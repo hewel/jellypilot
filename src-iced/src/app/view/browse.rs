@@ -266,25 +266,38 @@ fn played_option(
 
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let padding = page_padding(class);
-  match &state.full.as_ref().expect("FullUi required").browse.view {
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  match &browse.view {
     LibraryBrowseView::Inactive => {
       empty_surface(state.palette(), state.t("browse-choose-library"), padding)
     }
     LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
-    LibraryBrowseView::Empty => match &state.shell.destination {
-      Destination::Search(query) => empty_surface(
+    LibraryBrowseView::Empty => {
+      let body = match &state.shell.destination {
+        Destination::Search(query) => empty_surface(
+          state.palette(),
+          state.format("browse-no-results", &[("query", query.as_str().into())]),
+          padding,
+        ),
+        Destination::Home
+        | Destination::PersonalLists(_)
+        | Destination::Library { .. }
+        | Destination::Detail(_)
+        | Destination::NowPlaying => {
+          empty_surface(state.palette(), state.t("browse-empty-library"), padding)
+        }
+      };
+      let mut surface = stack![body].width(Fill).height(Fill);
+      if let Some(banner) = failure_overlay(
         state.palette(),
-        state.format("browse-no-results", &[("query", query.as_str().into())]),
-        padding,
-      ),
-      Destination::Home
-      | Destination::PersonalLists(_)
-      | Destination::Library { .. }
-      | Destination::Detail(_)
-      | Destination::NowPlaying => {
-        empty_surface(state.palette(), state.t("browse-empty-library"), padding)
+        state.kernel.locale,
+        browse.data.refresh_failure(),
+        browse.data.is_refreshing(),
+      ) {
+        surface = surface.push(banner);
       }
-    },
+      surface.into()
+    }
     LibraryBrowseView::Failed {
       message,
       retryable,
@@ -310,8 +323,8 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
       visible_items,
       *visible_start,
       *total_record_count,
-      load_more_failure.as_ref(),
-      *retry_busy,
+      browse.data.refresh_failure().or(load_more_failure.as_ref()),
+      *retry_busy || browse.data.is_refreshing(),
       class,
     ),
   }
@@ -391,8 +404,7 @@ fn ready_surface<'a>(
   surface.into()
 }
 
-/// Builds the viewport-pinned failure banner when the ready surface carries
-/// an incremental load-more failure, or `None` when the tail loaded cleanly.
+/// Builds the viewport-pinned banner for a refresh or incremental load failure.
 fn failure_overlay<'a>(
   palette: &'static ThemePalette,
   locale: Localizer,

@@ -37,7 +37,6 @@ browse-retry-failed = Could not retry library browsing: { $details }
 browse-refresh-failed = Could not refresh this page: { $details }
 browse-apply-failed = Could not apply library results: { $details }
 browse-save-filters-failed = Could not save library filters: { $details }
-browse-reset-failed = Could not reset library browsing: { $details }
 browse-open-failed = Could not open library browsing: { $details }
 browse-load-more-failed = Could not load more items: { $details }
 browse-library-unavailable = The selected library is no longer available.

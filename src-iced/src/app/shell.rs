@@ -41,6 +41,82 @@ enum PageState {
   ),
 }
 
+struct RefreshTarget {
+  destination: Destination,
+  browse_identity: Option<String>,
+}
+
+impl RefreshTarget {
+  fn capture(state: &State) -> Self {
+    Self {
+      destination: state.shell.destination.clone(),
+      browse_identity: state.full.as_ref().and_then(|full| {
+        matches!(
+          state.shell.destination,
+          Destination::Library { .. } | Destination::Search(_)
+        )
+        .then(|| full.browse.data.identity().map(str::to_owned))
+        .flatten()
+      }),
+    }
+  }
+
+  fn matches(&self, state: &State) -> bool {
+    self.destination == state.shell.destination
+      && (!matches!(
+        self.destination,
+        Destination::Library { .. } | Destination::Search(_)
+      ) || self.browse_identity.as_deref()
+        == state
+          .full
+          .as_ref()
+          .and_then(|full| full.browse.data.identity()))
+  }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum RefreshPhase {
+  Directory,
+  BrowsePage,
+  OtherPage,
+}
+
+struct RefreshRun {
+  target: Option<RefreshTarget>,
+  phase: RefreshPhase,
+}
+
+fn active_browse_refreshing(state: &State) -> bool {
+  matches!(
+    state.shell.destination,
+    Destination::Library { .. } | Destination::Search(_)
+  ) && state
+    .full
+    .as_ref()
+    .is_some_and(|full| full.browse.data.is_refreshing())
+}
+
+pub(crate) fn refresh_busy(state: &State) -> bool {
+  state.shell.refresh.is_some() || active_browse_refreshing(state)
+}
+
+/// Browse settlements can spawn more required work; task-stream exhaustion
+/// does not establish completion of the model's refresh transaction.
+pub(crate) fn reconcile_refresh(state: &mut State) {
+  let Some(run) = state.shell.refresh.as_ref() else {
+    return;
+  };
+  let target_matches = run
+    .target
+    .as_ref()
+    .is_some_and(|target| target.matches(state));
+  if !target_matches {
+    state.shell.leave_refresh_target();
+  } else if run.phase == RefreshPhase::BrowsePage && !active_browse_refreshing(state) {
+    state.shell.refresh = None;
+  }
+}
+
 pub const SEARCH_INPUT_ID: &str = "shell.search-input";
 pub const SEARCH_TRIGGER_ID: &str = "shell.search-trigger";
 pub const ACCOUNT_TRIGGER_ID: &str = "shell.account-trigger";
@@ -80,7 +156,7 @@ pub struct Surface {
   pub account_popover_open: bool,
   pub account_focus_return: String,
   pub focus_visibility: jellypilot_ui::widgets::control_button::FocusVisibility,
-  pub refresh_busy: bool,
+  refresh: Option<RefreshRun>,
   refresh_generation: u64,
   pub destination: Destination,
   pub navigation_stack: Vec<NavigationEntry>,
@@ -105,7 +181,7 @@ impl Surface {
       account_popover_open: false,
       account_focus_return: ACCOUNT_TRIGGER_ID.to_owned(),
       focus_visibility: jellypilot_ui::widgets::control_button::FocusVisibility::default(),
-      refresh_busy: false,
+      refresh: None,
       refresh_generation: 0,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
@@ -118,6 +194,7 @@ impl Surface {
     if self.destination == destination {
       return false;
     }
+    self.leave_refresh_target();
     if !matches!(&destination, Destination::Detail(_)) {
       if let Some(index) = self
         .navigation_stack
@@ -145,10 +222,21 @@ impl Surface {
     let Some(entry) = self.navigation_stack.pop() else {
       return false;
     };
+    self.leave_refresh_target();
     self.destination = entry.destination;
     self.scroll_memory = entry.scroll_memory;
     self.page_state = entry.page_state;
     true
+  }
+
+  fn leave_refresh_target(&mut self) {
+    if let Some(run) = self.refresh.as_mut() {
+      if run.phase == RefreshPhase::Directory {
+        run.target = None;
+      } else {
+        self.refresh = None;
+      }
+    }
   }
 
   fn clear_history(&mut self) {
@@ -229,13 +317,13 @@ fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
 pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
   state.shell.compact_search_open = false;
   state.shell.account_popover_open = false;
-  state.shell.refresh_busy = false;
+  state.shell.refresh = None;
   state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
   match mode {
     AppMode::ControlOnly => {
       close_settings(state);
       if let Some(full) = state.full.as_mut() {
-        browse::reset(&mut full.browse, &mut state.kernel);
+        browse::reset(&mut full.browse);
         super::personal_lists::leave_view(&mut full.personal_lists);
       }
       if state.playback.view.now_playing.is_none() {
@@ -444,13 +532,16 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
       Task::done(Message::Account(message))
     }
     ShellMessage::RefreshCurrent => {
-      if state.shell.refresh_busy || state.full.is_none() {
+      if refresh_busy(state) || state.full.is_none() {
         return Task::none();
       }
       let Some(client) = state.kernel.client.clone() else {
         return Task::none();
       };
-      state.shell.refresh_busy = true;
+      state.shell.refresh = Some(RefreshRun {
+        target: Some(RefreshTarget::capture(state)),
+        phase: RefreshPhase::Directory,
+      });
       state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
       let generation = state.shell.refresh_generation;
       let session = state.kernel.request_gate.current_session();
@@ -476,7 +567,11 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
       generation,
       result,
     } => {
-      if !state.shell.refresh_busy
+      if !state
+        .shell
+        .refresh
+        .as_ref()
+        .is_some_and(|run| run.phase == RefreshPhase::Directory)
         || !state.kernel.request_gate.is_current_session(session)
         || generation != state.shell.refresh_generation
       {
@@ -505,16 +600,41 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
           ));
         }
       }
+      let target_matches = state
+        .shell
+        .refresh
+        .as_ref()
+        .and_then(|run| run.target.as_ref())
+        .is_some_and(|target| target.matches(state));
+      // Directory results remain useful after navigation, but must never
+      // refresh a different page (or a new query on the same route).
+      if !target_matches && !removed {
+        state.shell.refresh = None;
+        return Task::none();
+      }
       let page = if removed {
         state.kernel.notice = Some(UiText::new("shell-library-unavailable"));
         navigate(state, Destination::Home)
       } else {
         refresh_current_page(state)
       };
-      page.chain(Task::done(Message::Shell(ShellMessage::RefreshFinished {
-        session,
-        generation,
-      })))
+      let browse_refreshing = active_browse_refreshing(state);
+      state.shell.refresh = Some(RefreshRun {
+        target: Some(RefreshTarget::capture(state)),
+        phase: if browse_refreshing {
+          RefreshPhase::BrowsePage
+        } else {
+          RefreshPhase::OtherPage
+        },
+      });
+      if browse_refreshing {
+        page
+      } else {
+        page.chain(Task::done(Message::Shell(ShellMessage::RefreshFinished {
+          session,
+          generation,
+        })))
+      }
     }
     ShellMessage::RefreshFinished {
       session,
@@ -522,8 +642,13 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
     } => {
       if state.kernel.request_gate.is_current_session(session)
         && generation == state.shell.refresh_generation
+        && state
+          .shell
+          .refresh
+          .as_ref()
+          .is_some_and(|run| run.phase == RefreshPhase::OtherPage)
       {
-        state.shell.refresh_busy = false;
+        state.shell.refresh = None;
       }
       Task::none()
     }
@@ -538,7 +663,11 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
   match &state.shell.destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } | Destination::Search(_) => {
-      browse::refresh(&mut full.browse, &mut state.kernel, source)
+      if full.browse.data.identity().is_some() {
+        browse::refresh(&mut full.browse, &mut state.kernel)
+      } else {
+        browse::start(&mut full.browse, &mut state.kernel, source)
+      }
     }
     Destination::Detail(id) => detail::refresh(&mut full.detail, &mut state.kernel, id),
     Destination::PersonalLists(route) => super::personal_lists::refresh(
@@ -598,7 +727,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Library { .. } | Destination::Search(_)
   ) && previous != destination
   {
-    browse::leave_view(&mut full.browse, &mut state.kernel);
+    browse::leave_view(&mut full.browse);
   } else if matches!(previous, Destination::Detail(_)) && previous != destination {
     detail::leave_view(&mut full.detail, &mut state.kernel);
   }
@@ -702,12 +831,12 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
 
 /// Resets account-owned presentation after the playback handoff has already settled.
 pub(crate) fn reset_connected_content(state: &mut State) {
-  state.shell.refresh_busy = false;
+  state.shell.refresh = None;
   state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
   state.shell.compact_search_open = false;
   state.shell.account_popover_open = false;
   if let Some(full) = state.full.as_mut() {
-    browse::reset(&mut full.browse, &mut state.kernel);
+    browse::reset(&mut full.browse);
   }
   state.kernel.artwork_adapter.reset_session();
   state.full = (state.app_mode() == AppMode::Full).then(crate::app::state::FullUi::default);
@@ -733,6 +862,183 @@ mod tests {
   use jellypilot_core::request_gate::RequestGate;
 
   use super::*;
+  use jellypilot_core::browse_model::{
+    BrowseEffect, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
+    LibraryBrowseView,
+  };
+
+  fn test_library() -> jellypilot_media_server::VideoLibraryShortcut {
+    jellypilot_media_server::VideoLibraryShortcut {
+      id: "movies".into(),
+      name: "Movies".into(),
+      collection_type: "movies".into(),
+      item_count: None,
+      artwork_image_id: None,
+    }
+  }
+
+  fn browsing_state() -> (State, BrowsePageRequest) {
+    let mut state = State::boot(false);
+    state.kernel = test_fixture().1;
+    state.kernel.client = Some(Arc::new(jellypilot_media_server::JellyfinClient::new()));
+    state.full = Some(super::super::state::FullUi::default());
+    state.shell.destination = Destination::Library {
+      library_id: "movies".into(),
+      collection_type: "movies".into(),
+    };
+    state.full.as_mut().unwrap().home.data.shortcuts =
+      jellypilot_core::LoadState::Ready(vec![test_library()]);
+    let source = browse_source(&state).unwrap();
+    let model = &mut state.full.as_mut().unwrap().browse.data;
+    let request = page_request(model.configure(source).unwrap());
+    state.full.as_mut().unwrap().browse.view = state.full.as_ref().unwrap().browse.data.view();
+    (state, request)
+  }
+
+  fn page_request(effects: Vec<BrowseEffect>) -> BrowsePageRequest {
+    effects
+      .into_iter()
+      .find_map(|effect| match effect {
+        BrowseEffect::RequestPage(request) => Some(request),
+        _ => None,
+      })
+      .unwrap()
+  }
+
+  #[test]
+  fn directory_refresh_does_not_restart_a_page_after_leaving_and_returning() {
+    let (mut state, _) = browsing_state();
+    drop(update_shell(&mut state, ShellMessage::RefreshCurrent));
+    let generation = state.shell.refresh_generation;
+    let session = state.kernel.request_gate.current_session();
+    drop(navigate(
+      &mut state,
+      Destination::Search("another query".into()),
+    ));
+    drop(navigate_back(&mut state));
+    let model = &state.full.as_ref().unwrap().browse;
+    let token = *model.page_tasks.keys().next().expect("resumed delivery");
+    let resumed = BrowsePageSettlement {
+      source_id: model.data.identity().unwrap().into(),
+      token,
+      result: Err("not delivered".into()),
+    };
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation,
+        result: Ok(vec![test_library()]),
+      },
+    ));
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .browse
+      .data
+      .is_current_settlement(&resumed));
+    assert!(!refresh_busy(&state));
+  }
+
+  #[test]
+  fn directory_refresh_does_not_replace_changed_query_preferences() {
+    let (mut state, _) = browsing_state();
+    drop(update_shell(&mut state, ShellMessage::RefreshCurrent));
+    let generation = state.shell.refresh_generation;
+    let session = state.kernel.request_gate.current_session();
+    let source = browse_source(&state).unwrap();
+    let request = page_request(
+      state
+        .full
+        .as_mut()
+        .unwrap()
+        .browse
+        .data
+        .configure_with_preferences(
+          source,
+          BrowsePreferences {
+            sort: jellypilot_media_server::VideoLibrarySort::ReleaseDate,
+            ..BrowsePreferences::default()
+          },
+        )
+        .unwrap(),
+    );
+    reconcile_refresh(&mut state);
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation,
+        result: Ok(vec![test_library()]),
+      },
+    ));
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .browse
+      .data
+      .is_current_settlement(&BrowsePageSettlement {
+        source_id: request.source_id,
+        token: request.token,
+        result: Err("not delivered".into()),
+      },));
+    assert!(!refresh_busy(&state));
+  }
+
+  #[test]
+  fn browse_refresh_busy_follows_model_settlement_not_task_completion() {
+    let (mut state, initial) = browsing_state();
+    state
+      .full
+      .as_mut()
+      .unwrap()
+      .browse
+      .data
+      .settle(BrowsePageSettlement {
+        source_id: initial.source_id,
+        token: initial.token,
+        result: Ok(BrowsePagePayload {
+          start_index: 0,
+          limit: initial.limit,
+          total_record_count: 0,
+          has_more: false,
+          items: Vec::new(),
+        }),
+      })
+      .unwrap();
+    let request = page_request(state.full.as_mut().unwrap().browse.data.refresh().unwrap());
+    state.shell.refresh = Some(RefreshRun {
+      target: Some(RefreshTarget::capture(&state)),
+      phase: RefreshPhase::BrowsePage,
+    });
+    let session = state.kernel.request_gate.current_session();
+    let generation = state.shell.refresh_generation;
+    drop(super::super::update::update(
+      &mut state,
+      Message::Shell(ShellMessage::RefreshFinished {
+        session,
+        generation,
+      }),
+    ));
+    assert!(refresh_busy(&state));
+    drop(super::super::update::update(
+      &mut state,
+      Message::Browse(super::super::message::BrowseMessage::PageSettled(
+        BrowsePageSettlement {
+          source_id: request.source_id,
+          token: request.token,
+          result: Err("refresh failed".into()),
+        },
+      )),
+    ));
+    assert!(!refresh_busy(&state));
+    assert!(matches!(
+      state.full.as_ref().unwrap().browse.view,
+      LibraryBrowseView::Empty
+    ));
+  }
 
   fn test_fixture() -> (Surface, Kernel) {
     let kernel = Kernel {
@@ -765,7 +1071,10 @@ mod tests {
       library_id: "removed".to_owned(),
       collection_type: "movies".to_owned(),
     };
-    state.shell.refresh_busy = true;
+    state.shell.refresh = Some(RefreshRun {
+      target: Some(RefreshTarget::capture(&state)),
+      phase: RefreshPhase::Directory,
+    });
     state.shell.refresh_generation = 7;
     let session = state.kernel.request_gate.current_session();
     drop(update_shell(
@@ -792,6 +1101,10 @@ mod tests {
       state.shell.destination,
       Destination::Library { .. }
     ));
+    state.shell.refresh = Some(RefreshRun {
+      target: Some(RefreshTarget::capture(&state)),
+      phase: RefreshPhase::Directory,
+    });
     drop(update_shell(
       &mut state,
       ShellMessage::DirectoryLoaded {
@@ -805,6 +1118,10 @@ mod tests {
       library_id: "changed".to_owned(),
       collection_type: "movies".to_owned(),
     };
+    state.shell.refresh = Some(RefreshRun {
+      target: Some(RefreshTarget::capture(&state)),
+      phase: RefreshPhase::Directory,
+    });
     drop(update_shell(
       &mut state,
       ShellMessage::DirectoryLoaded {

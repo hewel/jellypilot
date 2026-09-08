@@ -205,6 +205,7 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   let task = route_message(state, message);
+  shell::reconcile_refresh(state);
   if let Some(full) = state.full.as_mut() {
     state
       .image_diagnostics
@@ -2520,20 +2521,17 @@ mod tests {
       None,
       false,
       state.shell.window_size,
-      BrowseMessage::PageSettled(
-        0,
-        jellypilot_core::browse_model::BrowsePageSettlement {
-          source_id: request.source_id.clone(),
-          token: request.token,
-          result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-            start_index: 0,
-            limit: 24,
-            total_record_count: 1,
-            has_more: false,
-            items: vec![item],
-          }),
-        },
-      ),
+      BrowseMessage::PageSettled(jellypilot_core::browse_model::BrowsePageSettlement {
+        source_id: request.source_id.clone(),
+        token: request.token,
+        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
+          start_index: 0,
+          limit: 24,
+          total_record_count: 1,
+          has_more: false,
+          items: vec![item],
+        }),
+      }),
     ));
     assert!(matches!(
       state.full.as_ref().unwrap().browse.view,
@@ -2682,20 +2680,37 @@ mod tests {
         item_count: Some(1),
         artwork_image_id: None,
       }]);
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Loading;
-    let (_task, handle) = Task::<Message>::none().abortable();
-    state.full.as_mut().unwrap().browse.page_tasks.insert(
-      jellypilot_core::LibraryBrowseLoadToken {
-        generation: 1,
-        sequence: 1,
-      },
-      handle,
-    );
+    let source = shell::browse_source(&state).unwrap();
+    let request = state
+      .full
+      .as_mut()
+      .unwrap()
+      .browse
+      .data
+      .configure(source)
+      .unwrap()
+      .into_iter()
+      .find_map(|effect| match effect {
+        jellypilot_core::browse_model::BrowseEffect::RequestPage(request) => Some(request),
+        _ => None,
+      })
+      .unwrap();
+    let (_task, handle) =
+      Task::perform(std::future::pending::<Message>(), std::convert::identity).abortable();
+    let cancellation = handle.clone();
+    state
+      .full
+      .as_mut()
+      .unwrap()
+      .browse
+      .page_tasks
+      .insert(request.token, handle);
 
     drop(shell::apply_app_mode(
       &mut state,
       jellypilot_core::config::AppMode::ControlOnly,
     ));
+    assert!(cancellation.is_aborted());
     assert_eq!(state.shell.destination, Destination::NowPlaying);
     assert!(state.shell.navigation_stack.is_empty());
     assert!(state.full.is_none());

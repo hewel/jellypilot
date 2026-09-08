@@ -169,7 +169,7 @@ pub enum BrowseMessage {
     height: f32,
   },
   Retry,
-  PageSettled(u64, BrowsePageSettlement),
+  PageSettled(BrowsePageSettlement),
   ArtworkLoaded(super::artwork::ImageCompletion),
 }
 

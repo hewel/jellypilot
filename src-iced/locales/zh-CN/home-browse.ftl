@@ -34,7 +34,6 @@ browse-retry-failed = 无法重试浏览媒体库：{ $details }
 browse-refresh-failed = 无法刷新此页面：{ $details }
 browse-apply-failed = 无法应用媒体库结果：{ $details }
 browse-save-filters-failed = 无法保存媒体库筛选条件：{ $details }
-browse-reset-failed = 无法重置媒体库浏览：{ $details }
 browse-open-failed = 无法打开媒体库浏览：{ $details }
 browse-load-more-failed = 无法加载更多项目：{ $details }
 browse-library-unavailable = 所选媒体库已不可用。

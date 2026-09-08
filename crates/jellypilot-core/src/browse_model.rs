@@ -1,5 +1,16 @@
+//! Library/Search result-set lifecycle over the portable pagination reducer.
+//!
+//! [`BrowseModel`] owns query identity, retained data, refresh replacement and
+//! delivery correlation. A suspended model can move into navigation history;
+//! resuming it reissues unfinished work without reusing physical delivery IDs.
+//! Runtime task handles, layout geometry and image demand remain in the shell.
+//! Refresh retains a complete usable result set until the captured replacement
+//! window is ready, so failure does not turn a display projection into a second
+//! source of lifecycle state.
+
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     LibraryBrowseAction, LibraryBrowseCommand, LibraryBrowseCore, LibraryBrowseCoreError,
@@ -43,12 +54,27 @@ impl BrowseSource {
     }
 }
 
+/// Process-unique identity of one physical page delivery, independent of its query.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BrowseDeliveryToken(u64);
+
+impl BrowseDeliveryToken {
+    fn next() -> Result<Self, LibraryBrowseCoreError> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map(Self)
+        .map_err(|_| LibraryBrowseCoreError::SequenceExhausted)
+    }
+}
+
 /// Environment work emitted by the display-free browse model.
 #[derive(Clone, Debug)]
 pub enum BrowseEffect {
     ResetViewport,
     RequestPage(BrowsePageRequest),
-    CancelPage { token: LibraryBrowseLoadToken },
+    CancelPage { token: BrowseDeliveryToken },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,7 +126,7 @@ impl BrowsePreferences {
 pub struct BrowsePageRequest {
     pub source_id: String,
     pub source: BrowseSource,
-    pub token: LibraryBrowseLoadToken,
+    pub token: BrowseDeliveryToken,
     pub start_index: u32,
     pub limit: u32,
     pub preferences: BrowsePreferences,
@@ -148,7 +174,7 @@ impl TryFrom<VideoSearchPage> for BrowsePagePayload {
 #[derive(Clone, Debug)]
 pub struct BrowsePageSettlement {
     pub source_id: String,
-    pub token: LibraryBrowseLoadToken,
+    pub token: BrowseDeliveryToken,
     pub result: Result<BrowsePagePayload, String>,
 }
 /// One display position and its payload, if the corresponding page is loaded.
@@ -183,41 +209,28 @@ pub enum LibraryBrowseView {
 struct PendingPage {
     start_index: u32,
     limit: u32,
+    delivery: Option<BrowseDeliveryToken>,
 }
 
-/// Display-free native browse state used by the live GTK shell.
-#[derive(Clone, Debug, Default)]
+/// Browse lifecycle authority. Result sets are replaced atomically on refresh.
+#[derive(Debug, Default)]
 pub struct BrowseModel {
-    core: LibraryBrowseCore,
-    pages: BTreeMap<u32, Vec<VideoLibraryItem>>,
-    pending: BTreeMap<LibraryBrowseLoadToken, PendingPage>,
-    source: Option<BrowseSource>,
-    source_id: Option<String>,
-    virtual_window_start: u32,
-    /// The exact virtual display range currently projected by the reducer.
-    ///
-    /// `None` means that no virtual window has been established yet (for
-    /// example, before the bootstrap page settles).
-    virtual_window: Option<Range<u32>>,
-    preferences: BrowsePreferences,
-    epoch: u32,
+    committed: BrowseResultSet,
+    refresh: Option<BrowseRefresh>,
+    refresh_failure: Option<LibraryBrowseFailure>,
+    suspended: bool,
+}
+
+#[derive(Debug)]
+struct BrowseRefresh {
+    replacement: BrowseResultSet,
+    required_range: Range<u32>,
 }
 
 impl BrowseModel {
-    /// Clears browse state while advancing the settlement identity epoch.
-    ///
-    /// The epoch survives media-session reuse so a completion queued before a
-    /// route reset can never match a request issued after reopening that route.
-    pub fn reset(&mut self) -> Result<(), LibraryBrowseCoreError> {
-        let epoch = self
-            .epoch
-            .checked_add(1)
-            .ok_or(LibraryBrowseCoreError::GenerationExhausted)?;
-        *self = Self {
-            epoch,
-            ..Self::default()
-        };
-        Ok(())
+    /// Discards all data and delivery identities. The adapter owns task cancellation.
+    pub fn reset(&mut self) {
+        *self = Self::default();
     }
 
     pub fn configure(
@@ -232,9 +245,296 @@ impl BrowseModel {
         source: BrowseSource,
         preferences: BrowsePreferences,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        let identity = format!(
+            "{}:preferences:{}",
+            source.identity(),
+            preferences.identity()
+        );
+        if self.identity() == Some(identity.as_str()) {
+            return Ok(Vec::new());
+        }
+        let mut next = BrowseResultSet {
+            suspended: self.suspended,
+            ..BrowseResultSet::default()
+        };
+        let loads = next.configure_with_preferences(source, preferences)?;
+        let mut effects = self.committed.suspend();
+        if let Some(refresh) = &mut self.refresh {
+            effects.extend(refresh.replacement.suspend());
+        }
+        self.committed = next;
+        self.refresh = None;
+        self.refresh_failure = None;
+        effects.extend(loads);
+        Ok(effects)
+    }
+
+    /// Logical query identity; unchanged by physical delivery or refresh cycles.
+    #[must_use]
+    pub fn identity(&self) -> Option<&str> {
+        self.committed.source_id.as_deref()
+    }
+
+    /// Pauses physical work without discarding data or unfinished paging intent.
+    pub fn suspend(&mut self) -> Vec<BrowseEffect> {
+        self.suspended = true;
+        let mut effects = self.committed.suspend();
+        if let Some(refresh) = &mut self.refresh {
+            effects.extend(refresh.replacement.suspend());
+        }
+        effects
+    }
+
+    /// Reissues unfinished work with fresh delivery identities, preserving the viewport.
+    pub fn resume(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        self.suspended = false;
+        if let Some(refresh) = &mut self.refresh {
+            refresh.replacement.resume()
+        } else {
+            self.committed.resume()
+        }
+    }
+
+    /// Refreshes the stored query, retaining the complete usable result until replacement.
+    pub fn refresh(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        if self.refresh.is_some() {
+            return Ok(Vec::new());
+        }
+        let Some(source) = self.committed.source.clone() else {
+            return Ok(Vec::new());
+        };
+        let required_range = self
+            .committed
+            .virtual_window
+            .clone()
+            .unwrap_or(0..LIBRARY_BROWSE_PAGE_SIZE);
+        let mut replacement = BrowseResultSet {
+            suspended: self.suspended,
+            ..BrowseResultSet::default()
+        };
+        let loads = replacement.configure_with_preferences(source, self.committed.preferences)?;
+        let mut effects = self.committed.suspend();
+        effects.extend(
+            loads
+                .into_iter()
+                .filter(|effect| !matches!(effect, BrowseEffect::ResetViewport)),
+        );
+        self.refresh = Some(BrowseRefresh {
+            replacement,
+            required_range,
+        });
+        self.refresh_failure = None;
+        Ok(effects)
+    }
+
+    #[must_use]
+    pub fn is_refreshing(&self) -> bool {
+        self.refresh.is_some()
+    }
+
+    #[must_use]
+    pub fn refresh_failure(&self) -> Option<&LibraryBrowseFailure> {
+        self.refresh_failure.as_ref()
+    }
+
+    pub fn retry(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        if self
+            .refresh_failure
+            .as_ref()
+            .is_some_and(|failure| failure.retryable)
+        {
+            self.refresh()
+        } else if self.refresh.is_some() || self.refresh_failure.is_some() {
+            Ok(Vec::new())
+        } else {
+            self.committed.retry()
+        }
+    }
+
+    #[must_use]
+    pub fn is_current_settlement(&self, settlement: &BrowsePageSettlement) -> bool {
+        self.refresh.as_ref().map_or_else(
+            || self.committed.is_current_settlement(settlement),
+            |refresh| refresh.replacement.is_current_settlement(settlement),
+        )
+    }
+
+    pub fn settle(
+        &mut self,
+        settlement: BrowsePageSettlement,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        if !self.is_current_settlement(&settlement) {
+            return Ok(Vec::new());
+        }
+        let Some(refresh) = &mut self.refresh else {
+            return self.committed.settle(settlement);
+        };
+        let settled_start = refresh
+            .replacement
+            .pending
+            .values()
+            .find(|page| page.delivery == Some(settlement.token))
+            .map(|page| page.start_index);
+        let transport_failure = settlement.result.as_ref().err().cloned();
+        let mut effects = refresh.replacement.settle(settlement)?;
+        let snapshot = refresh.replacement.core.snapshot();
+        let total = match snapshot.status {
+            LibraryBrowseStatus::Ready {
+                total_record_count, ..
+            } => Some(total_record_count),
+            LibraryBrowseStatus::Empty { .. } => Some(0),
+            LibraryBrowseStatus::InitialFailure { .. }
+            | LibraryBrowseStatus::Inactive
+            | LibraryBrowseStatus::Loading => None,
+        };
+        let required = total.map_or_else(
+            || refresh.required_range.clone(),
+            |total| replacement_display_range(refresh.required_range.clone(), total),
+        );
+        let required_failed = settled_start.is_some_and(|start| {
+            (start == 0
+                || (start < required.end
+                    && start.saturating_add(LIBRARY_BROWSE_PAGE_SIZE) > required.start))
+                && !refresh.replacement.pages.contains_key(&start)
+        });
+        let incomplete_page = required.clone().any(|index| {
+            let start = index / LIBRARY_BROWSE_PAGE_SIZE * LIBRARY_BROWSE_PAGE_SIZE;
+            refresh.replacement.pages.get(&start).is_some_and(|items| {
+                usize::try_from(index - start).is_ok_and(|offset| offset >= items.len())
+            })
+        });
+        let failure = if required_failed {
+            Some(match transport_failure {
+                Some(message) => LibraryBrowseFailure {
+                    message,
+                    retryable: true,
+                },
+                None => LibraryBrowseFailure {
+                    message: "Media server returned invalid refresh page metadata.".to_owned(),
+                    retryable: false,
+                },
+            })
+        } else {
+            incomplete_page.then(|| LibraryBrowseFailure {
+                message: "Media server returned an incomplete refresh display window.".to_owned(),
+                retryable: false,
+            })
+        };
+        if let Some(failure) = failure {
+            // Newly scheduled replacement work must never escape after rollback.
+            effects.retain(|effect| !matches!(effect, BrowseEffect::RequestPage(_)));
+            effects.extend(refresh.replacement.suspend());
+            let usable = matches!(
+                self.committed.core.snapshot().status,
+                LibraryBrowseStatus::Ready { .. } | LibraryBrowseStatus::Empty { .. }
+            );
+            if let Some(refresh) = self.refresh.take() {
+                if !usable {
+                    self.committed = refresh.replacement;
+                }
+            }
+            self.refresh_failure = Some(failure);
+            if !self.suspended {
+                effects.extend(self.committed.resume()?);
+            }
+            return Ok(effects);
+        }
+        let Some(total) = total else {
+            return Ok(effects);
+        };
+        effects.extend(
+            refresh
+                .replacement
+                .set_display_range(required.clone(), total)?,
+        );
+        let complete = required.clone().all(|index| {
+            let start = index / LIBRARY_BROWSE_PAGE_SIZE * LIBRARY_BROWSE_PAGE_SIZE;
+            refresh.replacement.pages.get(&start).is_some_and(|items| {
+                usize::try_from(index - start).is_ok_and(|offset| offset < items.len())
+            })
+        });
+        if complete {
+            let latest = self.committed.virtual_window.clone().unwrap_or(required);
+            let Some(refresh) = self.refresh.take() else {
+                return Ok(effects);
+            };
+            self.committed = refresh.replacement;
+            effects.extend(
+                self.committed
+                    .set_display_range(replacement_display_range(latest, total), total)?,
+            );
+        }
+        Ok(effects)
+    }
+
+    #[must_use]
+    pub fn view(&self) -> LibraryBrowseView {
+        self.committed.view()
+    }
+
+    pub fn set_display_range(
+        &mut self,
+        range: Range<u32>,
+        total_record_count: u32,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        self.committed.set_display_range(range, total_record_count)
+    }
+
+    #[must_use]
+    pub fn peek_display_range(&self) -> Option<Range<u32>> {
+        self.committed.peek_display_range()
+    }
+
+    #[must_use]
+    pub fn display_range(&self) -> Option<Range<u32>> {
+        self.committed.display_range()
+    }
+
+    #[cfg(test)]
+    fn retained_page_count(&self) -> usize {
+        self.committed.retained_page_count()
+    }
+
+    #[cfg(test)]
+    fn retained_item_count(&self) -> usize {
+        self.committed.retained_item_count()
+    }
+}
+
+fn replacement_display_range(range: Range<u32>, total: u32) -> Range<u32> {
+    if range.is_empty() || range.start >= total {
+        virtual_window_range(range.start, total)
+    } else {
+        clamped_display_range(range, total)
+    }
+}
+
+/// One complete result set, including retained payloads and unfinished paging intent.
+#[derive(Debug, Default)]
+struct BrowseResultSet {
+    core: LibraryBrowseCore,
+    pages: BTreeMap<u32, Vec<VideoLibraryItem>>,
+    pending: BTreeMap<LibraryBrowseLoadToken, PendingPage>,
+    source: Option<BrowseSource>,
+    source_id: Option<String>,
+    virtual_window_start: u32,
+    /// The exact virtual display range currently projected by the reducer.
+    ///
+    /// `None` means that no virtual window has been established yet (for
+    /// example, before the bootstrap page settles).
+    virtual_window: Option<Range<u32>>,
+    preferences: BrowsePreferences,
+    suspended: bool,
+}
+
+impl BrowseResultSet {
+    pub fn configure_with_preferences(
+        &mut self,
+        source: BrowseSource,
+        preferences: BrowsePreferences,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
         let source_id = format!(
-            "epoch:{}:{}:preferences:{}",
-            self.epoch,
+            "{}:preferences:{}",
             source.identity(),
             preferences.identity()
         );
@@ -253,7 +553,7 @@ impl BrowseModel {
         self.source = Some(source);
         self.source_id = Some(source_id);
         self.preferences = preferences;
-        Ok(self.apply_commands(update.commands))
+        self.apply_commands(update.commands)
     }
 
     pub fn retry(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
@@ -268,26 +568,33 @@ impl BrowseModel {
             return Ok(Vec::new());
         }
 
-        let mut effects = match settlement.result {
-            Ok(page) => self.settle_loaded(settlement.token, page)?,
-            Err(message) => self.settle_failed(settlement.token, message)?,
+        let Some(token) = self.pending.iter().find_map(|(token, pending)| {
+            (pending.delivery == Some(settlement.token)).then_some(*token)
+        }) else {
+            return Ok(Vec::new());
         };
-        if let LibraryBrowseView::Ready {
+        let mut effects = match settlement.result {
+            Ok(page) => self.settle_loaded(token, page)?,
+            Err(message) => self.settle_failed(token, message)?,
+        };
+        if let LibraryBrowseStatus::Ready {
             mode: LibraryBrowseMode::Virtual,
             total_record_count,
             ..
-        } = self.view()
+        } = self.core.snapshot().status
         {
             effects.extend(self.update_virtual_window(total_record_count)?);
         }
         Ok(effects)
     }
-
     /// Returns whether a settlement belongs to a currently pending request.
     #[must_use]
     pub fn is_current_settlement(&self, settlement: &BrowsePageSettlement) -> bool {
         self.source_id.as_deref() == Some(settlement.source_id.as_str())
-            && self.pending.contains_key(&settlement.token)
+            && self
+                .pending
+                .values()
+                .any(|pending| pending.delivery == Some(settlement.token))
     }
 
     #[must_use]
@@ -359,7 +666,7 @@ impl BrowseModel {
         })?;
         self.virtual_window_start = range.start;
         self.virtual_window = Some(range);
-        Ok(self.apply_commands(update.commands))
+        self.apply_commands(update.commands)
     }
 
     /// Returns the projected virtual display range without cloning any items.
@@ -445,15 +752,13 @@ impl BrowseModel {
             )
         });
         if page_is_valid
-            && pending
-                == Some(PendingPage {
-                    start_index: page.start_index,
-                    limit: page.limit,
-                })
+            && pending.is_some_and(|pending| {
+                pending.start_index == page.start_index && pending.limit == page.limit
+            })
         {
             self.pages.insert(page.start_index, page.items);
         }
-        Ok(self.apply_commands(update.commands))
+        self.apply_commands(update.commands)
     }
 
     fn settle_failed(
@@ -471,7 +776,7 @@ impl BrowseModel {
             },
         })?;
         self.pending.remove(&token);
-        Ok(self.apply_commands(update.commands))
+        self.apply_commands(update.commands)
     }
 
     fn update_virtual_window(
@@ -490,43 +795,92 @@ impl BrowseModel {
         action: LibraryBrowseAction,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
         let update = self.core.dispatch(action)?;
-        Ok(self.apply_commands(update.commands))
+        self.apply_commands(update.commands)
     }
 
-    fn apply_commands(&mut self, commands: Vec<LibraryBrowseCommand>) -> Vec<BrowseEffect> {
-        commands
-            .into_iter()
-            .filter_map(|command| match command {
-                LibraryBrowseCommand::ResetViewport => Some(BrowseEffect::ResetViewport),
+    fn apply_commands(
+        &mut self,
+        commands: Vec<LibraryBrowseCommand>,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        let mut effects = Vec::new();
+        for command in commands {
+            match command {
+                LibraryBrowseCommand::ResetViewport => effects.push(BrowseEffect::ResetViewport),
                 LibraryBrowseCommand::LoadPage {
                     token,
                     start_index,
                     limit,
                     ..
                 } => {
-                    self.pending
-                        .insert(token, PendingPage { start_index, limit });
-                    Some(BrowseEffect::RequestPage(BrowsePageRequest {
-                        source_id: self.source_id.clone()?,
-                        source: self.source.clone()?,
+                    self.pending.insert(
                         token,
-                        start_index,
-                        limit,
-                        preferences: self.preferences,
-                    }))
+                        PendingPage {
+                            start_index,
+                            limit,
+                            delivery: None,
+                        },
+                    );
                 }
                 LibraryBrowseCommand::CancelLoad { token } => {
-                    self.pending.remove(&token);
-                    Some(BrowseEffect::CancelPage { token })
+                    if let Some(delivery) =
+                        self.pending.remove(&token).and_then(|page| page.delivery)
+                    {
+                        effects.push(BrowseEffect::CancelPage { token: delivery });
+                    }
                 }
                 LibraryBrowseCommand::ReleasePages { page_starts } => {
                     for page_start in page_starts {
                         self.pages.remove(&page_start);
                     }
-                    None
                 }
+            }
+        }
+        effects.extend(self.issue_pending()?);
+        Ok(effects)
+    }
+
+    fn issue_pending(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        if self.suspended {
+            return Ok(Vec::new());
+        }
+        let (Some(source), Some(source_id)) = (&self.source, &self.source_id) else {
+            return Ok(Vec::new());
+        };
+        let mut effects = Vec::new();
+        for page in self
+            .pending
+            .values_mut()
+            .filter(|page| page.delivery.is_none())
+        {
+            let token = BrowseDeliveryToken::next()?;
+            page.delivery = Some(token);
+            effects.push(BrowseEffect::RequestPage(BrowsePageRequest {
+                source_id: source_id.clone(),
+                source: source.clone(),
+                token,
+                start_index: page.start_index,
+                limit: page.limit,
+                preferences: self.preferences,
+            }));
+        }
+        Ok(effects)
+    }
+
+    fn suspend(&mut self) -> Vec<BrowseEffect> {
+        self.suspended = true;
+        self.pending
+            .values_mut()
+            .filter_map(|page| {
+                page.delivery
+                    .take()
+                    .map(|token| BrowseEffect::CancelPage { token })
             })
             .collect()
+    }
+
+    fn resume(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        self.suspended = false;
+        self.issue_pending()
     }
 }
 
@@ -661,6 +1015,7 @@ mod tests {
 
     fn visible_indexes(model: &BrowseModel) -> Vec<u32> {
         model
+            .committed
             .core
             .snapshot()
             .slots
@@ -1169,15 +1524,9 @@ mod tests {
                 .configure(source.clone())
                 .expect("first source should configure"),
         );
-        model.reset().expect("browse epoch should advance");
-        let current = request(
-            model
-                .configure(source)
-                .expect("same source should reopen in a new epoch"),
-        );
+        model.reset();
+        let current = request(model.configure(source).expect("same source should reopen"));
 
-        assert_eq!(stale.token, current.token);
-        assert_ne!(stale.source_id, current.source_id);
         settle(&mut model, &stale, 1, 1);
 
         assert!(model.is_current_settlement(&BrowsePageSettlement {
@@ -1356,7 +1705,7 @@ mod tests {
         settle(&mut model, &stale, 1, 1);
 
         assert!(matches!(model.view(), LibraryBrowseView::Loading));
-        assert!(model.pages.is_empty());
+        assert!(model.committed.pages.is_empty());
     }
 
     #[test]
@@ -1384,7 +1733,7 @@ mod tests {
             })
             .expect("malformed completion should become a retained failure");
 
-        assert!(model.pages.is_empty());
+        assert!(model.committed.pages.is_empty());
         assert!(matches!(
             model.view(),
             LibraryBrowseView::Failed {
@@ -1575,5 +1924,255 @@ mod tests {
             },
             Some(480)
         );
+    }
+    fn loaded_search(total: u32, range: Range<u32>) -> BrowseModel {
+        let mut model = BrowseModel::default();
+        let effects = model
+            .configure(BrowseSource::Search {
+                session: session(),
+                query: "arrival".to_owned(),
+            })
+            .unwrap();
+        settle_all_requests(&mut model, effects, total);
+        let effects = model.set_display_range(range, total).unwrap();
+        settle_all_requests(&mut model, effects, total);
+        model
+    }
+
+    fn fail(model: &mut BrowseModel, request: &BrowsePageRequest) -> Vec<BrowseEffect> {
+        model
+            .settle(BrowsePageSettlement {
+                source_id: request.source_id.clone(),
+                token: request.token,
+                result: Err("offline".to_owned()),
+            })
+            .unwrap()
+    }
+
+    fn visible_ids(model: &BrowseModel) -> Vec<String> {
+        let LibraryBrowseView::Ready { visible_items, .. } = model.view() else {
+            panic!("expected usable result");
+        };
+        visible_items
+            .into_iter()
+            .map(|slot| slot.item.expect("loaded slot").id)
+            .collect()
+    }
+
+    #[test]
+    fn default_recreation_rejects_departed_delivery_for_identical_query() {
+        let source = BrowseSource::Search {
+            session: session(),
+            query: "arrival".to_owned(),
+        };
+        let mut departed = BrowseModel::default();
+        let old = request(departed.configure(source.clone()).unwrap());
+        let mut current = BrowseModel::default();
+        let live = request(current.configure(source).unwrap());
+        assert!(settle(&mut current, &old, 1, 1).is_empty());
+        assert!(matches!(current.view(), LibraryBrowseView::Loading));
+        settle(&mut current, &live, 1, 1);
+        assert_eq!(visible_ids(&current), vec!["item-0"]);
+    }
+
+    #[test]
+    fn suspend_resume_preserves_ready_pages_and_rejects_cancelled_delivery() {
+        let mut model = loaded_search(240, 48..72);
+        let before = visible_ids(&model);
+        let pending = model.set_display_range(120..144, 240).unwrap();
+        let old = requests(&pending);
+        let cancelled = model.suspend();
+        assert_eq!(cancelled.len(), old.len());
+        assert!(cancelled
+            .iter()
+            .all(|effect| matches!(effect, BrowseEffect::CancelPage { .. })));
+        assert!(model.suspend().is_empty());
+        for request in &old {
+            assert!(settle(&mut model, request, 240, 24).is_empty());
+        }
+        assert!(model.set_display_range(48..72, 240).unwrap().is_empty());
+        assert_eq!(visible_ids(&model), before);
+        let resumed = model.resume().unwrap();
+        assert!(resumed
+            .iter()
+            .all(|effect| matches!(effect, BrowseEffect::RequestPage(_))));
+        assert!(model.resume().unwrap().is_empty());
+        settle_all_requests(&mut model, resumed, 240);
+        assert_eq!(visible_ids(&model), before);
+    }
+
+    #[test]
+    fn failed_refresh_retains_deep_result_set_and_retry_replaces_it() {
+        let mut model = loaded_search(240, 120..144);
+        let deep = visible_ids(&model);
+        let identity = model.identity().unwrap().to_owned();
+        let refresh = request(model.refresh().unwrap());
+        fail(&mut model, &refresh);
+        assert!(!model.is_refreshing());
+        assert!(model.refresh_failure().is_some());
+        assert_eq!(visible_ids(&model), deep);
+        assert!(model.set_display_range(0..24, 240).unwrap().is_empty());
+        assert!(model.set_display_range(120..144, 240).unwrap().is_empty());
+        assert_eq!(visible_ids(&model), deep);
+        model.suspend();
+        assert!(model.resume().unwrap().is_empty());
+        assert!(model.refresh_failure().is_some());
+        let retry = model.retry().unwrap();
+        assert!(model.is_refreshing());
+        settle_all_requests(&mut model, retry, 3);
+        assert!(!model.is_refreshing());
+        assert!(model.refresh_failure().is_none());
+        assert_eq!(model.identity(), Some(identity.as_str()));
+        assert_eq!(model.display_range(), Some(0..3));
+        assert_eq!(visible_ids(&model), vec!["item-0", "item-1", "item-2"]);
+        assert_eq!(model.retained_item_count(), 3);
+    }
+
+    #[test]
+    fn refresh_waits_for_captured_window_not_later_scroll_or_prefetch() {
+        let mut model = loaded_search(240, 120..144);
+        let bootstrap = request(model.refresh().unwrap());
+        let mut pending = requests(&settle(&mut model, &bootstrap, 240, 24));
+        assert!(model.is_refreshing());
+        model.set_display_range(192..216, 240).unwrap();
+        while !pending.iter().any(|request| request.start_index == 120) {
+            let next = pending.remove(0);
+            pending.extend(requests(&settle(&mut model, &next, 240, 24)));
+            assert!(model.is_refreshing());
+        }
+        let index = pending
+            .iter()
+            .position(|request| request.start_index == 120)
+            .unwrap();
+        let required = pending.remove(index);
+        let effects = settle(&mut model, &required, 240, 24);
+        assert!(!model.is_refreshing());
+        assert_eq!(model.display_range(), Some(192..216));
+        pending.extend(requests(&effects));
+        while let Some(request) = pending.pop() {
+            pending.extend(requests(&settle(&mut model, &request, 240, 24)));
+        }
+        assert_eq!(
+            visible_ids(&model).first().map(String::as_str),
+            Some("item-192")
+        );
+    }
+
+    #[test]
+    fn suspended_refresh_resumes_required_work_and_same_query_is_noop() {
+        let mut model = loaded_search(240, 120..144);
+        let original = visible_ids(&model);
+        let bootstrap = request(model.refresh().unwrap());
+        let effects = settle(&mut model, &bootstrap, 240, 24);
+        model.suspend();
+        assert!(model
+            .configure(BrowseSource::Search {
+                session: session(),
+                query: "arrival".to_owned()
+            })
+            .unwrap()
+            .is_empty());
+        assert!(model.refresh().unwrap().is_empty());
+        for request in requests(&effects) {
+            assert!(fail(&mut model, &request).is_empty());
+        }
+        assert!(model.is_refreshing());
+        assert_eq!(visible_ids(&model), original);
+        let resumed = model.resume().unwrap();
+        settle_all_requests(&mut model, resumed, 240);
+        assert!(!model.is_refreshing());
+        assert_eq!(visible_ids(&model), original);
+    }
+
+    #[test]
+    fn refresh_atomically_replaces_ready_result_with_empty_and_retains_empty_on_failure() {
+        let mut model = loaded_search(240, 120..144);
+        let refresh = request(model.refresh().unwrap());
+        settle(&mut model, &refresh, 0, 0);
+        assert!(!model.is_refreshing());
+        assert!(matches!(model.view(), LibraryBrowseView::Empty));
+        assert_eq!(model.retained_item_count(), 0);
+        let refresh = request(model.refresh().unwrap());
+        fail(&mut model, &refresh);
+        assert!(matches!(model.view(), LibraryBrowseView::Empty));
+        assert!(model
+            .refresh_failure()
+            .is_some_and(|failure| failure.retryable));
+        let retry = model.retry().unwrap();
+        settle_all_requests(&mut model, retry, 1);
+        assert_eq!(visible_ids(&model), vec!["item-0"]);
+    }
+
+    #[test]
+    fn required_refresh_page_failure_rolls_back_and_retries_the_refresh() {
+        let mut model = loaded_search(240, 120..144);
+        let original = visible_ids(&model);
+        let bootstrap = request(model.refresh().unwrap());
+        let mut pending = requests(&settle(&mut model, &bootstrap, 240, 24));
+        while !pending.iter().any(|request| request.start_index == 120) {
+            let next = pending.remove(0);
+            pending.extend(requests(&settle(&mut model, &next, 240, 24)));
+        }
+        let required = pending.remove(
+            pending
+                .iter()
+                .position(|request| request.start_index == 120)
+                .unwrap(),
+        );
+        fail(&mut model, &required);
+        assert!(!model.is_refreshing());
+        assert!(model.refresh_failure().is_some());
+        assert_eq!(visible_ids(&model), original);
+        for departed in pending {
+            assert!(settle(&mut model, &departed, 240, 24).is_empty());
+        }
+        let retry = request(model.retry().unwrap());
+        assert_eq!(retry.start_index, 0);
+        assert!(model.is_refreshing());
+    }
+
+    #[test]
+    fn refreshed_result_never_mixes_old_and_new_pages() {
+        let mut model = loaded_search(240, 120..144);
+        let original = visible_ids(&model);
+        let effects = model.refresh().unwrap();
+        let mut pending = requests(&effects);
+        while let Some(request) = pending.pop() {
+            let mut replacement_items = items(request.start_index, 24);
+            for item in &mut replacement_items {
+                item.id = format!("new-{}", item.id);
+            }
+            let effects = model
+                .settle(BrowsePageSettlement {
+                    source_id: request.source_id,
+                    token: request.token,
+                    result: Ok(BrowsePagePayload {
+                        start_index: request.start_index,
+                        limit: request.limit,
+                        total_record_count: 240,
+                        has_more: request.start_index + 24 < 240,
+                        items: replacement_items,
+                    }),
+                })
+                .unwrap();
+            pending.extend(requests(&effects));
+            if model.is_refreshing() {
+                assert_eq!(visible_ids(&model), original);
+            } else {
+                assert!(visible_ids(&model).iter().all(|id| id.starts_with("new-")));
+            }
+        }
+    }
+    #[test]
+    fn incomplete_refresh_window_fails_instead_of_waiting_forever() {
+        let mut model = loaded_search(240, 0..24);
+        let original = visible_ids(&model);
+        let bootstrap = request(model.refresh().unwrap());
+        settle(&mut model, &bootstrap, 240, 1);
+        assert!(!model.is_refreshing());
+        assert!(model
+            .refresh_failure()
+            .is_some_and(|failure| !failure.retryable));
+        assert_eq!(visible_ids(&model), original);
     }
 }

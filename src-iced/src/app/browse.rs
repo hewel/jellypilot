@@ -10,13 +10,12 @@ use iced::widget::operation;
 use iced::{task, Task};
 use jellypilot_core::browse::fetch_browse_page;
 use jellypilot_core::browse_model::{
-  BrowseEffect, BrowseModel, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
-  BrowseSource, LibraryBrowseView,
+  BrowseDeliveryToken, BrowseEffect, BrowseModel, BrowsePageRequest, BrowsePageSettlement,
+  BrowsePreferences, BrowseSource, LibraryBrowseView,
 };
 use jellypilot_core::browse_window::visible_display_range;
 use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
-use jellypilot_core::LibraryBrowseLoadToken;
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::VideoLibrarySortDirection;
 use jellypilot_ui::layout::SizeClass;
@@ -35,16 +34,13 @@ pub struct Surface {
   pub data: BrowseModel,
   pub view: LibraryBrowseView,
   pub artwork: ImageCollection,
-  pub page_tasks: HashMap<LibraryBrowseLoadToken, task::Handle>,
+  pub page_tasks: HashMap<BrowseDeliveryToken, task::Handle>,
   pub viewport: BrowseViewport,
   pub grid_viewport: Option<ArtworkGridViewport>,
   pub scroll_id: iced::widget::Id,
   pub sort_menu_open: bool,
   pub search_input: String,
   pub filters: Option<BrowseFilterSettings>,
-  pub request_generation: u64,
-  page_requests: HashMap<LibraryBrowseLoadToken, BrowsePageRequest>,
-  refresh_fallback: Option<LibraryBrowseView>,
 }
 
 impl Default for Surface {
@@ -60,9 +56,6 @@ impl Default for Surface {
       sort_menu_open: false,
       search_input: String::new(),
       filters: None,
-      request_generation: 0,
-      page_requests: HashMap::new(),
-      refresh_fallback: None,
     }
   }
 }
@@ -80,25 +73,25 @@ impl Surface {
 /// Data and query context owned by one navigation-history entry.
 pub(crate) struct Snapshot {
   data: BrowseModel,
-  view: LibraryBrowseView,
   viewport: BrowseViewport,
+  grid_viewport: Option<ArtworkGridViewport>,
   scroll_id: iced::widget::Id,
   filters: Option<BrowseFilterSettings>,
   search_input: String,
-  requests: Vec<BrowsePageRequest>,
-  refresh_fallback: Option<LibraryBrowseView>,
 }
 
 pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> Snapshot {
+  drop(surface.data.suspend());
+  abort_pages(surface);
+  let data = std::mem::take(&mut surface.data);
+  sync_view(surface);
   Snapshot {
-    data: std::mem::take(&mut surface.data),
-    view: std::mem::replace(&mut surface.view, LibraryBrowseView::Inactive),
+    data,
     viewport: surface.viewport,
+    grid_viewport: surface.grid_viewport,
     scroll_id: surface.scroll_id.clone(),
     filters: surface.filters,
     search_input: submitted_query.unwrap_or(&surface.search_input).to_owned(),
-    requests: surface.page_requests.values().cloned().collect(),
-    refresh_fallback: surface.refresh_fallback.take(),
   }
 }
 
@@ -111,20 +104,30 @@ pub(crate) fn restore(
   abort_pages(surface);
   begin_artwork_view(surface);
   surface.data = snapshot.data;
-  surface.view = snapshot.view;
   surface.viewport = snapshot.viewport;
+  surface.grid_viewport = snapshot.grid_viewport;
   surface.scroll_id = snapshot.scroll_id;
   surface.filters = snapshot.filters;
   surface.search_input = snapshot.search_input;
-  surface.refresh_fallback = snapshot.refresh_fallback;
   surface.sort_menu_open = false;
-  let requests = snapshot
-    .requests
-    .into_iter()
-    .map(|request| start_page_request(surface, kernel, request))
-    .collect::<Vec<_>>();
+  let effects = match surface.data.resume() {
+    Ok(effects) => effects,
+    Err(error) => {
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not restore library browsing: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-open-failed").arg("details", sanitize_message(&error.to_string())),
+      );
+      sync_view(surface);
+      return prepare_artwork(surface);
+    }
+  };
+  sync_view(surface);
   Task::batch([
-    Task::batch(requests),
+    apply_effects(surface, kernel, effects),
     sync_scroll_window(surface, kernel, window_size),
     prepare_artwork(surface),
   ])
@@ -225,33 +228,22 @@ pub fn update(
       sync_view(surface);
       apply_effects(surface, kernel, effects)
     }
-    BrowseMessage::PageSettled(generation, settlement) => {
-      if generation != surface.request_generation {
+    BrowseMessage::PageSettled(settlement) => {
+      if !surface.data.is_current_settlement(&settlement) {
         return Task::none();
       }
-      let current = surface.data.is_current_settlement(&settlement);
-      if current {
-        if let Err(error) = &settlement.result {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Error,
-            DiagnosticCategory::Connection,
-            format!("Browse page load failed: {error}"),
+      surface.page_tasks.remove(&settlement.token);
+      if let Err(error) = &settlement.result {
+        kernel.diagnostics.record(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Connection,
+          format!("Browse page load failed: {error}"),
+        );
+        if surface.data.is_refreshing() {
+          kernel.notice = Some(
+            UiText::new("browse-refresh-failed")
+              .arg("details", sanitize_message(&error.to_string())),
           );
-        }
-        surface.page_tasks.remove(&settlement.token);
-        surface.page_requests.remove(&settlement.token);
-        if surface.refresh_fallback.is_some() {
-          if let Err(error) = &settlement.result {
-            kernel.diagnostics.record(
-              DiagnosticLevel::Error,
-              DiagnosticCategory::Connection,
-              format!("Could not refresh this page: {error}"),
-            );
-            kernel.notice = Some(
-              UiText::new("browse-refresh-failed")
-                .arg("details", sanitize_message(&error.to_string())),
-            );
-          }
         }
       }
       let effects = match surface.data.settle(settlement) {
@@ -323,21 +315,10 @@ pub fn start(
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
 ) -> Task<Message> {
-  surface.refresh_fallback = None;
   let Some(source) = source else {
     abort_pages(surface);
     begin_artwork_view(surface);
-    if let Err(error) = surface.data.reset() {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not reset library browsing: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      return Task::none();
-    }
+    surface.data.reset();
     sync_view(surface);
     kernel.notice = Some(UiText::new("browse-library-unavailable"));
     return Task::none();
@@ -433,45 +414,30 @@ pub(crate) fn sync_scroll_window(
 }
 
 fn sync_view(surface: &mut Surface) {
-  let view = surface.data.view();
-  if matches!(
-    view,
-    LibraryBrowseView::Loading | LibraryBrowseView::Failed { .. }
-  ) {
-    surface.view = surface.refresh_fallback.clone().unwrap_or(view);
-  } else {
-    surface.refresh_fallback = None;
-    surface.view = view;
-  }
+  surface.view = surface.data.view();
 }
 
-/// Reloads the current request identity while keeping usable cards on a failed refresh.
-pub(crate) fn refresh(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  source: Option<BrowseSource>,
-) -> Task<Message> {
-  let fallback = matches!(
-    surface.view,
-    LibraryBrowseView::Ready { .. } | LibraryBrowseView::Empty
-  )
-  .then(|| surface.view.clone());
-  abort_pages(surface);
-  if let Err(error) = surface.data.reset() {
-    kernel.diagnostics.record(
-      DiagnosticLevel::Error,
-      DiagnosticCategory::Connection,
-      format!("Could not refresh this page: {error}"),
-    );
-    kernel.notice = Some(
-      UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
-    );
-    return Task::none();
-  }
-  let task = start(surface, kernel, source);
-  surface.refresh_fallback = fallback;
+/// Refreshes the model's stored query without releasing usable image demand.
+pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  let effects = match surface.data.refresh() {
+    Ok(effects) => effects,
+    Err(error) => {
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not refresh this page: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
+      );
+      return Task::none();
+    }
+  };
   sync_view(surface);
-  task
+  Task::batch([
+    apply_effects(surface, kernel, effects),
+    prepare_artwork(surface),
+  ])
 }
 
 fn apply_effects(
@@ -504,7 +470,6 @@ fn apply_effects(
         if let Some(handle) = surface.page_tasks.remove(&token) {
           handle.abort();
         }
-        surface.page_requests.remove(&token);
       }
     }
   }
@@ -522,11 +487,8 @@ fn start_page_request(
   request: BrowsePageRequest,
 ) -> Task<Message> {
   let token = request.token;
-  let generation = surface.request_generation;
-  surface.page_requests.insert(token, request.clone());
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::done(Message::Browse(BrowseMessage::PageSettled(
-      generation,
       BrowsePageSettlement {
         source_id: request.source_id,
         token,
@@ -535,7 +497,7 @@ fn start_page_request(
     )));
   };
   let (task, handle) = Task::perform(fetch_browse_page(client, request), move |settlement| {
-    Message::Browse(BrowseMessage::PageSettled(generation, settlement))
+    Message::Browse(BrowseMessage::PageSettled(settlement))
   })
   .abortable();
   surface.page_tasks.insert(token, handle);
@@ -571,43 +533,21 @@ fn begin_artwork_view(surface: &mut Surface) {
 /// Browse leave hook, invoked by the top-level router when the destination
 /// switches away from Library/Search: aborts in-flight page requests,
 /// releases this view's image demand, and resets the model.
-pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
+pub(crate) fn leave_view(surface: &mut Surface) {
   abort_pages(surface);
   begin_artwork_view(surface);
-  if let Err(error) = surface.data.reset() {
-    kernel.diagnostics.record(
-      DiagnosticLevel::Error,
-      DiagnosticCategory::Connection,
-      format!("Could not reset library browsing: {error}"),
-    );
-    kernel.notice =
-      Some(UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())));
-  }
+  surface.data.reset();
   sync_view(surface);
 }
 
 /// Browse portion of the router's connected-surface reset: aborts in-flight
 /// page requests, drops the artwork cells, and resets the model and view.
-pub(crate) fn reset(surface: &mut Surface, kernel: &mut Kernel) {
-  surface.refresh_fallback = None;
+pub(crate) fn reset(surface: &mut Surface) {
+  leave_view(surface);
   surface.filters = None;
-  abort_pages(surface);
-  begin_artwork_view(surface);
-  if let Err(error) = surface.data.reset() {
-    kernel.diagnostics.record(
-      DiagnosticLevel::Error,
-      DiagnosticCategory::Connection,
-      format!("Could not reset library browsing: {error}"),
-    );
-    kernel.notice =
-      Some(UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())));
-  }
-  surface.view = LibraryBrowseView::Inactive;
 }
 
 fn abort_pages(surface: &mut Surface) {
-  surface.request_generation = surface.request_generation.wrapping_add(1);
-  surface.page_requests.clear();
   for (_, handle) in surface.page_tasks.drain() {
     handle.abort();
   }
@@ -658,74 +598,230 @@ mod tests {
     (Surface::default(), kernel)
   }
 
-  #[test]
-  fn resumed_refresh_rejects_departed_results_and_retains_cards_on_failure() {
-    use jellypilot_core::browse_model::BrowsePagePayload;
+  #[tokio::test]
+  async fn resumed_refresh_rejects_departed_results_and_retains_cards_on_failure() {
     let (mut surface, mut kernel) = test_fixture();
     let source = search_source(&kernel, "original");
-    let first = browse_request(surface.data.configure(source.clone()).unwrap());
+    let first = browse_request(surface.data.configure(source).unwrap());
+    settle_page(&mut surface.data, first, 240);
+    let deep = surface.data.set_display_range(192..216, 240).unwrap();
+    for effect in deep {
+      if let BrowseEffect::RequestPage(request) = effect {
+        settle_page(&mut surface.data, request, 240);
+      }
+    }
+    sync_view(&mut surface);
+    surface.viewport.offset_y = 8_000.0;
+    surface.grid_viewport = Some(ArtworkGridViewport {
+      offset_y: 8_000.0,
+      height: WINDOW_HEIGHT,
+    });
+    let scroll_id = surface.scroll_id.clone();
+    let departed = task_settlement(refresh(&mut surface, &mut kernel)).await;
+    let (_, handle) = Task::<Message>::none().abortable();
+    surface.page_tasks.insert(departed.token, handle);
+    let saved = snapshot(&mut surface, Some("original"));
+    assert!(surface.page_tasks.is_empty());
+    assert!(!saved.data.is_current_settlement(&departed));
+    let current = task_settlement(restore(&mut surface, &mut kernel, saved, window_size())).await;
+    let (_, handle) = Task::<Message>::none().abortable();
+    surface.page_tasks.insert(current.token, handle);
+    dispatch_settlement(&mut surface, &mut kernel, departed);
+    assert!(surface.page_tasks.contains_key(&current.token));
+    assert!(surface.data.is_refreshing());
+    dispatch_settlement(&mut surface, &mut kernel, current);
+    assert!(!surface.data.is_refreshing());
+    assert!(surface.data.refresh_failure().is_some());
+    assert_eq!(surface.viewport.offset_y, 8_000.0);
+    assert_eq!(surface.scroll_id, scroll_id);
+    surface.data.set_display_range(192..216, 240).unwrap();
+    sync_view(&mut surface);
+    assert_eq!(
+      surface.grid_viewport,
+      Some(ArtworkGridViewport {
+        offset_y: 8_000.0,
+        height: WINDOW_HEIGHT,
+      })
+    );
+    let LibraryBrowseView::Ready { visible_items, .. } = &surface.view else {
+      panic!("failed refresh must preserve deep cached pages");
+    };
+    assert_eq!(visible_items[0].item.as_ref().unwrap().id, "item-192");
+    let retry = update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::Retry,
+    );
+    assert!(surface.data.is_refreshing());
+    let retry = task_settlement(retry).await;
+    assert!(surface.data.is_current_settlement(&retry));
+  }
+
+  #[tokio::test]
+  async fn empty_refresh_failure_survives_history_and_retries_without_resetting_scroll() {
+    let (mut surface, mut kernel) = test_fixture();
+    let first = browse_request(
+      surface
+        .data
+        .configure(search_source(&kernel, "empty"))
+        .unwrap(),
+    );
+    settle_page(&mut surface.data, first, 0);
+    sync_view(&mut surface);
+    let failure = task_settlement(refresh(&mut surface, &mut kernel)).await;
+    dispatch_settlement(&mut surface, &mut kernel, failure);
+    let saved = snapshot(&mut surface, Some("empty"));
+    drop(restore(&mut surface, &mut kernel, saved, window_size()));
+    assert!(matches!(surface.view, LibraryBrowseView::Empty));
+    assert!(surface.data.refresh_failure().is_some());
+    let scroll_id = surface.scroll_id.clone();
+    let retry = update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::Retry,
+    );
+    assert!(surface.data.is_refreshing());
+    assert_eq!(surface.scroll_id, scroll_id);
+    dispatch_settlement(&mut surface, &mut kernel, task_settlement(retry).await);
+    assert!(matches!(surface.view, LibraryBrowseView::Empty));
+    assert!(surface.data.refresh_failure().is_some());
+  }
+
+  fn settle_page(model: &mut BrowseModel, request: BrowsePageRequest, total: u32) {
+    let mut pending = vec![request];
+    while let Some(request) = pending.pop() {
+      let end = (request.start_index + request.limit).min(total);
+      let effects = model
+        .settle(BrowsePageSettlement {
+          source_id: request.source_id,
+          token: request.token,
+          result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
+            start_index: request.start_index,
+            limit: request.limit,
+            total_record_count: total,
+            has_more: end < total,
+            items: (request.start_index..end)
+              .map(|index| episode(&format!("item-{index}"), 1))
+              .collect(),
+          }),
+        })
+        .unwrap();
+      pending.extend(effects.into_iter().filter_map(|effect| match effect {
+        BrowseEffect::RequestPage(request) => Some(request),
+        BrowseEffect::CancelPage { .. } | BrowseEffect::ResetViewport => None,
+      }));
+    }
+  }
+
+  async fn task_settlement(task: Task<Message>) -> BrowsePageSettlement {
+    use iced::futures::StreamExt;
+    let mut stream = iced_runtime::task::into_stream(task).expect("page task");
+    while let Some(action) = stream.next().await {
+      if let iced_runtime::Action::Output(Message::Browse(BrowseMessage::PageSettled(settlement))) =
+        action
+      {
+        return settlement;
+      }
+    }
+    panic!("page task must deliver a settlement");
+  }
+
+  fn dispatch_settlement(
+    surface: &mut Surface,
+    kernel: &mut Kernel,
+    settlement: BrowsePageSettlement,
+  ) {
+    drop(update(
+      surface,
+      kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::PageSettled(settlement),
+    ));
+  }
+
+  #[tokio::test]
+  async fn snapshot_aborts_owned_delivery_without_a_separate_leave_hook() {
+    use iced::futures::StreamExt;
+    let (mut surface, kernel) = test_fixture();
+    let request = browse_request(
+      surface
+        .data
+        .configure(search_source(&kernel, "pending"))
+        .unwrap(),
+    );
+    let settlement = BrowsePageSettlement {
+      source_id: request.source_id,
+      token: request.token,
+      result: Err("departed".to_owned()),
+    };
+    let (task, handle) = Task::done(Message::Browse(BrowseMessage::PageSettled(
+      settlement.clone(),
+    )))
+    .abortable();
+    surface.page_tasks.insert(request.token, handle);
+    let mut saved = snapshot(&mut surface, Some("pending"));
+    let mut stream = iced_runtime::task::into_stream(task).expect("owned delivery");
+    assert!(stream.next().await.is_none());
+    assert!(!saved.data.is_current_settlement(&settlement));
+    let resumed = browse_request(saved.data.resume().unwrap());
+    assert_ne!(resumed.token, settlement.token);
+  }
+
+  #[tokio::test]
+  async fn refresh_start_and_failure_preserve_overlapping_image_demand() {
+    use jellypilot_core::image_lifecycle::ImagePriority;
+    let (mut surface, mut kernel) = test_fixture();
+    let request = browse_request(
+      surface
+        .data
+        .configure(search_source(&kernel, "images"))
+        .unwrap(),
+    );
+    let mut item = episode("cached", 1);
+    item.artwork_image_id = Some("cached-image".to_owned());
     surface
       .data
       .settle(BrowsePageSettlement {
-        source_id: first.source_id,
-        token: first.token,
-        result: Ok(BrowsePagePayload {
+        source_id: request.source_id,
+        token: request.token,
+        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
           start_index: 0,
           limit: 24,
           total_record_count: 1,
           has_more: false,
-          items: vec![episode("cached", 1)],
+          items: vec![item],
         }),
       })
       .unwrap();
     sync_view(&mut surface);
-    drop(refresh(&mut surface, &mut kernel, Some(source)));
-    let request = surface.page_requests.values().next().unwrap().clone();
-    let departed = surface.request_generation;
-    let saved = snapshot(&mut surface, Some("original"));
-    leave_view(&mut surface, &mut kernel);
-    drop(restore(&mut surface, &mut kernel, saved, window_size()));
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      None,
-      false,
-      window_size(),
-      BrowseMessage::PageSettled(
-        departed,
-        BrowsePageSettlement {
-          source_id: request.source_id.clone(),
-          token: request.token,
-          result: Ok(BrowsePagePayload {
-            start_index: 0,
-            limit: 24,
-            total_record_count: 1,
-            has_more: false,
-            items: vec![episode("stale", 1)],
-          }),
-        },
-      ),
+    drop(surface.artwork.observe(
+      kernel.request_gate.current_session(),
+      ImageSpec {
+        key: "cached".to_owned(),
+        image_id: "cached-image".to_owned(),
+        size_class: ArtworkSizeClass::Card,
+        derived: DerivedArtwork::default(),
+      },
+      Some(ImagePriority::Visible),
+      Arc::new(jellypilot_media_server::JellyfinClient::new()),
+      Arc::clone(&kernel.artwork_adapter),
+      |completion| Message::Browse(BrowseMessage::ArtworkLoaded(completion)),
     ));
-    let current = surface.request_generation;
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      None,
-      false,
-      window_size(),
-      BrowseMessage::PageSettled(
-        current,
-        BrowsePageSettlement {
-          source_id: request.source_id,
-          token: request.token,
-          result: Err("refresh unavailable".to_owned()),
-        },
-      ),
-    ));
-    let LibraryBrowseView::Ready { visible_items, .. } = &surface.view else {
-      panic!("returning during a failed refresh must preserve usable cards");
-    };
-    assert_eq!(visible_items[0].item.as_ref().unwrap().id, "cached");
+    let epoch = surface.artwork.epoch();
+    let task = refresh(&mut surface, &mut kernel);
+    assert!(surface.artwork.get("cached").is_some());
+    assert_eq!(surface.artwork.epoch(), epoch);
+    dispatch_settlement(&mut surface, &mut kernel, task_settlement(task).await);
+    assert!(surface.artwork.get("cached").is_some());
+    assert_eq!(surface.artwork.epoch(), epoch);
   }
 
   fn browse_request(effects: Vec<BrowseEffect>) -> BrowsePageRequest {
@@ -805,13 +901,14 @@ mod tests {
         .configure(source.clone())
         .expect("first search should configure"),
     );
-    surface.data.reset().expect("browse epoch should advance");
+    surface.data = BrowseModel::default();
     let current = browse_request(
       surface
         .data
         .configure(source)
         .expect("search should reopen"),
     );
+    sync_view(&mut surface);
     let (_, handle) = Task::<Message>::none().abortable();
     surface.page_tasks.insert(current.token, handle);
 
@@ -821,14 +918,11 @@ mod tests {
       None,
       false,
       window_size(),
-      BrowseMessage::PageSettled(
-        0,
-        BrowsePageSettlement {
-          source_id: stale.source_id,
-          token: stale.token,
-          result: Err("stale server response".to_owned()),
-        },
-      ),
+      BrowseMessage::PageSettled(BrowsePageSettlement {
+        source_id: stale.source_id,
+        token: stale.token,
+        result: Err("stale server response".to_owned()),
+      }),
     ));
 
     assert!(surface.page_tasks.contains_key(&current.token));
@@ -916,7 +1010,7 @@ mod tests {
       None,
       false,
       window_size(),
-      BrowseMessage::PageSettled(0, settlement),
+      BrowseMessage::PageSettled(settlement),
     ));
 
     let metrics = ArtworkGridMetrics::for_cards(
@@ -1064,7 +1158,7 @@ mod tests {
       offset_y: 400.0,
       height: 300.0,
     });
-    leave_view(&mut surface, &mut kernel);
+    leave_view(&mut surface);
     drop(update(
       &mut surface,
       &mut kernel,

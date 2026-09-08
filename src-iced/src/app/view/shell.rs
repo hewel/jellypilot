@@ -401,6 +401,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     personal_destination,
     personal_active,
   ));
+  let refreshing = crate::app::shell::refresh_busy(state);
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)
       .style(sidebar::action)
@@ -408,10 +409,8 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       .padding([7, 0])
       .width(Fill)
       .content_centered(true)
-      .on_press_maybe(
-        (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
-      ),
-    if state.shell.refresh_busy {
+      .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
+    if refreshing {
       state.t("shell-refreshing")
     } else {
       state.t("common-refresh")
@@ -566,16 +565,15 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     state.t("common-settings"),
     TooltipOptions::default(),
   );
+  let refreshing = crate::app::shell::refresh_busy(state);
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
       .style(sidebar::action)
       .min_height(40.0)
       .width(Fill)
       .content_centered(true)
-      .on_press_maybe(
-        (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
-      ),
-    if state.shell.refresh_busy {
+      .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
+    if refreshing {
       state.t("shell-refreshing")
     } else {
       state.t("common-refresh")

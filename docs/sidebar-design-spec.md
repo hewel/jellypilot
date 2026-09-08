@@ -27,7 +27,7 @@ Multiple saved logins support switching, not simultaneous connections or aggrega
 
 - Back restores the history entry's absolute scroll offsets, including horizontal Home rows and detail carousels, rather than reopening the route at the top.
 - Browse history retains loaded result pages, filters, sorting, and the committed search query. Detail history retains loaded content, selected season, and expanded descriptions; Personal Lists retains its page offsets and visible entries.
-- Restore positions during layout before drawing ready content. Loading placeholders must not consume a saved ready-content position. Pending browse requests resume with a new delivery generation, and a failed refresh retains usable cached cards.
+- Restore positions during layout before drawing ready content. Loading placeholders must not consume a saved ready-content position. Saving Browse history pauses requests before transferring its model; resuming issues fresh delivery identities. Late results cannot become current after restoration or model recreation.
 - A new search or changed filter/sort starts a new result set at the top. Navigating to an existing non-detail history destination restores that entry and truncates the intervening history.
 - History is in-memory and account-scoped; disconnect, account handoff, or switching to Control-Only clears it. Restoration uses absolute logical offsets, not item anchors, so resizing into a different grid column count does not guarantee the same card remains at the same screen position.
 - Human acceptance: scroll a library, open a card and return; repeat with Home's vertical and horizontal positions, nested details, and Personal Lists. Confirm no initial top flash, unchanged query/filter context, fresh results starting at the top, and no restored positions after changing accounts.
@@ -118,6 +118,12 @@ The bottom action is named Refresh. It reloads the current account's library dir
 Personal Lists refreshes Favorites and server information for currently visible Watchlist entries without changing local Watchlist membership.
 Show real request activity and coalesce repeated triggers. Preserve current navigation, retain usable content on failure, and provide retry.
 If a directory refresh confirms that the current library is no longer accessible, return to Home and explain why. Refresh results from the old account must not update the new account.
+
+Library/Search refresh retains the current absolute scroll position and the complete last usable result set, not only the currently drawn cards. Failed refresh keeps those pages available for browsing and exposes retry, including when the retained result is empty. Successful refresh replaces the result set without mixing old and new pages; smaller results clamp to a usable window and empty results clear the old cards.
+
+The refresh target is the destination and query selected when Refresh is pressed. Leaving that target invalidates its page-refresh participation, even if the user returns before the directory response; changing filters or sorting likewise prevents retargeting. The directory result still updates the library list, and a confirmed removal still redirects an inaccessible current library to Home.
+
+Browse refresh remains busy through bootstrap and the pages needed for its captured display window. Later scrolling and speculative prefetch do not indefinitely extend that transaction. Restoring an unfinished refresh resumes its busy state and continues to coalesce repeated triggers.
 
 ### Shortcuts and Layering
 
