@@ -22,7 +22,7 @@ source=(
 )
 noextract=("$pkgname-$pkgver.pkg.tar.zst")
 # Filled from the GitHub release SHA256SUMS when publishing to the AUR.
-sha256sums=('SKIP')
+sha256sums=('07ab40c42d9341e96c0f0d7b26b16ae519d851bfa39c4736242ab2e6d9f969e2')
 
 package() {
   bsdtar -x \
