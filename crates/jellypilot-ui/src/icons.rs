@@ -87,7 +87,7 @@ impl From<f32> for IconSize {
     }
 }
 
-const ICON_COUNT: usize = 58;
+const ICON_COUNT: usize = Icon::all().len();
 static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     let mut handles = std::array::from_fn(|_| Handle::from_memory(&[]));
     for icon in Icon::all() {
@@ -105,9 +105,13 @@ pub enum Icon {
     Stop,
     Previous,
     Next,
-    VolumeHigh,
+    VolumeLow,
+    VolumeMedium,
+    VolumeMuted,
+    VolumeLoud,
     VolumeMute,
     AudioTrack,
+    HeadphonesSquare,
     Subtitles,
     IntroSkip,
     Playlist,
@@ -181,9 +185,13 @@ impl Icon {
             Self::Stop => include_bytes!("../assets/icons/player-stop.svg"),
             Self::Previous => include_bytes!("../assets/icons/player-skip-back.svg"),
             Self::Next => include_bytes!("../assets/icons/player-skip-forward.svg"),
-            Self::VolumeHigh => include_bytes!("../assets/icons/volume.svg"),
+            Self::VolumeLow => include_bytes!("../assets/icons/volume.svg"),
+            Self::VolumeMedium => include_bytes!("../assets/icons/volume-medium.svg"),
+            Self::VolumeMuted => include_bytes!("../assets/icons/volume-muted.svg"),
+            Self::VolumeLoud => include_bytes!("../assets/icons/volume-loud.svg"),
             Self::VolumeMute => include_bytes!("../assets/icons/volume-off.svg"),
             Self::AudioTrack => include_bytes!("../assets/icons/headphones.svg"),
+            Self::HeadphonesSquare => include_bytes!("../assets/icons/headphones-square.svg"),
             Self::Subtitles => include_bytes!("../assets/icons/subtitles.svg"),
             Self::IntroSkip => include_bytes!("../assets/icons/sparkles.svg"),
             Self::Playlist => include_bytes!("../assets/icons/playlist.svg"),
@@ -275,9 +283,13 @@ impl Icon {
             Self::Stop,
             Self::Previous,
             Self::Next,
-            Self::VolumeHigh,
+            Self::VolumeLow,
+            Self::VolumeMedium,
+            Self::VolumeMuted,
+            Self::VolumeLoud,
             Self::VolumeMute,
             Self::AudioTrack,
+            Self::HeadphonesSquare,
             Self::Subtitles,
             Self::IntroSkip,
             Self::Playlist,
@@ -449,7 +461,6 @@ mod tests {
 
     #[test]
     fn icon_count_matches_variant_slice() {
-        assert_eq!(Icon::all().len(), ICON_COUNT);
         for (idx, icon) in Icon::all().iter().enumerate() {
             assert_eq!(icon.index(), idx);
         }

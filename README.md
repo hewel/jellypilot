@@ -156,10 +156,41 @@ native iced/no-webview decision. External remains the default, including existin
 files. In **Settings → Playback**, select Embedded and restart; the same player, transport,
 queue, volume, subtitles, and remote-session controller are reused. **Show video** opens the
 player surface while browsing. Switching back preserves the external executable and arguments.
-Click the video picture or press **Space** to toggle playback/pause. Space applies only to
-embedded playback, ignores held-key repeats and widget-consumed input, and is disabled while
-settings/account/search modals or shortcut capture are active. Existing configured playback
-bindings take precedence if assigned to Space.
+
+The embedded player uses one full-window video surface with floating controls in both windowed
+and fullscreen playback; the video keeps its aspect ratio without cropping.
+
+| Input | Embedded player action |
+|---|---|
+| Left / Right | Seek −5 / +5 seconds; held keys repeat |
+| Up / Down | Volume +5 / −5 percentage points, limited to 0–100%; held keys repeat |
+| F | Toggle fullscreen; held-key repeats ignored |
+| Esc | Leave fullscreen; an open menu or modal takes priority |
+| Space / click video | Toggle pause; Space repeats ignored |
+| Back button | Stop playback, then restore the source page and leave fullscreen |
+
+These keys apply only while the embedded player is visible, not while browsing. Captured input,
+menus, modals and shortcut capture take priority; the listed unmodified keys are reserved in the
+player. Other configured episode/intro bindings remain available. Search is unavailable within
+the standalone player; Settings can open over windowed playback.
+
+The cursor reappears on any pointer movement and hides after three idle seconds while playing,
+independently of the controls. Moving near the bottom control area (including a 48px approach
+band) reveals the bar; movement over the middle of the picture does not reveal or prolong it.
+The top-left Back button has its own reveal region and three-second timeout. Pausing,
+dragging, open menus and an intro prompt keep controls visible. Keyboard seek and volume
+changes show brief feedback. Hovering the timeline previews its time; dragging changes
+the target preview and seeks once on release. Seek availability retains the existing positive,
+finite-duration check, not a separate backend seekability signal. A failed Stop keeps the player
+open so Back can be retried.
+
+Slider keyboard/wheel adjustments submit immediately rather than waiting for a mouse release.
+Switching fullscreen during a drag cancels its unfinished preview; releasing afterward does not
+submit the cancelled target. Clicking the picture outside an open player menu only dismisses
+that menu and does not pause or resume playback.
+
+The bar uses a translucent background without blur. Its transport stays centered in one row
+down to 768 logical pixels; at 900 pixels and below, the landscape thumbnail is hidden.
 
 ```bash
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,

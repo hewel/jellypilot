@@ -43,7 +43,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   // Keep this ancestor stable: adding or removing it would reset descendant
   // input focus, cursor positions, and scroll state during iced reconciliation.
   let mut layers = if state.shell.player_fullscreen {
-    stack![concealed(base), player::video_surface()]
+    stack![concealed(base), player::embedded(state)]
   } else if let Some(modal) = account::modal_layer(state) {
     stack![inert(base), modal]
   } else {

@@ -44,6 +44,10 @@ impl std::fmt::Debug for Message {
       Self::OpenDetail(_) => formatter.write_str("OpenDetail"),
       Self::Detail(_) => formatter.write_str("Detail"),
       Self::Playback(_) => formatter.write_str("Playback"),
+      Self::EmbeddedPlayer(message) => formatter
+        .debug_tuple("EmbeddedPlayer")
+        .field(message)
+        .finish(),
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
@@ -80,6 +84,7 @@ pub enum Message {
   OpenDetail(VideoLibraryItem),
   Detail(DetailMessage),
   Playback(PlaybackMessage),
+  EmbeddedPlayer(super::embedded_player::Message),
   Settings(SettingsMessage),
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
@@ -257,10 +262,14 @@ pub enum SettingsMessage {
 pub enum PlaybackMessage {
   Intent(Box<PlaybackIntent>),
   Event(Box<PlaybackEvent>),
+  SeekDragStarted,
   SeekChanged(f64),
   SeekReleased,
+  SeekAdjusted(f64),
+  VolumeDragStarted,
   VolumeChanged(f64),
   VolumeReleased,
+  VolumeAdjusted(f64),
   AudioMenuToggled,
   AudioMenuDismissed,
   AudioTrackSelected(i64),

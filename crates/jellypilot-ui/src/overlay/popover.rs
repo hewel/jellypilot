@@ -15,6 +15,7 @@ pub enum PopoverAppearance {
     #[default]
     Default,
     Account,
+    EmbeddedPlayer,
 }
 
 /// Placement and dismissal behavior for a [`popover`].
@@ -70,11 +71,13 @@ where
             .padding(match options.appearance {
                 PopoverAppearance::Default => TOKENS.spacing.s3,
                 PopoverAppearance::Account => TOKENS.spacing.s2_5,
+                PopoverAppearance::EmbeddedPlayer => TOKENS.spacing.s3,
             })
             .width(options.width.map_or(Length::Fit, Length::Fixed))
             .style(match options.appearance {
                 PopoverAppearance::Default => style::popover_surface,
                 PopoverAppearance::Account => crate::widgets::sidebar::popover,
+                PopoverAppearance::EmbeddedPlayer => crate::widgets::embedded_player::popover,
             }),
     );
 

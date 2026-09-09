@@ -55,6 +55,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
   if state.app_mode() == AppMode::ControlOnly {
     return control_only_view(state);
   }
+  if crate::embedded::enabled()
+    && state.shell.destination == Destination::NowPlaying
+    && state.playback.view.now_playing.is_some()
+  {
+    let player = player::embedded(state);
+    return if state.shell.settings_open {
+      stack![inert(player), settings_modal(state)]
+    } else {
+      stack![player]
+    }
+    .width(Fill)
+    .height(Fill)
+    .into();
+  }
   let palette = state.palette();
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();

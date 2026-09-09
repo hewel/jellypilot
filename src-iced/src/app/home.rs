@@ -281,7 +281,7 @@ fn artwork_image_id(placement: ArtworkPlacement, item: &VideoLibraryItem) -> Opt
   }
 }
 
-fn landscape_image_id(item: &VideoLibraryItem) -> Option<&str> {
+pub(super) fn landscape_image_id(item: &VideoLibraryItem) -> Option<&str> {
   if item.item_type.eq_ignore_ascii_case("Episode") {
     item
       .artwork_image_id

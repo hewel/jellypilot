@@ -106,6 +106,13 @@ where
         self
     }
 
+    /// Sets the line height; use [`Pixels`] for an absolute height.
+    #[must_use]
+    pub fn line_height(mut self, line_height: impl Into<text::LineHeight>) -> Self {
+        self.format.line_height = Some(line_height.into());
+        self
+    }
+
     /// Sets the [`Color`] of the text.
     #[must_use]
     pub fn color(self, color: impl Into<Color>) -> Self

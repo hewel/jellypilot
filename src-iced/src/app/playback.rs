@@ -56,6 +56,7 @@ use super::state::{
 };
 
 pub(crate) const PLAYER_IMAGE_KEY: &str = "now-playing";
+pub(crate) const PLAYER_THUMBNAIL_KEY: &str = "now-playing-thumbnail";
 
 #[derive(Clone)]
 pub enum QueueState {
@@ -136,6 +137,8 @@ pub struct Surface {
   pub playable: Option<Playable>,
   pub in_flight_refresh: Option<EffectId>,
   pub in_flight_command: Option<EffectId>,
+  pub replacing: bool,
+  pub replacement_generation: u64,
   pub adjacent_playables: [Option<Playable>; 2],
   pub queue: QueueState,
   queue_session: Option<SessionToken>,
@@ -152,6 +155,8 @@ pub struct Surface {
   pub remote_stopping: bool,
   account_playback_handoff: Option<AccountPlaybackHandoff>,
   account_remote_handoff: Option<u64>,
+  pub seek_dragging: bool,
+  pub volume_dragging: bool,
   pub seek_preview: Option<f64>,
   pub volume_preview: Option<f64>,
   pub audio_menu_open: bool,
@@ -171,6 +176,8 @@ impl Surface {
       in_flight_refresh: None,
       in_flight_command: None,
       adjacent_playables: [None, None],
+      replacing: false,
+      replacement_generation: 0,
       queue: QueueState::Unavailable,
       queue_session: None,
       queue_season: None,
@@ -185,6 +192,8 @@ impl Surface {
       account_playback_handoff: None,
       account_remote_handoff: None,
       seek_preview: None,
+      seek_dragging: false,
+      volume_dragging: false,
       volume_preview: None,
       audio_menu_open: false,
       subtitle_menu_open: false,
@@ -1147,6 +1156,11 @@ fn update_playback(
       quit_requested,
       PlaybackInput::Event(Box::new(*event)),
     ),
+    PlaybackMessage::SeekDragStarted => {
+      surface.seek_dragging = true;
+      surface.seek_preview = None;
+      Task::none()
+    }
     PlaybackMessage::SeekChanged(position) => {
       surface.seek_preview = seek_intent(
         position,
@@ -1164,6 +1178,7 @@ fn update_playback(
       Task::none()
     }
     PlaybackMessage::SeekReleased => {
+      surface.seek_dragging = false;
       let Some(position) = surface.seek_preview else {
         return Task::none();
       };
@@ -1185,6 +1200,33 @@ fn update_playback(
         PlaybackInput::Intent(Box::new(intent)),
       )
     }
+    PlaybackMessage::SeekAdjusted(position) => {
+      let Some(intent) = seek_intent(
+        position,
+        surface
+          .view
+          .now_playing
+          .as_ref()
+          .and_then(|view| view.duration_seconds),
+        surface.view.now_playing.is_some(),
+      ) else {
+        return Task::none();
+      };
+      if let PlaybackIntent::Seek(position) = intent {
+        surface.seek_preview = Some(position);
+      }
+      apply_playback_input(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackInput::Intent(Box::new(intent)),
+      )
+    }
+    PlaybackMessage::VolumeDragStarted => {
+      surface.volume_dragging = true;
+      surface.volume_preview = None;
+      Task::none()
+    }
     PlaybackMessage::VolumeChanged(volume) => {
       surface.volume_preview =
         volume_intent(volume, surface.view.now_playing.is_some()).and_then(|intent| match intent {
@@ -1194,12 +1236,27 @@ fn update_playback(
       Task::none()
     }
     PlaybackMessage::VolumeReleased => {
+      surface.volume_dragging = false;
       let Some(volume) = surface.volume_preview else {
         return Task::none();
       };
       let Some(intent) = volume_intent(volume, surface.view.now_playing.is_some()) else {
         return Task::none();
       };
+      apply_playback_input(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackInput::Intent(Box::new(intent)),
+      )
+    }
+    PlaybackMessage::VolumeAdjusted(volume) => {
+      let Some(intent) = volume_intent(volume, surface.view.now_playing.is_some()) else {
+        return Task::none();
+      };
+      if let PlaybackIntent::SetVolume(volume) = intent {
+        surface.volume_preview = Some(volume);
+      }
       apply_playback_input(
         surface,
         kernel,
@@ -1368,8 +1425,13 @@ fn update_playback(
         handoff.settlement = Some(result);
       }
       if !surface.view.busy {
-        surface.seek_preview = None;
-        surface.volume_preview = None;
+        surface.replacing = false;
+        if !surface.seek_dragging {
+          surface.seek_preview = None;
+        }
+        if !surface.volume_dragging {
+          surface.volume_preview = None;
+        }
       }
       tasks.push(clear_inactive_playback(surface));
       Task::batch(tasks)
@@ -1437,6 +1499,26 @@ pub(crate) fn apply_playback_input(
   quit_requested: bool,
   input: PlaybackInput,
 ) -> Task<Message> {
+  // A replacement can wait behind a control/refresh. Publish the barrier when
+  // accepted at this shared ingress, not only when its controller effect runs.
+  let replacing = match &input {
+    PlaybackInput::Intent(intent) => match intent.as_ref() {
+      PlaybackIntent::Start { .. } => surface.view.engine_available && !quit_requested,
+      PlaybackIntent::PlayAdjacent(direction) => matches!(
+        match direction {
+          AdjacentDirection::Previous => &surface.view.adjacent.previous,
+          AdjacentDirection::Next => &surface.view.adjacent.next,
+        },
+        jellypilot_mpv::playback_session::AdjacentAvailability::Available { .. }
+      ),
+      PlaybackIntent::Stop | PlaybackIntent::Quit | PlaybackIntent::Disconnect => true,
+      _ => false,
+    },
+    PlaybackInput::Event(_) => false,
+  };
+  if replacing {
+    begin_replacement(surface);
+  }
   let effects = surface.session.handle(input, Instant::now());
   let task = execute_playback_effects(surface, kernel, effects);
   sync_playback_projection(surface, kernel, quit_requested);
@@ -1446,6 +1528,21 @@ pub(crate) fn apply_playback_input(
   } else {
     Task::batch([task, artwork_task])
   }
+}
+
+fn begin_replacement(surface: &mut Surface) {
+  surface.replacing = true;
+  surface.replacement_generation = surface.replacement_generation.wrapping_add(1);
+  if crate::embedded::enabled() {
+    cancel_slider_drags(surface);
+  }
+}
+
+pub(crate) fn cancel_slider_drags(surface: &mut Surface) {
+  surface.seek_dragging = false;
+  surface.volume_dragging = false;
+  surface.seek_preview = None;
+  surface.volume_preview = None;
 }
 /// Re-prepares the player-bar artwork whenever the projected Now Playing item
 /// matches the resolved playable but the artwork cell does not cover it.
@@ -1475,6 +1572,10 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
   match message {
     PlaybackMessage::Intent(_) => "intent",
     PlaybackMessage::Event(_) => "event",
+    PlaybackMessage::SeekDragStarted => "seek-drag-started",
+    PlaybackMessage::SeekAdjusted(_) => "seek-adjusted",
+    PlaybackMessage::VolumeDragStarted => "volume-drag-started",
+    PlaybackMessage::VolumeAdjusted(_) => "volume-adjusted",
     PlaybackMessage::SeekChanged(_) => "seek-changed",
     PlaybackMessage::SeekReleased => "seek-released",
     PlaybackMessage::VolumeChanged(_) => "volume-changed",
@@ -1591,6 +1692,14 @@ fn execute_playback_effect(
 ) -> Task<Message> {
   match effect {
     PlaybackEffect::Controller(id, command) => {
+      if !surface.replacing
+        && matches!(
+          &command,
+          ControllerCommand::Start { .. } | ControllerCommand::Stop | ControllerCommand::Shutdown
+        )
+      {
+        begin_replacement(surface);
+      }
       match &command {
         ControllerCommand::Refresh => {
           surface.in_flight_refresh = Some(id);
@@ -1783,28 +1892,53 @@ fn prepare_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Me
   if !surface.artwork_enabled {
     return Task::none();
   }
-  let Some(image_id) = surface.playable.as_ref().and_then(Playable::image_id) else {
-    surface.artwork.clear();
-    return Task::none();
-  };
-  let spec = ImageSpec {
-    key: PLAYER_IMAGE_KEY.to_owned(),
-    image_id: image_id.to_owned(),
-    size_class: ArtworkSizeClass::Card,
-    derived: DerivedArtwork::default(),
-  };
-  surface.artwork.retain(std::slice::from_ref(&spec));
+  let mut specs = Vec::with_capacity(2);
+  if let Some(playable) = surface.playable.as_ref() {
+    if let Some(image_id) = playable.image_id() {
+      specs.push(ImageSpec {
+        key: PLAYER_IMAGE_KEY.to_owned(),
+        image_id: image_id.to_owned(),
+        size_class: ArtworkSizeClass::Card,
+        derived: DerivedArtwork::default(),
+      });
+    }
+    if crate::embedded::enabled() {
+      if let Some(image_id) = player_thumbnail_id(playable) {
+        specs.push(ImageSpec {
+          key: PLAYER_THUMBNAIL_KEY.to_owned(),
+          image_id: image_id.to_owned(),
+          size_class: ArtworkSizeClass::Card,
+          derived: DerivedArtwork::default(),
+        });
+      }
+    }
+  }
+  surface.artwork.retain(&specs);
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
-  surface.artwork.observe(
-    kernel.request_gate.current_session(),
-    spec,
-    Some(ImagePriority::Visible),
-    client,
-    Arc::clone(&kernel.artwork_adapter),
-    |completion| Message::Playback(PlaybackMessage::ArtworkLoaded(completion)),
-  )
+  Task::batch(specs.into_iter().map(|spec| {
+    surface.artwork.observe(
+      kernel.request_gate.current_session(),
+      spec,
+      Some(ImagePriority::Visible),
+      Arc::clone(&client),
+      Arc::clone(&kernel.artwork_adapter),
+      |completion| Message::Playback(PlaybackMessage::ArtworkLoaded(completion)),
+    )
+  }))
+}
+
+fn player_thumbnail_id(playable: &Playable) -> Option<&str> {
+  match playable {
+    Playable::Library(item) => super::home::landscape_image_id(item),
+    Playable::Detail(item) if item.item_type.eq_ignore_ascii_case("Episode") => item
+      .artwork_image_id
+      .as_deref()
+      .or(item.backdrop_image_id.as_deref()),
+    Playable::Detail(item) => item.backdrop_image_id.as_deref(),
+    Playable::Media(_) => None,
+  }
 }
 
 /// Starts the teardown barrier used by profile switch, Disconnect, and active
@@ -2060,6 +2194,11 @@ mod tests {
   }
 
   fn active_playback_fixture() -> (Surface, Kernel) {
+    let (surface, kernel, _) = active_playback_fixture_with_auxiliary();
+    (surface, kernel)
+  }
+
+  fn active_playback_fixture_with_auxiliary() -> (Surface, Kernel, Vec<PlaybackEffect>) {
     let (mut surface, kernel) = test_fixture();
     let now = Instant::now();
     surface.session.handle(
@@ -2079,7 +2218,7 @@ mod tests {
       now,
     );
     let (id, _) = controller_effect(effects);
-    surface.session.handle(
+    let auxiliary = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
@@ -2090,7 +2229,291 @@ mod tests {
       now,
     );
     surface.view = surface.session.view();
-    (surface, kernel)
+    (surface, kernel, auxiliary)
+  }
+
+  #[test]
+  fn queued_tray_and_remote_replacements_block_adjustments_before_start_dispatches() {
+    for remote_start in [false, true] {
+      let (mut surface, mut kernel, auxiliary) = active_playback_fixture_with_auxiliary();
+      for effect in auxiliary {
+        if let PlaybackEffect::LookupAdjacent(id, AdjacentDirection::Next) = effect {
+          drop(apply_playback_input(
+            &mut surface,
+            &mut kernel,
+            false,
+            PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+              id,
+              direction: AdjacentDirection::Next,
+              result: Ok(Some(media_item("episode-2"))),
+            })),
+          ));
+        }
+      }
+      drop(apply_playback_input(
+        &mut surface,
+        &mut kernel,
+        false,
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(15.0))),
+      ));
+      let seek_id = surface.in_flight_command.expect("seek is running");
+      let before = surface.replacement_generation;
+      if remote_start {
+        let remote = surface.remote;
+        let play = kernel.request_gate.begin_remote_play();
+        drop(update_remote(
+          &mut surface,
+          &mut kernel,
+          false,
+          RemoteMessage::PlayResolved {
+            remote,
+            play,
+            result: Box::new(Ok(Playable::Library(episode("episode-2", 1)))),
+            start_position_ticks: None,
+            selection: PlaybackSelection::default(),
+          },
+        ));
+      } else {
+        drop(update_tray(
+          &mut surface,
+          &mut kernel,
+          false,
+          TrayAction::Next,
+        ));
+      }
+      assert_eq!(
+        surface.in_flight_command,
+        Some(seek_id),
+        "replacement is still queued behind the old seek"
+      );
+      assert!(
+        surface.replacing,
+        "embedded keyboard must be blocked before the queued Start effect runs"
+      );
+      assert_ne!(
+        surface.replacement_generation, before,
+        "old seek targets and Back intent must be invalidated"
+      );
+      drop(update(
+        &mut surface,
+        &mut kernel,
+        false,
+        PlaybackMessage::ControllerSettled {
+          id: seek_id,
+          settlement: Box::new(ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+            snapshot: playback_snapshot(15.0),
+            warnings: Vec::new(),
+          }))),
+          started: None,
+          tracks: None,
+        },
+      ));
+      assert!(
+        surface.replacing,
+        "the barrier remains during replacement startup"
+      );
+      assert_ne!(surface.in_flight_command, Some(seek_id));
+    }
+  }
+
+  #[test]
+  fn discrete_slider_adjustments_dispatch_without_starting_a_drag() {
+    for (message, seek) in [
+      (PlaybackMessage::SeekAdjusted(120.0), true),
+      (PlaybackMessage::VolumeAdjusted(42.0), false),
+    ] {
+      let (mut surface, mut kernel) = active_playback_fixture();
+      let now = Instant::now();
+      let (refresh_id, _) = controller_effect(
+        surface
+          .session
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+      );
+      surface.view = surface.session.view();
+      drop(update_playback(&mut surface, &mut kernel, false, message));
+      assert!(!surface.seek_dragging && !surface.volume_dragging);
+      let (_, command) = controller_effect(surface.session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id: refresh_id,
+          settlement: ControllerSettlement::Refreshed {
+            outcome: PlaybackRefreshOutcome {
+              snapshot: playback_snapshot(10.0),
+              state: PlaybackRefreshState::Active,
+              warnings: Vec::new(),
+            },
+            client_messages: Vec::new(),
+          },
+        })),
+        now,
+      ));
+      if seek {
+        assert!(matches!(command, ControllerCommand::Seek(120.0)));
+      } else {
+        assert!(matches!(command, ControllerCommand::SetVolume(42.0)));
+      }
+    }
+  }
+
+  #[test]
+  fn unchanged_slider_press_holds_controls_without_committing_a_stale_preview() {
+    let (mut surface, mut kernel) = active_playback_fixture();
+    surface.seek_preview = Some(90.0);
+    surface.volume_preview = Some(35.0);
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::SeekDragStarted,
+    ));
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::VolumeDragStarted,
+    ));
+    assert!(surface.seek_dragging && surface.volume_dragging);
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::SeekReleased,
+    ));
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::VolumeReleased,
+    ));
+    assert!(!surface.seek_dragging && !surface.volume_dragging);
+    assert!(surface.in_flight_command.is_none());
+    assert!(!surface.view.busy);
+  }
+
+  #[test]
+  fn fullscreen_switches_cancel_previews_and_late_releases_do_not_commit() {
+    let (playback, kernel) = active_playback_fixture();
+    let mut state = super::super::state::State::boot(false);
+    state.playback = playback;
+    state.kernel = kernel;
+    state.shell.window_id = Some(iced::window::Id::unique());
+    for fullscreen in [true, false] {
+      state.playback.seek_dragging = true;
+      state.playback.volume_dragging = true;
+      state.playback.seek_preview = Some(90.0);
+      state.playback.volume_preview = Some(35.0);
+      drop(super::super::shell::toggle_player_fullscreen(&mut state));
+      assert_eq!(state.shell.player_fullscreen, fullscreen);
+      assert!(!state.playback.seek_dragging && !state.playback.volume_dragging);
+      assert_eq!(state.playback.seek_preview, None);
+      assert_eq!(state.playback.volume_preview, None);
+      drop(update_playback(
+        &mut state.playback,
+        &mut state.kernel,
+        false,
+        PlaybackMessage::SeekReleased,
+      ));
+      drop(update_playback(
+        &mut state.playback,
+        &mut state.kernel,
+        false,
+        PlaybackMessage::VolumeReleased,
+      ));
+      assert!(state.playback.in_flight_command.is_none());
+    }
+  }
+
+  #[test]
+  fn fullscreen_no_op_does_not_cancel_a_drag() {
+    let (playback, kernel) = active_playback_fixture();
+    let mut state = super::super::state::State::boot(false);
+    state.playback = playback;
+    state.kernel = kernel;
+    state.shell.window_id = None;
+    state.playback.seek_dragging = true;
+    state.playback.seek_preview = Some(90.0);
+    drop(super::super::shell::toggle_player_fullscreen(&mut state));
+    drop(super::super::shell::exit_player_fullscreen(&mut state));
+    assert!(state.playback.seek_dragging);
+    assert_eq!(state.playback.seek_preview, Some(90.0));
+  }
+
+  #[test]
+  fn transport_refresh_preserves_active_drag_target_until_release() {
+    let (mut surface, mut kernel) = active_playback_fixture();
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::SeekDragStarted,
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::SeekChanged(90.0),
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::VolumeDragStarted,
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::VolumeChanged(35.0),
+    ));
+    drop(apply_playback_input(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
+    ));
+    let id = surface
+      .in_flight_refresh
+      .expect("refresh is running during drag");
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::ControllerSettled {
+        id,
+        settlement: Box::new(ControllerSettlement::Refreshed {
+          outcome: jellypilot_mpv::playback::PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(11.0),
+            state: jellypilot_mpv::playback::PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        }),
+        started: None,
+        tracks: None,
+      },
+    ));
+    assert_eq!(surface.seek_preview, Some(90.0));
+    assert_eq!(surface.volume_preview, Some(35.0));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::SeekReleased,
+    ));
+    assert!(!surface.seek_dragging);
+    assert_eq!(
+      surface.seek_preview,
+      Some(90.0),
+      "release retains the chosen target while its command settles"
+    );
+    assert!(surface.in_flight_command.is_some());
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::VolumeReleased,
+    ));
+    assert!(!surface.volume_dragging);
+    assert_eq!(surface.volume_preview, Some(35.0));
   }
 
   #[test]

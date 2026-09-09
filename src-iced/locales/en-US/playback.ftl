@@ -3,12 +3,18 @@ player-unmute = Unmute
 player-full-library = Full library mode
 player-waiting = Waiting for playback
 player-show-video = Show video
+player-back = Back to library
+player-fullscreen-shortcut = Toggle fullscreen (F)
 player-skip-intro = Skip intro?
 player-skip-credits = Skip credits?
 player-skip = Skip
 player-audio = Audio
 player-subtitles = Subtitles
 player-queue = Queue
+player-remaining-minutes = { $minutes ->
+    [one] { $minutes } minute left
+   *[other] { $minutes } minutes left
+}
 player-no-audio = No audio tracks
 player-loading-audio = Loading audio tracks…
 player-unavailable-audio = Audio tracks unavailable

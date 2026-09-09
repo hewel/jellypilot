@@ -23,19 +23,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     _ => None,
   });
   let mut subscriptions = vec![window_events];
-  if state.shell.player_fullscreen {
-    subscriptions.push(event::listen_with(|event, _, _| {
-      matches!(
-        event,
-        Event::Keyboard(keyboard::Event::KeyPressed {
-          modified_key: keyboard::Key::Named(keyboard::key::Named::Escape),
-          repeat: false,
-          ..
-        })
-      )
-      .then_some(Message::Shell(ShellMessage::ExitPlayerFullscreen))
-    }));
-  }
+  subscriptions.push(super::embedded_player::subscription(state));
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
@@ -46,9 +34,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
     } else {
-      if !state.shell.player_fullscreen
-        && (state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
-          || super::accounts::blocking_modal(&state.accounts))
+      if state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
+        || super::accounts::blocking_modal(&state.accounts)
       {
         subscriptions.push(
           event::listen_with(|event, status, _| Some((event, status)))
@@ -59,7 +46,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
               state.shell.compact_search_open,
               super::accounts::blocking_modal(&state.accounts),
             ))
-            .filter_map(application_shortcut),
+            .with((
+              super::embedded_player::active(state),
+              state.shell.player_fullscreen,
+            ))
+            .filter_map(visible_application_shortcut),
         );
       } else if state.shell.settings_open {
         subscriptions.push(event::listen_with(settings_modal_events));
@@ -75,9 +66,20 @@ pub fn subscription(state: &State) -> Subscription<Message> {
           event::listen_with(|event, status, _| Some((event, status)))
             .with((
               playback_shortcuts(state.kernel.settings.snapshot()),
-              crate::embedded::enabled(),
+              super::embedded_player::active(state),
             ))
-            .filter_map(playback_shortcut),
+            .with(super::embedded_player::input_blocked(state))
+            .filter_map(|(blocked, event)| {
+              if event.0 .1 {
+                if blocked {
+                  return None;
+                }
+                if super::embedded_player::reserved_key(&event.1 .0) {
+                  return super::embedded_player::keyboard(event.1 .0, event.1 .1);
+                }
+              }
+              playback_shortcut(event)
+            }),
         );
       }
     }
@@ -111,6 +113,19 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 }
 
 type ApplicationShortcutEvent = ((bool, bool, bool, bool, bool), (Event, event::Status));
+
+fn visible_application_shortcut(
+  ((embedded, fullscreen), event): ((bool, bool), ApplicationShortcutEvent),
+) -> Option<Message> {
+  let message = application_shortcut(event);
+  match message {
+    Some(Message::Shell(ShellMessage::SearchEscape | ShellMessage::FocusSearch)) if embedded => {
+      None
+    }
+    Some(Message::Settings(super::message::SettingsMessage::Open)) if fullscreen => None,
+    message => message,
+  }
+}
 
 fn application_shortcut(
   ((full, settings, account, compact_search, blocking), (event, status)): ApplicationShortcutEvent,
@@ -393,6 +408,39 @@ mod tests {
       text: None,
       repeat: false,
     })
+  }
+
+  #[test]
+  fn standalone_player_shortcuts_only_open_visible_surfaces() {
+    let command = if cfg!(target_os = "macos") {
+      keyboard::Modifiers::LOGO
+    } else {
+      keyboard::Modifiers::CTRL
+    };
+    let shortcut = |embedded, fullscreen, key: &str| {
+      visible_application_shortcut((
+        (embedded, fullscreen),
+        (
+          (true, false, false, false, false),
+          (
+            key_pressed(keyboard::Key::Character(key.into()), command),
+            event::Status::Ignored,
+          ),
+        ),
+      ))
+    };
+    assert!(matches!(
+      shortcut(false, false, "k"),
+      Some(Message::Shell(ShellMessage::FocusSearch))
+    ));
+    assert!(shortcut(true, false, "k").is_none());
+    assert!(matches!(
+      shortcut(true, false, ","),
+      Some(Message::Settings(
+        super::super::message::SettingsMessage::Open
+      ))
+    ));
+    assert!(shortcut(true, true, ",").is_none());
   }
 
   #[test]

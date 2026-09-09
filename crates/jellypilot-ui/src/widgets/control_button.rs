@@ -509,10 +509,6 @@ where
 {
     let mut content = Row::new().spacing(spacing).align_y(iced::Alignment::Center);
 
-    if content_centered {
-        content = content.push(space::horizontal());
-    }
-
     let status = match state {
         IconControlState::Rest => button::Status::Active,
         IconControlState::Hovered => button::Status::Hovered,
@@ -549,10 +545,15 @@ where
     }
 
     if content_centered {
-        content = content.push(space::horizontal()).width(Length::Fill);
+        Row::new()
+            .push(space::horizontal())
+            .push(content)
+            .push(space::horizontal())
+            .width(Length::Fill)
+            .into()
+    } else {
+        content.into()
     }
-
-    content.into()
 }
 
 fn status<Message>(
@@ -988,26 +989,30 @@ mod tests {
 
     #[test]
     fn tall_icon_control_centers_content_in_its_hit_area() {
-        let mut button: ControlButton<'_, TestMessage, ()> =
-            ControlButton::new(Some(Icon::Settings), None, ButtonVariant::Text)
-                .min_height(40.0)
-                .width(Length::Fixed(100.0))
-                .content_centered(true);
-        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
-        button.diff(&mut tree);
-        let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
+        fn glyph_bounds(layout: Layout<'_>) -> Option<Rectangle> {
+            if layout.children().next().is_none() {
+                let bounds = layout.bounds();
+                return (bounds.width > 0.0 && bounds.height > 0.0).then_some(bounds);
+            }
+            layout.children().find_map(glyph_bounds)
+        }
 
-        let node = button.layout(&mut tree, &(), &limits);
-        let content = Layout::new(&node)
-            .children()
-            .next()
-            .expect("content row")
-            .children()
-            .nth(1)
-            .expect("icon between horizontal spacers")
-            .bounds();
-
-        assert_eq!(content.y + content.height / 2.0, node.size().height / 2.0);
+        for width in [18.0, 100.0] {
+            let mut button: ControlButton<'_, TestMessage, ()> =
+                ControlButton::new(Some(Icon::VolumeLoud), None, ButtonVariant::Text)
+                    .icon_size(IconSize::Custom(18.0))
+                    .padding(0)
+                    .min_height(40.0)
+                    .width(Length::Fixed(width))
+                    .content_centered(true);
+            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+            button.diff(&mut tree);
+            let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
+            let node = button.layout(&mut tree, &(), &limits);
+            let glyph = glyph_bounds(Layout::new(&node)).expect("visible icon");
+            assert_eq!(glyph.size(), Size::new(18.0, 18.0));
+            assert_eq!(glyph.center(), Point::new(width / 2.0, 20.0));
+        }
     }
 
     #[test]

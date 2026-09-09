@@ -6,6 +6,7 @@ pub mod button;
 pub mod container;
 pub mod control_button;
 pub mod ellipsis_text;
+pub mod embedded_player;
 pub mod escape_input;
 pub mod field;
 pub mod focus_scope;
@@ -17,6 +18,7 @@ pub mod search_field;
 pub mod sidebar;
 pub mod skeleton;
 pub mod switch;
+pub mod tracked_slider;
 
 pub use control_button::{control_button, ControlButton};
 pub use poster_card::{poster_card, PosterCard};

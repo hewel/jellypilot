@@ -144,6 +144,7 @@ pub struct Surface {
   pub full_window_size: Option<iced::Size>,
   /// Embedded video presentation; the Library Browser remains mounted underneath.
   pub player_fullscreen: bool,
+  pub embedded_player: super::embedded_player::Surface,
   /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
   /// each `FrameTick` while skeletons are on screen.
   pub skeleton_phase: f32,
@@ -175,6 +176,7 @@ impl Surface {
       window_size: FULL_DEFAULT_WINDOW_SIZE,
       full_window_size: None,
       player_fullscreen: false,
+      embedded_player: super::embedded_player::Surface::default(),
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       quit_requested: false,
@@ -373,6 +375,7 @@ pub(crate) fn exit_player_fullscreen(state: &mut State) -> Task<Message> {
   if !std::mem::take(&mut state.shell.player_fullscreen) {
     return Task::none();
   }
+  super::playback::cancel_slider_drags(&mut state.playback);
   state
     .shell
     .window_id
@@ -388,7 +391,6 @@ pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
   }
   if !state.playback.session.can_toggle_fullscreen()
     || state.shell.quit_requested
-    || state.full.is_none()
     || super::accounts::content_mutations_blocked(&state.accounts)
   {
     return Task::none();
@@ -397,13 +399,13 @@ pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   state.shell.player_fullscreen = true;
+  super::playback::cancel_slider_drags(&mut state.playback);
   iced::window::set_mode(id, iced::window::Mode::Fullscreen)
 }
 
 pub(crate) fn reconcile_player_fullscreen(state: &mut State) -> Task<Message> {
   if !state.shell.images_visible
     || state.shell.quit_requested
-    || state.full.is_none()
     || super::accounts::content_mutations_blocked(&state.accounts)
     || (state.playback.view.now_playing.is_none() && !state.playback.view.busy)
   {

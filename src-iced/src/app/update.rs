@@ -206,10 +206,15 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+  let was_fullscreen = state.shell.player_fullscreen;
   let task = route_message(state, message);
+  if was_fullscreen && !state.shell.player_fullscreen {
+    playback::cancel_slider_drags(&mut state.playback);
+  }
   shell::reconcile_refresh(state);
   let collections_task = super::collections::reconcile(state);
   let fullscreen_task = shell::reconcile_player_fullscreen(state);
+  super::embedded_player::reconcile(state);
   if let Some(full) = state.full.as_mut() {
     state
       .image_diagnostics
@@ -237,6 +242,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
 fn route_message(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    Message::EmbeddedPlayer(message) => super::embedded_player::update(state, message),
     Message::Collections(message) => super::collections::update(state, message),
     Message::UiLanguageSelected(preference) => select_ui_language(state, preference),
     Message::Account(message) => update_account(state, message),
@@ -580,6 +586,10 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         && matches!(
           &message,
           super::message::PlaybackMessage::Intent(_)
+            | super::message::PlaybackMessage::SeekDragStarted
+            | super::message::PlaybackMessage::SeekAdjusted(_)
+            | super::message::PlaybackMessage::VolumeDragStarted
+            | super::message::PlaybackMessage::VolumeAdjusted(_)
             | super::message::PlaybackMessage::SeekChanged(_)
             | super::message::PlaybackMessage::SeekReleased
             | super::message::PlaybackMessage::VolumeChanged(_)
@@ -598,6 +608,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         return shell::toggle_player_fullscreen(state);
       }
       let had_playback = state.playback.view.now_playing.is_some();
+      let return_to_source = super::embedded_player::before_playback(state, &message);
       let task = playback::update(
         &mut state.playback,
         &mut state.kernel,
@@ -610,6 +621,11 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         && state.app_mode() == AppMode::Full
       {
         Task::batch([task, shell::navigate(state, Destination::NowPlaying)])
+      } else {
+        task
+      };
+      let task = if return_to_source {
+        Task::batch([task, super::embedded_player::return_to_source(state)])
       } else {
         task
       };
