@@ -86,10 +86,6 @@ jobs:
             asset: '*.exe'
           - os: ubuntu-latest
             platform: linux-x86_64
-            format: deb
-            asset: '*.deb'
-          - os: ubuntu-latest
-            platform: linux-x86_64
             format: appimage
             asset: '*.AppImage'
           - os: macos-latest
@@ -119,6 +115,58 @@ jobs:
         with:
           name: jellypilot-${{ matrix.platform }}-${{ matrix.format }}
           path: target/release/bundle/${{ matrix.asset }}
+          if-no-files-found: error
+
+  deb:
+    name: Package linux-x86_64 (deb)
+    needs: metadata
+    # Fedora LAN runner. Build inside Ubuntu 24.04 so the .deb keeps a
+    # Debian/Ubuntu glibc baseline instead of Fedora 44's newer libc.
+    runs-on: jellypilot-lan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Debian package
+        run: |
+          cache="${HOME}/.cache/jellypilot-ci"
+          mkdir -p "${cache}/cargo" "${cache}/rustup" "${cache}/bun"
+          podman run --rm \
+            --security-opt label=disable \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -v "${cache}/cargo:/opt/cargo" \
+            -v "${cache}/rustup:/opt/rustup" \
+            -v "${cache}/bun:/opt/bun" \
+            -w /work \
+            -e CARGO_HOME=/opt/cargo \
+            -e RUSTUP_HOME=/opt/rustup \
+            -e BUN_INSTALL=/opt/bun \
+            -e HUSKY=0 \
+            docker.io/library/ubuntu:24.04 \
+            bash -lc '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              export PATH="/opt/bun/bin:/opt/cargo/bin:$PATH"
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl build-essential pkg-config git unzip xz-utils \
+                libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols
+              if ! command -v bun >/dev/null; then
+                curl -fsSL https://bun.sh/install | bash
+              fi
+              if ! command -v rustc >/dev/null; then
+                curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+                  -y --default-toolchain stable --profile minimal --no-modify-path
+              fi
+              if ! command -v cargo-packager >/dev/null; then
+                cargo install cargo-packager --version 0.11.8 --locked
+              fi
+              bun install --frozen-lockfile
+              cargo packager --config Packager.toml --formats deb
+            '
+      - name: Upload deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-linux-x86_64-deb
+          path: target/release/bundle/*.deb
           if-no-files-found: error
 
   arch:
@@ -171,7 +219,7 @@ jobs:
   release:
     name: Create draft GitHub release
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [metadata, package, arch]
+    needs: [metadata, package, arch, deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
