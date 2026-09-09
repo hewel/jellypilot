@@ -137,11 +137,13 @@ bun run task iced build --release
 
 The release binary is `target/release/jellypilot`.
 
-Maintained Cargo tasks prepare `target/vendor/iced` before building. Its exact base revision and
-the checked-in extension patch SHA-256 are pinned in `tools/embedded-mpv/iced-source.json`;
-the base checkout is verified and the patch is applied without modifying a sibling checkout.
-An unavailable remote revision fails explicitly. Before the fork revisions are published,
-supply an accessible checkout containing the exact pinned commit:
+Maintained Cargo tasks prepare the repository-owned `target/vendor/iced` before building.
+`tools/embedded-mpv/iced-source.json` is the authority for the published fork revision and
+remote. Preparation fetches that exact commit remotely, verifies HEAD and tracked cleanliness,
+and makes all iced crates use the same checkout. There is no checked-in patch or fallback
+revision. Existing owned vendor checkouts are preserved when the stable link changes.
+An inaccessible commit fails explicitly. An optional local source can provide the same
+committed contents without being modified; it is not the remote cold-prepare acceptance path:
 
 ```bash
 bun run task iced prepare --source /absolute/path/to/iced
@@ -154,6 +156,10 @@ native iced/no-webview decision. External remains the default, including existin
 files. In **Settings → Playback**, select Embedded and restart; the same player, transport,
 queue, volume, subtitles, and remote-session controller are reused. **Show video** opens the
 player surface while browsing. Switching back preserves the external executable and arguments.
+Click the video picture or press **Space** to toggle playback/pause. Space applies only to
+embedded playback, ignores held-key repeats and widget-consumed input, and is disabled while
+settings/account/search modals or shortcut capture are active. Existing configured playback
+bindings take precedence if assigned to Space.
 
 ```bash
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
@@ -162,10 +168,9 @@ bun run task mpv build --source /absolute/path/to/mpv
 bun run task iced run --embedded
 ```
 
-`tools/embedded-mpv/source.json` pins mpv to
-`6430785cab693d103ea5a7b70de6efa92c5700d4`, its baseline, and Meson options.
-The supplied source must be at that revision with no tracked changes. Without `--source`,
-the task fetches that revision from the configured fork; an unpublished or inaccessible
+`tools/embedded-mpv/source.json` is the authority for the mpv revision, baseline and Meson
+options. The supplied source must be at that revision with no tracked changes. Without
+`--source`, the task fetches that revision from the configured fork; an inaccessible
 revision is a hard prerequisite failure. No source commit or push is performed.
 
 The build stages `target/embedded-mpv/lib/jellypilot/libmpv.so`,
@@ -175,12 +180,6 @@ Source and options are pinned; host libraries/compiler and auto-selected depende
 recorded, **not pinned**, so this is not a bit-reproducible or self-contained distribution.
 Vulkan headers may be supplied explicitly through `CFLAGS=-I/absolute/sdk/include` (and
 dependencies through `PKG_CONFIG_PATH`); neither is silently obtained from another build tree.
-
-For this workstation, the explicit SDK came from
-`vulkan-headers-1:1.4.357.0-1-any.pkg.tar.zst`
-(SHA-256 `2f6c34cc829c4b63c0cf08cf147841c8ded023b746324540fb02322d9c415c07`),
-extracted under `target/sdk/vulkan-headers-1.4.357.0`. Its `usr/include` was passed in `CFLAGS`
-to the build command; the staged library was rebuilt from the pinned mpv source.
 
 Development run/hot commands pass staged asset paths even when Embedded is selected through
 saved settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
@@ -202,6 +201,88 @@ presentation feedback. Non-Linux embedded startup is explicitly unavailable.
 The daemon factory retains the host/device resources across last-window close; reopening
 creates a new surface and renderer for the same playback session. Daemon exit terminates
 mpv before removing its process-private IPC directory.
+
+### Fork maintenance and joint acceptance
+
+The locked combination is the **JellyPilot commit and its working-tree state**, `Cargo.lock`,
+`tools/embedded-mpv/iced-source.json`, and `tools/embedded-mpv/source.json`, together with the
+staged `target/embedded-mpv/manifest.json` and the actual library/baseline hashes. The manifests
+and lockfile are the source of truth; this document intentionally has no second version table.
+The native manifest records host tools and dependencies, not a bit-reproducible environment.
+An override library is not attested by the staged manifest: retain its actual hash and origin.
+
+For an upstream synchronization, work on a disposable sync branch in each affected fork.
+Read the [iced maintenance guide](https://github.com/hewel/iced/blob/main/FORK_MAINTENANCE.md)
+and [mpv maintenance guide](https://github.com/hewel/mpv/blob/iced-player/DOCS/fork-maintenance.md).
+Review the upstream range and the fork's actual ABI/source changes; do not invent an ABI
+version bump when no ABI contract changes. Publish the candidate fork commits through the
+normal owner workflow, update the application manifests as one candidate combination, then:
+
+1. In a fresh application checkout, run `bun install --frozen-lockfile` and
+   `bun run task iced prepare` **without `--source`**. Preparation must fetch the manifest's
+   exact published commit and all iced packages must resolve under `target/vendor/iced`.
+2. Build the pinned mpv with `bun run task mpv build`, preserving its generated manifest and
+   any explicit SDK/dependency inputs. Run the applicable [project gates](docs/agents/validation.md).
+3. Run `bun run task iced regress all --file /absolute/path/to/real-moving-clip.mp4`.
+   This is the sole joint-probe entry; [native regression policy](docs/agents/validation.md#opt-in-native-regressions)
+   defines prerequisites and evidence. A missing GPU fixture is rejected before preparation,
+   build or application startup. Normal run/hot/smoke commands do not enable these probes.
+4. Complete the separate [manual color comparison](#manual-three-way-color-comparison).
+   Review the exact candidate combination, current-run automatic report, human record and
+   explicitly unavailable coverage before accepting a sync. A passing lifecycle probe alone
+   is not color, HDR presentation, hardware decoding or Dolby Vision acceptance.
+
+The default local artifact directory is `target/native-regression/`: `report.json` aggregates
+only the requested scenarios; `tray.json`, `external.json` and `gpu.json` carry individual
+results. Every automatic report has a fresh `runId`; every scenario is `pass`, `fail` or
+`unavailable`. Check both the command exit status and that identity, not an old file's presence.
+Unrequested scenario files can belong to earlier runs. Preserve reports outside this directory
+before the next invocation if needed. These ignored local artifacts are not published docs.
+
+Rollback means restoring the **last accepted combination**, not mixing one old library with
+new host bindings. Preserve the pre-sync application revision, source manifests/lockfile,
+baseline, native build manifest and binary hashes before changing pins. In a separate checkout
+of that accepted application revision, prepare its iced pin and rebuild/stage its mpv pin
+with the recorded inputs, or restore its verified archived artifacts. Keep the candidate tree
+and local work intact. Start with `jellypilot --external` if embedded prerequisites are absent,
+then rerun the applicable gates and joint acceptance before calling embedded recovery complete.
+
+### Manual three-way color comparison
+
+This is a **human** protocol, separate from the automatic GPU lifecycle probe. Keep
+`target/native-regression/color-comparison.json` as a human-authored record; the regression
+command never writes it, captures reference images, changes display settings, or updates a
+reference to make a candidate pass. Retain the old accepted native binary and baseline before
+the sync; if they are unavailable, mark that comparison `unavailable`, not equivalent.
+
+Compare **old accepted native mpv / candidate native mpv / candidate embedded JellyPilot**.
+The native executables must come from the respective recorded fork revisions, not an
+unidentified system `mpv`. The application mpv build stages libmpv only; obtain native comparison
+binaries from the corresponding fork build workflow and record their source/binary hashes.
+Use the same explicitly loaded, hash-recorded baseline (`--no-config --include=<baseline>`
+for native mpv) and record the embedded host backend differences; do not silently change color,
+tone-mapping, scaling or hardware-decoding options between columns.
+
+For each of **SDR**, **HDR10**, and **Dolby Vision Profile 5**:
+
+- Use a real authorized local fixture. Record its hash and ffprobe stream metadata: codec,
+  dimensions, pixel format, color primaries/transfer/matrix/range, and HDR/DOVI side data.
+  HDR10 requires actual PQ/BT.2020/HDR metadata evidence. Profile 5 requires an actual DOVI
+  configuration record identifying `dv_profile=5`; a filename, HEVC 10-bit stream, BT.2020 tag,
+  synthetic pattern or another DV profile is not proof. Missing evidence or fixture is
+  `unavailable`; do not synthesize a substitute and claim Profile 5 coverage.
+- Fix and record the same timestamp/frame, physical video-picture dimensions (not logical
+  window size), monitor, compositor session, display mode/HDR state, scaling and baseline
+  hash for all three columns. Pause at the agreed timestamp, wait for the decoded frame,
+  and compare the same picture region with overlays removed equally.
+- The human checks hue/skin tones, neutral grays, shadow detail, highlights/clipping,
+  saturation and gradients. Record what was actually observed and the compared column pair,
+  with `pass`, `fail` or `unavailable`, reviewer and timestamp. Do not promote screenshot
+  byte differences or an automated decode success to a visual conclusion.
+- Identify the run and candidate/accepted artifacts in the human record and link any
+  intentionally captured human evidence. Automatic `report.json` continues to describe only
+  automated coverage. Approval or replacement of an old reference is a separate explicit
+  human decision; retain the old record rather than overwriting it during a sync.
 
 ### Usage
 

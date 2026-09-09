@@ -25,9 +25,22 @@ pub use state::State;
 pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Task<Message>) {
   let mut state = State::boot(smoke);
   state.instance = instance;
-  state.kernel.tray = (!smoke)
-    .then(|| crate::tray::Tray::new(state.kernel.locale).ok())
-    .flatten();
+  state.kernel.tray = if crate::regression::active() {
+    match crate::tray::Tray::new(state.kernel.locale) {
+      Ok(tray) => {
+        crate::regression::check("real tray initialized before embedded Host creation");
+        Some(tray)
+      }
+      Err(error) => {
+        crate::regression::unavailable(format!("Real tray initialization failed: {error}"));
+        return (state, iced::exit());
+      }
+    }
+  } else {
+    (!smoke)
+      .then(|| crate::tray::Tray::new(state.kernel.locale).ok())
+      .flatten()
+  };
   if let Some(tray) = &state.kernel.tray {
     tray.sync(&state.playback.view, false, state.kernel.locale);
   }
@@ -55,7 +68,12 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
       None,
     );
     if smoke {
-      geometry.size = crate::smoke_window_size();
+      geometry.size = if crate::regression::active() {
+        geometry.min_size = None;
+        iced::Size::new(480.0, 320.0)
+      } else {
+        crate::smoke_window_size()
+      };
     }
     state.shell.window_size = geometry.size;
     let (_id, open) = iced::window::open(window_settings(geometry));
@@ -65,11 +83,21 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
 }
 
 fn window_settings(geometry: shell::ModeGeometry) -> iced::window::Settings {
+  // Fixed probe windows use the same floating hint as Control-Only mode;
+  // changing compositor settings or accepting a tiled desktop-sized readback is not a probe.
   iced::window::Settings {
     size: geometry.size,
-    min_size: geometry.min_size,
-    max_size: geometry.max_size,
-    resizable: geometry.resizable,
+    min_size: if crate::regression::active() {
+      Some(geometry.size)
+    } else {
+      geometry.min_size
+    },
+    max_size: if crate::regression::active() {
+      Some(geometry.size)
+    } else {
+      geometry.max_size
+    },
+    resizable: !crate::regression::active() && geometry.resizable,
     icon: crate::window_icon(),
     // The close request is handled by the shell so Full mode can preserve its
     // hide-to-tray behavior and Control-Only can destroy the window.
@@ -79,10 +107,19 @@ fn window_settings(geometry: shell::ModeGeometry) -> iced::window::Settings {
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+  if let Some(task) = crate::regression::update(state, &message) {
+    return task;
+  }
   update::update(state, message)
 }
 
 pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Message> {
+  if let Some(size) = crate::regression::gpu_size() {
+    return iced::widget::container(crate::embedded::view())
+      .width(size.width)
+      .height(size.height)
+      .into();
+  }
   jellypilot_ui::widgets::focus_scope::focus_scope(
     view::image_observer::observe_images(view::view(state)),
     state.shell.focus_visibility.clone(),
@@ -90,6 +127,12 @@ pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Me
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {
+  if crate::regression::active() {
+    return Subscription::batch([
+      subscriptions::subscription(state),
+      crate::regression::subscription(),
+    ]);
+  }
   subscriptions::subscription(state)
 }
 

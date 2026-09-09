@@ -4,6 +4,7 @@ mod app;
 mod embedded;
 mod i18n;
 mod instance;
+mod regression;
 mod runner;
 mod tray;
 

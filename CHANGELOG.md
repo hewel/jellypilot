@@ -10,6 +10,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added default-enabled per-season player volume memory, stored locally per server and account, with a Playback setting that pauses saving/restoring without deleting records. Unknown seasons and movies use MPV startup volume; temporary mute carries across continuous episode playback only.
 - Added an isolated, reusable `jellypilot-player` crate for GStreamer local-video playback and an iced/wgpu surface, with a standalone demo and private worker/frame/shutdown ownership. Production playback remains External MPV Playback; no GStreamer dependency was added to the application workspace.
 - Added explicit HTTP(S)/HLS sources to the isolated player/demo, with a cancellable same-origin authenticated relay, bounded playlist rewriting, network deadlines, buffering/seek-window state, and a credential-safe `--url-env` launch path. Production Jellyfin/Emby playback remains External MPV Playback.
+- Added opt-in native maintenance regressions for real-tray locale startup, missing embedded-dependency recovery, and GPU video-copy/window lifecycle, with fresh run-identified reports and separate human color acceptance.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.
@@ -21,6 +22,7 @@ All notable changes to JellyPilot are documented in this file.
 - Moved Library/Search restoration and refresh ownership into the display-free browse model, retaining complete usable results and scroll position while replacement data loads.
 - Consolidated Intro Skipper eligibility and prompt lifetime into one display-free policy, preserving Automatic, Manual, and Off modes, exact-start skipping, and one automatic attempt per range.
 - Migrated Intro Skipper playback to Jellyfin's native media-segment API, preserving multiple intro/credit ranges and Automatic/Manual/Off behavior without the deprecated plugin endpoint or elevated editor API.
+- Replaced checked-in iced patch preparation with the exact published fork revision from the source manifest, preserving unified repository-owned vendor paths and rejecting dirty or non-owned checkout reuse.
 
 ### Fixed
 - Added Jellyfin 12.0 compatibility: updated the generated API client, migrated API and playback/subtitle/WebSocket authentication away from disabled legacy forms, and redacted the modern `ApiKey` query parameter in diagnostics. Emby authentication remains unchanged.

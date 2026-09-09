@@ -32,10 +32,12 @@ pub(super) fn run(
     .with_env_filter(filter)
     .with_writer(LogTee)
     .init();
+  let arguments: Vec<_> = std::env::args().collect();
+  crate::regression::initialize(&arguments)?;
   let result = crate::run_application(
-    std::env::args().any(|argument| argument == "--smoke-test"),
+    arguments.iter().any(|argument| argument == "--smoke-test"),
     factory,
   );
   crate::embedded::cleanup();
-  result
+  crate::regression::finish(result)
 }

@@ -20,7 +20,7 @@ exclude = [
 resolver = "2"
 
 [workspace.dependencies]
-# Exact upstream revision and extension hash: tools/embedded-mpv/iced-source.json.
+# Exact published fork revision: tools/embedded-mpv/iced-source.json.
 # The dispatcher materializes this repository-relative tree before invoking Cargo.
 iced = { path = "target/vendor/iced", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
 iced_runtime = { path = "target/vendor/iced/runtime" }

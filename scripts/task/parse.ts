@@ -30,6 +30,12 @@ export type TaskCommand =
   | { readonly _tag: 'icedPrepare'; readonly source: string | null }
   | { readonly _tag: 'icedBuild'; readonly release: boolean }
   | {
+      readonly _tag: 'icedRegress';
+      readonly scenario: 'tray' | 'external' | 'gpu' | 'all';
+      readonly file: string | null;
+      readonly output: string;
+    }
+  | {
       readonly _tag: 'icedLocalVideo';
       readonly action: 'run';
       readonly smoke: boolean;
@@ -157,6 +163,40 @@ function parseSourceOptions(command: string, rest: readonly string[]): string | 
   return source;
 }
 
+function parseRegression(args: readonly string[]): TaskCommand {
+  const [scenario, ...rest] = args;
+  if (scenario !== 'tray' && scenario !== 'external' && scenario !== 'gpu' && scenario !== 'all') {
+    throw new Error(
+      'Expected iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>].',
+    );
+  }
+  let file: string | null = null;
+  let output = 'target/native-regression';
+  const seen = new Set<string>();
+  for (let index = 0; index < rest.length; index += 2) {
+    const option = rest[index];
+    if (option !== '--file' && option !== '--out') {
+      throw new Error(`Unknown iced regress option: ${option}`);
+    }
+    const value = rest[index + 1];
+    if (seen.has(option) || value === undefined || value.trim() === '' || value.startsWith('--')) {
+      throw new Error(`iced regress requires one non-empty value for ${option}.`);
+    }
+    seen.add(option);
+    if (option === '--file') file = value;
+    else output = value;
+  }
+  if ((scenario === 'gpu' || scenario === 'all') && file === null) {
+    throw new Error(
+      'iced regress gpu/all requires --file <media>; no media or color coverage is fabricated.',
+    );
+  }
+  if (file !== null && scenario !== 'gpu' && scenario !== 'all') {
+    throw new Error('--file applies only to iced regress gpu/all.');
+  }
+  return { _tag: 'icedRegress', scenario, file, output };
+}
+
 export function parseCli(argv: readonly string[]): TaskCommand {
   const [command, ...args] = argv;
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
@@ -192,6 +232,7 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === 'iced') {
     const [action, ...rest] = args;
     if (action === 'local-video') return parseLocalVideo(rest);
+    if (action === 'regress') return parseRegression(rest);
     if (action === 'prepare') {
       return { _tag: 'icedPrepare', source: parseSourceOptions('iced prepare', rest) };
     }

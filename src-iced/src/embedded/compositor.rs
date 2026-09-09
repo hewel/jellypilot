@@ -17,17 +17,22 @@ pub(crate) struct Compositor {
   binding_layout: wgpu::BindGroupLayout,
   generation: u64,
   integration: crate::EmbeddedEngineFactory,
+  probe: Option<crate::regression::Probe>,
 }
 
 pub(crate) struct Surface {
   native: Option<wgpu::Surface<'static>>,
   synchronization: Arc<jellypilot_mpv_host::QueueLock>,
+  regression: bool,
 }
 
 impl Drop for Surface {
   fn drop(&mut self) {
     let _guard = QueueGuard::acquire(self.synchronization.as_ref());
     drop(self.native.take());
+    if self.regression {
+      crate::regression::surface_dropped();
+    }
   }
 }
 
@@ -44,11 +49,14 @@ impl Drop for AcquiredFrame {
 }
 
 fn unavailable(reason: impl std::fmt::Display) -> iced::advanced::graphics::core::backend::Error {
+  let reason =
+    format!("Embedded MPV unavailable: {reason}. Start with --external to use external MPV.");
+  if crate::regression::active() {
+    crate::regression::unavailable(reason.clone());
+  }
   iced::advanced::graphics::core::backend::Error::GraphicsAdapterNotFound {
     backend: "JellyPilot embedded MPV",
-    reason: iced::advanced::graphics::core::backend::Reason::RequestFailed(format!(
-      "Embedded MPV unavailable: {reason}. Start with --external to use external MPV."
-    )),
+    reason: iced::advanced::graphics::core::backend::Reason::RequestFailed(reason),
   }
 }
 
@@ -96,6 +104,9 @@ impl graphics::Compositor for Compositor {
       move || wake.request_redraw(),
     )
     .map_err(unavailable)?;
+    if crate::regression::active() {
+      crate::regression::host_created(context.adapter().get_info().name);
+    }
     let binding_layout = context.create_bind_group_layout(&video::layout_descriptor());
     let generation = host.frame_generation();
     {
@@ -114,10 +125,14 @@ impl graphics::Compositor for Compositor {
       binding_layout,
       generation,
       integration: options.engine_factory,
+      probe: None,
     })
   }
 
   fn create_renderer(&self, settings: renderer::Settings) -> Renderer {
+    if crate::regression::active() {
+      crate::regression::renderer_created();
+    }
     Renderer::Primary(iced_wgpu::Renderer::new(self.engine.clone(), settings))
   }
 
@@ -153,7 +168,11 @@ impl graphics::Compositor for Compositor {
     let mut surface = Surface {
       native,
       synchronization: self.context.queue_lock(),
+      regression: crate::regression::active(),
     };
+    if surface.regression {
+      crate::regression::surface_created();
+    }
     if width > 0 && height > 0 {
       self.configure_surface(&mut surface, width, height);
     }
@@ -219,7 +238,7 @@ impl graphics::Compositor for Compositor {
       tracing::error!(%error, "Embedded MPV redraw failed");
       compositor::SurfaceError::Other
     })?;
-    self.host.copy_ready();
+    let copied = self.host.copy_ready().is_some();
     if self.host.frame_generation() != self.generation {
       self.generation = self.host.frame_generation();
       FRAME
@@ -263,6 +282,23 @@ impl graphics::Compositor for Compositor {
         frame.present();
       }
     }
+    if crate::regression::active() {
+      crate::regression::tray_presented();
+      if crate::regression::gpu() {
+        if self.probe.is_none() {
+          match crate::regression::Probe::new() {
+            Ok(probe) => self.probe = Some(probe),
+            Err(error) => crate::regression::fail(error),
+          }
+        }
+        if let Some(probe) = self.probe.as_mut() {
+          if let Err(error) = probe.present(renderer, viewport, background, copied, self.generation)
+          {
+            crate::regression::fail(error);
+          }
+        }
+      }
+    }
     Ok(())
   }
 
@@ -287,5 +323,8 @@ impl Drop for Compositor {
     frame.binding = None;
     frame.layout = None;
     frame.shell = None;
+    if crate::regression::active() {
+      crate::regression::compositor_dropped();
+    }
   }
 }

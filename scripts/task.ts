@@ -8,6 +8,7 @@ import { prepareIced } from './task/iced-source';
 import { runApi } from './task/misc';
 import { runMonitor } from './task/monitor';
 import { buildMpv } from './task/mpv';
+import { runNativeRegression } from './task/native-regression';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
 import { runRust } from './task/rust';
@@ -43,6 +44,7 @@ const program = Effect.try({
       Match.when({ _tag: 'icedHot' }, () => runHot(process.env)),
       Match.when({ _tag: 'icedBuild' }, ({ release }) => buildIced(release)),
       Match.when({ _tag: 'icedPrepare' }, ({ source }) => prepareIced(source)),
+      Match.when({ _tag: 'icedRegress' }, (task) => runNativeRegression(task, process.env)),
       Match.when({ _tag: 'icedLocalVideo' }, (task) => runLocalVideo(task)),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),

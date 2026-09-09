@@ -23,7 +23,49 @@ checks; do not add an approval pause solely because the applicable tier is broad
    remains human (see root AGENTS.md).
    The standard smoke skips tray creation. GTK/tray startup changes also need a nonvisual
    probe that enables the real tray before embedded-host creation under a non-C `LC_ALL`,
-   using an isolated D-Bus session and Xvfb. A tray-free smoke cannot verify that boundary.
+   using an isolated D-Bus session and a usable native display. A tray-free smoke cannot verify
+   that boundary; Xvfb without a presentation-capable Vulkan driver is not hardware evidence.
+
+## Opt-in native regressions
+
+The sole maintained joint entry is
+`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>]`.
+It is not part of normal startup or a replacement for the applicable project gates.
+See [fork maintenance](../../README.md#fork-maintenance-and-joint-acceptance) for sync and
+rollback, and [manual color comparison](../../README.md#manual-three-way-color-comparison)
+for the separate human acceptance protocol.
+
+Prerequisites: Linux, `dbus-run-session`, the normal launcher build dependencies, and `xvfb-run`
+for the External recovery scenario. Tray/GPU use the **current native display** and require
+the pinned staged libmpv/baseline, an installed non-C locale and a presentation-capable Vulkan
+adapter; GPU also requires `ffprobe`. The runner preserves the Wayland display socket (or X11
+`DISPLAY`) and does not substitute Xvfb or a software driver for hardware acceptance.
+Supply a real, seekable, moving local clip long enough for pause/seek/resume.
+`gpu` and `all` reject missing media before preparation/build/startup; no implicit or synthetic
+fixture is used. Private D-Bus sessions and temporary configuration/runtime directories isolate
+app/IPC state while retaining the display connection. Probes manipulate only their own windows:
+no desktop input injection, other-window control, visual screenshot inspection or display-setting
+changes. If the current display/adapter cannot support the probe, record `unavailable`.
+
+- `tray`: creates the real GTK tray under a non-C locale before embedded-host initialization
+  and renders through the actual compositor. Tray-free smoke cannot establish this result.
+- `external`: confirms an explicit missing-embedded-asset rejection, then starts and exits
+  External mode successfully with missing libmpv, baseline and Vulkan driver paths.
+- `gpu`: exercises real decoded video, paused clock, seek/frame change, paused video-region
+  resize through iced layout and real copy-target replacement (not OS window-resize acceptance),
+  resumed playback, image work and in-memory readback through the actual compositor. It
+  closes the last window, reopens through the shell/tray show route, checks the retained
+  playback session/new renderer binding, acknowledges stop, then exits. This is nonvisual
+  lifecycle evidence, not a color comparison or proof of a particular hardware decoder.
+
+Default reports are `target/native-regression/report.json` and the selected scenario JSON files.
+They include a fresh run identity; aggregate `pass` requires all requested scenarios to pass
+and their processes to exit successfully. Failures, timeouts and unavailable prerequisites
+must not be interpreted as pass. Check each item's status/reason and matching `runId`;
+unselected files may be from an older run. Keep media/source/artifact metadata with the report.
+Human-authored `color-comparison.json` is separate and is never written or accepted by the
+automatic entry. SDR, HDR10 and metadata-confirmed Profile 5 comparisons remain unavailable
+until a human actually performs and records them.
 
 ## Diagnosing Smoke and Playback Failures
 

@@ -44,6 +44,20 @@ describe('parseCli', () => {
     }
   });
 
+  test('rejects GPU regression without media before dispatching preparation or startup', () => {
+    for (const args of [
+      ['gpu'],
+      ['all', '--out', 'target/probe'],
+      ['gpu', '--file'],
+      ['all', '--file', ' '],
+      ['gpu', '--file', '--out'],
+      ['gpu', '--file', 'clip.mp4', '--file', 'other.mp4'],
+      ['tray', '--file', 'clip.mp4'],
+    ]) {
+      expect(() => parseCli(['iced', 'regress', ...args])).toThrow();
+    }
+  });
+
   test('does not accept embedded selection on unrelated iced commands or as a valued option', () => {
     expect(() => parseCli(['iced', 'hot', '--embedded'])).toThrow();
     expect(() => parseCli(['iced', 'run', '--embedded', 'false'])).toThrow();

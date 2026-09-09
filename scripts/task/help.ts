@@ -19,10 +19,13 @@ Application:
   iced run [--smoke] [--release] [--embedded] (env: JELLYPILOT_SMOKE_SIZE=WxH)
   iced build [--release]          (build the official launcher without running it)
   iced hot                       (hot reload via cargo-hot, dev feature)
-  iced prepare [--source <checkout>] (pinned base plus verified checked-in iced extension patch)
+  iced prepare [--source <checkout>] (exact published fork revision from iced-source.json)
     All maintained Cargo tasks automatically use the same prepared target/vendor iced source.
     --embedded selects staged libmpv and baseline; explicit env overrides must be absolute:
     JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. External playback remains the default.
+  iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>]
+    Linux opt-in native probes; gpu/all requires a real readable local media file before startup.
+    Fresh run-identified reports: target/native-regression by default. Color acceptance stays human.
 
 Embedded mpv dependency (Linux Vulkan):
   mpv build [--source <checkout>]

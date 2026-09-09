@@ -1,144 +1,203 @@
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 
-import { Data, Effect } from 'effect';
+import { Data, Effect, Option } from 'effect';
 
 import { command } from './commands';
 import { REPO_ROOT } from './constants';
 import { runCommand } from './process';
 
-const BASE_REVISION = '3e32da72f7faf6e9b16f0b259756aba3c3ed0b96';
-const REMOTE = 'https://github.com/hewel/iced.git';
 const VENDOR = path.join(REPO_ROOT, 'target/vendor');
 
 class TaskIcedSourceError extends Data.TaggedError('TaskIcedSourceError')<{
   readonly message: string;
+  readonly cause?: unknown;
 }> {}
 
 const sourceIo = <A>(operation: () => Promise<A>) =>
   Effect.tryPromise({
     try: operation,
     catch: (cause) =>
-      new TaskIcedSourceError({ message: `iced source preparation failed: ${String(cause)}` }),
+      new TaskIcedSourceError({
+        message: `iced source preparation failed: ${String(cause)}`,
+        cause,
+      }),
   });
+
+const pathStatus = (location: string) =>
+  sourceIo(() => lstat(location)).pipe(
+    Effect.map(Option.some),
+    Effect.catchTag('TaskIcedSourceError', (error) =>
+      typeof error.cause === 'object' &&
+      error.cause !== null &&
+      'code' in error.cause &&
+      error.cause.code === 'ENOENT'
+        ? Effect.succeed(Option.none())
+        : Effect.fail(error),
+    ),
+  );
+
+const verifyCheckout = Effect.fn('task.iced.verifyCheckout')(function* (
+  checkout: string,
+  revision: string,
+) {
+  for (const directory of [checkout, path.join(checkout, '.git')]) {
+    const status = yield* pathStatus(directory);
+    if (Option.isNone(status) || !status.value.isDirectory() || status.value.isSymbolicLink()) {
+      return yield* Effect.fail(
+        new TaskIcedSourceError({ message: `Refusing non-owned iced checkout at ${directory}.` }),
+      );
+    }
+  }
+  const head = yield* runCommand({
+    ...command('git', ['-C', checkout, 'rev-parse', 'HEAD']),
+    buffered: true,
+  });
+  const dirty = yield* runCommand({
+    ...command('git', ['-C', checkout, 'status', '--porcelain', '--untracked-files=no']),
+    buffered: true,
+  });
+  if (head.stdout.trim() !== revision || dirty.stdout.trim() !== '') {
+    return yield* Effect.fail(
+      new TaskIcedSourceError({
+        message: `Prepared iced source at ${checkout} must have HEAD ${revision} and no tracked edits. Preserve any local work and move this checkout aside before preparing again.`,
+      }),
+    );
+  }
+});
+
+const verifyStableLink = Effect.fn('task.iced.verifyStableLink')(function* (link: string) {
+  const status = yield* pathStatus(link);
+  if (Option.isNone(status)) return;
+  if (!status.value.isSymbolicLink()) {
+    return yield* Effect.fail(
+      new TaskIcedSourceError({
+        message: `Refusing to replace non-symlink ${link}. Move it aside without deleting its contents.`,
+      }),
+    );
+  }
+  const destination = path.resolve(VENDOR, yield* sourceIo(() => readlink(link)));
+  // Older generated checkouts used a longer digest in their directory name.
+  // Only switch links within our owned namespace; never remove their contents.
+  if (
+    path.dirname(destination) !== VENDOR ||
+    !/^iced-(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(path.basename(destination))
+  ) {
+    return yield* Effect.fail(
+      new TaskIcedSourceError({
+        message: `Refusing to take over ${link}: it does not point to an owned vendor checkout.`,
+      }),
+    );
+  }
+  const target = yield* pathStatus(destination);
+  if (Option.isSome(target) && (!target.value.isDirectory() || target.value.isSymbolicLink())) {
+    return yield* Effect.fail(
+      new TaskIcedSourceError({
+        message: `Refusing indirect or non-directory iced link target ${destination}.`,
+      }),
+    );
+  }
+});
 
 export const prepareIced = Effect.fn('task.iced.prepare')(function* (source: string | null) {
   const pinPath = path.join(REPO_ROOT, 'tools/embedded-mpv/iced-source.json');
-  const patchPath = path.join(REPO_ROOT, 'tools/embedded-mpv/iced.patch');
   const pin: unknown = yield* sourceIo(async () => JSON.parse(await readFile(pinPath, 'utf8')));
   if (
     typeof pin !== 'object' ||
     pin === null ||
     !('revision' in pin) ||
-    pin.revision !== BASE_REVISION ||
+    typeof pin.revision !== 'string' ||
+    !/^[a-f0-9]{40}$/.test(pin.revision) ||
     !('remote' in pin) ||
-    pin.remote !== REMOTE ||
-    !('patchSha256' in pin) ||
-    typeof pin.patchSha256 !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(pin.patchSha256)
+    typeof pin.remote !== 'string' ||
+    !/^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._/-]+\.git$/.test(pin.remote) ||
+    Object.keys(pin).some((key) => key !== 'remote' && key !== 'revision')
   ) {
     return yield* Effect.fail(
       new TaskIcedSourceError({
-        message: `Invalid ${pinPath}: expected the accepted iced base revision, remote, and actual patchSha256. No substitute revision is allowed.`,
+        message: `Invalid ${pinPath}: expected only an HTTPS remote and a full lowercase commit SHA revision.`,
       }),
     );
   }
-  const patch = yield* sourceIo(() => readFile(patchPath));
-  if (createHash('sha256').update(patch).digest('hex') !== pin.patchSha256) {
-    return yield* Effect.fail(
-      new TaskIcedSourceError({
-        message:
-          'iced.patch SHA256 does not match iced-source.json. Capture and review the exact extension patch before preparation.',
-      }),
-    );
+  const { remote, revision } = pin;
+  // Check each parent before creating descendants, rather than following an
+  // accidental target/vendor symlink into somebody else's source directory.
+  for (const directory of [path.join(REPO_ROOT, 'target'), VENDOR]) {
+    const status = yield* pathStatus(directory);
+    if (Option.isNone(status)) {
+      yield* sourceIo(() => mkdir(directory));
+    } else if (!status.value.isDirectory() || status.value.isSymbolicLink()) {
+      return yield* Effect.fail(
+        new TaskIcedSourceError({
+          message: `Refusing non-directory or symlink preparation root ${directory}.`,
+        }),
+      );
+    }
   }
-  yield* sourceIo(() => mkdir(VENDOR, { recursive: true }));
-  const checkout = path.join(VENDOR, `iced-${pin.patchSha256}`);
-  const marker = path.join(checkout, '.jellypilot-tree');
-  const exists = yield* sourceIo(() => Bun.file(marker).exists());
-  if (!exists) {
-    const work = yield* sourceIo(() => mkdtemp(path.join(VENDOR, '.iced-')));
-    const origin = source === null ? REMOTE : path.resolve(REPO_ROOT, source);
+  const checkout = path.join(VENDOR, `iced-${revision}`);
+  const link = path.join(VENDOR, 'iced');
+  yield* verifyStableLink(link);
+  if (Option.isNone(yield* pathStatus(checkout))) {
+    const origin = source === null ? remote : path.resolve(REPO_ROOT, source);
     if (source !== null) {
       const head = yield* runCommand({
         ...command('git', ['-C', origin, 'rev-parse', 'HEAD']),
         buffered: true,
       });
-      if (head.stdout.trim() !== BASE_REVISION) {
+      if (head.stdout.trim() !== revision) {
         return yield* Effect.fail(
           new TaskIcedSourceError({
-            message: `Explicit iced source HEAD must be ${BASE_REVISION}. Only committed base contents are copied; the checked-in patch supplies the extension.`,
+            message: `Explicit iced source HEAD must be ${revision}. Only committed contents are fetched; the source checkout is never modified.`,
           }),
         );
       }
     }
-    yield* runCommand(
-      command('git', ['clone', '--no-checkout', '--no-hardlinks', origin, work]),
-    ).pipe(
-      Effect.catchTag('TaskProcessError', () =>
-        Effect.fail(
-          new TaskIcedSourceError({
-            message: `Cannot clone iced. If the accepted base is unpublished, run bun run task iced prepare --source <checkout-at-${BASE_REVISION}>. No push or source-checkout modification is performed.`,
-          }),
-        ),
-      ),
-    );
-    yield* runCommand(command('git', ['-C', work, 'checkout', '--detach', BASE_REVISION])).pipe(
-      Effect.catchTag('TaskProcessError', () =>
-        Effect.fail(
-          new TaskIcedSourceError({
-            message: `Accepted iced base ${BASE_REVISION} is unavailable. Use iced prepare --source <checkout> containing that exact commit.`,
-          }),
-        ),
-      ),
-    );
-    yield* runCommand(command('git', ['-C', work, 'apply', '--index', patchPath]));
-    const tree = yield* runCommand({
-      ...command('git', ['-C', work, 'write-tree']),
-      buffered: true,
-    });
-    yield* sourceIo(() => writeFile(path.join(work, '.jellypilot-tree'), tree.stdout.trim()));
-    yield* sourceIo(() => rename(work, checkout));
-  }
-  const tree = (yield* sourceIo(() => readFile(marker, 'utf8'))).trim();
-  if (!/^[a-f0-9]{40}$/.test(tree)) {
-    return yield* Effect.fail(
-      new TaskIcedSourceError({
-        message:
-          'Prepared iced tree marker is invalid. Remove only the generated target/vendor iced checkout and prepare it again.',
-      }),
-    );
-  }
-  yield* runCommand({
-    ...command('git', ['-C', checkout, 'diff', '--exit-code', tree]),
-    buffered: true,
-  }).pipe(
-    Effect.catchTag('TaskProcessError', () =>
-      Effect.fail(
-        new TaskIcedSourceError({
-          message:
-            'Prepared iced source has been edited. Do not build an uncertified extension; remove only the generated target/vendor iced checkout and prepare again.',
+    yield* Effect.acquireUseRelease(
+      sourceIo(() => mkdtemp(path.join(VENDOR, '.iced-'))),
+      (work) =>
+        Effect.gen(function* () {
+          const staged = path.join(work, 'checkout');
+          yield* runCommand(command('git', ['init', staged]));
+          yield* runCommand(
+            command('git', ['-C', staged, 'fetch', '--depth=1', '--no-tags', origin, revision]),
+          ).pipe(
+            Effect.catchTag('TaskProcessError', (cause) =>
+              Effect.fail(
+                new TaskIcedSourceError({
+                  message: `Cannot fetch pinned iced revision ${revision} from ${source === null ? remote : 'the explicit source'}. No substitute revision or source-tree edits are used.`,
+                  cause,
+                }),
+              ),
+            ),
+          );
+          yield* runCommand(command('git', ['-C', staged, 'checkout', '--detach', revision]));
+          yield* verifyCheckout(staged, revision);
+          yield* sourceIo(() => rename(staged, checkout));
         }),
-      ),
-    ),
-  );
-  // Direct path dependencies avoid Cargo resolving an unpublished git revision
-  // even when a [patch] table replaces every upstream package.
-  yield* sourceIo(async () => {
-    const link = path.join(VENDOR, 'iced');
-    if (await Bun.file(path.join(link, 'Cargo.toml')).exists()) {
-      if ((await realpath(link)) !== (await realpath(checkout))) {
-        throw new Error(
-          'Prepared iced link targets a different patch; remove only target/vendor/iced and prepare again.',
-        );
-      }
-      return;
-    }
-    await symlink(
-      process.platform === 'win32' ? checkout : path.basename(checkout),
-      link,
-      process.platform === 'win32' ? 'junction' : 'dir',
+      (work) => sourceIo(() => rm(work, { recursive: true, force: true })),
     );
-  });
+  }
+  yield* verifyCheckout(checkout, revision);
+  yield* verifyStableLink(link);
+  const current = yield* pathStatus(link);
+  if (Option.isSome(current)) {
+    const destination = path.resolve(VENDOR, yield* sourceIo(() => readlink(link)));
+    if (destination === checkout) return;
+  }
+  // Rename only the link, preserving the previous checkout and any user edits.
+  // A private temporary directory owns both publication and failure cleanup.
+  yield* Effect.acquireUseRelease(
+    sourceIo(() => mkdtemp(path.join(VENDOR, '.iced-link-'))),
+    (work) =>
+      sourceIo(async () => {
+        const stagedLink = path.join(work, 'iced');
+        await symlink(
+          process.platform === 'win32' ? checkout : path.basename(checkout),
+          stagedLink,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+        await rename(stagedLink, link);
+      }),
+    (work) => sourceIo(() => rm(work, { recursive: true, force: true })),
+  );
 });
