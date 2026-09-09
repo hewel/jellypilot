@@ -12,6 +12,10 @@ depends=(
   'mpv'
   'libxkbcommon'
   'wayland'
+  'ffmpeg'
+  'libplacebo'
+  'libass'
+  'vulkan-icd-loader'
 )
 provides=('jellypilot')
 conflicts=('jellypilot')

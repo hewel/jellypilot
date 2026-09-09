@@ -4,6 +4,12 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Linux packages install the pinned mpv fork and baseline under `/usr/lib/jellypilot` and `/usr/share/jellypilot` so Embedded MPV Playback works from the packaged prefix.
+
+### Fixed
+- Resolve embedded assets from the executable prefix (`../lib`, `../share`) as well as beside the binary, so `/usr/bin/jellypilot` no longer looks under `/usr/bin/lib`.
+
 ## [2.1.1] - 2026-09-09
 
 ### Fixed

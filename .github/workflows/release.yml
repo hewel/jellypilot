@@ -159,8 +159,12 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 ca-certificates curl build-essential pkg-config git unzip xz-utils \
+                meson ninja-build python3 \
                 libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-                libfuse2t64 file
+                libfuse2t64 file \
+                libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
+                libswresample-dev libswscale-dev libplacebo-dev libass-dev \
+                libvulkan-dev glslang-dev libshaderc-dev liblcms2-dev
               if ! command -v bun >/dev/null; then
                 curl -fsSL https://bun.sh/install | bash
               fi
@@ -172,6 +176,7 @@ jobs:
                 cargo install cargo-packager --version 0.11.8 --locked
               fi
               bun install --frozen-lockfile
+              bun run task mpv build
               cargo packager --config Packager.toml --formats deb
               cargo packager --config Packager.toml --formats appimage
             '
@@ -214,7 +219,9 @@ jobs:
             docker.io/library/archlinux:base-devel \
             bash -lc '
               set -euo pipefail
-              pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland
+              pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland \
+                meson ninja pkgconf vulkan-headers vulkan-icd-loader ffmpeg libplacebo libass \
+                shaderc lcms2
               useradd --create-home builder
               mkdir -p /work/target/release/bundle
               chown -R builder:builder /work

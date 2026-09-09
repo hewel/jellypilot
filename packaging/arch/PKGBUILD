@@ -15,11 +15,24 @@ depends=(
   'mpv'
   'libxkbcommon'
   'wayland'
+  'ffmpeg'
+  'libplacebo'
+  'libass'
+  'vulkan-icd-loader'
 )
 makedepends=(
   'git'
   'rust'
   'bun'
+  'meson'
+  'ninja'
+  'pkgconf'
+  'vulkan-headers'
+  'ffmpeg'
+  'libplacebo'
+  'libass'
+  'shaderc'
+  'lcms2'
 )
 conflicts=('jellypilot-bin')
 source=(
@@ -35,6 +48,7 @@ build() {
   cd "$srcdir/$pkgname"
 
   bun install --frozen-lockfile
+  bun run task mpv build
   bun run task iced build --release
 }
 
@@ -42,6 +56,10 @@ package() {
   cd "$srcdir/$pkgname"
 
   install -Dm755 "target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
+  install -Dm755 "target/embedded-mpv/lib/jellypilot/libmpv.so" \
+    "$pkgdir/usr/lib/jellypilot/libmpv.so"
+  install -Dm644 "target/embedded-mpv/share/jellypilot/mpv-baseline.conf" \
+    "$pkgdir/usr/share/jellypilot/mpv-baseline.conf"
   install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \
     "$pkgdir/usr/share/applications/top.pigfun.jellypilot.desktop"
   install -Dm644 "assets/icons/128x128.png" \

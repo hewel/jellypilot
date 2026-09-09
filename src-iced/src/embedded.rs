@@ -67,14 +67,53 @@ pub(crate) fn cleanup() {
 }
 
 #[cfg(target_os = "linux")]
-fn asset(variable: &str, root: &Path, relative: &str) -> Result<PathBuf, String> {
-  let path = std::env::var_os(variable).map_or_else(|| root.join(relative), PathBuf::from);
-  if !path.is_absolute() {
-    return Err(format!("{variable} must be an absolute path"));
+fn bundled_asset_candidates(exe_dir: &Path, relative: &str) -> [PathBuf; 2] {
+  let beside = exe_dir.join(relative);
+  let prefixed = exe_dir
+    .parent()
+    .map_or_else(|| beside.clone(), |prefix| prefix.join(relative));
+  [beside, prefixed]
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_asset(
+  override_path: Option<PathBuf>,
+  exe_dir: &Path,
+  relative: &str,
+  variable: &str,
+) -> Result<PathBuf, String> {
+  if let Some(path) = override_path {
+    if !path.is_absolute() {
+      return Err(format!("{variable} must be an absolute path"));
+    }
+    return path.canonicalize().map_err(|_| {
+      format!(
+        "Embedded MPV asset missing: {}. Run the pinned MPV build task or set {variable}; system libmpv is not used.",
+        path.display()
+      )
+    });
   }
-  path.canonicalize().map_err(|_| {
-    format!("Embedded MPV asset missing: {}. Run the pinned MPV build task or set {variable}; system libmpv is not used.", path.display())
-  })
+  let candidates = bundled_asset_candidates(exe_dir, relative);
+  for candidate in &candidates {
+    if let Ok(path) = candidate.canonicalize() {
+      return Ok(path);
+    }
+  }
+  Err(format!(
+    "Embedded MPV asset missing: {} (also tried {}). Linux packages install the pinned fork under the executable prefix; development builds stage target/embedded-mpv. Set {variable} only for a trusted pinned ABI. System libmpv is not used.",
+    candidates[0].display(),
+    candidates[1].display()
+  ))
+}
+
+#[cfg(target_os = "linux")]
+fn asset(variable: &str, root: &Path, relative: &str) -> Result<PathBuf, String> {
+  resolve_asset(
+    std::env::var_os(variable).map(PathBuf::from),
+    root,
+    relative,
+    variable,
+  )
 }
 
 pub(crate) fn initialize(
@@ -134,5 +173,71 @@ pub(crate) fn initialize(
         engine_factory: _engine_factory,
       })
       .map_err(|_| "Embedded playback already initialized".to_owned())
+  }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+  use super::{bundled_asset_candidates, resolve_asset};
+  use std::fs;
+  use std::path::{Path, PathBuf};
+
+  fn write_file(path: &Path) {
+    if let Some(parent) = path.parent() {
+      fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, b"asset").unwrap();
+  }
+
+  #[test]
+  fn prefix_install_uses_usr_lib_not_usr_bin_lib() {
+    let root =
+      std::env::temp_dir().join(format!("jellypilot-embedded-prefix-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let exe_dir = root.join("usr/bin");
+    let library = root.join("usr/lib/jellypilot/libmpv.so");
+    write_file(&library);
+    let resolved = resolve_asset(
+      None,
+      &exe_dir,
+      "lib/jellypilot/libmpv.so",
+      "JELLYPILOT_LIBMPV",
+    )
+    .unwrap();
+    assert_eq!(resolved, library.canonicalize().unwrap());
+    let _ = fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn development_layout_keeps_assets_beside_the_binary() {
+    let root = std::env::temp_dir().join(format!("jellypilot-embedded-dev-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let exe_dir = root.join("release");
+    let library = exe_dir.join("lib/jellypilot/libmpv.so");
+    write_file(&library);
+    let resolved = resolve_asset(
+      None,
+      &exe_dir,
+      "lib/jellypilot/libmpv.so",
+      "JELLYPILOT_LIBMPV",
+    )
+    .unwrap();
+    assert_eq!(resolved, library.canonicalize().unwrap());
+    let candidates = bundled_asset_candidates(&exe_dir, "lib/jellypilot/libmpv.so");
+    assert_eq!(candidates[0], library);
+    let _ = fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn override_must_be_an_existing_absolute_file() {
+    let exe_dir = Path::new("/usr/bin");
+    let error = resolve_asset(
+      Some(PathBuf::from("relative.so")),
+      exe_dir,
+      "lib/jellypilot/libmpv.so",
+      "JELLYPILOT_LIBMPV",
+    )
+    .unwrap_err();
+    assert!(error.contains("must be an absolute path"));
   }
 }

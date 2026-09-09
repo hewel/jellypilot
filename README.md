@@ -122,6 +122,9 @@ paru -S jellypilot
 ```
 
 `yay` and other AUR helpers work the same way. The two packages conflict; pick one.
+Linux packages install the pinned mpv fork at `/usr/lib/jellypilot/libmpv.so` and
+`/usr/share/jellypilot/mpv-baseline.conf`, so Embedded MPV Playback works from the
+installed prefix. External MPV remains the settings default.
 
 #### Build from Source
 
@@ -221,10 +224,11 @@ dependencies through `PKG_CONFIG_PATH`); neither is silently obtained from anoth
 Development run/hot commands pass staged asset paths even when Embedded is selected through
 saved settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
 supported; only trusted files implementing the pinned host ABI may be loaded. A directly
-launched binary instead looks beside itself for `lib/jellypilot/libmpv.so` and
-`share/jellypilot/mpv-baseline.conf`. Existing native packages remain external-first and do
-not silently bundle host system libraries. To recover from an unavailable embedded setup,
-launch `jellypilot --external`, select External in Settings, and restart.
+launched binary looks beside itself, then in the executable prefix (`../lib/jellypilot` and
+`../share/jellypilot`), so `/usr/bin/jellypilot` loads `/usr/lib/jellypilot/libmpv.so`.
+Linux packages ship that pinned fork; they do not use system libmpv. To recover from an
+unavailable embedded setup, launch `jellypilot --external`, select External in Settings, and
+restart.
 
 The host retains the actual enabled Vulkan feature chain and shares its device/queue with
 the official iced renderer. Video reaches a private 10-bit texture through three ordered

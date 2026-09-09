@@ -27,4 +27,25 @@ installMode = "currentUser"
 package-name = "jellypilot"
 section = "video"
 priority = "optional"
-depends = ["libgtk-3-0", "libxkbcommon0", "libwayland-client0", "mpv"]
+depends = [
+  "libgtk-3-0",
+  "libxkbcommon0",
+  "libwayland-client0",
+  "mpv",
+  "libavcodec60",
+  "libavfilter9",
+  "libavformat60",
+  "libavutil58",
+  "libswresample4",
+  "libswscale7",
+  "libplacebo338",
+  "libass9",
+  "libvulkan1",
+]
+[deb.files]
+"target/embedded-mpv/lib/jellypilot/libmpv.so" = "usr/lib/jellypilot/libmpv.so"
+"target/embedded-mpv/share/jellypilot/mpv-baseline.conf" = "usr/share/jellypilot/mpv-baseline.conf"
+
+[appimage.files]
+"target/embedded-mpv/lib/jellypilot/libmpv.so" = "usr/lib/jellypilot/libmpv.so"
+"target/embedded-mpv/share/jellypilot/mpv-baseline.conf" = "usr/share/jellypilot/mpv-baseline.conf"
