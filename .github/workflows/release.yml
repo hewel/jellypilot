@@ -118,7 +118,9 @@ jobs:
       - name: Restore leftover workspace ownership
         run: |
           if [[ -d "${GITHUB_WORKSPACE}" ]]; then
-            podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+            # Rootless podman maps host user to namespace uid 0, not $(id -u).
+            podman unshare chown -R 0:0 "${GITHUB_WORKSPACE}"
+            rm -rf "${GITHUB_WORKSPACE}/.codegraph"
           fi
       - uses: actions/checkout@v4
       - name: Build Debian and AppImage packages
@@ -199,7 +201,7 @@ jobs:
           if-no-files-found: error
       - name: Restore workspace ownership
         if: always()
-        run: podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+        run: podman unshare chown -R 0:0 "${GITHUB_WORKSPACE}"
 
   arch:
     name: Package Arch Linux
@@ -212,7 +214,9 @@ jobs:
       - name: Restore leftover workspace ownership
         run: |
           if [[ -d "${GITHUB_WORKSPACE}" ]]; then
-            podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+            # Rootless podman maps host user to namespace uid 0, not $(id -u).
+            podman unshare chown -R 0:0 "${GITHUB_WORKSPACE}"
+            rm -rf "${GITHUB_WORKSPACE}/.codegraph"
           fi
       - uses: actions/checkout@v4
       - name: Validate PKGBUILD tag
@@ -256,7 +260,7 @@ jobs:
           if-no-files-found: ignore
       - name: Restore workspace ownership
         if: always()
-        run: podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+        run: podman unshare chown -R 0:0 "${GITHUB_WORKSPACE}"
 
   release:
     name: Create draft GitHub release
