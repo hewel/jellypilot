@@ -60,6 +60,9 @@ pub fn badge_variant(theme: &Theme, variant: BadgeVariant) -> container::Style {
     widgets::badge::style(theme, variant)
 }
 
+/// Builds a complete status tag (dot + label).
+pub use crate::widgets::badge::status_tag;
+
 /// Resolves a normal text-input variant and interaction status.
 pub fn field_variant(
     theme: &Theme,

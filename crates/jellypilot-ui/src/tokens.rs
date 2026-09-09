@@ -33,6 +33,11 @@ pub struct DesignTokens {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SemanticColors {
     pub background: Color,
+    /// Quiet structural edge for tonal controls, pills, and fields. Dark mode
+    /// is translucent white 8% so it holds over imagery; light mode resolves
+    /// to the opaque light `outlineVariant` until a translucent light
+    /// equivalent is accepted.
+    pub borderSubtle: Color,
     /// Rest fill for quiet controls and fields.
     pub control: Color,
     /// Hover and focus fill for quiet controls and fields.
@@ -40,6 +45,9 @@ pub struct SemanticColors {
     pub error: Color,
     pub errorContainer: Color,
     pub favorite: Color,
+    /// 1px outline overlaid on artwork (posters, stills, avatars). It sits on
+    /// the image, not the surface, so it is theme-independent pure white 10%.
+    pub imageOutline: Color,
     pub onBackground: Color,
     /// Rest icon and label color for quiet controls and fields.
     pub onControl: Color,
@@ -61,8 +69,16 @@ pub struct SemanticColors {
     pub outlineVariant: Color,
     pub primary: Color,
     pub primaryContainer: Color,
+    /// Primary fill on hover (supersedes the legacy 10% brightness lift).
+    pub primaryHover: Color,
+    /// Primary fill while pressed.
+    pub primaryPressed: Color,
     pub secondary: Color,
     pub secondaryContainer: Color,
+    /// Sidebar docked background, between `surfaceContainerLowest` and
+    /// `surfaceContainerLow` in dark mode; light mode keeps
+    /// `surfaceContainerLowest` until the Paper file defines a light value.
+    pub sidebarBg: Color,
     pub surface: Color,
     pub surfaceContainer: Color,
     pub surfaceContainerHigh: Color,
@@ -464,17 +480,22 @@ pub const SIDEBAR_CONTROL_RADIUS: f32 = TOKENS.radii.xl;
 /// rule (outer radius − padding) for controls nested in the search field.
 pub const SIDEBAR_INSET_RADIUS: f32 = SIDEBAR_CONTROL_RADIUS - 3.0;
 
+/// Outer radius of the Sidebar account menu in the Paper Home composition.
+pub const ACCOUNT_POPOVER_RADIUS: f32 = 16.0;
+
 /// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
 /// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
 /// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.
 pub const DARK_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
+        borderSubtle: Color::from_rgba8(0xff, 0xff, 0xff, 0.08),
         control: Color::from_rgb8(0x1c, 0x1d, 0x22),
         controlHover: Color::from_rgb8(0x29, 0x2a, 0x31),
         error: Color::from_rgb8(0xff, 0x6b, 0x7a),
         errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
         favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
+        imageOutline: Color::from_rgba8(0xff, 0xff, 0xff, 0.10),
         onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
         onControl: Color::from_rgb8(0xe5, 0xe5, 0xe5),
         onControlHover: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -494,8 +515,11 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
         outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
+        primaryHover: Color::from_rgb8(0x78, 0x7d, 0xf8),
+        primaryPressed: Color::from_rgb8(0x55, 0x62, 0xce),
         secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
         secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
+        sidebarBg: Color::from_rgb8(0x0f, 0x10, 0x16),
         surface: Color::from_rgb8(0x15, 0x16, 0x1c),
         surfaceContainer: Color::from_rgb8(0x19, 0x1a, 0x21),
         surfaceContainerHigh: Color::from_rgb8(0x20, 0x22, 0x2b),
@@ -531,11 +555,13 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
 pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+        borderSubtle: Color::from_rgb8(0xe7, 0xec, 0xf3),
         control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
         controlHover: Color::from_rgb8(0xe2, 0xe8, 0xf0),
         error: Color::from_rgb8(0x4b, 0x11, 0x19),
         errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
         favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
+        imageOutline: Color::from_rgba8(0xff, 0xff, 0xff, 0.10),
         onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
         onControl: Color::from_rgb8(0x33, 0x41, 0x55),
         onControlHover: Color::from_rgb8(0x0f, 0x17, 0x2a),
@@ -555,8 +581,11 @@ pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
         outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+        primaryHover: Color::from_rgb8(0x54, 0x57, 0xe8),
+        primaryPressed: Color::from_rgb8(0x4f, 0x46, 0xe5),
         secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
         secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
+        sidebarBg: Color::from_rgb8(0xfa, 0xfa, 0xfa),
         surface: Color::from_rgb8(0xff, 0xff, 0xff),
         surfaceContainer: Color::from_rgb8(0xe9, 0xed, 0xf2),
         surfaceContainerHigh: Color::from_rgb8(0xe2, 0xe8, 0xf0),
@@ -642,14 +671,16 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 39] {
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 44] {
         [
             ("background", colors.background),
+            ("borderSubtle", colors.borderSubtle),
             ("control", colors.control),
             ("controlHover", colors.controlHover),
             ("error", colors.error),
             ("errorContainer", colors.errorContainer),
             ("favorite", colors.favorite),
+            ("imageOutline", colors.imageOutline),
             ("onBackground", colors.onBackground),
             ("onControl", colors.onControl),
             ("onControlHover", colors.onControlHover),
@@ -669,8 +700,11 @@ mod tests {
             ("outlineVariant", colors.outlineVariant),
             ("primary", colors.primary),
             ("primaryContainer", colors.primaryContainer),
+            ("primaryHover", colors.primaryHover),
+            ("primaryPressed", colors.primaryPressed),
             ("secondary", colors.secondary),
             ("secondaryContainer", colors.secondaryContainer),
+            ("sidebarBg", colors.sidebarBg),
             ("surface", colors.surface),
             ("surfaceContainer", colors.surfaceContainer),
             ("surfaceContainerHigh", colors.surfaceContainerHigh),
@@ -692,11 +726,13 @@ mod tests {
             DARK_PALETTE.colors,
             SemanticColors {
                 background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
+                borderSubtle: Color::from_rgba8(0xff, 0xff, 0xff, 0.08),
                 control: Color::from_rgb8(0x1c, 0x1d, 0x22),
                 controlHover: Color::from_rgb8(0x29, 0x2a, 0x31),
                 error: Color::from_rgb8(0xff, 0x6b, 0x7a),
                 errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
                 favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
+                imageOutline: Color::from_rgba8(0xff, 0xff, 0xff, 0.10),
                 onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
                 onControl: Color::from_rgb8(0xe5, 0xe5, 0xe5),
                 onControlHover: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -716,8 +752,11 @@ mod tests {
                 outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
+                primaryHover: Color::from_rgb8(0x78, 0x7d, 0xf8),
+                primaryPressed: Color::from_rgb8(0x55, 0x62, 0xce),
                 secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
                 secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
+                sidebarBg: Color::from_rgb8(0x0f, 0x10, 0x16),
                 surface: Color::from_rgb8(0x15, 0x16, 0x1c),
                 surfaceContainer: Color::from_rgb8(0x19, 0x1a, 0x21),
                 surfaceContainerHigh: Color::from_rgb8(0x20, 0x22, 0x2b),
@@ -740,11 +779,13 @@ mod tests {
             LIGHT_PALETTE.colors,
             SemanticColors {
                 background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+                borderSubtle: Color::from_rgb8(0xe7, 0xec, 0xf3),
                 control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
                 controlHover: Color::from_rgb8(0xe2, 0xe8, 0xf0),
                 error: Color::from_rgb8(0x4b, 0x11, 0x19),
                 errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
                 favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
+                imageOutline: Color::from_rgba8(0xff, 0xff, 0xff, 0.10),
                 onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
                 onControl: Color::from_rgb8(0x33, 0x41, 0x55),
                 onControlHover: Color::from_rgb8(0x0f, 0x17, 0x2a),
@@ -764,8 +805,11 @@ mod tests {
                 outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+                primaryHover: Color::from_rgb8(0x54, 0x57, 0xe8),
+                primaryPressed: Color::from_rgb8(0x4f, 0x46, 0xe5),
                 secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
                 secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
+                sidebarBg: Color::from_rgb8(0xfa, 0xfa, 0xfa),
                 surface: Color::from_rgb8(0xff, 0xff, 0xff),
                 surfaceContainer: Color::from_rgb8(0xe9, 0xed, 0xf2),
                 surfaceContainerHigh: Color::from_rgb8(0xe2, 0xe8, 0xf0),
@@ -845,6 +889,7 @@ mod tests {
                 ),
                 ("warning badge", colors.warning, colors.warningContainer),
                 ("success badge", colors.tertiary, colors.tertiaryContainer),
+                ("error tag", colors.error, colors.errorContainer),
                 (
                     "neutral badge",
                     palette.text.secondary,
@@ -855,6 +900,7 @@ mod tests {
                     colors.onSecondaryContainer,
                     colors.secondaryContainer,
                 ),
+                ("active pill", colors.secondary, colors.primaryContainer),
             ];
             for (label, fg, bg) in pairs {
                 assert!(
@@ -937,9 +983,15 @@ mod tests {
                 ("text.metadata", palette.text.metadata),
                 ("text.muted", palette.text.muted),
             ];
+            // Translucency is confined to the two edge roles accepted in the
+            // Paper syncs: `borderSubtle` (quiet structural edge) and
+            // `imageOutline` (artwork outline) overlay surfaces and imagery;
+            // they are never surface fills, which stay fully opaque.
+            const TRANSLUCENT_EDGE_ROLES: [&str; 2] = ["borderSubtle", "imageOutline"];
             for (field, color) in semantic_color_fields(&palette.colors)
                 .into_iter()
                 .chain(text_fields)
+                .filter(|(field, _)| !TRANSLUCENT_EDGE_ROLES.contains(field))
             {
                 assert_eq!(
                     color.a, 1.0,

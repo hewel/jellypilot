@@ -4,12 +4,13 @@ use jellypilot_core::config::{AppMode, IntroMode, PlaybackBackend, ShortcutKind,
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
-use jellypilot_ui::fonts::{BODY_FONT, FONT_ATTRIBUTIONS, FONT_LICENSES};
+use jellypilot_ui::fonts::{BODY_FONT, FONT_ATTRIBUTIONS, FONT_LICENSES, MONO_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
+use jellypilot_ui::widgets::badge::status_tag;
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::switch::switch;
 
@@ -150,7 +151,7 @@ fn feedback(state: &State) -> Element<'_, Message> {
       .into();
   }
   if let Some(saved) = &state.settings.view.saved {
-    return badge(state.kernel.locale.message(saved), BadgeVariant::Success);
+    return status_tag(state.kernel.locale.message(saved), BadgeVariant::Success);
   }
   space::vertical().height(0).into()
 }
@@ -167,6 +168,8 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
+  .font(MONO_FONT)
+  .size(12.0)
   .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
@@ -176,6 +179,8 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvArgsChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SaveMpvArgs))
+  .font(MONO_FONT)
+  .size(12.0)
   .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
@@ -242,6 +247,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::PlaybackTargetNameChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SavePlaybackTargetName))
+  .size(12.0)
   .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
@@ -776,7 +782,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
           row![
             row![
               icon_with_color(level_icon, IconSize::Xs, level_color),
-              badge(
+              status_tag(
                 diagnostic_level_label(state.kernel.locale, Some(diagnostic.level)),
                 diagnostic_badge(diagnostic.level)
               ),
@@ -918,7 +924,10 @@ fn labeled_field<'a>(
       )
       .icon_size(IconSize::Sm)
       .spacing(TOKENS.spacing.s1_5)
-      .padding([6, 12])
+      .padding([7, 12])
+      .min_height(32.0)
+      .label_size(12.0)
+      .radius(TOKENS.radii.lg)
       .on_press(Message::Settings(save)),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -1046,18 +1055,11 @@ fn subtitle_language_label(locale: Localizer, code: &str) -> String {
   locale.text(id)
 }
 
-fn badge<'a, Message: 'a>(label: String, variant: BadgeVariant) -> Element<'a, Message> {
-  container(text(label).size(12))
-    .padding([3, 8])
-    .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
-    .into()
-}
-
 const fn diagnostic_badge(level: DiagnosticLevel) -> BadgeVariant {
   match level {
     DiagnosticLevel::Info => BadgeVariant::Neutral,
     DiagnosticLevel::Warning => BadgeVariant::Warning,
-    DiagnosticLevel::Error => BadgeVariant::Neutral,
+    DiagnosticLevel::Error => BadgeVariant::Error,
   }
 }
 

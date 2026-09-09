@@ -9,10 +9,10 @@ use crate::i18n::Localizer;
 use iced::widget::{
   button, column, container, modal, row, scrollable, space, stack, text, text_input, Column, Id,
 };
-use iced::{Alignment, Element, Fill, Length};
+use iced::{Alignment, Background, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
-use jellypilot_ui::fonts::DISPLAY_FONT;
+use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
@@ -27,7 +27,7 @@ use jellypilot_ui::widgets::inert::inert;
 use jellypilot_ui::widgets::search_field::search_field;
 use jellypilot_ui::widgets::sidebar;
 use jellypilot_ui::widgets::skeleton::skeleton_block;
-pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
+pub(crate) const SIDEBAR_WIDTH: f32 = 220.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
 /// Width of the two shell hairlines (sidebar edge and player-bar edge).
 pub(crate) const HAIRLINE_WIDTH: f32 = 1.0;
@@ -43,7 +43,7 @@ fn platform_search_hint() -> &'static str {
 /// Returns the sidebar width corresponding to the given window-width [`SizeClass`].
 ///
 /// Compact windows collapse the sidebar to a 72px icon rail to maximize screen
-/// real estate for media content, while Standard and Wide windows use the full 240px panel.
+/// real estate for media content, while Standard and Wide windows use the full 220px panel.
 pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
   match class {
     SizeClass::Compact => SIDEBAR_RAIL_WIDTH,
@@ -155,7 +155,7 @@ fn sidebar_full(
   let personal_destination = Destination::PersonalLists(Route::Overview);
   let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
   let personal_navigation = Column::new()
-    .spacing(TOKENS.spacing.s1_5)
+    .spacing(TOKENS.spacing.s0_5)
     .push(destination_button(
       Icon::Home,
       state.t("common-home"),
@@ -178,11 +178,11 @@ fn sidebar_full(
     .shortcuts
   {
     LoadState::Idle | LoadState::Loading => Column::new()
-      .spacing(TOKENS.spacing.s1_5)
+      .spacing(TOKENS.spacing.s0_5)
       .push(shortcut_skeleton(skeleton_phase, reduced_motion))
       .push(shortcut_skeleton(skeleton_phase, reduced_motion)),
     LoadState::Ready(shortcuts) => {
-      let mut libraries = Column::new().spacing(TOKENS.spacing.s1_5);
+      let mut libraries = Column::new().spacing(TOKENS.spacing.s0_5);
       for shortcut in shortcuts {
         let destination = Destination::Library {
           library_id: shortcut.id.clone(),
@@ -219,13 +219,19 @@ fn sidebar_full(
     .shortcuts
   {
     library_heading = library_heading.push(space::horizontal()).push(
-      container(text(shortcuts.len().to_string()).size(11))
-        .padding([2, 6])
-        .style(sidebar::count_badge),
+      text(shortcuts.len().to_string())
+        .size(12)
+        .color(state.palette().text.metadata),
     );
   }
-  let main = column![search_slot, personal_navigation, library_heading,]
-    .spacing(TOKENS.spacing.s4)
+  let library_heading = container(library_heading).padding(iced::Padding {
+    top: 0.0,
+    right: TOKENS.spacing.s3,
+    bottom: TOKENS.spacing.s1_5,
+    left: TOKENS.spacing.s3,
+  });
+  let main = column![search_slot, personal_navigation, library_heading]
+    .spacing(TOKENS.spacing.s2)
     .width(Fill);
   let libraries = scrollable(libraries)
     .width(Fill)
@@ -235,16 +241,19 @@ fn sidebar_full(
     account::sidebar_popover(state, false),
     footer_toolbar(state),
   ]
-  .spacing(TOKENS.spacing.s3);
+  .spacing(TOKENS.spacing.s2);
   let content = column![main, libraries, bottom]
-    .spacing(TOKENS.spacing.s4)
+    .spacing(TOKENS.spacing.s2)
     .width(Fill)
     .height(Fill);
 
   container(content)
-    .padding(TOKENS.spacing.s3)
+    .padding([TOKENS.spacing.s4, TOKENS.spacing.s3])
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
+    .style(|_theme| container::Style {
+      background: Some(Background::Color(state.palette().colors.sidebarBg)),
+      ..container::Style::default()
+    })
 }
 
 /// One shared neutral field keeps the full sidebar and compact-search popover
@@ -258,8 +267,8 @@ fn unified_search_field<'a>(
   let leading = control_button(Some(Icon::Search), None, ButtonVariant::Text)
     .style(sidebar::search_action)
     .icon_size(IconSize::Sm)
-    .min_height(40.0)
-    .padding([7, 12])
+    .min_height(26.0)
+    .padding([5, 8])
     .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
   let leading = match trigger_id {
     Some(id) => leading.id(id),
@@ -270,34 +279,31 @@ fn unified_search_field<'a>(
       .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
       .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
       .id(Id::new(SEARCH_INPUT_ID))
-      .padding([8, 2])
-      .size(14)
+      .padding([5, 0])
+      .size(12)
       .width(Fill)
       .style(sidebar::search_input),
     Message::Shell(ShellMessage::ClearSearch),
   );
   let keycap = container(
-    container(text(platform_search_hint()).size(11))
-      .padding([2, 4])
-      .center_x(Length::Fixed(48.0))
-      .center_y(Length::Fixed(32.0))
-      .style(sidebar::inset),
+    text(platform_search_hint())
+      .size(11)
+      .style(|theme| text::Style {
+        color: Some(jellypilot_ui::tokens::palette(theme).text.metadata),
+      }),
   )
-  .padding(iced::Padding {
-    top: 0.0,
-    right: 2.0,
-    bottom: 0.0,
-    left: 0.0,
-  });
+  .center_x(Length::Fixed(44.0))
+  .center_y(Length::Fixed(26.0));
   let trailing: Element<'_, Message> = if search_draft.is_empty() {
     keycap.into()
   } else {
     tooltip(
       control_button(Some(Icon::Close), None, ButtonVariant::Text)
         .style(sidebar::search_action)
-        .min_height(40.0)
-        .padding([4, 4])
-        .width(Length::Fixed(48.0))
+        .icon_size(IconSize::Sm)
+        .min_height(26.0)
+        .padding([5, 8])
+        .width(Length::Fixed(44.0))
         .content_centered(true)
         .on_press(Message::Shell(ShellMessage::ClearSearch)),
       locale.text("shell-clear-search"),
@@ -452,7 +458,10 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   container(content)
     .padding(TOKENS.spacing.s4)
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
+    .style(|_theme| container::Style {
+      background: Some(Background::Color(state.palette().colors.sidebarBg)),
+      ..container::Style::default()
+    })
 }
 
 fn settings_modal(state: &State) -> Element<'_, Message> {
@@ -525,7 +534,9 @@ fn settings_button<'a>() -> Element<'a, Message> {
   control_button(Some(Icon::Settings), None, ButtonVariant::Text)
     .style(sidebar::action)
     .id(SETTINGS_TRIGGER_ID)
-    .min_height(40.0)
+    .icon_size(IconSize::Md)
+    .padding([8, 0])
+    .min_height(34.0)
     .width(Fill)
     .content_centered(true)
     .on_press(Message::Settings(SettingsMessage::Open))
@@ -553,12 +564,10 @@ fn compact_settings_button<'a>(locale: Localizer) -> Element<'a, Message> {
 /// The full sidebar groups its three global actions into one compact control
 /// strip so the account trigger remains the clear visual anchor at the bottom.
 fn footer_toolbar(state: &State) -> Element<'_, Message> {
-  let divider = || {
-    container(space::horizontal())
-      .width(1.0)
-      .height(24.0)
-      .style(sidebar::divider)
-  };
+  let divider = container(space::horizontal())
+    .width(Fill)
+    .height(HAIRLINE_WIDTH)
+    .style(sidebar::divider);
   let settings = tooltip(
     settings_button(),
     state.t("common-settings"),
@@ -568,7 +577,9 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
       .style(sidebar::action)
-      .min_height(40.0)
+      .icon_size(IconSize::Md)
+      .padding([8, 0])
+      .min_height(34.0)
       .width(Fill)
       .content_centered(true)
       .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
@@ -582,7 +593,9 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
   let control = tooltip(
     control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Text)
       .style(sidebar::action)
-      .min_height(40.0)
+      .icon_size(IconSize::Md)
+      .padding([8, 0])
+      .min_height(34.0)
       .width(Fill)
       .content_centered(true)
       .on_press(Message::Settings(SettingsMessage::AppModeSelected(
@@ -592,19 +605,16 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     TooltipOptions::default(),
   );
 
-  container(
+  column![
+    divider,
     row![
       container(settings).width(Length::FillPortion(1)),
-      divider(),
       container(refresh).width(Length::FillPortion(1)),
-      divider(),
       container(control).width(Length::FillPortion(1)),
     ]
     .align_y(Alignment::Center),
-  )
-  .padding(3)
+  ]
   .width(Fill)
-  .style(sidebar::toolbar)
   .into()
 }
 
@@ -634,6 +644,7 @@ fn destination_button<'a>(
         container(
           ellipsis_text(label.clone())
             .size(14)
+            .font(if active { HEADING_FONT } else { BODY_FONT })
             .style(move |theme| text::Style {
               color: Some(jellypilot_ui::widgets::button::style(theme, variant, status).text_color),
             })
@@ -652,15 +663,15 @@ fn destination_button<'a>(
   } else {
     sidebar::personal
   })
-  .min_height(if is_library { 32.0 } else { 38.0 })
-  .padding(if is_library { [4, 12] } else { [7, 12] })
+  .min_height(38.0)
+  .padding([9, 12])
   .width(Fill)
   .on_press(Message::Home(HomeMessage::Navigate(destination)));
 
   focus_tooltip(btn, tooltip_label, TooltipOptions::default())
 }
 fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
-  skeleton_block(Length::Fill, 34.0, skeleton_phase, reduced_motion).into()
+  skeleton_block(Length::Fill, 38.0, skeleton_phase, reduced_motion).into()
 }
 
 fn compact_destination_button<'a>(

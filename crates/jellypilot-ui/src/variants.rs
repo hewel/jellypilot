@@ -13,6 +13,12 @@ pub enum ButtonVariant {
     TonalActive,
     Text,
     Icon,
+    /// Filter Pill / Season Pill default: tonal outline with a subtle surface
+    /// fill, switching to the shared active treatment when selected.
+    Pill,
+    /// Shared active treatment for pills: filled with `primaryContainer` and
+    /// `secondary` content, borderless.
+    PillActive,
 }
 
 /// Container surface roles. A surface is exactly one of: flush with the app
@@ -42,6 +48,7 @@ pub enum BadgeVariant {
     Success,
     Warning,
     Neutral,
+    Error,
 }
 
 /// Text input variants.

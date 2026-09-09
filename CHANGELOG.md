@@ -11,20 +11,24 @@ All notable changes to JellyPilot are documented in this file.
 - Added an isolated, reusable `jellypilot-player` crate for GStreamer local-video playback and an iced/wgpu surface, with a standalone demo and private worker/frame/shutdown ownership. Production playback remains External MPV Playback; no GStreamer dependency was added to the application workspace.
 - Added explicit HTTP(S)/HLS sources to the isolated player/demo, with a cancellable same-origin authenticated relay, bounded playlist rewriting, network deadlines, buffering/seek-window state, and a credential-safe `--url-env` launch path. Production Jellyfin/Emby playback remains External MPV Playback.
 - Added opt-in native maintenance regressions for real-tray locale startup, missing embedded-dependency recovery, and GPU video-copy/window lifecycle, with fresh run-identified reports and separate human color acceptance.
+- Added movie/series collection controls to Home and the playback bar: Hero Favorites/Watchlist target the movie or parent series, while the player Favorite follows Now Playing independently. Unknown state remains disabled; mutations retain account and in-flight ownership.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.
-- Refined the native Sidebar and Account Popover with scoped light/dark surfaces, a separate library-count badge, and segmented tools.
+- Synchronized the Paper Home Sidebar and Account Popover with a 220px expanded Sidebar, compact flat tools, a 320px account menu, and separately resolved light/dark surfaces.
 - Simplified the Account Popover into a quick menu: show the current account once, quiet the address and actions, and move preferences and saved-login removal to a direct Accounts Settings entry.
 - Widened the default Full-mode window from 1600×900 to 1760×900 logical pixels without changing its height, minimum size, or Control-Only sizing.
-- Reworked Video Home with a full-width, aspect-preserving Backdrop behind scrolling content, a detail-style bottom gradient, and a subdued thumbnail selection rail with hover/focus information. Added manual selection, series-grouped continuation candidates, and selection retained across same-profile refreshes; kept the separate Continue Watching row directly resumable and visible in compact windows.
+- Reworked Video Home with a fixed 440px foreground, full-width uncropped Backdrop, Logo-first identity, and compact thumbnail selection rail. Preserved real Home rows, independent direct resume, and selection without automatic vertical scrolling; Continue Watching may require scrolling in compact windows.
 - Made Library Image loading follow measured visibility, with immediate visible-image admission and one viewport of prefetch before and after scrolling across Home, Browse, Detail, and Personal Lists.
 - Moved Library/Search restoration and refresh ownership into the display-free browse model, retaining complete usable results and scroll position while replacement data loads.
 - Consolidated Intro Skipper eligibility and prompt lifetime into one display-free policy, preserving Automatic, Manual, and Off modes, exact-start skipping, and one automatic attempt per range.
 - Migrated Intro Skipper playback to Jellyfin's native media-segment API, preserving multiple intro/credit ranges and Automatic/Manual/Off behavior without the deprecated plugin endpoint or elevated editor API.
 - Replaced checked-in iced patch preparation with the exact published fork revision from the source manifest, preserving unified repository-owned vendor paths and rejecting dirty or non-owned checkout reuse.
+- Removed decorative translucent borders from Hero glass controls while preserving their fills, blur, and independent keyboard focus indication.
+- Restyled the docked playback bar while retaining direct Stop and existing transport/track controls; its expand action toggles the current player, with Escape and browser-state restoration for existing embedded playback.
 
 ### Fixed
+- Kept Hero playback/Details buttons content-sized instead of stretching across the action row, and horizontally centered carousel arrows within their unchanged 40×40 hit areas.
 - Added Jellyfin 12.0 compatibility: updated the generated API client, migrated API and playback/subtitle/WebSocket authentication away from disabled legacy forms, and redacted the modern `ApiKey` query parameter in diagnostics. Emby authentication remains unchanged.
 - Restored history-specific vertical and horizontal scroll positions when returning to Home, browse results, details, and Personal Lists. Back navigation retains loaded content and query context; new searches and filter changes still start at the top.
 - Avoided repeated overview text shaping on detail pages during playback updates, preventing long layout stalls while scrolling.

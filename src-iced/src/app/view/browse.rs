@@ -5,7 +5,7 @@ use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{Destination, State};
 use crate::i18n::media::item_caption;
 use crate::i18n::Localizer;
-use iced::widget::{button, column, container, row, scrollable, stack, text, Column, Row};
+use iced::widget::{column, container, row, scrollable, stack, text, Column, Row};
 use iced::{Alignment, Color, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::diagnostics::sanitize_message;
@@ -119,7 +119,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     .filters
     .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
   let sort_trigger = control_button(
-    Some(Icon::Sliders),
+    Some(Icon::ChevronDown),
     Some(state.format(
       "browse-sort",
       &[(
@@ -127,11 +127,14 @@ fn toolbar(state: &State) -> Element<'_, Message> {
         sort_label(state.kernel.locale, filters.sort()).into(),
       )],
     )),
-    ButtonVariant::Tonal,
+    ButtonVariant::Pill,
   )
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
-  .padding([6, 12])
+  .spacing(7.0)
+  .padding([8, 12])
+  .min_height(32.0)
+  .label_size(12.0)
+  .trailing_icon(true)
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled));
   let sort_menu = column![
     sort_option(state.t("browse-sort-title"), VideoLibrarySort::Title),
@@ -168,42 +171,38 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   let direction = control_button(
     Some(direction_icon),
     Some(direction_label),
-    ButtonVariant::Tonal,
+    ButtonVariant::Pill,
   )
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
-  .padding([6, 12])
+  .spacing(7.0)
+  .padding([8, 12])
+  .min_height(32.0)
+  .label_size(12.0)
   .on_press(Message::Browse(BrowseMessage::SortDirectionToggled));
-  // Favorited state keeps the heart in the fixed rose `favorite` accent
-  // across hover; the off state is an ordinary Tonal `control_button`.
   let favorites: Element<'_, Message> = if filters.favorites_only() {
-    button(
-      row![
-        icon_with_color(
-          Icon::HeartFilled,
-          IconSize::Sm,
-          state.palette().colors.favorite
-        ),
-        text(state.t("browse-favorites-on")),
-      ]
-      .spacing(TOKENS.spacing.s1_5)
-      .align_y(Alignment::Center),
+    control_button(
+      Some(Icon::HeartFilled),
+      Some(state.t("browse-favorites-on")),
+      ButtonVariant::PillActive,
     )
-    .padding([6, 12])
+    .icon_size(IconSize::Sm)
+    .spacing(7.0)
+    .padding([8, 12])
+    .min_height(32.0)
+    .label_size(12.0)
     .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::TonalActive)
-    })
     .into()
   } else {
     control_button(
       Some(Icon::Heart),
       Some(state.t("browse-favorites-off")),
-      ButtonVariant::Tonal,
+      ButtonVariant::Pill,
     )
     .icon_size(IconSize::Sm)
-    .spacing(TOKENS.spacing.s1_5)
-    .padding([6, 12])
+    .spacing(7.0)
+    .padding([8, 12])
+    .min_height(32.0)
+    .label_size(12.0)
     .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
     .into()
   };
@@ -252,14 +251,16 @@ fn played_option(
   selected: VideoLibraryPlayedFilter,
 ) -> Element<'static, Message> {
   let variant = if value == selected {
-    ButtonVariant::TonalActive
+    ButtonVariant::PillActive
   } else {
-    ButtonVariant::Tonal
+    ButtonVariant::Pill
   };
   control_button(Some(icon), Some(label), variant)
     .icon_size(IconSize::Sm)
-    .spacing(TOKENS.spacing.s1_5)
-    .padding([6, 12])
+    .spacing(7.0)
+    .padding([8, 12])
+    .min_height(32.0)
+    .label_size(12.0)
     .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
     .into()
 }

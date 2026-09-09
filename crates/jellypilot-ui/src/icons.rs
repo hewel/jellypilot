@@ -347,21 +347,23 @@ fn control_color(
     disabled: bool,
 ) -> Color {
     let colors = palette.colors;
-    let mut color = match variant {
+
+    if disabled {
+        return palette.text.muted;
+    }
+
+    match variant {
         ButtonVariant::Primary => colors.onPrimary,
         ButtonVariant::Secondary => colors.onSecondaryContainer,
         ButtonVariant::TonalActive => colors.onControlHover,
-        ButtonVariant::Tonal | ButtonVariant::Icon if hovered => colors.onControlHover,
-        ButtonVariant::Tonal | ButtonVariant::Icon => colors.onControl,
+        ButtonVariant::PillActive => colors.secondary,
+        ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill if hovered => {
+            colors.onControlHover
+        }
+        ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => colors.onControl,
         ButtonVariant::Text if hovered => palette.text.heading,
         ButtonVariant::Text => palette.text.body,
-    };
-
-    if disabled {
-        color.a *= 0.5;
     }
-
-    color
 }
 
 /// Creates a standard-sized iced `Svg` widget with default surface text color.
@@ -574,6 +576,16 @@ mod tests {
                 palette.colors.onControl,
                 palette.colors.onControlHover,
             ),
+            (
+                ButtonVariant::Pill,
+                palette.colors.onControl,
+                palette.colors.onControlHover,
+            ),
+            (
+                ButtonVariant::PillActive,
+                palette.colors.secondary,
+                palette.colors.secondary,
+            ),
         ];
 
         for (variant, rest, hovered) in cases {
@@ -583,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn control_color_applies_disabled_alpha_after_variant_and_hover_resolution() {
+    fn control_color_uses_muted_for_disabled() {
         let palette = DARK_PALETTE;
 
         for variant in [
@@ -593,16 +605,14 @@ mod tests {
             ButtonVariant::TonalActive,
             ButtonVariant::Text,
             ButtonVariant::Icon,
+            ButtonVariant::Pill,
+            ButtonVariant::PillActive,
         ] {
             for hovered in [false, true] {
-                let enabled = control_color(&palette, variant, hovered, false);
                 let disabled = control_color(&palette, variant, hovered, true);
                 assert_eq!(
-                    disabled,
-                    Color {
-                        a: enabled.a * 0.5,
-                        ..enabled
-                    }
+                    disabled, palette.text.muted,
+                    "disabled content for {variant:?} must be text.muted"
                 );
             }
         }

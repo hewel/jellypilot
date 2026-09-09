@@ -37,6 +37,7 @@ pub enum PlaybackIntent {
     selection: Box<PlaybackSelection>,
   },
   TogglePaused,
+  ToggleFullscreen,
   SetPaused(bool),
   Seek(f64),
   SetVolume(f64),
@@ -114,6 +115,7 @@ pub enum ControllerCommand {
     continue_playback: bool,
   },
   SetPaused(bool),
+  ToggleFullscreen,
   Seek(f64),
   SetVolume(f64),
   SetMuted(bool),
@@ -155,9 +157,11 @@ impl ControllerCommand {
         },
         client_messages: Vec::new(),
       },
-      Self::SetPaused(_) | Self::Seek(_) | Self::SetVolume(_) | Self::SetMuted(_) => {
-        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback))
-      }
+      Self::SetPaused(_)
+      | Self::ToggleFullscreen
+      | Self::Seek(_)
+      | Self::SetVolume(_)
+      | Self::SetMuted(_) => ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
     }
   }
 }
@@ -342,6 +346,19 @@ impl PlaybackSession {
     }
   }
 
+  /// Whether a fullscreen action can still target the currently visible player.
+  #[must_use]
+  pub fn can_toggle_fullscreen(&self) -> bool {
+    self
+      .snapshot
+      .as_ref()
+      .and_then(|snapshot| snapshot.now_playing.as_ref())
+      .is_some()
+      && !self.controller_busy()
+      && !self.quitting
+      && !self.cleanup_pending
+  }
+
   fn handle_intent(&mut self, intent: PlaybackIntent, now: Instant) -> Vec<PlaybackEffect> {
     match intent {
       PlaybackIntent::Start {
@@ -365,6 +382,17 @@ impl PlaybackSession {
         self.enqueue(ControllerRequest::controlled(
           RequestKind::Paused,
           ControllerCommand::SetPaused(!paused),
+        ))
+      }
+      PlaybackIntent::ToggleFullscreen => {
+        // A toggle must not queue behind a replacement or shutdown and affect
+        // a different player session than the one visible when it was pressed.
+        if !self.can_toggle_fullscreen() {
+          return Vec::new();
+        }
+        self.enqueue(ControllerRequest::controlled(
+          RequestKind::Fullscreen,
+          ControllerCommand::ToggleFullscreen,
         ))
       }
       PlaybackIntent::SetPaused(paused) => {
@@ -1022,6 +1050,7 @@ enum ControllerOperation {
 enum RequestKind {
   Start { target_id: String },
   Paused,
+  Fullscreen,
   Seek,
   Volume,
   Muted,
@@ -1340,6 +1369,62 @@ mod tests {
     let id = start_command(&mut session, now, mode);
     let effects = settle_start(&mut session, id, now, "Episode");
     (session, now, effects)
+  }
+
+  #[test]
+  fn fullscreen_does_not_cross_a_player_replacement() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let (id, command) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleFullscreen)),
+      now,
+    ));
+    assert!(matches!(command, ControllerCommand::ToggleFullscreen));
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2", "Second")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      })),
+      now,
+    );
+    assert!(session
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleFullscreen)),
+        now,
+      )
+      .is_empty());
+    let (replacement, command) = controller_effect(session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-1", "Episode", 0.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    ));
+    assert!(matches!(command, ControllerCommand::Start { .. }));
+    assert!(session
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleFullscreen)),
+        now,
+      )
+      .is_empty());
+    let effects = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: replacement,
+        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-2", "Episode", 0.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    assert!(!effects.iter().any(|effect| matches!(
+      effect,
+      PlaybackEffect::Controller(_, ControllerCommand::ToggleFullscreen)
+    )));
   }
 
   fn intro_fetch_id(effects: &[PlaybackEffect]) -> EffectId {

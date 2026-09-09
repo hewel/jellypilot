@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod artwork;
 pub(crate) mod avatars;
 pub mod browse;
+pub(crate) mod collections;
 pub mod detail;
 pub mod home;
 pub mod kernel;

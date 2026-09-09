@@ -17,7 +17,7 @@ use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
-use jellypilot_ui::widgets::inert::inert;
+use jellypilot_ui::widgets::inert::{concealed, inert};
 
 use super::message::Message;
 use super::state::{NoticeLevel, State, ToastNotice};
@@ -28,9 +28,23 @@ pub fn view(state: &State) -> Element<'_, Message> {
   } else {
     login::view(state)
   };
+  // Preserve the browser's layout and widget state while native video fills the window.
+  let base = container(base)
+    .width(if state.shell.player_fullscreen {
+      Length::Fixed(state.shell.window_size.width)
+    } else {
+      Fill
+    })
+    .height(if state.shell.player_fullscreen {
+      Length::Fixed(state.shell.window_size.height)
+    } else {
+      Fill
+    });
   // Keep this ancestor stable: adding or removing it would reset descendant
   // input focus, cursor positions, and scroll state during iced reconciliation.
-  let mut layers = if let Some(modal) = account::modal_layer(state) {
+  let mut layers = if state.shell.player_fullscreen {
+    stack![concealed(base), player::video_surface()]
+  } else if let Some(modal) = account::modal_layer(state) {
     stack![inert(base), modal]
   } else {
     stack![base]

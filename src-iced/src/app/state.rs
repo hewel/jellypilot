@@ -603,6 +603,7 @@ pub fn diagnostic_matches(
 #[derive(Default)]
 pub struct FullUi {
   pub personal_lists: crate::app::personal_lists::Surface,
+  pub collections: crate::app::collections::Surface,
   pub home: crate::app::home::Surface,
   pub browse: crate::app::browse::Surface,
   pub detail: crate::app::detail::Surface,

@@ -2,9 +2,9 @@
 //!
 //! Every surface is exactly one role:
 //! - `Canvas`: flush with the window background — opaque, square, flat.
-//! - `Block`: a docked block (sidebar, player bar) — opaque
-//!   `surfaceContainerLowest`, square, flat; separation comes from the two
-//!   shell hairlines, not from borders or shadows.
+//! - `Block`: a docked block (sidebar, player bar) — opaque `sidebarBg`,
+//!   square, flat; separation comes from the two shell hairlines, not from
+//!   borders or shadows.
 //! - `Raised`: a floating layer (cards, toasts, popovers) — opaque
 //!   `surfaceContainerHigh`, `lg` radius, `raised_high` shadow.
 //! - `Floating`: an outlined floating layer using the `lg` radius.

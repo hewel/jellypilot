@@ -1,10 +1,42 @@
 # JellyPilot Video Home Hero and Resume Interaction Specification
 
-**Status: Full-width Backdrop trial implemented; awaiting human evaluation.** After reviewing the previous composition, the user requested this trial without ambient fill or edge feathering. Candidate, interaction, layout-boundary, workspace, and native startup checks have passed. The checklist below remains unchecked: this is not human visual acceptance or a live-server playback result.
+**Status: Paper Home synchronization implemented; human visual acceptance pending.** The foreground Hero is fixed at 440 logical pixels and the original Backdrop scales independently without cropping. Code-level verification is recorded below; the known Hero mask/edge artifact remains deferred.
 
 Source reference: `hero_carousel_design_spec_en.md` v2.1, supplied from the user's external prototype workspace. Its Web implementation, credentials, mock data, and claimed acceptance results are not native requirements or implementation evidence. Credentials must not be copied into project documentation.
 
 This specification follows [CONTEXT.md](../CONTEXT.md), the [jellypilot-ui design system](design-system.md), [ADR 0027](adr/0027-cross-platform-iced-frontend.md), and [ADR 0028](adr/0028-library-image-raster-pipeline.md). The existing [Sidebar specification](sidebar-design-spec.md) continues to own shell geometry and account interaction.
+
+## Accepted Paper Home Synchronization
+
+Reference: [Desktop - Home, MY-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/MY-0). The decisions below are confirmed requirements for this implementation, not a claim of completed implementation or visual acceptance.
+
+Confirmed decisions:
+
+- Synchronize the entire Home composition, including the Sidebar, Account Popover, and bottom playback bar, not only the central Video Home content. Shared shell changes can affect other destinations.
+- Add Favorites and Watchlist actions beside the Hero playback and Details actions. For a movie, both actions target that movie. For a featured episode, both target its parent series, while playback continues to target the episode. This supersedes the previous prohibition against adding those actions from the prototype.
+- Prioritize the Hero composition at smaller/shorter window sizes. Continue Watching may move below the first screen; the previous requirement that its complete cards and captions fit on the first screen no longer governs this revision.
+- The previously reported Hero edge/corner artifact remains recorded and deferred; synchronizing the design does not reopen that renderer investigation.
+- Keep the original Backdrop uncropped and use a fixed 440-logical-pixel foreground Hero rather than deriving Hero height from the image's aspect ratio. Preserve the full-width, original-aspect background, with excess image height extending behind later content instead of being clipped at the Hero boundary. Logo, actions, and the selection rail are positioned against the fixed foreground region.
+- Keep Title Logo priority with the existing text-headline fallback, rather than switching every item to the reference's plain-text title.
+- Keep other real Home sections, including latest Episodes and library shortcuts where available. The three illustrated sections are examples, not a new restriction on Home content.
+- Adapt dark and light themes separately using the existing semantic palette and the same layout. The dark reference does not make the Home composition or its shared shell permanently dark; the Backdrop gradient blends into the active theme.
+- Do not automatically adjust the page's vertical scroll offset when switching the Featured Item. A different image aspect ratio must not change the fixed foreground Hero height.
+- The bottom playback bar's Favorites action targets the currently playing movie or the parent series of the currently playing episode. It is independent of the Hero selection.
+- Keep a directly accessible Stop button in the restyled playback bar, even though the reference omits it from the primary transport group.
+- The playback bar's expand action toggles the current player's fullscreen state. It does not make the Library Browser fullscreen, open a new player page, or introduce a playback backend.
+- Icons may be obtained directly from [Reicon](https://reicon.dev). Reuse the existing vendored set where suitable and obtain missing glyphs from Reicon rather than drawing approximations; retain the semantic icon helpers, theme tinting, and asset attribution required by [ADR 0034](adr/0034-reicon-icon-set.md).
+
+Acceptance criteria for this revision (human visual acceptance remains outstanding):
+
+- Compare the complete composition with the linked Home artboard at its 1440px reference width and at the supported 1760×900 and 1024×640 window sizes, in both themes. Account Popover appearance is checked when opened; it is not permanently open merely because the reference illustrates it.
+- Verify uncropped Backdrops with landscape, portrait, and differing candidate aspect ratios while the foreground Hero height stays fixed. Continue Watching may require scrolling. Changing selection must not explicitly adjust the page's vertical scroll offset; normal scroll-range clamping still applies when content becomes shorter.
+- Verify Logo priority, readable episode identity and controls, distinct selected/focused rail states, and retained real Home sections. Missing or failed artwork retains usable metadata/actions and an honest neutral state rather than blocking playback or displaying fabricated media.
+- Feature episode A from series X while episode B from series Y is playing: Hero Favorites/Watchlist act on X, the playback-bar Favorite acts on Y, and playback actions still target the appropriate episode. Missing parent identity or unresolved collection state must not silently turn a series action into a single-episode action or show a fabricated success.
+- Verify successful and failed collection changes against the existing server-confirmed Favorites and local, Profile Scope-owned Watchlist contracts, including selected-item and profile changes during an operation.
+- Verify the restyled bar retains direct Stop, queue, audio/subtitle selection, volume and seeking where available, and that fullscreen affects the current player rather than the browsing shell. No Now Playing state means no fabricated active bar or progress.
+- Verify new and reused Reicon glyphs remain theme-tinted with clear active, disabled, hover, and keyboard-focus states. Hero decorative borders stay absent; the previously recorded mask/edge artifact remains a known deferred issue, not a failed promise of renderer repair.
+
+The specification below describes the preceding implementation and remains the baseline except where these confirmed decisions supersede it. Other behavioral or visual differences are not silently adopted from the reference.
 
 ## 1. Purpose and Scope
 
@@ -17,9 +49,9 @@ The current visual trial preserves the accepted selection/resume interactions an
 - Title treatment, essential metadata, and playback/Details actions form one lower-left foreground group. A detail-style vertical gradient transitions from transparent at the top through a near-opaque metadata/action zone to the page color at the image bottom; there is no separate left-side scrim.
 - An image-only Hero Selection Rail sits quietly at the lower right. Full title, episode identity, and resume/next-up/latest role appear on hover or keyboard focus rather than as a second permanent metadata row.
 - The background scrolls away with Home content. It is not fixed wallpaper behind later rows.
-- Subject visibility, readable controls, and a complete first-screen Continue Watching row take precedence over a fixed Hero height.
+- Keep the foreground Hero at 440 logical pixels; Continue Watching remains directly resumable but may require vertical scrolling.
 
-The change is scoped to Video Home's Hero, its selection rail, and the layout needed to preserve direct resume access. It does not redesign the Sidebar, account lifecycle, Settings, detail screens, or playback architecture. Existing Next Up and latest-content rows remain separate browsing surfaces.
+The Paper synchronization includes Home, shared Sidebar/Account Popover composition, and the bottom playback bar. It preserves account lifecycle, Settings, playback backends, and separate Next Up/latest-content browsing surfaces.
 
 ## 2. Two Distinct Interactions
 
@@ -85,15 +117,9 @@ The bottom gradient may obscure lower image content, but the image geometry keep
 
 Keep the existing Full-mode default of 1760×900 logical pixels and minimum of 1024×640; do not change window constraints to make this design fit.
 
-The first-screen priority is the usable Continue Watching row, not a fixed minimum Hero height. When that row exists, its visible cards, titles, and direct-resume targets should fit without vertical scrolling at the supported default and minimum window sizes, accounting for persistent shell and playback controls. Horizontal browsing remains necessary for additional items; the requirement does not put every candidate on screen simultaneously.
+The foreground Hero is fixed at 440 logical pixels at both supported sizes. Its height is independent of the viewport height and Backdrop ratio. Continue Watching may fall below the first screen; vertical scrolling must expose complete cards, captions, and direct-resume controls.
 
-At reduced height:
-
-- Reduce the foreground Hero and Logo presentation height. The width-sized background remains independent and can extend behind the rows without pushing them down.
-- Make the Hero Selection Rail visibly subordinate and more compact than the direct-resume row; do not duplicate two full-sized episode-card rows.
-- Reduce spacing and secondary metadata before reducing the readability or usability of titles and buttons.
-- Preserve the separate selection and direct-play interactions.
-- Do not reserve the prototype's 440–520px Hero minimum or force a 2.2:1/2.4:1 ratio against the available height.
+At reduced width, keep the selection rail subordinate and compact, truncate long labels with full-value hints, and preserve separate selection and direct-play interactions. The width-sized background remains independent and can extend behind rows without pushing them down. Selection does not explicitly change the page's vertical offset.
 
 Both supported themes and the existing reduced-motion preference remain in scope. Do not force the entire homepage dark or replace global theme tokens to imitate the prototype's white CTA and cinema palette. The Backdrop gradient must blend into the active native theme through the existing design system, not a second styling mechanism.
 
@@ -115,7 +141,7 @@ These interaction and failure rules were included in the final shared-understand
 
 This is the outstanding human acceptance checklist, not a record of completed visual verification:
 
-- At 1760×900 and 1024×640 logical pixels, with and without the playback bar—including active intro/credits prompts—verify the visible Continue Watching cards, identifying text, and direct-resume targets remain on the first screen.
+- At 1760×900 and 1024×640 logical pixels, with and without the playback bar—including active intro/credits prompts—verify the fixed Hero remains usable and scrolling exposes complete Continue Watching cards and direct-resume targets.
 - Verify the original image reaches the Home region's top and side edges, retains its aspect ratio, and extends below the foreground without a rounded frame, blurred filler, or feathered edges. Scroll down: the image must move with the page rather than remain fixed behind later content.
 - Check that title, metadata, and actions read as one foreground group rather than separate blocks. Bright artwork must remain readable without turning the entire left half into a solid panel.
 - Verify the quiet thumbnail rail retains a clear selected item and a separate keyboard-focus indicator. Hover/focus must expose the full title, episode, and action/source role without changing selection.
@@ -126,4 +152,4 @@ This is the outstanding human acceptance checklist, not a record of completed vi
 - Inspect bright, dark, low-resolution, and missing Backdrops; left-edge and multi-subject compositions; wide and narrow logos; long titles; and episode identification. Check readable text and sensible framing rather than assuming a fade guarantees contrast or subject preservation.
 - Verify pointer and keyboard selection, direct playback, focus versus selection, search input, menus, reduced motion, and both themes.
 
-Verification follows the [validation policy](agents/validation.md). Code-level checks cover candidate grouping, cross-source selection retention, long-label rail scrolling, late-artwork focus retention, and complete Continue Watching caption bounds with docked playback controls. The headless native scenario draws the composed page and checks actual two-dimensional text/control separation at both supported window sizes, with and without playback controls and active prompts. It also checks full-width landscape/portrait Backdrop geometry and unchanged Continue Watching positions after image arrival. Workspace checks, workspace tests, and the native startup smoke gate pass; independent source reviews reported no outstanding findings. Human visual acceptance and live-server External MPV Playback remain separate.
+Verification follows the [validation policy](agents/validation.md). Focused core/MPV/iced tests, focused iced clippy, `bun run check`, workspace Rust tests, and the native startup smoke gate passed. The final Detail refresh-ordering fix was rechecked with iced tests, iced clippy, and Rust format checking. Regressions cover independent resume after scrolling, uncropped Backdrop geometry, menu keyboard-focus retention, collection confirmation after navigation, conflicting same-item write rejection, fullscreen replacement admission, and browser scroll preservation across embedded fullscreen. Independent source review findings were addressed. These are code-level/startup results, not visual acceptance or live-server playback verification.

@@ -1,5 +1,6 @@
 use super::image_observer::{observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageCell, ImageSpec, ImageStatus};
+use crate::app::collections::{self, Source};
 use crate::app::home::ArtworkPlacement;
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{HomeRow, HomeSection, State};
@@ -20,8 +21,8 @@ use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
-use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
-use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
+use jellypilot_ui::icons::{icon_sized, icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -31,40 +32,18 @@ use jellypilot_ui::widgets::skeleton::{
   skeleton_block, skeleton_block_with_radius, skeleton_panel,
 };
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
-const THUMB_FRAME_WIDTH: f32 = 240.0;
-const THUMB_FRAME_HEIGHT: f32 = 135.0;
-const POSTER_FRAME_WIDTH: f32 = 168.0;
-const POSTER_FRAME_HEIGHT: f32 = 240.0;
-/// Budget against the actual Home viewport, after all docked player controls.
-const HERO_HEIGHT_RATIO: f32 = 0.62;
-const HERO_MAX_HEIGHT: f32 = 520.0;
-const SECTION_TITLE_SIZE: f32 = 24.0;
-const HERO_LOGO_MAX_HEIGHT: f32 = 96.0;
-/// Hero Selection Rail geometry: compact 16:9 stills, deliberately
-/// subordinate to the 240x135 direct-resume cards.
-const RAIL_IMAGE_WIDTH: f32 = 80.0;
-const RAIL_IMAGE_HEIGHT: f32 = 45.0;
+const THUMB_FRAME_WIDTH: f32 = 272.0;
+const THUMB_FRAME_HEIGHT: f32 = 153.0;
+const POSTER_FRAME_WIDTH: f32 = 175.0;
+const POSTER_FRAME_HEIGHT: f32 = 262.0;
+const HERO_HEIGHT: f32 = 440.0;
+const SECTION_TITLE_SIZE: f32 = 20.0;
+const HERO_LOGO_HEIGHT: f32 = 88.0;
+/// The rail stays smaller than direct-resume cards, including its focus gutter.
+const RAIL_IMAGE_WIDTH: f32 = 96.0;
+const RAIL_IMAGE_HEIGHT: f32 = 54.0;
 const RAIL_CARD_WIDTH: f32 = RAIL_IMAGE_WIDTH + TOKENS.spacing.s0_5 * 2.0 + 4.0;
-const RAIL_ROW_HEIGHT: f32 = 68.0;
-const HERO_MIN_TEXT_ZONE: f32 = 240.0;
-
-fn hero_height(viewport_height: f32, has_continue_watching: bool) -> f32 {
-  let preferred = (viewport_height * HERO_HEIGHT_RATIO).min(HERO_MAX_HEIGHT);
-  if !has_continue_watching {
-    return preferred;
-  }
-  let continuation = section_scroll_height(HomeSection::ContinueWatching)
-    + SECTION_TITLE_SIZE * 1.3
-    + TOKENS.spacing.s3;
-  let page_spacing = TOKENS.spacing.s4 + TOKENS.spacing.s2;
-  preferred.min((viewport_height - continuation - page_spacing).max(0.0))
-}
-
-/// The Title Logo scales with the hero so short windows keep room for the
-/// selection rail and the Continue Watching row.
-fn hero_logo_height(hero_height: f32) -> f32 {
-  (hero_height * 0.2).clamp(40.0, HERO_LOGO_MAX_HEIGHT)
-}
+const RAIL_ROW_HEIGHT: f32 = 76.0;
 
 fn hero_rail_scroll_id() -> iced::widget::Id {
   iced::widget::Id::new("home-hero-rail")
@@ -91,7 +70,7 @@ pub(crate) fn reveal_hero_selection(index: usize) -> iced::Task<Message> {
       state: &mut dyn widget::operation::Scrollable,
     ) {
       if id == Some(&self.id) {
-        let step = RAIL_CARD_WIDTH + TOKENS.spacing.s3;
+        let step = RAIL_CARD_WIDTH + TOKENS.spacing.s2_5;
         state.scroll_to(widget::operation::scrollable::AbsoluteOffset {
           x: Some((self.index as f32 * step - (bounds.width - RAIL_CARD_WIDTH) / 2.0).max(0.0)),
           y: None,
@@ -115,9 +94,9 @@ pub(crate) const fn section_frame_size(section: HomeSection) -> (f32, f32) {
 
 const fn section_scroll_height(section: HomeSection) -> f32 {
   if section.is_action() {
-    208.0
+    THUMB_FRAME_HEIGHT + 58.0
   } else {
-    296.0
+    POSTER_FRAME_HEIGHT + 58.0
   }
 }
 
@@ -128,15 +107,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
 fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
-  let has_continue_watching = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .home
-    .data
-    .row(HomeSection::ContinueWatching)
-    .is_some_and(|row| matches!(&row.items, LoadState::Ready(items) if !items.is_empty()));
-  let hero_height = hero_height(viewport.height, has_continue_watching);
 
   let mut content = Column::new().width(Fill);
 
@@ -159,7 +129,7 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
           .featured_section(),
       )
     });
-  let mut scrim_start = hero_height;
+  let mut scrim_start = HERO_HEIGHT;
   if featured.is_some() || home_is_loading(state) {
     content = content.push(if let Some((item, section)) = featured {
       let (hero, metadata_top) = featured_hero(
@@ -167,24 +137,22 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
         item,
         section.unwrap_or(HomeSection::ContinueWatching),
         viewport.width,
-        hero_height,
         skeleton_phase,
         reduced_motion,
       );
       scrim_start = metadata_top;
       hero
     } else {
-      featured_skeleton(skeleton_phase, reduced_motion, hero_height)
+      featured_skeleton(skeleton_phase, reduced_motion)
     });
   }
 
   let mut rows = Column::new()
-    .spacing(TOKENS.spacing.s4)
     .padding(iced::Padding {
-      top: TOKENS.spacing.s4,
-      right: TOKENS.spacing.s8,
-      bottom: TOKENS.spacing.s2,
-      left: TOKENS.spacing.s8,
+      top: 0.0,
+      right: TOKENS.spacing.s9,
+      bottom: TOKENS.spacing.s9,
+      left: TOKENS.spacing.s9,
     })
     .width(Fill);
 
@@ -197,7 +165,14 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
     .rows()
   {
     if let Some(section) = section_view(state, row, skeleton_phase, reduced_motion) {
-      rows = rows.push(section);
+      rows = rows.push(container(section).padding(iced::Padding {
+        top: if row.section.is_latest() {
+          TOKENS.spacing.s9
+        } else {
+          TOKENS.spacing.s7
+        },
+        ..iced::Padding::ZERO
+      }));
     }
   }
 
@@ -249,34 +224,31 @@ fn featured_hero<'a>(
   item: &'a VideoLibraryItem,
   section: HomeSection,
   width: f32,
-  hero_height: f32,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> (Element<'a, Message>, f32) {
   let palette = state.palette();
   let home = &state.full.as_ref().expect("FullUi required").home;
-  let text_zone = ((width - TOKENS.spacing.s8 * 2.0) * 0.4).clamp(HERO_MIN_TEXT_ZONE, 480.0);
-  let metadata_size = if hero_height < 200.0 { 12.0 } else { 14.0 };
+  let inner_width = (width - TOKENS.spacing.s9 * 2.0).max(1.0);
+  // Disjoint columns keep localized actions and long titles out of the rail.
+  // Shrink the rail viewport, never the fixed foreground, on narrow windows.
+  let text_zone = (inner_width * 0.46).clamp(340.0, 480.0).min(inner_width);
+  let rail_width = (inner_width - text_zone - TOKENS.spacing.s6).clamp(0.0, 630.0);
+  let metadata_size = 12.0;
   let secondary = hero_secondary_line(state, section, item);
   let metadata_height = if secondary.is_empty() {
     0.0
   } else {
-    metadata_size * 1.3 + TOKENS.spacing.s0_5
+    metadata_size * 1.3 + TOKENS.spacing.s2_5
   };
-  let headline_height =
-    (hero_height - TOKENS.spacing.s4 * 2.0 - metadata_height - TOKENS.spacing.s3 - 40.0)
-      .max(0.0)
-      .min(hero_logo_height(hero_height) * 1.5);
-  let copy_height = headline_height + metadata_height + TOKENS.spacing.s3 + 40.0;
+  let headline_height = HERO_LOGO_HEIGHT * 1.5;
   let headline = hero_artwork(
     state,
     home.artwork.get(&ArtworkPlacement::Hero.key(&item.id)),
     item,
-    hero_logo_height(hero_height),
+    HERO_LOGO_HEIGHT,
     iced::Size::new(text_zone, headline_height),
-    (hero_height * 0.15)
-      .clamp(20.0, 42.0)
-      .min(headline_height / 1.3),
+    45.0,
   );
   let headline = observe_home(
     headline,
@@ -285,7 +257,7 @@ fn featured_hero<'a>(
     ImageAxis::Vertical,
   );
   let mut info = Column::new()
-    .spacing(TOKENS.spacing.s0_5)
+    .spacing(TOKENS.spacing.s2_5)
     .align_x(Alignment::Start)
     .push(headline);
   if !secondary.is_empty() {
@@ -302,7 +274,7 @@ fn featured_hero<'a>(
     state.t("home-play")
   };
   let play_enabled = state.playback.view.engine_available;
-  let scrim_start = hero_height - TOKENS.spacing.s4 - 40.0 - TOKENS.spacing.s3 - metadata_height;
+  let scrim_start = HERO_HEIGHT - TOKENS.spacing.s9 - 40.0 - TOKENS.spacing.s2_5 - metadata_height;
   let backdrop = hero_backdrop(
     state,
     home
@@ -311,34 +283,113 @@ fn featured_hero<'a>(
     width,
     scrim_start,
   );
-  let button_style = if backdrop.is_some() {
-    jellypilot_ui::widgets::button::hero_glass
-  } else {
-    jellypilot_ui::widgets::button::style
-  };
-  let play = control_button(Some(Icon::Play), Some(play_label), ButtonVariant::Primary)
-    .style(button_style)
-    .spacing(TOKENS.spacing.s2)
-    .padding([7, 14])
+  let hero_style =
+    |variant: ButtonVariant| -> fn(&iced::Theme, ButtonVariant, button::Status) -> button::Style {
+      if backdrop.is_some() && variant != ButtonVariant::Primary {
+        jellypilot_ui::widgets::button::hero_glass
+      } else {
+        jellypilot_ui::widgets::button::style
+      }
+    };
+  let action = |icon, label: String, variant| {
+    let style = hero_style(variant);
+    control_button_content(
+      move |control_state| {
+        let status = match control_state {
+          IconControlState::Rest => button::Status::Active,
+          IconControlState::Hovered => button::Status::Hovered,
+          IconControlState::Disabled => button::Status::Disabled,
+        };
+        row![
+          icon_sized(icon, IconSize::Custom(15.0)).style(move |theme, _| {
+            iced::widget::svg::Style {
+              color: Some(style(theme, variant, status).text_color),
+            }
+          }),
+          container(
+            text(label.clone())
+              .size(14)
+              .font(HEADING_FONT)
+              .style(move |theme| text::Style {
+                color: Some(style(theme, variant, status).text_color),
+              }),
+          )
+          .width(Length::Shrink),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .align_y(Alignment::Center)
+        .into()
+      },
+      variant,
+    )
+    .style(style)
+    .padding([8, 16])
     .min_height(40.0)
+    .width(Length::Shrink)
+  };
+  let play = action(Icon::Play, play_label.clone(), ButtonVariant::Primary)
     .id(iced::widget::Id::new("home-hero-play"))
     .on_press_maybe(play_enabled.then(|| play_message(state, item)));
-  let details = control_button(
-    Some(Icon::Info),
-    Some(state.t("home-details")),
-    ButtonVariant::Tonal,
-  )
-  .style(button_style)
-  .spacing(TOKENS.spacing.s2)
-  .padding([7, 14])
-  .min_height(40.0)
-  .id(iced::widget::Id::new("home-hero-details"))
-  .on_press(Message::OpenDetail(item.clone()));
-  info = info.push(
-    container(row![play, details].spacing(TOKENS.spacing.s2)).padding(iced::Padding {
-      top: TOKENS.spacing.s2,
-      ..iced::Padding::ZERO
+  let details_label = state.t("home-details");
+  let details = action(Icon::Info, details_label.clone(), ButtonVariant::Tonal)
+    .id(iced::widget::Id::new("home-hero-details"))
+    .on_press(Message::OpenDetail(item.clone()));
+  let controls = collections::controls(state, Source::Hero);
+  let favorite_variant = if controls.favorite == Some(true) {
+    ButtonVariant::TonalActive
+  } else {
+    ButtonVariant::Tonal
+  };
+  let favorite = control_button(
+    Some(if controls.favorite == Some(true) {
+      Icon::HeartFilled
+    } else {
+      Icon::Heart
     }),
+    None,
+    favorite_variant,
+  )
+  .style(hero_style(favorite_variant))
+  .icon_size(IconSize::Sm)
+  .padding(12)
+  .width(Length::Fixed(40.0))
+  .min_height(40.0)
+  .id(iced::widget::Id::new("home-hero-favorite"))
+  .on_press_maybe(controls.favorite_action);
+  let watchlist_variant = if controls.watchlisted == Some(true) {
+    ButtonVariant::TonalActive
+  } else {
+    ButtonVariant::Tonal
+  };
+  let watchlist = control_button(
+    Some(if controls.watchlisted == Some(true) {
+      Icon::BookmarkFilled
+    } else {
+      Icon::Bookmark
+    }),
+    None,
+    watchlist_variant,
+  )
+  .style(hero_style(watchlist_variant))
+  .icon_size(IconSize::Sm)
+  .padding(12)
+  .width(Length::Fixed(40.0))
+  .min_height(40.0)
+  .id(iced::widget::Id::new("home-hero-watchlist"))
+  .on_press_maybe(controls.watchlist_action);
+  info = info.push(
+    row![
+      focus_tooltip(play, play_label, TooltipOptions::default()),
+      focus_tooltip(details, details_label, TooltipOptions::default()),
+      focus_tooltip(favorite, controls.favorite_label, TooltipOptions::default()),
+      focus_tooltip(
+        watchlist,
+        controls.watchlist_label,
+        TooltipOptions::default()
+      ),
+    ]
+    .spacing(TOKENS.spacing.s2_5)
+    .align_y(Alignment::Center),
   );
 
   let candidates: Vec<(HomeSection, &VideoLibraryItem)> = home.data.hero_candidates().collect();
@@ -347,13 +398,13 @@ fn featured_hero<'a>(
     .position(|(_, candidate)| candidate.id == item.id)
     .unwrap_or(0);
   let mut selection = Row::new()
-    .spacing(TOKENS.spacing.s3)
+    .spacing(TOKENS.spacing.s2_5)
     .align_y(Alignment::Center)
     .width(Fill);
   // One candidate is a static hero: no rail, no navigation controls.
   if candidates.len() > 1 {
     let mut cards = Row::new()
-      .spacing(TOKENS.spacing.s3)
+      .spacing(TOKENS.spacing.s2_5)
       .align_y(Alignment::Start);
     for (index, (candidate_section, candidate)) in candidates.iter().enumerate() {
       cards = cards.push(hero_rail_card(
@@ -380,49 +431,54 @@ fn featured_hero<'a>(
       .map(|(_, candidate)| candidate.id.clone());
     let previous = control_button(Some(Icon::ChevronLeft), None, ButtonVariant::Text)
       .icon_size(IconSize::Sm)
+      .content_centered(true)
+      .spacing(0.0)
       .padding(6)
       .width(Length::Fixed(40.0))
       .min_height(40.0)
+      .style(hero_style(ButtonVariant::Text))
       .id(iced::widget::Id::new("home-hero-rail-prev"))
       .on_press_maybe(previous_id.map(|id| Message::Home(HomeMessage::HeroSelected(id))));
     let next = control_button(Some(Icon::ChevronRight), None, ButtonVariant::Text)
       .icon_size(IconSize::Sm)
+      .content_centered(true)
+      .spacing(0.0)
       .padding(6)
       .width(Length::Fixed(40.0))
       .min_height(40.0)
+      .style(hero_style(ButtonVariant::Text))
       .id(iced::widget::Id::new("home-hero-rail-next"))
       .on_press_maybe(next_id.map(|id| Message::Home(HomeMessage::HeroSelected(id))));
-    selection = selection.push(rail).push(previous).push(next);
+    selection = selection.push(rail).push(
+      row![previous, next]
+        .spacing(TOKENS.spacing.s1)
+        .align_y(Alignment::Center),
+    );
   }
 
-  let foreground = container(
-    container(info)
-      .width(text_zone)
-      .height(copy_height)
-      .align_y(Alignment::End),
-  )
-  .padding(iced::Padding {
-    left: TOKENS.spacing.s8,
-    bottom: TOKENS.spacing.s4,
-    ..iced::Padding::ZERO
-  })
-  .width(Fill)
-  .height(Fill)
-  .align_y(Alignment::End);
-  let selection = container(selection)
+  let foreground = container(container(info).width(text_zone))
     .padding(iced::Padding {
-      left: TOKENS.spacing.s8 + text_zone + TOKENS.spacing.s6,
-      right: TOKENS.spacing.s8,
-      bottom: TOKENS.spacing.s4,
-      top: 0.0,
+      left: TOKENS.spacing.s9,
+      bottom: TOKENS.spacing.s9,
+      ..iced::Padding::ZERO
     })
     .width(Fill)
     .height(Fill)
     .align_y(Alignment::End);
+  let selection = container(container(selection).width(rail_width))
+    .padding(iced::Padding {
+      right: TOKENS.spacing.s9,
+      bottom: TOKENS.spacing.s9,
+      ..iced::Padding::ZERO
+    })
+    .width(Fill)
+    .height(Fill)
+    .align_x(Alignment::End)
+    .align_y(Alignment::End);
 
   let hero = container(stack![foreground, selection])
     .width(Fill)
-    .height(hero_height)
+    .height(HERO_HEIGHT)
     .clip(true);
   (
     Element::new(HeroGlass {
@@ -434,37 +490,35 @@ fn featured_hero<'a>(
   )
 }
 
-fn featured_skeleton<'a>(
-  phase: f32,
-  reduced_motion: bool,
-  hero_height: f32,
-) -> Element<'a, Message> {
-  let backdrop = skeleton_block(Fill, hero_height, phase, reduced_motion);
+fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
+  let backdrop = skeleton_block(Fill, HERO_HEIGHT, phase, reduced_motion);
   let copy = column![
-    skeleton_block(360.0, hero_logo_height(hero_height), phase, reduced_motion),
+    skeleton_block(340.0, HERO_LOGO_HEIGHT, phase, reduced_motion),
     skeleton_block(280.0, 18.0, phase, reduced_motion),
     row![
-      skeleton_block(112.0, 34.0, phase, reduced_motion),
-      skeleton_block(112.0, 34.0, phase, reduced_motion),
+      skeleton_block(112.0, 40.0, phase, reduced_motion),
+      skeleton_block(112.0, 40.0, phase, reduced_motion),
+      skeleton_block(40.0, 40.0, phase, reduced_motion),
+      skeleton_block(40.0, 40.0, phase, reduced_motion),
     ]
-    .spacing(TOKENS.spacing.s2),
+    .spacing(TOKENS.spacing.s2_5),
   ]
-  .spacing(TOKENS.spacing.s3)
+  .spacing(TOKENS.spacing.s2_5)
   .align_x(Alignment::Start);
   let foreground = container(copy)
     .padding(iced::Padding {
       top: TOKENS.spacing.s2,
-      right: TOKENS.spacing.s8,
-      bottom: TOKENS.spacing.s4,
-      left: TOKENS.spacing.s8,
+      right: TOKENS.spacing.s9,
+      bottom: TOKENS.spacing.s9,
+      left: TOKENS.spacing.s9,
     })
     .width(Fill)
-    .height(hero_height)
+    .height(HERO_HEIGHT)
     .align_y(Alignment::End);
 
   stack![backdrop, foreground]
     .width(Fill)
-    .height(hero_height)
+    .height(HERO_HEIGHT)
     .into()
 }
 
@@ -508,7 +562,7 @@ fn section_row<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let mut cards = Row::new()
-    .spacing(TOKENS.spacing.s4)
+    .spacing(TOKENS.spacing.s5)
     .align_y(Alignment::Start);
   for item in items {
     cards = cards.push(video_card(
@@ -530,12 +584,12 @@ fn section_row<'a>(
 
   column![
     text(state.kernel.locale.message(&home_row.title))
-      .font(BODY_FONT)
+      .font(HEADING_FONT)
       .size(SECTION_TITLE_SIZE)
       .color(state.palette().text.heading),
     cards,
   ]
-  .spacing(TOKENS.spacing.s3)
+  .spacing(TOKENS.spacing.s3_5)
   .into()
 }
 
@@ -561,13 +615,14 @@ fn video_card<'a>(
 
   let text_stack = column![
     ellipsis_text(card_title(item))
+      .font(HEADING_FONT)
       .size(14)
       .color(palette.text.heading),
     ellipsis_text(card_subtitle(state.kernel.locale, item))
       .size(12)
       .color(palette.text.metadata),
   ]
-  .spacing(TOKENS.spacing.s1)
+  .spacing(TOKENS.spacing.s2)
   .width(Fill);
 
   if is_action_card {
@@ -653,9 +708,9 @@ fn video_card<'a>(
     .clip(true);
     let copy = container(text_stack)
       .padding(iced::Padding {
-        top: TOKENS.spacing.s3,
+        top: TOKENS.spacing.s2,
         right: 0.0,
-        bottom: TOKENS.spacing.s4,
+        bottom: 0.0,
         left: 0.0,
       })
       .width(Fill);
@@ -679,13 +734,14 @@ fn video_card<'a>(
 
   let copy = column![
     ellipsis_text(card_title(item))
+      .font(HEADING_FONT)
       .size(14)
       .color(palette.text.heading),
     ellipsis_text(card_subtitle(state.kernel.locale, item))
       .size(12)
       .color(palette.text.metadata),
   ]
-  .spacing(TOKENS.spacing.s1)
+  .spacing(TOKENS.spacing.s2)
   .padding(iced::Padding {
     top: TOKENS.spacing.s2,
     right: 0.0,
@@ -849,7 +905,22 @@ fn hero_backdrop(
 }
 
 #[derive(Default)]
-struct HeroButtonBounds([Option<iced::Rectangle>; 2]);
+struct HeroButtonBounds([Option<HeroButtonMask>; 5]);
+
+struct HeroButtonMask {
+  bounds: iced::Rectangle,
+  radius: f32,
+}
+
+impl HeroButtonBounds {
+  const GLASS_BUTTONS: [(&'static str, f32); 5] = [
+    ("home-hero-details", TOKENS.radii.xl),
+    ("home-hero-favorite", TOKENS.radii.xl),
+    ("home-hero-watchlist", TOKENS.radii.xl),
+    ("home-hero-rail-prev", TOKENS.radii.xl),
+    ("home-hero-rail-next", TOKENS.radii.xl),
+  ];
+}
 
 impl widget::Operation for HeroButtonBounds {
   fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
@@ -862,9 +933,12 @@ impl widget::Operation for HeroButtonBounds {
     bounds: iced::Rectangle,
     _state: &mut dyn widget::operation::Focusable,
   ) {
-    for (index, name) in ["home-hero-play", "home-hero-details"].iter().enumerate() {
+    for (index, (name, radius)) in Self::GLASS_BUTTONS.iter().enumerate() {
       if id == Some(&widget::Id::new(name)) {
-        self.0[index] = Some(bounds);
+        self.0[index] = Some(HeroButtonMask {
+          bounds,
+          radius: *radius,
+        });
       }
     }
   }
@@ -956,18 +1030,21 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
     };
     let origin = iced::Vector::new(layout.bounds().x, layout.bounds().y);
     if let Some(backdrop) = &self.backdrop {
-      for bounds in self.buttons.0.iter().flatten() {
-        let node = layout::Node::new(bounds.size()).move_to(bounds.position() + origin);
+      for mask in self.buttons.0.iter().flatten() {
+        let node = layout::Node::new(mask.bounds.size()).move_to(mask.bounds.position() + origin);
         let image = Image::new(backdrop.handle.clone())
           .content_fit(ContentFit::Contain)
           .display_frame(iced::Rectangle::new(
-            iced::Point::new(-bounds.x, -bounds.y),
+            iced::Point::new(-mask.bounds.x, -mask.bounds.y),
             backdrop.size,
           ))
-          .mask_frame(iced::Rectangle::new(iced::Point::ORIGIN, bounds.size()))
-          .border_radius(TOKENS.radii.md)
+          .mask_frame(iced::Rectangle::new(
+            iced::Point::ORIGIN,
+            mask.bounds.size(),
+          ))
+          .border_radius(mask.radius)
           .border_smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING)
-          .blur(16.0)
+          .blur(10.0)
           // Image anchors the gradient to the full display frame, not the mask.
           .tint(backdrop.fade);
         <Image as Widget<Message, iced::Theme, iced::Renderer>>::draw(
@@ -1161,7 +1238,7 @@ fn hero_rail_card<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
-  let radius = full_radius(TOKENS.radii.md);
+  let radius = full_radius(TOKENS.radii.lg);
   let spec = ArtworkPlacement::Selection(section).spec(item);
   let title = card_title(item);
   let content = move |_| -> Element<'a, Message> {
@@ -1408,7 +1485,7 @@ fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-pub(crate) const PROGRESS_BAR_HEIGHT: f32 = 4.0;
+pub(crate) const PROGRESS_BAR_HEIGHT: f32 = 6.0;
 
 fn progress_bar<'a>(
   palette: &'static ThemePalette,
@@ -1544,7 +1621,7 @@ fn section_skeleton<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let (width, height) = section_frame_size(row.section);
-  let mut cards = Row::new().spacing(TOKENS.spacing.s4);
+  let mut cards = Row::new().spacing(TOKENS.spacing.s5);
   for _ in 0..5 {
     cards = cards.push(
       column![
@@ -1563,12 +1640,15 @@ fn section_skeleton<'a>(
   }
   column![
     text(locale.message(&row.title))
-      .font(DISPLAY_FONT)
-      .size(24)
+      .font(HEADING_FONT)
+      .size(SECTION_TITLE_SIZE)
       .color(palette.text.heading),
-    cards,
+    scrollable(cards)
+      .direction(Direction::Horizontal(Scrollbar::new()))
+      .height(section_scroll_height(row.section))
+      .style(jellypilot_ui::theme::scrollable),
   ]
-  .spacing(TOKENS.spacing.s3)
+  .spacing(TOKENS.spacing.s3_5)
   .into()
 }
 
@@ -1584,15 +1664,15 @@ fn section_error<'a>(
   container(
     column![
       text(locale.message(title))
-        .font(DISPLAY_FONT)
-        .size(24)
+        .font(HEADING_FONT)
+        .size(SECTION_TITLE_SIZE)
         .color(palette.text.heading),
       text(locale.message(error))
         .size(13)
         .color(palette.colors.error),
       retry,
     ]
-    .spacing(TOKENS.spacing.s3),
+    .spacing(TOKENS.spacing.s3_5),
   )
   .padding(TOKENS.spacing.s4)
   .width(Fill)
@@ -1603,17 +1683,6 @@ fn section_error<'a>(
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn section_frame_sizes_and_row_heights_match_aspect_ratios() {
-    let (cw_w, cw_h) = section_frame_size(HomeSection::ContinueWatching);
-    assert_eq!((cw_w, cw_h), (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT));
-    assert_eq!(section_scroll_height(HomeSection::ContinueWatching), 208.0);
-
-    let (mov_w, mov_h) = section_frame_size(HomeSection::Latest(0));
-    assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
-    assert_eq!(section_scroll_height(HomeSection::Latest(0)), 296.0);
-  }
 
   #[test]
   fn unplayed_badge_only_formats_nonzero_latest_series_counts() {

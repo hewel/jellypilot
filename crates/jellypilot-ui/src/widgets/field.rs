@@ -33,13 +33,13 @@ fn resolve(
     let palette = palette(theme);
     let colors = palette.colors;
     let disabled = matches!(status, text_input::Status::Disabled);
-    // Opaque fill with no idle border. The 1px border appears only as a
-    // functional signal: primary while focused (accessibility exemption), or
-    // error while the field is invalid.
+    // Filled fields rest on a subtle container surface with a quiet structural
+    // edge. The 1px border is functional: primary while focused, error while
+    // invalid. Disabled fields keep an opaque control fill and muted content.
     let FieldVariant::Filled = variant;
     let (background, mut border_color, mut border_width) = match status {
         text_input::Status::Focused { .. } => (colors.controlHover, colors.primary, 1.0),
-        _ => (colors.control, Color::TRANSPARENT, 0.0),
+        _ => (colors.surfaceContainerHigh, colors.borderSubtle, 1.0),
     };
 
     if is_error && !disabled {
@@ -48,24 +48,20 @@ fn resolve(
     }
 
     text_input::Style {
-        background: Background::Color(if disabled {
-            scale_alpha(background, 0.5)
-        } else {
-            background
-        }),
+        background: Background::Color(if disabled { colors.control } else { background }),
         border: Border {
             smoothing: super::container::SURFACE_SMOOTHING,
-            radius: TOKENS.radii.md.into(),
+            radius: TOKENS.radii.xl.into(),
             color: if disabled {
-                scale_alpha(border_color, 0.5)
+                Color::TRANSPARENT
             } else {
                 border_color
             },
-            width: border_width,
+            width: if disabled { 0.0 } else { border_width },
         },
         placeholder: palette.text.muted,
         value: if disabled {
-            scale_alpha(colors.onSurface, 0.5)
+            palette.text.muted
         } else {
             colors.onSurface
         },
@@ -77,13 +73,6 @@ fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 
-fn scale_alpha(color: Color, factor: f32) -> Color {
-    Color {
-        a: color.a * factor,
-        ..color
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use iced::border::Radius;
@@ -93,16 +82,17 @@ mod tests {
     use crate::tokens::DARK_PALETTE;
 
     #[test]
-    fn field_style_is_opaque_borderless_and_uses_md_radius() {
+    fn filled_field_rest_uses_surface_container_high_and_border_subtle() {
         let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for status in [Status::Active, Status::Hovered] {
             let style = style(&theme, FieldVariant::Filled, status);
             assert_eq!(
                 style.background,
-                Background::Color(DARK_PALETTE.colors.control)
+                Background::Color(DARK_PALETTE.colors.surfaceContainerHigh)
             );
-            assert_eq!(style.border.radius, Radius::from(TOKENS.radii.md));
-            assert_eq!(style.border.width, 0.0);
+            assert_eq!(style.border.radius, Radius::from(TOKENS.radii.xl));
+            assert_eq!(style.border.width, 1.0);
+            assert_eq!(style.border.color, DARK_PALETTE.colors.borderSubtle);
         }
     }
 
@@ -120,7 +110,7 @@ mod tests {
         );
         assert_eq!(focused.border.width, 1.0);
         assert_eq!(focused.border.color, DARK_PALETTE.colors.primary);
-        assert_eq!(focused.border.radius, Radius::from(TOKENS.radii.md));
+        assert_eq!(focused.border.radius, Radius::from(TOKENS.radii.xl));
     }
 
     #[test]
@@ -129,9 +119,26 @@ mod tests {
         let err_style = error_style(&theme, FieldVariant::Filled, Status::Active);
         assert_eq!(err_style.border.width, 1.0);
         assert_eq!(err_style.border.color, DARK_PALETTE.colors.error);
-        assert_eq!(err_style.border.radius, Radius::from(TOKENS.radii.md));
+        assert_eq!(err_style.border.radius, Radius::from(TOKENS.radii.xl));
 
         let disabled = error_style(&theme, FieldVariant::Filled, Status::Disabled);
         assert_eq!(disabled.border.width, 0.0);
+        assert_eq!(
+            disabled.background,
+            Background::Color(DARK_PALETTE.colors.control)
+        );
+        assert_eq!(disabled.value, DARK_PALETTE.text.muted);
+    }
+
+    #[test]
+    fn disabled_field_uses_control_fill_and_muted_value() {
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let disabled = style(&theme, FieldVariant::Filled, Status::Disabled);
+        assert_eq!(
+            disabled.background,
+            Background::Color(DARK_PALETTE.colors.control)
+        );
+        assert_eq!(disabled.border.width, 0.0);
+        assert_eq!(disabled.value, DARK_PALETTE.text.muted);
     }
 }

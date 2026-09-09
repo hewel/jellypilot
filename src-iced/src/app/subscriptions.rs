@@ -23,6 +23,19 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     _ => None,
   });
   let mut subscriptions = vec![window_events];
+  if state.shell.player_fullscreen {
+    subscriptions.push(event::listen_with(|event, _, _| {
+      matches!(
+        event,
+        Event::Keyboard(keyboard::Event::KeyPressed {
+          modified_key: keyboard::Key::Named(keyboard::key::Named::Escape),
+          repeat: false,
+          ..
+        })
+      )
+      .then_some(Message::Shell(ShellMessage::ExitPlayerFullscreen))
+    }));
+  }
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
@@ -33,8 +46,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
     } else {
-      if state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
-        || super::accounts::blocking_modal(&state.accounts)
+      if !state.shell.player_fullscreen
+        && (state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
+          || super::accounts::blocking_modal(&state.accounts))
       {
         subscriptions.push(
           event::listen_with(|event, status, _| Some((event, status)))

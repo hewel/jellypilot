@@ -1112,6 +1112,26 @@ impl PlaybackController {
     Ok(self.control_outcome(transport, reporting))
   }
 
+  /// Toggle the current MPV player's fullscreen state.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error without active playback or when MPV rejects the command.
+  pub async fn toggle_fullscreen(&mut self) -> Result<PlaybackOutcome, PlaybackError> {
+    self.require_active()?;
+    self
+      .mpv
+      .toggle_fullscreen()
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)?;
+    let transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
+    self.record_transport(&transport);
+    Ok(self.control_outcome(transport, true))
+  }
+
   /// Seek the current item to an absolute position in seconds.
   ///
   /// # Errors

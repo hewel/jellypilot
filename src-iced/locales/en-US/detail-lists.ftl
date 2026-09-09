@@ -53,8 +53,8 @@ lists-favorites-error = Could not load favorites. Try again.
 lists-watchlist-error = Could not load watchlist. Try again.
 lists-metadata-error = Could not load current item details. Try again.
 lists-watchlist-update-error = Could not update watchlist. Try again.
-lists-favorite-remove-error = Could not remove from favorites. Try again.
-lists-favorite-not-removed = The server did not remove this favorite.
+lists-favorite-update-error = Could not update favorites. Try again.
+lists-favorite-not-updated = The server did not confirm the favorite change.
 lists-title = Personal lists
 lists-separate-help = Favorites and watchlist are kept separate.
 lists-view-all = View all
@@ -75,3 +75,16 @@ lists-saved-count =
         [one] { $count } saved item
        *[other] { $count } saved items
     }
+
+collection-loading = Loading collection status…
+collection-unavailable = Collection status unavailable. Refresh to retry.
+collection-updating = Updating collection…
+collection-series-unfavorite = Remove this series from favorites
+collection-series-favorite = Favorite this series
+collection-movie-unfavorite = Remove this movie from favorites
+collection-movie-favorite = Favorite this movie
+collection-series-watchlist-remove = Remove this series from watchlist
+collection-series-watchlist-add = Add this series to watchlist
+collection-movie-watchlist-remove = Remove this movie from watchlist
+collection-movie-watchlist-add = Add this movie to watchlist
+player-toggle-fullscreen = Toggle player fullscreen

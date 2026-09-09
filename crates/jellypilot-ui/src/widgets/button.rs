@@ -3,81 +3,91 @@
 use iced::widget::button;
 use iced::{Background, Border, Color, Theme};
 
-use crate::tokens::{palette, TOKENS};
+use crate::tokens::{palette, LIGHT_PALETTE, TOKENS};
 use crate::variants::ButtonVariant;
 
 /// Resolves a button variant and interaction status to an iced style.
 pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let palette = palette(theme);
     let colors = palette.colors;
-    let shadows = palette.shadows;
-    let (mut background, mut text_color, mut border_color, border_width, mut shadow) = match variant
-    {
-        ButtonVariant::Primary => (
-            Some(colors.primary),
-            colors.onPrimary,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
-        ButtonVariant::Secondary => (
-            Some(colors.secondaryContainer),
-            colors.onSecondaryContainer,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
-        ButtonVariant::Tonal => (
-            Some(colors.control),
-            colors.onControl,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
-        ButtonVariant::TonalActive => (
-            Some(colors.controlHover),
-            colors.onControlHover,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
-        ButtonVariant::Text => (
-            None,
-            palette.text.body,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
-        ButtonVariant::Icon => (
-            None,
-            colors.onControl,
-            Color::TRANSPARENT,
-            0.0,
-            shadows.none.iced(),
-        ),
+    let text = palette.text;
+
+    let mut background: Option<Color>;
+    let mut text_color: Color;
+    let mut border_color = Color::TRANSPARENT;
+    let mut border_width = 0.0;
+
+    let radius = match variant {
+        ButtonVariant::Pill | ButtonVariant::PillActive => TOKENS.radii.lg,
+        _ => TOKENS.radii.xl,
     };
 
+    match variant {
+        ButtonVariant::Primary => {
+            background = Some(colors.primary);
+            text_color = colors.onPrimary;
+        }
+        ButtonVariant::Secondary => {
+            background = Some(colors.secondaryContainer);
+            text_color = colors.onSecondaryContainer;
+        }
+        ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => {
+            background = Some(colors.surfaceContainerHigh);
+            text_color = colors.onControl;
+            border_color = colors.borderSubtle;
+            border_width = 1.0;
+        }
+        ButtonVariant::TonalActive => {
+            background = Some(colors.controlHover);
+            text_color = colors.onControlHover;
+            border_color = colors.borderSubtle;
+            border_width = 1.0;
+        }
+        ButtonVariant::Text => {
+            background = None;
+            text_color = text.body;
+        }
+        ButtonVariant::PillActive => {
+            background = Some(colors.primaryContainer);
+            text_color = colors.secondary;
+        }
+    }
+
     match status {
-        button::Status::Active | button::Status::Pressed => {}
+        button::Status::Active => {}
         button::Status::Hovered => match variant {
             ButtonVariant::Primary => {
-                background = background.map(|color| brightness(color, 1.1));
+                background = Some(colors.primaryHover);
             }
-            ButtonVariant::Secondary | ButtonVariant::TonalActive => {}
-            ButtonVariant::Tonal | ButtonVariant::Icon => {
+            ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => {
                 background = Some(colors.controlHover);
                 text_color = colors.onControlHover;
             }
             ButtonVariant::Text => {
                 background = Some(colors.control);
-                text_color = palette.text.heading;
+                text_color = text.heading;
             }
+            ButtonVariant::Secondary | ButtonVariant::TonalActive | ButtonVariant::PillActive => {}
+        },
+        button::Status::Pressed => match variant {
+            ButtonVariant::Primary => {
+                background = Some(colors.primaryPressed);
+            }
+            ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => {
+                background = Some(colors.surfaceContainer);
+                text_color = colors.onControl;
+            }
+            ButtonVariant::Text => {
+                background = None;
+                text_color = text.body;
+            }
+            ButtonVariant::Secondary | ButtonVariant::TonalActive | ButtonVariant::PillActive => {}
         },
         button::Status::Disabled => {
-            background = background.map(|color| scale_alpha(color, 0.5));
-            text_color = scale_alpha(text_color, 0.5);
-            border_color = scale_alpha(border_color, 0.5);
-            shadow.color = scale_alpha(shadow.color, 0.5);
+            background = Some(colors.control);
+            text_color = text.muted;
+            border_width = 0.0;
+            border_color = Color::TRANSPARENT;
         }
     }
 
@@ -86,104 +96,65 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         text_color,
         border: Border {
             smoothing: super::container::SURFACE_SMOOTHING,
-            radius: TOKENS.radii.md.into(),
+            radius: radius.into(),
             color: border_color,
             width: border_width,
         },
-        shadow,
+        shadow: palette.shadows.none.iced(),
         ..button::Style::default()
     }
 }
 
-/// Translucent Hero fills over the native Backdrop blur, retaining each
-/// variant's content contrast and interaction colors.
+/// Translucent Hero fills over the native Backdrop blur.
+///
+/// * Primary keeps its solid accent fill (`primary` / `primaryHover` /
+///   `primaryPressed`).
+/// * Non-primary variants use a borderless 10% tint, lifted to 24% on hover
+///   and 18% when pressed. Dark mode uses white; light mode uses on-surface
+///   ink to stay legible over its light fade. Keyboard focus is separate.
 pub fn hero_glass(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let mut style = style(theme, variant, status);
-    if let Some(Background::Color(color)) = style.background {
-        let opacity = if variant == ButtonVariant::Primary {
-            0.88
-        } else {
-            0.72
-        };
-        style.background = Some(color.scale_alpha(opacity).into());
-    }
-    style
-}
-fn brightness(color: Color, factor: f32) -> Color {
-    Color {
-        r: (color.r * factor).min(1.0),
-        g: (color.g * factor).min(1.0),
-        b: (color.b * factor).min(1.0),
-        ..color
-    }
-}
 
-fn scale_alpha(color: Color, factor: f32) -> Color {
-    Color {
-        a: color.a * factor,
-        ..color
+    if variant == ButtonVariant::Primary {
+        return style;
     }
+
+    style.border.width = 0.0;
+    style.border.color = Color::TRANSPARENT;
+
+    let fill_alpha = match status {
+        button::Status::Active => 0.10,
+        button::Status::Hovered => 0.24,
+        button::Status::Pressed => 0.18,
+        button::Status::Disabled => return style,
+    };
+
+    let colors = palette(theme).colors;
+    let ink = if colors.background == LIGHT_PALETTE.colors.background {
+        colors.onSurface
+    } else {
+        Color::WHITE
+    };
+    style.background = Some(Background::Color(ink.scale_alpha(fill_alpha)));
+    style.text_color = ink;
+    style
 }
 
 #[cfg(test)]
 mod tests {
-    use iced::Color;
+    use iced::border::Radius;
+    use iced::widget::button::Status;
+    use iced::{Background, Color, Shadow};
 
-    use super::brightness;
+    use crate::tokens::{DARK_PALETTE, TOKENS};
+    use crate::variants::ButtonVariant;
 
-    #[test]
-    fn brightness_matches_primary_css_hover_filter() {
-        let hovered = brightness(Color::from_rgb8(0x4f, 0x46, 0xe5), 1.1);
-
-        assert_eq!(
-            hovered,
-            Color::from_rgb(
-                (0x4f as f32 / 255.0 * 1.1).min(1.0),
-                (0x46 as f32 / 255.0 * 1.1).min(1.0),
-                (0xe5 as f32 / 255.0 * 1.1).min(1.0),
-            )
-        );
+    fn dark_theme() -> iced::Theme {
+        crate::theme::theme(crate::theme::ThemeMode::Dark)
     }
 
     #[test]
-    fn brightness_clamps_channels_to_one() {
-        assert_eq!(brightness(Color::WHITE, 1.1), Color::WHITE);
-    }
-
-    #[test]
-    fn text_and_secondary_variants_never_draw_borders() {
-        use crate::variants::ButtonVariant;
-        use iced::widget::button::Status;
-
-        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
-        for variant in [ButtonVariant::Text, ButtonVariant::Secondary] {
-            for status in [
-                Status::Active,
-                Status::Hovered,
-                Status::Pressed,
-                Status::Disabled,
-            ] {
-                let style = super::style(&theme, variant, status);
-                assert_eq!(
-                    style.border.width, 0.0,
-                    "{variant:?} button variant must have zero border width in status {status:?}"
-                );
-                assert_eq!(
-                    style.border.color,
-                    Color::TRANSPARENT,
-                    "{variant:?} button variant must have a transparent border in status {status:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn button_variants_use_md_radius_token() {
-        use crate::variants::ButtonVariant;
-        use iced::border::Radius;
-        use iced::widget::button::Status;
-
-        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+    fn button_variants_use_correct_radius_token() {
         for variant in [
             ButtonVariant::Primary,
             ButtonVariant::Secondary,
@@ -192,22 +163,27 @@ mod tests {
             ButtonVariant::Text,
             ButtonVariant::Icon,
         ] {
-            let style = super::style(&theme, variant, Status::Active);
+            let style = super::style(&dark_theme(), variant, Status::Active);
             assert_eq!(
                 style.border.radius,
-                Radius::from(crate::tokens::TOKENS.radii.md),
-                "Button variant {variant:?} must use md (6px) radius token"
+                Radius::from(TOKENS.radii.xl),
+                "{variant:?} must use the xl (12px) radius token"
+            );
+        }
+
+        for variant in [ButtonVariant::Pill, ButtonVariant::PillActive] {
+            let style = super::style(&dark_theme(), variant, Status::Active);
+            assert_eq!(
+                style.border.radius,
+                Radius::from(TOKENS.radii.lg),
+                "{variant:?} must use the lg (8px) radius token"
             );
         }
     }
 
     #[test]
     fn buttons_cast_no_shadow_in_any_status() {
-        use crate::variants::ButtonVariant;
-        use iced::widget::button::Status;
-        use iced::Shadow;
-
-        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let theme = dark_theme();
         for variant in [
             ButtonVariant::Primary,
             ButtonVariant::Secondary,
@@ -215,6 +191,8 @@ mod tests {
             ButtonVariant::TonalActive,
             ButtonVariant::Text,
             ButtonVariant::Icon,
+            ButtonVariant::Pill,
+            ButtonVariant::PillActive,
         ] {
             for status in [
                 Status::Active,
@@ -233,60 +211,267 @@ mod tests {
     }
 
     #[test]
-    fn tonal_uses_control_fill_and_content_tokens() {
-        use crate::variants::ButtonVariant;
-        use iced::widget::button::Status;
-        use iced::Background;
+    fn primary_uses_accent_hover_and_pressed_tokens() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
 
-        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
-        let idle = super::style(&theme, ButtonVariant::Tonal, Status::Active);
+        let active = super::style(&theme, ButtonVariant::Primary, Status::Active);
+        assert_eq!(active.background, Some(Background::Color(colors.primary)));
+        assert_eq!(active.text_color, colors.onPrimary);
+        assert_eq!(active.border.width, 0.0);
+
+        let hovered = super::style(&theme, ButtonVariant::Primary, Status::Hovered);
         assert_eq!(
-            idle.background,
-            Some(Background::Color(
-                crate::tokens::DARK_PALETTE.colors.control
-            ))
+            hovered.background,
+            Some(Background::Color(colors.primaryHover))
         );
+        assert_eq!(hovered.text_color, colors.onPrimary);
+
+        let pressed = super::style(&theme, ButtonVariant::Primary, Status::Pressed);
         assert_eq!(
-            idle.text_color,
-            crate::tokens::DARK_PALETTE.colors.onControl
+            pressed.background,
+            Some(Background::Color(colors.primaryPressed))
         );
-        assert_eq!(idle.border.width, 0.0);
+        assert_eq!(pressed.text_color, colors.onPrimary);
+    }
+
+    #[test]
+    fn tonal_uses_surface_container_and_control_hover_tokens() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+
+        let active = super::style(&theme, ButtonVariant::Tonal, Status::Active);
+        assert_eq!(
+            active.background,
+            Some(Background::Color(colors.surfaceContainerHigh))
+        );
+        assert_eq!(active.text_color, colors.onControl);
+        assert_eq!(active.border.width, 1.0);
+        assert_eq!(active.border.color, colors.borderSubtle);
 
         let hovered = super::style(&theme, ButtonVariant::Tonal, Status::Hovered);
         assert_eq!(
             hovered.background,
-            Some(Background::Color(
-                crate::tokens::DARK_PALETTE.colors.controlHover
-            ))
+            Some(Background::Color(colors.controlHover))
         );
+        assert_eq!(hovered.text_color, colors.onControlHover);
+        assert_eq!(hovered.border.color, colors.borderSubtle);
+
+        let pressed = super::style(&theme, ButtonVariant::Tonal, Status::Pressed);
         assert_eq!(
-            hovered.text_color,
-            crate::tokens::DARK_PALETTE.colors.onControlHover
+            pressed.background,
+            Some(Background::Color(colors.surfaceContainer))
         );
-        assert_eq!(hovered.border.width, 0.0);
+        assert_eq!(pressed.text_color, colors.onControl);
+        assert_eq!(pressed.border.color, colors.borderSubtle);
     }
 
     #[test]
-    fn tonal_active_always_uses_hovered_control_tokens() {
-        use crate::variants::ButtonVariant;
-        use iced::widget::button::Status;
-        use iced::Background;
+    fn tonal_active_uses_control_hover_with_subtle_border() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
 
-        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for status in [Status::Active, Status::Hovered, Status::Pressed] {
             let style = super::style(&theme, ButtonVariant::TonalActive, status);
             assert_eq!(
                 style.background,
-                Some(Background::Color(
-                    crate::tokens::DARK_PALETTE.colors.controlHover
-                )),
+                Some(Background::Color(colors.controlHover)),
                 "TonalActive must stay filled in status {status:?}"
             );
+            assert_eq!(style.text_color, colors.onControlHover);
+            assert_eq!(style.border.width, 1.0);
+            assert_eq!(style.border.color, colors.borderSubtle);
+        }
+    }
+
+    #[test]
+    fn pill_matches_tonal_visuals() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+
+        let active = super::style(&theme, ButtonVariant::Pill, Status::Active);
+        assert_eq!(
+            active.background,
+            Some(Background::Color(colors.surfaceContainerHigh))
+        );
+        assert_eq!(active.text_color, colors.onControl);
+        assert_eq!(active.border.width, 1.0);
+        assert_eq!(active.border.color, colors.borderSubtle);
+
+        let hovered = super::style(&theme, ButtonVariant::Pill, Status::Hovered);
+        assert_eq!(
+            hovered.background,
+            Some(Background::Color(colors.controlHover))
+        );
+        assert_eq!(hovered.text_color, colors.onControlHover);
+
+        let pressed = super::style(&theme, ButtonVariant::Pill, Status::Pressed);
+        assert_eq!(
+            pressed.background,
+            Some(Background::Color(colors.surfaceContainer))
+        );
+        assert_eq!(pressed.text_color, colors.onControl);
+    }
+
+    #[test]
+    fn pill_active_uses_primary_container() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+
+        for status in [Status::Active, Status::Hovered, Status::Pressed] {
+            let style = super::style(&theme, ButtonVariant::PillActive, status);
             assert_eq!(
-                style.text_color,
-                crate::tokens::DARK_PALETTE.colors.onControlHover
+                style.background,
+                Some(Background::Color(colors.primaryContainer)),
+                "PillActive must stay filled in status {status:?}"
             );
+            assert_eq!(style.text_color, colors.secondary);
             assert_eq!(style.border.width, 0.0);
+        }
+    }
+
+    #[test]
+    fn icon_matches_tonal_visuals() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+
+        let active = super::style(&theme, ButtonVariant::Icon, Status::Active);
+        assert_eq!(
+            active.background,
+            Some(Background::Color(colors.surfaceContainerHigh))
+        );
+        assert_eq!(active.text_color, colors.onControl);
+        assert_eq!(active.border.width, 1.0);
+        assert_eq!(active.border.color, colors.borderSubtle);
+
+        let hovered = super::style(&theme, ButtonVariant::Icon, Status::Hovered);
+        assert_eq!(
+            hovered.background,
+            Some(Background::Color(colors.controlHover))
+        );
+        assert_eq!(hovered.text_color, colors.onControlHover);
+
+        let pressed = super::style(&theme, ButtonVariant::Icon, Status::Pressed);
+        assert_eq!(
+            pressed.background,
+            Some(Background::Color(colors.surfaceContainer))
+        );
+        assert_eq!(pressed.text_color, colors.onControl);
+    }
+
+    #[test]
+    fn text_and_secondary_fills_unchanged() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+        let text = DARK_PALETTE.text;
+
+        let secondary_active = super::style(&theme, ButtonVariant::Secondary, Status::Active);
+        assert_eq!(
+            secondary_active.background,
+            Some(Background::Color(colors.secondaryContainer))
+        );
+        assert_eq!(secondary_active.text_color, colors.onSecondaryContainer);
+
+        let secondary_pressed = super::style(&theme, ButtonVariant::Secondary, Status::Pressed);
+        assert_eq!(
+            secondary_pressed.background,
+            Some(Background::Color(colors.secondaryContainer))
+        );
+        assert_eq!(secondary_pressed.text_color, colors.onSecondaryContainer);
+
+        let text_active = super::style(&theme, ButtonVariant::Text, Status::Active);
+        assert_eq!(text_active.background, None);
+        assert_eq!(text_active.text_color, text.body);
+
+        let text_pressed = super::style(&theme, ButtonVariant::Text, Status::Pressed);
+        assert_eq!(text_pressed.background, None);
+        assert_eq!(text_pressed.text_color, text.body);
+
+        let text_hovered = super::style(&theme, ButtonVariant::Text, Status::Hovered);
+        assert_eq!(
+            text_hovered.background,
+            Some(Background::Color(colors.control))
+        );
+        assert_eq!(text_hovered.text_color, text.heading);
+    }
+
+    #[test]
+    fn primary_secondary_text_are_borderless() {
+        let theme = dark_theme();
+        for variant in [
+            ButtonVariant::Primary,
+            ButtonVariant::Secondary,
+            ButtonVariant::Text,
+        ] {
+            for status in [
+                Status::Active,
+                Status::Hovered,
+                Status::Pressed,
+                Status::Disabled,
+            ] {
+                let style = super::style(&theme, variant, status);
+                assert_eq!(
+                    style.border.width, 0.0,
+                    "{variant:?} must have zero border width in status {status:?}"
+                );
+                assert_eq!(
+                    style.border.color,
+                    Color::TRANSPARENT,
+                    "{variant:?} must have a transparent border in status {status:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_uses_shared_control_and_muted_rule() {
+        let theme = dark_theme();
+        let colors = DARK_PALETTE.colors;
+
+        for variant in [
+            ButtonVariant::Primary,
+            ButtonVariant::Secondary,
+            ButtonVariant::Tonal,
+            ButtonVariant::TonalActive,
+            ButtonVariant::Text,
+            ButtonVariant::Icon,
+            ButtonVariant::Pill,
+            ButtonVariant::PillActive,
+        ] {
+            let style = super::style(&theme, variant, Status::Disabled);
+            assert_eq!(
+                style.background,
+                Some(Background::Color(colors.control)),
+                "{variant:?} disabled fill must be the control token"
+            );
+            assert_eq!(
+                style.text_color, DARK_PALETTE.text.muted,
+                "{variant:?} disabled content must be text.muted"
+            );
+            assert_eq!(
+                style.border.width, 0.0,
+                "{variant:?} disabled border must be removed"
+            );
+        }
+    }
+
+    #[test]
+    fn hero_controls_do_not_inherit_decorative_borders() {
+        for mode in [
+            crate::theme::ThemeMode::Dark,
+            crate::theme::ThemeMode::Light,
+        ] {
+            let theme = crate::theme::theme(mode);
+            for variant in [ButtonVariant::Tonal, ButtonVariant::Text] {
+                for status in [
+                    Status::Active,
+                    Status::Hovered,
+                    Status::Pressed,
+                    Status::Disabled,
+                ] {
+                    assert_eq!(super::hero_glass(&theme, variant, status).border.width, 0.0);
+                }
+            }
         }
     }
 }

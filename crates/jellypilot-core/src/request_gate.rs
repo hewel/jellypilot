@@ -35,6 +35,19 @@ pub struct DetailAuxToken {
     item_id: String,
 }
 
+impl DetailAuxToken {
+    /// Authentication identity, independent of the originating Detail navigation.
+    #[must_use]
+    pub fn session(&self) -> SessionToken {
+        self.session
+    }
+
+    #[must_use]
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+}
+
 /// Identity of one remote-control lifecycle generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoteToken(u64);

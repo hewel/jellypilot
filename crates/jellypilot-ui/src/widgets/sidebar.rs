@@ -3,7 +3,10 @@
 use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Color, Theme};
 
-use crate::tokens::{palette, SIDEBAR_CONTROL_RADIUS, SIDEBAR_INSET_RADIUS, TOKENS};
+use crate::tokens::{
+    palette, ACCOUNT_POPOVER_RADIUS, LIGHT_PALETTE, SIDEBAR_CONTROL_RADIUS, SIDEBAR_INSET_RADIUS,
+    TOKENS,
+};
 use crate::variants::{ButtonVariant, FieldVariant};
 use crate::widgets::container::SURFACE_SMOOTHING;
 
@@ -39,39 +42,30 @@ pub fn search_input(theme: &Theme, status: text_input::Status) -> text_input::St
     style
 }
 
-/// Docked toolbar with a neutral fill and no floating elevation.
-pub fn toolbar(theme: &Theme) -> container::Style {
+/// Neutral structural separator for the docked tools and account actions.
+pub fn divider(theme: &Theme) -> container::Style {
+    container::Style::default().background(palette(theme).colors.outlineVariant)
+}
+
+/// Inset server address surface in the account quick menu.
+pub fn address(theme: &Theme) -> container::Style {
     surface(
         theme,
-        palette(theme).colors.control,
-        SIDEBAR_CONTROL_RADIUS,
+        palette(theme).colors.surfaceContainerHigh,
+        TOKENS.radii.lg,
         false,
     )
 }
 
-/// Neutral structural separator between toolbar actions.
-pub fn divider(theme: &Theme) -> container::Style {
-    container::Style::default().background(palette(theme).colors.outline)
-}
-
-/// Bounded inset control surface for compact Sidebar details.
-pub fn inset(theme: &Theme) -> container::Style {
-    surface(
-        theme,
-        palette(theme).colors.control,
-        SIDEBAR_INSET_RADIUS,
-        true,
-    )
-}
-
-/// Quiet count badge, independent from the heading text.
-pub fn count_badge(theme: &Theme) -> container::Style {
-    surface(theme, palette(theme).colors.control, TOKENS.radii.md, false)
-}
-
 /// Account-only floating surface; other popovers retain their default appearance.
 pub fn popover(theme: &Theme) -> container::Style {
-    let mut style = surface(theme, palette(theme).colors.surface, TOKENS.radii.x2l, true);
+    let colors = palette(theme).colors;
+    let fill = if colors.background == LIGHT_PALETTE.colors.background {
+        colors.surface
+    } else {
+        colors.surfaceContainer
+    };
+    let mut style = surface(theme, fill, ACCOUNT_POPOVER_RADIUS, true);
     style.shadow = palette(theme).shadows.raised_high.iced();
     style
 }
@@ -83,9 +77,9 @@ pub fn personal(theme: &Theme, variant: ButtonVariant, status: button::Status) -
     style
 }
 
-/// Denser library destination with the Sidebar's inset radius.
+/// Library destinations share the personal-navigation geometry.
 pub fn library(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
-    action(theme, variant, status)
+    personal(theme, variant, status)
 }
 
 /// Neutral account anchor; opening the menu does not alter the structural outline.
@@ -94,7 +88,8 @@ pub fn identity(theme: &Theme, variant: ButtonVariant, status: button::Status) -
     let colors = palette(theme).colors;
     style.background = Some(Background::Color(match status {
         button::Status::Hovered | button::Status::Pressed => colors.control,
-        _ => colors.surface,
+        _ if colors.background == LIGHT_PALETTE.colors.background => colors.surface,
+        _ => colors.surfaceContainerLow,
     }));
     style.border.color = colors.outlineVariant;
     style.border.width = 1.0;
@@ -125,6 +120,8 @@ pub fn menu_action(theme: &Theme, variant: ButtonVariant, status: button::Status
     let mut style = action(theme, variant, status);
     if matches!(status, button::Status::Active | button::Status::Disabled) {
         style.background = None;
+        style.border.width = 0.0;
+        style.border.color = Color::TRANSPARENT;
     }
     style
 }
@@ -134,7 +131,7 @@ mod tests {
     use iced::widget::text_input::Status;
     use iced::{Background, Color};
 
-    use super::search_input;
+    use super::{search_input, ButtonVariant};
     use crate::variants::FieldVariant;
 
     fn field_style(theme: &iced::Theme, status: Status) -> iced::widget::text_input::Style {
@@ -188,6 +185,43 @@ mod tests {
             assert_eq!(
                 got.selection, expected.selection,
                 "selection color in {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn menu_action_is_borderless_and_transparent_at_rest_and_disabled() {
+        use iced::widget::button;
+
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        for status in [button::Status::Active, button::Status::Disabled] {
+            let style = super::menu_action(&theme, ButtonVariant::Tonal, status);
+            assert_eq!(
+                style.background, None,
+                "menu_action must have no background in {status:?}"
+            );
+            assert_eq!(
+                style.border.width, 0.0,
+                "menu_action must have no structural border in {status:?}"
+            );
+            assert_eq!(
+                style.border.color,
+                Color::TRANSPARENT,
+                "menu_action border must be transparent in {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn menu_action_keeps_hover_and_pressed_surface() {
+        use iced::widget::button;
+
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        for status in [button::Status::Hovered, button::Status::Pressed] {
+            let style = super::menu_action(&theme, ButtonVariant::Tonal, status);
+            assert!(
+                style.background.is_some(),
+                "menu_action must keep its surface in {status:?}"
             );
         }
     }

@@ -44,9 +44,9 @@ Only authenticated Full mode shows the Sidebar. Control-Only retains its existin
 | Video libraries | Independent vertical scrolling, filling the remaining height | Video libraries browsable by the current account, with actual names and types |
 | Account and tools | Fixed at the bottom | Clickable identity card; Settings, Refresh, Control mode |
 
-- At window widths of 1280 and above, the Sidebar is 240 wide; below 1280, retain the 72-wide icon-only Sidebar. Full mode retains its existing minimum window size.
+- At window widths of 1280 and above, the Sidebar is 220 wide; below 1280, retain the 72-wide icon-only Sidebar. Full mode retains its existing minimum window size.
 - Full mode opens at 1760×900 logical pixels, with the existing 1024×640 minimum. Control-Only remains 480×760; returning to Full mode restores its previous in-session size when available.
-- The expanded Sidebar has horizontal padding of 12. Minimum heights for search, personal navigation, library rows, and bottom tools are 36, 38, 32, and 36 respectively.
+- The Paper Home revision uses expanded Sidebar padding of 16 vertically and 12 horizontally, 8-pixel section gaps, and 38-pixel navigation/library/tool targets; search retains its 36-pixel minimum.
   These are iced logical dimensions. The accepted visual targets below refine control geometry through semantic tokens/Catalog styles; they do not change global defaults for other surfaces.
 - The icon-only Sidebar provides full-name tooltips. Truncated long names remain available in full. The original's 15 libraries are sample data; counts and ordering come from actual responses.
 - Empty, loading, or failed library states change only the library region, retaining personal navigation and account actions. A list of 50 libraries must not displace the top or bottom regions.
@@ -61,7 +61,7 @@ The subsequent Account Popover simplification makes it a quick menu rather than 
 
 Light mode uses a white opaque Account Popover and pale neutral hover surfaces, with pale indigo selection reserved for Sidebar navigation. Dark mode preserves the same hierarchy with appropriate Charcoal surfaces and contrast, rather than mechanically inverting colors. No glass blur, avatar gradients, or continuous breathing effects are required.
 
-Allow low-contrast structural outlines on the Account Popover, bottom identity card, and necessary inset controls, plus fine separators in the bottom toolbar. Do not outline every navigation row or button. A soft floating shadow separates the Account Popover from the shell; search and docked tools must not acquire the same elevation.
+Allow low-contrast structural outlines on the Account Popover, bottom identity card, and necessary inset controls. Do not outline every navigation row or button. The Paper Home toolbar uses separate flat tools rather than the preceding segmented container. A soft floating shadow separates the Account Popover from the shell; search and docked tools must not acquire the same elevation.
 
 These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, as scoped by the [design system's Sidebar surface revision](design-system.md#sidebar-surface-revision). Do not enlarge global 6/8 radius tokens, recolor shared default surfaces, or add view-local hardcoded styling to approximate the reference. Other screens keep their current defaults.
 
@@ -72,16 +72,16 @@ These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, a
 | Search | Minimum height 36, radius 12; one pale neutral field with leading magnifier and inset shortcut keycap or clear action; no prominent floating shadow. The whole pill is the field: at rest it carries the 1px `outlineVariant` structural edge over a `control` fill; when its input holds editing focus (pointer or keyboard), the edge becomes 1px `primary` and the fill `controlHover`. The inner input never draws its own ring or background |
 | Personal navigation | Minimum row height 38, radius 12; pale indigo selected fill and clear accent icon/text, without a heavy outline |
 | Library heading | Libraries label on the left, actual count in a separate right-aligned neutral badge; do not use the inline `Libraries · N` treatment |
-| Library rows | Minimum height 32, radius 8; aligned typed icons and names, with independent scrolling |
-| Bottom identity card | Minimum height 44, radius 12; fixed rounded-square monogram, username first, provider/server identity second, restrained structural outline |
-| Bottom toolbar | Height at least 36, radius 12; three equal columns on a pale neutral surface with fine separators |
-| Account Popover | Retain width 368; target outer radius 20 and padding 12, with radius 8 for inset rows/controls; white opaque light-mode surface, restrained outline, soft shadow |
+| Library rows | Minimum height 38, radius 8; aligned typed icons and names, with independent scrolling |
+| Bottom identity card | Minimum height 54, radius 12; 36-pixel rounded-square avatar, username first and provider/server identity second |
+| Bottom toolbar | Three equal 38-pixel-high flat tool targets, without the preceding segmented container |
+| Account Popover | Width 320, outer radius 16 and padding 10; white opaque light-mode surface, semantic dark-mode surface, restrained outline and soft shadow |
 | Saved profile row | Show other accounts only, with a fixed-size rounded-square monogram and aligned username/provider/server identity; the current account appears once in the header |
 | Address and copy | Unframed, single-line address with an icon-only 40×40 copy target; full-value and copy-state hints remain available by keyboard and pointer |
 | Quick actions | Quiet full-width Add account, Manage accounts, and connected-only Disconnect rows; minimum height 40, label size 14, transparent resting backgrounds |
 | Account preferences and removal | Startup Auto Login, remote-control details, and Sign Out remain in Settings, reached directly through Manage accounts |
 
-The Sidebar's horizontal padding remains 12 and its expanded/icon-only widths remain 240/72. Three real libraries naturally leave more middle space than the reference's fifteen; do not fill that space with dummy entries or move the bottom anchor upward.
+The Sidebar's horizontal padding remains 12; the Paper Home revision updates expanded/icon-only widths to 220/72. Three real libraries naturally leave more middle space than the reference's fifteen; do not fill that space with dummy entries or move the bottom anchor upward.
 
 Home/personal-navigation controls, library rows, and bottom toolbar controls keep their visible icons and labels vertically centered within their hit areas, including selected and hovered states.
 
@@ -272,7 +272,7 @@ The checkboxes below track end-to-end acceptance with representative accounts an
 
 ### Human Visual and Interaction Review
 
-- [ ] At Full mode's minimum window size, both sides of the 1280 threshold, and wider windows, check the 72/240 Sidebar, content layout, and long-name tooltips.
+- [ ] At Full mode's minimum window size, both sides of the 1280 threshold, and wider windows, check the 72/220 Sidebar, content layout, and long-name tooltips.
 - [ ] With 0, 15, and 50 video libraries, check independent scrolling and continued access to top navigation and bottom account/tools.
 - [ ] Check the two vertically stacked list sections, their counts and View all actions, episode titles, unavailable items, and empty/error states.
 - [ ] Check expanded/icon-only search inputs, Account Popover boundaries, long account lists, copy feedback, and keyboard focus restoration.

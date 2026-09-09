@@ -38,6 +38,8 @@ pub struct Surface {
   pub items: HashMap<String, VideoLibraryItem>,
   pub data: DetailState,
   pub artwork: ImageCollection,
+  pub(crate) collection_change: Option<super::collections::Change>,
+  pub(crate) pending_user_data: HashMap<String, jellypilot_core::request_gate::DetailAuxToken>,
   refresh_token: Option<DetailToken>,
 }
 /// Updates Detail content and its locally owned images.
@@ -127,16 +129,31 @@ pub fn update(
       prepare_artwork(surface)
     }
     DetailMessage::UserDataUpdated { token, result } => {
-      let Some(update) =
-        settle_user_data_update(&mut surface.data, &mut kernel.request_gate, token, result)
-      else {
+      if !kernel.request_gate.is_current_session(token.session())
+        || surface.pending_user_data.get(token.item_id()) != Some(&token)
+      {
         return Task::none();
-      };
-      if let Some(update) = update {
-        if let Some(item) = surface.items.get_mut(&update.item_id) {
-          item.played = update.played;
-          item.favorite = update.favorite;
+      }
+      surface.pending_user_data.remove(token.item_id());
+      let result = result.and_then(|update| {
+        if update.item_id == token.item_id() {
+          Ok(update)
+        } else {
+          Err("User-data response targeted another item".to_owned())
         }
+      });
+      // A server write survives navigation; only Detail presentation is view-scoped.
+      if let Ok(update) = &result {
+        surface.collection_change = Some(super::collections::Change::Confirmed(update.clone()));
+      }
+      let failed = result.is_err();
+      let settled =
+        settle_user_data_update(&mut surface.data, &mut kernel.request_gate, token, result);
+      if failed && settled.is_none() {
+        return kernel.show_toast(
+          super::state::NoticeLevel::Error,
+          UiText::new(USER_DATA_FAILURE),
+        );
       }
       Task::none()
     }
@@ -534,6 +551,9 @@ fn start_user_data_update(
   let Some((item_id, played, favorite)) = detail_user_data(&surface.data.content) else {
     return Task::none();
   };
+  if surface.pending_user_data.contains_key(&item_id) {
+    return Task::none();
+  }
   let action = match kind {
     UserDataActionKind::Favorite if favorite => VideoUserDataAction::Unfavorite,
     UserDataActionKind::Favorite => VideoUserDataAction::Favorite,
@@ -551,11 +571,10 @@ fn start_user_data_update(
     return Task::none();
   };
   surface.data.user_data_busy = Some(kind);
-  // A refresh may have read the flags before this write. Its delayed response
-  // must not overwrite the confirmed mutation; unrelated season loads stay valid.
-  if let Some(refresh_token) = surface.refresh_token.take() {
-    let _ = kernel.request_gate.finish_detail(refresh_token);
-  }
+  surface
+    .pending_user_data
+    .insert(item_id.clone(), token.clone());
+  cancel_refresh(surface, kernel);
   surface.data.user_data_error = None;
   let request = VideoUserDataUpdateRequest { item_id, action };
   Task::perform(
@@ -568,6 +587,13 @@ fn start_user_data_update(
     },
     move |result| Message::Detail(DetailMessage::UserDataUpdated { token, result }),
   )
+}
+
+/// A confirmed write must not be overwritten by an older metadata refresh.
+pub(crate) fn cancel_refresh(surface: &mut Surface, kernel: &mut Kernel) {
+  if let Some(token) = surface.refresh_token.take() {
+    let _ = kernel.request_gate.finish_detail(token);
+  }
 }
 
 fn settle_user_data_update(

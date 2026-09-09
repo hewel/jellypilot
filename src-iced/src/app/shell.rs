@@ -142,6 +142,8 @@ pub struct Surface {
   /// Full-mode window size stashed when entering Control-Only mode; restored
   /// on the way back. In-memory only — never persisted.
   pub full_window_size: Option<iced::Size>,
+  /// Embedded video presentation; the Library Browser remains mounted underneath.
+  pub player_fullscreen: bool,
   /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
   /// each `FrameTick` while skeletons are on screen.
   pub skeleton_phase: f32,
@@ -172,6 +174,7 @@ impl Surface {
       images_visible: true,
       window_size: FULL_DEFAULT_WINDOW_SIZE,
       full_window_size: None,
+      player_fullscreen: false,
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       quit_requested: false,
@@ -315,11 +318,12 @@ fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
 /// controller size; entering Full restores the window and lands on Home
 /// through the normal activation path.
 pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
+  let fullscreen_exit = exit_player_fullscreen(state);
   state.shell.compact_search_open = false;
   state.shell.account_popover_open = false;
   state.shell.refresh = None;
   state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
-  match mode {
+  let task = match mode {
     AppMode::ControlOnly => {
       close_settings(state);
       if let Some(full) = state.full.as_mut() {
@@ -361,6 +365,51 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       };
       Task::batch([window_geometry_task(geometry), activation, membership])
     }
+  };
+  fullscreen_exit.chain(task)
+}
+
+pub(crate) fn exit_player_fullscreen(state: &mut State) -> Task<Message> {
+  if !std::mem::take(&mut state.shell.player_fullscreen) {
+    return Task::none();
+  }
+  state
+    .shell
+    .window_id
+    .filter(|_| state.shell.images_visible)
+    .map_or_else(Task::none, |id| {
+      iced::window::set_mode(id, iced::window::Mode::Windowed)
+    })
+}
+
+pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
+  if state.shell.player_fullscreen {
+    return exit_player_fullscreen(state);
+  }
+  if !state.playback.session.can_toggle_fullscreen()
+    || state.shell.quit_requested
+    || state.full.is_none()
+    || super::accounts::content_mutations_blocked(&state.accounts)
+  {
+    return Task::none();
+  }
+  let Some(id) = state.shell.window_id else {
+    return Task::none();
+  };
+  state.shell.player_fullscreen = true;
+  iced::window::set_mode(id, iced::window::Mode::Fullscreen)
+}
+
+pub(crate) fn reconcile_player_fullscreen(state: &mut State) -> Task<Message> {
+  if !state.shell.images_visible
+    || state.shell.quit_requested
+    || state.full.is_none()
+    || super::accounts::content_mutations_blocked(&state.accounts)
+    || (state.playback.view.now_playing.is_none() && !state.playback.view.busy)
+  {
+    exit_player_fullscreen(state)
+  } else {
+    Task::none()
   }
 }
 
@@ -402,6 +451,7 @@ pub fn update(
       Task::none()
     }
     WindowMessage::ShowRequested(id) => {
+      surface.player_fullscreen = false;
       // A second-instance activation arrives with no id; focus the tracked
       // window when one exists instead of opening a duplicate.
       if let Some(id) = id.or(surface.window_id) {
@@ -419,7 +469,9 @@ pub fn update(
       }
     }
     WindowMessage::Resized(size) => {
-      surface.window_size = size;
+      if !surface.player_fullscreen {
+        surface.window_size = size;
+      }
       Task::none()
     }
     WindowMessage::FrameTick(now) => {
@@ -477,6 +529,7 @@ fn capture_page(state: &mut State) -> Option<PageState> {
 pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Message> {
   use iced::widget::operation;
   match message {
+    ShellMessage::ExitPlayerFullscreen => exit_player_fullscreen(state),
     ShellMessage::FocusNext => operation::focus_next(),
     ShellMessage::FocusPrevious => operation::focus_previous(),
     ShellMessage::FocusSearch | ShellMessage::ToggleCompactSearch => {

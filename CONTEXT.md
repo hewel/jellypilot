@@ -91,7 +91,7 @@ One of the user-selectable ways to authenticate to a known Server URL. Quick Con
 _Avoid_: Account type, server type
 
 **Now Playing**:
-The user-facing playback status shown by JellyPilot for the current Playback Session. Now Playing may show transport state before rich media-server metadata is available.
+The user-facing playback status for the current Playback Session, which may show transport state before rich media-server metadata is available. Its Favorites action targets the currently playing movie or, for an episode, its parent series, independently of the Featured Item.
 _Avoid_: MPV state, Web player state, playback session internals
 
 **App Mode**:
@@ -170,7 +170,7 @@ A viewing plan kept on this device for one Profile Scope, labeled “稍后观�
 _Avoid_: Favorites, unwatched filter, cross-device list
 
 **Featured Item**:
-The media item currently selected for the Video Home hero, with Continue Watching prioritized for the initial selection; choosing a different Featured Item does not start playback or remove its direct-play entry from a home row. The hero uses the Featured Item's Backdrop (the series Backdrop for episodes) as its principal image and its Title Logo (the series Title Logo for episodes) as its headline; heroes have no portrait poster slot.
+The media item selected for the Video Home hero, initially prioritizing Continue Watching; selecting it neither starts playback nor removes its direct-play entry from a home row. Its presentation uses the item's Backdrop and Title Logo (the parent series' for episodes), never a portrait poster; playback targets the Featured Item, while Favorites and Watchlist target the parent series for an episode or the movie itself for a movie.
 _Avoid_: Playback queue item, exclusive resume entry
 
 **Hero Selection Rail**:

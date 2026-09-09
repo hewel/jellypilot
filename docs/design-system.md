@@ -36,6 +36,15 @@ The shell keeps two 1px `outlineVariant` dividers, both built as explicit divide
 
 Outside the scoped Sidebar treatment below, surfaces retain their borderless defaults. Badges, media cards, and ordinary navigation rows do not gain outlines. The exception is layered floating surfaces — popovers, modal cards, toasts, and floating prompts — which carry a 1px `outlineVariant` structural edge alongside their shadow so they read as a separate layer above content; the standalone login card, tooltips, and the scroll-to-bottom indicator stay borderless. Decorative primary-tinted halo borders remain prohibited; functional focus and error indications are distinct from decorative structure. Outline width encodes persistence: 1px marks persistent structural or functional state (boundaries, floating-layer edges, field focus, field error); 2px is reserved for the transient keyboard-only button focus ring.
 
+### Temporary Opaque Approximation for Translucent Borders
+
+- When a component needs the appearance of a translucent border, the current workaround is an **opaque, preblended border color**, not actual border alpha. For example, a neutral gray can approximate translucent white over a dark surface; apply the same principle to black or colored outlines over other surfaces.
+- Derive the approximation from the intended foreground color, opacity, and reference backing surface: `result = opacity × foreground + (1 − opacity) × backing`, in the color space used for the intended composition, then render the resulting color with alpha `1`. There is no single gray that works over every background.
+- Use semantic tokens and Catalog styles. Choose the reference backing surface deliberately and account for light/dark themes and hover/pressed surface changes; do not scatter hard-coded gray borders across widgets.
+- This is only an approximation over artwork, gradients, blur, or other changing backgrounds. It does not reproduce true transparency, fix antialiasing/coverage defects, or establish that iced's renderer is correct. Exact translucent-border rendering remains a separate renderer investigation, not a dependency change authorized by this workaround.
+- The strategy does not add borders to otherwise borderless components. Hero glass currently remains decoratively borderless; keyboard focus and error indications retain their independent semantics and visibility. This records an allowed temporary approach, not a completed migration of existing outlines.
+- **Known visual issue — deferred, not resolved:** after removing the Hero glass decorative border, human inspection of a supplied close-up still found a visible edge/corner artifact. The background/blur mask is a suspected cause, not a confirmed diagnosis. Removing the border did not fully eliminate the visible defect. Record only for now; no further rendering investigation or fix is authorized by this observation.
+
 ### Sidebar Surface Revision
 
 **Implemented scoped treatment; human visual acceptance pending.** Scope: the entire Sidebar, including search, navigation, library heading/rows, bottom identity card, toolbar, and Account Popover. It does not extend to Home, Settings, add-account or confirmation modals. Shared account functionality is not permission to restyle its Settings presentation.
@@ -82,22 +91,22 @@ The Sidebar surface revision's scoped role targets of 12 and 20 correspond to `x
 
 ## Buttons
 
-Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. Defaults use radius `md` and cast no shadow. The accepted Sidebar treatment refines geometry through semantic Catalog styles without changing every consumer of these variants.
+Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`, `Pill`, `PillActive`. Buttons cast no shadow. Default radius is `xl` (12), with `lg` (8) for pills and explicit S-tier overrides. Scoped Sidebar Catalog geometry remains authoritative for its controls.
 Simple controls with an optional icon and label use the status-aware `control_button` widget; whole-control hover drives both icon and label through the variant's content colors.
 Composite Sidebar and profile rows use `control_button_content` for whole-control hover and keyboard focus. Existing iced `button` consumers and fixed-color icons (the favorited heart, the theme toggle) retain their established `button_variant` treatment.
 
 - **Secondary** is the borderless tint chip — filled `secondaryContainer` with `onSecondaryContainer` content. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
-- **Tonal** is the default quiet control: `control` fill with `onControl` content at rest, then `controlHover` fill with `onControlHover` content on hover. It has no border.
+- **Tonal** is the quiet action control: `surfaceContainerHigh` fill, `onControl` content, and a 1px `borderSubtle` edge at rest; `controlHover`/`onControlHover` on hover and `surfaceContainer` while pressed.
 - **TonalActive** is the selected/on state of a tonal control: always `controlHover` fill with `onControlHover` content. Toggle call sites use the `TonalActive`/`Tonal` pair.
-- **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
+- **Primary** holds one primary action per section or state. Its hover/pressed use the `primaryHover`/`primaryPressed` tokens accepted in the 2026-09-09 controls sync, superseding the 10% hover brightness lift.
 - **Text** is the neutral ghost vocabulary: `text.body` content on a transparent background, then `control` fill with `text.heading` content on hover. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows). Indigo accent text marks ONLY the active/selected state. Actions never use Text — they are Tonal or Primary.
 - **Sidebar menu actions** opt into a scoped Tonal/Icon Catalog treatment: transparent at rest, neutral hover/press feedback, and minimum 40px hit height. The copy icon has a 40×40 target. This exception avoids a stack of filled buttons in the Account Popover without changing other Tonal controls.
-- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. This does not change native text-input focus or caret behavior. The ring is 2px per the outline width rule in Shell Hairlines and Structural Boundaries.
+- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. Native text-input focus and caret behavior are unchanged. The ring is 2px; Primary controls use `secondary` for contrast with their fill, while other variants use `primary`.
 
 ## Fields, Badges, Overlays
 
-- **Fields**: opaque `control` fill at rest and `controlHover` fill when focused, radius `md`, no idle border by default. Functional feedback remains: `text_input::Status::Focused` draws a 1px `primary` border and an invalid field draws a 1px `error` border. Sidebar structural boundaries are a separate, scoped treatment; they do not replace visible focus or error feedback.
-- **Badges**: opaque container fills (`tertiaryContainer` / `warningContainer` / `surfaceContainerHigh`), radius `md`, no border.
+- **Fields**: opaque `surfaceContainerHigh` fill, radius `xl`, and a 1px `borderSubtle` idle border. Settings values use 12px text, with monospace for path/parameter values. Focus retains `controlHover` fill and a 1px `primary` border; invalid fields retain a 1px `error` border. Paper's 2px outer field-focus ring is deliberately not adopted.
+- **Status tags**: H24, 10px inline padding, radius `full`, vertically centered 12px/600 label and 6px status dot. Success/Warning/Neutral/Error use opaque semantic container fills without borders. Large non-tag Quick Connect panels retain the separate badge surface treatment.
 - **Popover**: opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, and the floating-layer 1px `outlineVariant` edge. The Account Popover keeps its scoped Sidebar treatment with the same outline color.
 - **Tooltip**: `raised` shadow, radius `md`, no border. Opt-in Sidebar full-value hints also appear on keyboard focus and wrap long unbroken values within their bounded surface. An open popover suppresses its trigger's hover and focus hints while preserving hints within the popover content.
 - **Toast**: floating-layer treatment (opaque severity container fill, `raised_high` shadow, radius `lg`, 1px `outlineVariant` edge). Severity is shown by icon, text color, and fill — the structural edge is always neutral.
@@ -159,6 +168,8 @@ Bundled local fonts only; no network font imports. Body text uses Inter (`sans`)
 
 All UI icons are vendored from the Reicon set (MIT, `crates/jellypilot-ui/assets/icons/`, see [ADR 0034](adr/0034-reicon-icon-set.md)) and render on a 24×24 grid. The default weight is Outline; the Filled weight marks active state only where the vocabulary already pairs them (favorited heart, watchlist bookmark, the played-filter disc). Icons are consumed exclusively through the semantic `Icon` enum and the `icon*` helpers in `jellypilot-ui`, which tint via `currentColor` — never hardcode colors in vendored SVGs, and extend the enum from Reicon rather than importing one-off artwork.
 
+Missing icon assets may be obtained directly from [Reicon](https://reicon.dev); reuse suitable vendored glyphs first rather than drawing approximations. Add retrieved assets through the existing semantic icon pipeline and preserve their source and license attribution.
+
 ## Motion
 
 - Skeleton placeholders breathe between two opaque surface tones; under reduced motion (or a non-finite phase) they render the static `surfaceContainerLow` block.
@@ -205,3 +216,74 @@ Minimum viable chrome around 400×580: ambient blurred-artwork backdrop (dimmed 
 - Settings is a floating modal card (radius `x2l`, `raised_high`, 1px `border-subtle`) over a dimmed blurred backdrop: 208px section nav with the shared active treatment (`primaryContainer` fill, `secondary` content), content column per section.
 - Boolean settings use real switches (40×22 track, 18px knob) — never 开启/关闭 text buttons. Destructive actions (`退出登录`) render in `error` and sit right; recovery actions sit left.
 - The Account Popover shows the current identity zero times in its switch list — the header is the server row (URL + copy + 已连接 badge); only alternative accounts are listed. The sidebar identity card carries the switch affordance (transfer-v icon), a structural 1px edge, and the human-readable `Jellyfin · 10.0.0.27` subline, not the raw device ID.
+
+## 2026-09-09 Paper Controls Sync (组件库 02 按钮与控件)
+
+**Controls implementation delivered; human visual acceptance pending.** Scope: the controls artboard only — buttons, icon buttons, filter/season pills, toggle, status tags, inputs, and interaction states. Transition animations are explicitly excluded from this delivery; the season-selector popover remains deferred. Where this section differs from older text above, this section wins for new work; `tokens.rs` remains authoritative for token values. The pill active treatment was synced back into the Paper file in both themes.
+
+### Terminology
+
+- Paper's "SECONDARY · 次按钮" is the quiet action button and maps to the code's **Tonal** variant. The code's `Secondary` variant keeps its existing meaning — the switch-group active chip — and is not the Paper secondary button.
+
+### Size Ladder (统一规范 · 尺寸阶梯)
+
+| Tier | Geometry | Radius | Font | Use |
+|---|---|---|---|---|
+| M button | H36, PX16, gap 8, icon 15px | `xl` (12) | 14px/600 (Tonal 500) | Primary and Tonal action buttons |
+| S button | H32, PY7, PX12 | `lg` (8) | 12px | Compact in-row buttons (episode-card 播放, inline save) |
+| Icon button | 36×36, icon 16px | `xl` (12) | — | Icon-only actions; carousel arrows stay an 18px link-style exception |
+| Pill | H32, PY8, PX12, gap 7 | `lg` (8) | 12px | Filter/sort pills and the Season Pill |
+| Toggle | 40×22 track, 18px knob | `full` | — | Boolean settings |
+| Status Tag | H24, PX10, 6px dot | `full` | 12px/600 | Connection/remote-control status |
+
+### Buttons and States
+
+- Primary: implemented `primaryHover` (`#787df8` dark / `#5457e8` light) and `primaryPressed` (`#5562ce` dark / light `secondary` `#4f46e5`) in `tokens.rs`, replacing the 10% hover brightness lift.
+- Disabled: `control` fill with `text.muted` content, non-interactive — supersedes the legacy 50% alpha scaling, for buttons and fields alike.
+- Pressed has a distinct fill (Primary → `primaryPressed`; Tonal → `surfaceContainer`; glass → white/18%). Custom ControlButton styles also supply the actual icon and label colors.
+- State transitions remain instantaneous. The Paper 175ms easing treatment is explicitly excluded from this implementation.
+
+### Tonal (Paper Secondary Button)
+
+- Global retarget: `surfaceContainerHigh` fill with a 1px `border-subtle` structural edge and `onControl` content at weight 500; hover uses `controlHover` fill with `onControlHover` content; pressed uses `surfaceContainer`. This applies to every Tonal action button (browse toolbar, settings, detail action rows); the Sidebar menu-action exception stays as scoped. Light mode uses the Paper light counterparts (`surface-container-high` fill, `light-outline-variant` edge) until a translucent light `border-subtle` equivalent is accepted.
+
+### Icon Buttons
+
+- Icon controls use radius `xl`; the reference geometry is 36×36 with a 16px icon, with existing scoped sizes retained where specified. Canvas controls use the neutral Tonal treatment. Hero glass applies over imagery only: white/10% fill and native blur(10), with no decorative border in any interaction state; hover white/24%, pressed white/18%. Its labels/icons are white and blur masks match the glass controls' radii. Functional keyboard focus remains separately visible. Primary actions stay solid and do not request a glass mask. Missing artwork uses ordinary opaque styles.
+
+### Pills
+
+- **Filter Pill**: default `surfaceContainerHigh` fill + 1px `borderSubtle` edge, 12px text. `PillActive` uses `primaryContainer` fill with `secondary` content; browse filters and season buttons now use the `Pill`/`PillActive` pair. Other switch groups retain their existing active treatments.
+- **Season Pill**: same pill spec plus a trailing chevron. Whether the detail-page season scroll row becomes a pill-triggered popover is deferred to the detail-page batch; this section records only the control form.
+
+### Toggle
+
+- Implemented: 40×22 borderless track, 18px knob, off track `surfaceContainerHighest`, and disabled `control` track with muted knob. The 40px hit target remains.
+
+### Status Tag
+
+- Account and settings status displays use the shared `status_tag` constructor: vertically centered dot and label in H24, with Error mapping for failures. The legacy badge surface remains only for non-tag uses such as Quick Connect's large code/progress panels; it is not a second status-tag implementation.
+
+### Inputs
+
+- Accepted target: `surfaceContainerHigh` fill, radius `xl`, 1px `border-subtle` idle border, 12px text, mono stack for path/parameter values, and inline save buttons at S tier (`lg` radius). The sidebar search frame already uses radius `xl` and the Ctrl-K keycap exists.
+- **Deliberate deviation from Paper**: field focus keeps the existing 1px `primary` inset border for any modality; the Paper 2px outer focus ring is not adopted for fields, and the outline-width encoding (1px functional field focus/error, 2px keyboard focus rings) is unchanged. The Paper file's focused-search drawing retains the 2px ring — the design file is not authoritative for this detail.
+
+### Delivery and Verification
+
+- New palette roles: `primaryHover`, `primaryPressed`, `borderSubtle`, `imageOutline`, and `sidebarBg`. Light `borderSubtle` preserves the code palette's `outlineVariant` value (`#e7ecf3`), rather than silently recoloring the existing role to Paper's different value.
+- `sidebarBg` applies only to the full/compact shell Sidebar. Other `Block` consumers retain `surfaceContainerLowest`. `imageOutline` is available as a token; applying artwork outlines belongs to the separate artwork/card scope.
+- Scoped Sidebar menu actions remain borderless at rest; their Catalog radii survive unless a caller explicitly uses `.radius(...)`.
+- Post-review verification: `bun run check` and `bun run task rust test iced` passed. Workspace Rust tests passed before the review fixes; the final fixes were rechecked in the affected iced group. No application visual acceptance is claimed.
+
+## Accepted Paper Home Composition
+
+The [Home specification](home-hero-design-spec.md#accepted-paper-home-synchronization) supersedes the older Home/player/Sidebar geometry above. Human visual acceptance remains separate from code-level verification.
+
+- Hero foreground: fixed 440 logical pixels, lower-left identity/actions and lower-right compact selection rail. The original-aspect, full-width Backdrop is independently sized and scrolls with Home; Logo remains preferred over text.
+- Keep real Home sections and independent direct resume. Continue Watching may require vertical scrolling; selection never explicitly scrolls the page vertically.
+- Hero Favorite/Watchlist target the movie or episode's parent series. The player-bar Favorite independently targets Now Playing's movie/series. Unknown target/status disables mutation with an explanatory hint.
+- Sidebar: expanded 220, compact 72; expanded padding 16 vertically/12 horizontally, gaps 8, 38-pixel navigation/library/tool targets. Account trigger is 54 high; Account Popover is 320 wide, radius 16, padding 10.
+- Player bar remains docked, with metadata/Favorite, transport/seek, and queue/audio/subtitle/volume/fullscreen controls. Preserve direct Stop; reflow at narrow widths rather than discarding controls.
+- Fullscreen operates the current playback backend. External MPV receives its fullscreen command; existing embedded playback presents only video in the fullscreen window, preserving the concealed browser's widget state. Escape returns to the browser.
+- Dark and light themes resolve separately through semantic tokens/Catalogs. Hero glass controls stay borderless, including disabled states; keyboard focus remains distinct.

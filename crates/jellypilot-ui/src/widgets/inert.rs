@@ -11,11 +11,25 @@ where
 {
     Element::new(Inert {
         content: content.into(),
+        visible: true,
+    })
+}
+
+/// Keeps layout and widget state, but suppresses drawing and interaction.
+/// Used when an opaque replacement must not render a second native video surface.
+pub fn concealed<'a, Message>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message>
+where
+    Message: 'a + 'static,
+{
+    Element::new(Inert {
+        content: content.into(),
+        visible: false,
     })
 }
 
 struct Inert<'a, Message> {
     content: Element<'a, Message>,
+    visible: bool,
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for Inert<'_, Message>
@@ -69,6 +83,9 @@ where
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        if !self.visible {
+            return;
+        }
         self.content
             .as_widget()
             .draw(tree, renderer, theme, style, layout, cursor, viewport);

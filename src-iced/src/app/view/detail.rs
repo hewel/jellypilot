@@ -526,21 +526,18 @@ fn detail_actions<'a>(
     Some(playback_label),
     ButtonVariant::Primary,
   )
-  .spacing(TOKENS.spacing.s2)
+  .icon_size(IconSize::Custom(15.0))
+  .spacing(8.0)
   .padding([8, 16])
+  .min_height(36.0)
+  .label_size(14.0)
   .on_press_maybe(
     playback_target
       .filter(|_| playback_enabled)
       .map(|(item, position)| playback_message(state, item, position)),
   );
-  let any_busy = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .detail
-    .data
-    .user_data_busy
-    .is_some();
+  let any_busy =
+    crate::app::collections::busy(state.full.as_ref().expect("FullUi required"), item_id);
   // The favorited heart stays rose across hover (fixed `favorite` accent);
   // the unfavorited heart is an ordinary Tonal control on `control_button`.
   let favorite_button: Element<'_, Message> = if favorite {
@@ -929,12 +926,14 @@ fn season_button<'a>(
     .as_deref()
     == Some(season.id.as_str());
   let variant = if active {
-    ButtonVariant::TonalActive
+    ButtonVariant::PillActive
   } else {
-    ButtonVariant::Tonal
+    ButtonVariant::Pill
   };
   control_button(None, Some(season_label(season).to_owned()), variant)
-    .padding([6, 12])
+    .padding([8, 12])
+    .min_height(32.0)
+    .label_size(12.0)
     .on_press_maybe(
       (!loading).then_some(Message::Detail(DetailMessage::SeasonSelected(
         season.id.clone(),
@@ -1263,7 +1262,10 @@ fn episode_card_content<'a>(
   let play = control_button(Some(Icon::Play), Some(play_label), ButtonVariant::Primary)
     .icon_size(IconSize::Sm)
     .spacing(TOKENS.spacing.s1_5)
-    .padding([6, 12])
+    .padding([7, 12])
+    .min_height(32.0)
+    .label_size(12.0)
+    .radius(TOKENS.radii.lg)
     .on_press_maybe(play_enabled.then(|| {
       playback_message(
         state,

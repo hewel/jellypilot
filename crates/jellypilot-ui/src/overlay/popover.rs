@@ -67,7 +67,10 @@ where
 {
     let content = opaque(
         container(content)
-            .padding(TOKENS.spacing.s3)
+            .padding(match options.appearance {
+                PopoverAppearance::Default => TOKENS.spacing.s3,
+                PopoverAppearance::Account => TOKENS.spacing.s2_5,
+            })
             .width(options.width.map_or(Length::Fit, Length::Fixed))
             .style(match options.appearance {
                 PopoverAppearance::Default => style::popover_surface,

@@ -76,16 +76,16 @@ where
 
 /// Pure style mapping for the pill frame.
 ///
-/// The rest state uses the control fill and a structural `outlineVariant`
-/// border; the focused state swaps to `controlHover` and a functional primary
-/// border. Both keep the sidebar's 12 px radius.
+/// The rest state uses a subtle container surface and a 1 px `borderSubtle`
+/// structural edge; the focused state swaps to `controlHover` and a functional
+/// primary border. Both keep the sidebar's 12 px radius.
 #[must_use]
 pub fn frame_style(palette: &ThemePalette, focused: bool) -> container::Style {
     let colors = palette.colors;
     let (background, border_color) = if focused {
         (colors.controlHover, colors.primary)
     } else {
-        (colors.control, colors.outlineVariant)
+        (colors.surfaceContainerHigh, colors.borderSubtle)
     };
 
     container::Style {
@@ -288,15 +288,15 @@ mod tests {
     use crate::tokens::{DARK_PALETTE, SIDEBAR_CONTROL_RADIUS};
 
     #[test]
-    fn rest_frame_uses_control_fill_and_outline_variant_border() {
+    fn rest_frame_uses_surface_container_high_and_border_subtle() {
         let style = frame_style(&DARK_PALETTE, false);
 
         assert_eq!(
             style.background,
-            Some(Background::Color(DARK_PALETTE.colors.control))
+            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerHigh))
         );
         assert_eq!(style.border.width, 1.0);
-        assert_eq!(style.border.color, DARK_PALETTE.colors.outlineVariant);
+        assert_eq!(style.border.color, DARK_PALETTE.colors.borderSubtle);
         assert_eq!(
             style.border.radius,
             iced::border::Radius::from(SIDEBAR_CONTROL_RADIUS)

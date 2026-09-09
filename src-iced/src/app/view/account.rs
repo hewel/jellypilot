@@ -30,7 +30,7 @@ use crate::app::shell::{
 use crate::app::state::{LoginMethod, QuickConnectState, State};
 use crate::i18n::Localizer;
 
-const POPOVER_WIDTH: f32 = 368.0;
+const POPOVER_WIDTH: f32 = 320.0;
 const POPOVER_CONTENT_HEIGHT: f32 = 520.0;
 const PROFILE_LIST_HEIGHT: f32 = 192.0;
 
@@ -144,12 +144,11 @@ fn identity_card<'a>(
   account: &AccountView<'a>,
   compact: bool,
 ) -> Element<'a, Message> {
-  let (name, server, provider, provider_kind) = account.current.as_ref().map_or_else(
+  let (name, server, provider) = account.current.as_ref().map_or_else(
     || {
       (
         state.t("account-title"),
         state.t("account-not-signed-in"),
-        None,
         None,
       )
     },
@@ -158,7 +157,6 @@ fn identity_card<'a>(
         current.user_name.to_owned(),
         current.server_name.unwrap_or(current.server_url).to_owned(),
         Some(provider_name(current.provider)),
-        Some(current.provider),
       )
     },
   );
@@ -180,9 +178,15 @@ fn identity_card<'a>(
     return focus_tooltip(
       control_button_content(
         move |_| {
-          container(avatar(&identity, photo.clone(), 28.0, false))
-            .center_x(Fill)
-            .into()
+          container(avatar(
+            &identity,
+            photo.clone(),
+            28.0,
+            TOKENS.radii.lg,
+            false,
+          ))
+          .center_x(Fill)
+          .into()
         },
         ButtonVariant::Text,
       )
@@ -201,34 +205,19 @@ fn identity_card<'a>(
   focus_tooltip(
     control_button_content(
       move |_| {
-        let subtitle_line: Element<'_, Message> = match provider_kind {
-          Some(kind) => row![
-            brand_svg(brand_for(kind), 12.0),
-            container(ellipsis_text(subtitle.clone()).size(11).color(metadata)).width(Fill),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center)
-          .into(),
-          None => container(ellipsis_text(subtitle.clone()).size(11).color(metadata))
-            .width(Fill)
-            .into(),
-        };
+        let subtitle_line =
+          container(ellipsis_text(subtitle.clone()).size(10).color(metadata)).width(Fill);
         row![
-          avatar(&identity, photo.clone(), 28.0, false),
+          avatar(&identity, photo.clone(), 36.0, TOKENS.radii.lg, false),
           column![
-            container(ellipsis_text(name.clone()).font(HEADING_FONT).size(15)).width(Fill),
+            container(ellipsis_text(name.clone()).font(HEADING_FONT).size(12)).width(Fill),
             subtitle_line,
           ]
           .spacing(TOKENS.spacing.s0_5)
           .width(Fill),
-          column![
-            icon_with_color(Icon::ChevronUp, IconSize::Xs, metadata),
-            icon_with_color(Icon::ChevronDown, IconSize::Xs, metadata),
-          ]
-          .spacing(0)
-          .align_x(Alignment::Center),
+          icon_with_color(Icon::ChevronUp, IconSize::Xs, metadata),
         ]
-        .spacing(TOKENS.spacing.s2)
+        .spacing(TOKENS.spacing.s2_5)
         .align_y(Alignment::Center)
         .into()
       },
@@ -236,9 +225,9 @@ fn identity_card<'a>(
     )
     .style(sidebar::identity)
     .id(ACCOUNT_TRIGGER_ID)
-    .padding([4, 8])
+    .padding([8, 10])
     .width(Fill)
-    .min_height(44.0)
+    .min_height(54.0)
     .on_press(Message::Shell(ShellMessage::ToggleAccountPopover)),
     full_identity,
     TooltipOptions::default(),
@@ -247,7 +236,7 @@ fn identity_card<'a>(
 
 fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
   let palette = state.palette();
-  let mut content = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+  let mut content = Column::new().spacing(TOKENS.spacing.s2_5).width(Fill);
   if let Some(current) = &account.current {
     let server = current.server_name.unwrap_or(current.server_url);
     let provider = provider_name(current.provider);
@@ -256,59 +245,33 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
       CopyStatus::Copied => (Icon::Check, state.t("account-address-copied")),
       CopyStatus::Failed => (Icon::Warning, state.t("account-copy-failed")),
     };
-    content = content.push(
-      column![
+    content = content.push(focus_tooltip(
+      container(
         row![
-          column![
-            Presentation::Sidebar.text(
-              current.user_name,
-              16.0,
-              palette.text.heading,
-              Some(HEADING_FONT),
-              Fill,
-            ),
-            row![
-              brand_svg(brand_for(current.provider), 12.0),
-              Presentation::Sidebar.text(
-                format!("{provider} · {server}"),
-                11.0,
-                palette.text.metadata,
-                None,
-                Fill,
-              ),
-            ]
-            .spacing(TOKENS.spacing.s1)
-            .align_y(Alignment::Center),
-          ]
-          .spacing(TOKENS.spacing.s0_5)
-          .width(Fill),
+          icon_with_color(Icon::Server, IconSize::Xs, palette.text.metadata),
+          Presentation::Sidebar.text(current.server_url, 12.0, palette.text.metadata, None, Fill),
+          control_button(Some(copy_icon), None, ButtonVariant::Icon)
+            .id("account-address-copy")
+            .style(sidebar::menu_action)
+            .icon_size(IconSize::Xs)
+            .padding([0, 0])
+            .width(Length::Fixed(40.0))
+            .min_height(40.0)
+            .content_centered(true)
+            .on_press(Message::Account(accounts::Message::CopyServerAddress)),
           connection_badge(state),
         ]
         .spacing(TOKENS.spacing.s2)
         .align_y(Alignment::Center),
-        focus_tooltip(
-          row![
-            Presentation::Sidebar.text(current.server_url, 12.0, palette.text.metadata, None, Fill),
-            control_button(Some(copy_icon), None, ButtonVariant::Icon)
-              .id("account-address-copy")
-              .style(sidebar::menu_action)
-              .icon_size(IconSize::Sm)
-              .width(Length::Fixed(40.0))
-              .min_height(40.0)
-              .content_centered(true)
-              .on_press(Message::Account(accounts::Message::CopyServerAddress)),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center),
-          format!(
-            "{copy_hint}\n{} · {provider} · {server}\n{}",
-            current.user_name, current.server_url
-          ),
-          TooltipOptions::default(),
-        ),
-      ]
-      .spacing(TOKENS.spacing.s1),
-    );
+      )
+      .padding([1, 10])
+      .style(sidebar::address),
+      format!(
+        "{copy_hint}\n{} · {provider} · {server}\n{}",
+        current.user_name, current.server_url
+      ),
+      TooltipOptions::default(),
+    ));
   }
   content = content.extend(account_feedback(state, account, Presentation::Sidebar));
   if account.loading
@@ -319,16 +282,24 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
   {
     content = content.push(
       column![
-        text(if account.current.is_some() {
-          state.t("account-switch")
-        } else {
-          state.t("account-saved")
-        })
-        .size(12)
-        .color(palette.text.metadata),
+        container(
+          text(if account.current.is_some() {
+            state.t("account-switch")
+          } else {
+            state.t("account-saved")
+          })
+          .size(12)
+          .color(palette.text.metadata),
+        )
+        .padding(iced::Padding {
+          top: 0.0,
+          right: TOKENS.spacing.s2_5,
+          bottom: TOKENS.spacing.s1_5,
+          left: TOKENS.spacing.s2_5,
+        }),
         saved_profiles(state, account, Presentation::Sidebar),
       ]
-      .spacing(TOKENS.spacing.s1),
+      .spacing(TOKENS.spacing.s0_5),
     );
   }
   let mut actions = column![
@@ -358,7 +329,16 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
         ),
     );
   }
-  content = content.push(actions);
+  content = content.push(
+    column![
+      container(space::horizontal())
+        .width(Fill)
+        .height(1.0)
+        .style(sidebar::divider),
+      actions,
+    ]
+    .spacing(TOKENS.spacing.s2_5),
+  );
   scrollable(content)
     .height(Length::Fit)
     .style(jellypilot_ui::theme::scrollable)
@@ -369,9 +349,9 @@ fn menu_action(icon: Icon, label: &str) -> jellypilot_ui::ControlButton<'static,
   control_button(Some(icon), Some(label.to_owned()), ButtonVariant::Tonal)
     .style(sidebar::menu_action)
     .icon_size(IconSize::Sm)
-    .label_size(14.0)
-    .spacing(TOKENS.spacing.s2)
-    .padding([8, 8])
+    .label_size(12.0)
+    .spacing(TOKENS.spacing.s2_5)
+    .padding([8, 10])
     .min_height(40.0)
     .width(Fill)
 }
@@ -457,6 +437,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
               .and_then(|key| state.kernel.profile_avatars.get(key))
               .cloned(),
             36.0,
+            TOKENS.radii.md,
             false,
           ),
           column![
@@ -587,7 +568,8 @@ fn connection_badge(state: &State) -> Element<'static, Message> {
   let variant = match state.kernel.connection {
     ConnectionPhase::Connected => BadgeVariant::Success,
     ConnectionPhase::Connecting => BadgeVariant::Warning,
-    ConnectionPhase::SignedOut | ConnectionPhase::Failed => BadgeVariant::Neutral,
+    ConnectionPhase::SignedOut => BadgeVariant::Neutral,
+    ConnectionPhase::Failed => BadgeVariant::Error,
   };
   let label = match state.kernel.connection {
     ConnectionPhase::Connected => "account-connected",
@@ -595,7 +577,7 @@ fn connection_badge(state: &State) -> Element<'static, Message> {
     ConnectionPhase::SignedOut => "account-signed-out",
     ConnectionPhase::Failed => "account-connection-failed",
   };
-  status_badge(state.t(label), variant)
+  jellypilot_ui::theme::status_tag(state.t(label), variant)
 }
 
 fn remote_status(locale: Localizer, state: RemoteControlState) -> Element<'static, Message> {
@@ -605,14 +587,7 @@ fn remote_status(locale: Localizer, state: RemoteControlState) -> Element<'stati
     RemoteControlState::Lost => ("account-remote-lost", BadgeVariant::Warning),
     RemoteControlState::Unavailable => ("account-remote-unavailable", BadgeVariant::Neutral),
   };
-  status_badge(locale.text(label), variant)
-}
-
-fn status_badge(label: String, variant: BadgeVariant) -> Element<'static, Message> {
-  container(text(label).size(11))
-    .padding([3, 6])
-    .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
-    .into()
+  jellypilot_ui::theme::status_tag(locale.text(label), variant)
 }
 
 fn provider_badge(
@@ -682,11 +657,12 @@ fn avatar<'a>(
   identity: &str,
   photo: Option<image::Handle>,
   size: f32,
+  radius: f32,
   disabled: bool,
 ) -> Element<'a, Message> {
   match photo {
     Some(handle) => {
-      let mut tile = rounded_image(handle, full_radius(TOKENS.radii.md))
+      let mut tile = rounded_image(handle, full_radius(radius))
         .width(Length::Fixed(size))
         .height(Length::Fixed(size));
       if disabled {
@@ -718,7 +694,7 @@ fn avatar<'a>(
             text_color: Some(with_disabled_alpha(ink, disabled)),
             border: Border {
               smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-              radius: TOKENS.radii.md.into(),
+              radius: radius.into(),
               color: Color::TRANSPARENT,
               width: 0.0,
             },
@@ -797,7 +773,10 @@ fn saved_profiles<'a>(
   if account.profiles.is_empty() {
     return text(state.t("account-no-saved")).size(12).into();
   }
-  let mut profiles = Column::new().spacing(TOKENS.spacing.s1);
+  let mut profiles = Column::new().spacing(match presentation {
+    Presentation::Sidebar => TOKENS.spacing.s0_5,
+    Presentation::Settings => TOKENS.spacing.s1,
+  });
   let palette = state.palette();
   let management_open = presentation == Presentation::Settings && account.management_open;
   for (index, profile) in account.profiles.iter().enumerate() {
@@ -857,7 +836,11 @@ fn saved_profiles<'a>(
           } else {
             profile_title.clone()
           },
-          13.0,
+          if presentation == Presentation::Sidebar {
+            12.0
+          } else {
+            13.0
+          },
           title_color,
           Some(HEADING_FONT),
           Fill,
@@ -870,17 +853,27 @@ fn saved_profiles<'a>(
             .into(),
         };
         row![
-          avatar(&profile.title(), photo.clone(), 28.0, disabled),
+          avatar(
+            &profile.title(),
+            photo.clone(),
+            if presentation == Presentation::Sidebar {
+              30.0
+            } else {
+              28.0
+            },
+            if presentation == Presentation::Sidebar {
+              TOKENS.radii.lg
+            } else {
+              TOKENS.radii.md
+            },
+            disabled,
+          ),
           column![
             title,
             match presentation {
-              Presentation::Sidebar => row![
-                brand_svg(brand_for(provider), 12.0),
-                presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill),
-              ]
-              .spacing(TOKENS.spacing.s1)
-              .align_y(Alignment::Center)
-              .into(),
+              Presentation::Sidebar => {
+                presentation.text(profile_subtitle.clone(), 12.0, metadata_color, None, Fill)
+              }
               Presentation::Settings => {
                 presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill)
               }
@@ -890,7 +883,11 @@ fn saved_profiles<'a>(
           .width(Fill),
           indicator,
         ]
-        .spacing(TOKENS.spacing.s2)
+        .spacing(if presentation == Presentation::Sidebar {
+          TOKENS.spacing.s2_5
+        } else {
+          TOKENS.spacing.s2
+        })
         .align_y(Alignment::Center)
         .into()
       },
@@ -905,12 +902,16 @@ fn saved_profiles<'a>(
       if management_open { "signout" } else { "switch" },
     ))
     .padding(if presentation == Presentation::Sidebar {
-      [5, 8]
+      [6, 10]
     } else {
       [7, 8]
     })
     .width(Fill)
-    .min_height(44.0)
+    .min_height(if presentation == Presentation::Sidebar {
+      47.0
+    } else {
+      44.0
+    })
     .on_press_maybe(
       (!busy && !account.handoff_blocking && !(active && !management_open)).then_some(action),
     );
@@ -1321,7 +1322,7 @@ mod tests {
   use iced::widget::image;
   use iced::{Font, Size};
 
-  use super::avatar;
+  use super::{avatar, TOKENS};
 
   #[tokio::test]
   async fn profile_avatars_share_one_layout_box_across_states() {
@@ -1338,7 +1339,13 @@ mod tests {
     .expect("software layout renderer");
     let mut sizes = Vec::new();
     for photo in [None, Some(image::Handle::from_rgba(2, 2, vec![0; 16]))] {
-      let mut avatar = avatar("Long profile name@server", photo, 28.0, false);
+      let mut avatar = avatar(
+        "Long profile name@server",
+        photo,
+        28.0,
+        TOKENS.radii.md,
+        false,
+      );
       let mut tree = Tree::new(&avatar);
       tree.diff(avatar.as_widget_mut());
       let node = avatar.as_widget_mut().layout(

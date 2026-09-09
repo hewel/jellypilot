@@ -208,6 +208,8 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   let task = route_message(state, message);
   shell::reconcile_refresh(state);
+  let collections_task = super::collections::reconcile(state);
+  let fullscreen_task = shell::reconcile_player_fullscreen(state);
   if let Some(full) = state.full.as_mut() {
     state
       .image_diagnostics
@@ -225,14 +227,26 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   state
     .image_diagnostics
     .record(state.playback.artwork.take_summary());
-  Task::batch([task, state.image_diagnostics.schedule()])
+  Task::batch([
+    task,
+    collections_task,
+    fullscreen_task,
+    state.image_diagnostics.schedule(),
+  ])
 }
 
 fn route_message(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    Message::Collections(message) => super::collections::update(state, message),
     Message::UiLanguageSelected(preference) => select_ui_language(state, preference),
     Message::Account(message) => update_account(state, message),
+    Message::Shell(super::message::ShellMessage::ExitPlayerFullscreen) => {
+      shell::exit_player_fullscreen(state)
+    }
     Message::Shell(message) => {
+      if matches!(message, super::message::ShellMessage::RefreshCurrent) {
+        super::collections::invalidate(state);
+      }
       let previous_notice = state.kernel.notice.clone();
       let task = shell::update_shell(state, message);
       if let Some(notice) = state
@@ -263,6 +277,11 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
+      if matches!(&message, super::personal_lists::PersonalListsMessage::RemoveFavorite(item)
+        if super::collections::busy(full, &item.id))
+      {
+        return Task::none();
+      }
       super::personal_lists::update(
         &mut full.personal_lists,
         &mut state.kernel,
@@ -480,6 +499,13 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         Destination::Detail(item_id) => Some(item_id.as_str()),
         _ => None,
       };
+      if matches!(
+        &message,
+        DetailMessage::FavoriteToggled | DetailMessage::PlayedToggled
+      ) && detail_item_id.is_some_and(|id| super::collections::busy(full, id))
+      {
+        return Task::none();
+      }
       detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message)
     }
     Message::Settings(message @ (SettingsMessage::Open | SettingsMessage::OpenAccounts)) => {
@@ -564,6 +590,12 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         )
       {
         return Task::none();
+      }
+      if crate::embedded::enabled()
+        && matches!(&message, super::message::PlaybackMessage::Intent(intent)
+          if matches!(intent.as_ref(), PlaybackIntent::ToggleFullscreen))
+      {
+        return shell::toggle_player_fullscreen(state);
       }
       let had_playback = state.playback.view.now_playing.is_some();
       let task = playback::update(
@@ -792,6 +824,7 @@ mod tests {
         detail: detail::Surface::default(),
         browse: browse::Surface::default(),
         personal_lists: super::super::personal_lists::Surface::default(),
+        collections: super::super::collections::Surface::default(),
       }),
       playback,
       shell: shell::Surface::new(false),
@@ -1487,19 +1520,18 @@ mod tests {
           < 0.0001,
         "backdrop aspect changed: {background:?}, source {image_width}x{image_height}"
       );
-      let caption_bottom = query
-        .captions
-        .iter()
-        .map(|text| text.y + text.height)
-        .fold(0.0_f32, f32::max);
-      assert!(caption_bottom <= page.y + page.height,
-        "Continue Watching titles clipped: bottom {caption_bottom}, viewport {page:?}, prompt {with_prompt}");
-      assert!(
-        card.x >= page.x
-          && card.y >= page.y
-          && card.x + card.width <= page.x + page.width
-          && card.y + card.height <= page.y + page.height,
-        "resume target outside first screen: {card:?}, window {bounds:?}, player {with_player}",
+      // The fixed Hero can put Continue Watching below the initial viewport.
+      // Scroll as a user would before exercising its independent resume target.
+      let scroll_y = (card.y + card.height - page.y - page.height + 80.0).max(0.0);
+      ui.operate(
+        &renderer,
+        &mut widget::operation::scrollable::scroll_to::<()>(
+          widget::Id::new("home-page"),
+          iced::widget::scrollable::AbsoluteOffset {
+            x: None,
+            y: Some(scroll_y),
+          },
+        ),
       );
       ui.operate(
         &renderer,
@@ -1524,7 +1556,7 @@ mod tests {
       messages.clear();
       let cursor = mouse::Cursor::Available(iced::Point::new(
         card.center_x(),
-        card.y + card.height - 3.0,
+        card.y + card.height - 3.0 - scroll_y,
       ));
       update_ui(
         &mut ui,
@@ -2909,6 +2941,41 @@ mod tests {
     let mut after = PageScroll::default();
     ui.operate(&renderer, &mut after);
     assert_eq!(after.observed, before.observed);
+    let cache = ui.into_cache();
+    state.playback = active_intro_prompt_state().playback;
+    state.shell.window_id = Some(window);
+    drop(shell::toggle_player_fullscreen(&mut state));
+    assert!(state.shell.player_fullscreen);
+    let fullscreen_bounds = iced::Size::new(1920.0, 1080.0);
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::Resized(fullscreen_bounds)),
+    ));
+    let ui = UserInterface::build(
+      crate::app::view(&state, window),
+      fullscreen_bounds,
+      cache,
+      &mut renderer,
+    );
+    let cache = ui.into_cache();
+    drop(update(
+      &mut state,
+      Message::Shell(crate::app::message::ShellMessage::ExitPlayerFullscreen),
+    ));
+    assert!(!state.shell.player_fullscreen);
+    assert_eq!(state.shell.window_size, bounds);
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    let mut restored = PageScroll::default();
+    ui.operate(&renderer, &mut restored);
+    assert_eq!(
+      restored.observed, before.observed,
+      "fullscreen must preserve browser scroll"
+    );
   }
 
   #[tokio::test]

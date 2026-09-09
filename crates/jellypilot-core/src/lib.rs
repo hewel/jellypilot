@@ -11,6 +11,7 @@ pub mod browse_model;
 pub mod browse_window;
 #[cfg(feature = "native")]
 pub mod cards;
+pub mod collections;
 #[cfg(feature = "native")]
 pub mod config;
 #[cfg(feature = "native")]

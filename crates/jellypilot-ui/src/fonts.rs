@@ -36,6 +36,11 @@ pub const HEADING_FONT: Font = Font {
     ..BODY_FONT
 };
 
+/// Monospace stack for path and parameter values, diagnostics, and other
+/// technical content. The CSS stack in [`TOKENS.fonts.mono`] is not directly
+/// expressible in iced, so the helper resolves to the platform monospace family.
+pub const MONO_FONT: Font = Font::MONOSPACE;
+
 /// Attribution retained in the application's font notices.
 pub const FONT_ATTRIBUTIONS: &str = "\
 Manrope V5 by Mikhail Sharanda. © 2025 Mikhail Sharanda. All Rights Reserved.\n\

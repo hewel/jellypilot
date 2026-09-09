@@ -69,9 +69,11 @@ pub struct Surface {
   pub favorites: ListPage,
   pub watchlist: ListPage,
   pub watchlist_ids: HashSet<String>,
+  pub(crate) membership_loaded: bool,
   pub busy_items: HashSet<String>,
   pub mutation_error: Option<UiText>,
   pub artwork: ImageCollection,
+  pub(crate) collection_change: Option<super::collections::Change>,
   scope: Option<ProfileScope>,
   watchlist_records: Vec<WatchlistRecord>,
   store_revision: u64,
@@ -112,7 +114,7 @@ impl Default for Runtime {
 }
 
 impl Runtime {
-  fn next_generation(&self) -> u64 {
+  pub(crate) fn next_generation(&self) -> u64 {
     self
       .inner
       .next_generation
@@ -322,11 +324,12 @@ pub enum PersonalListsMessage {
     item_id: String,
     result: Result<(u64, Vec<WatchlistRecord>), String>,
   },
-  FavoriteRemovalFinished {
+  FavoriteMutationFinished {
     session: SessionToken,
     operation: u64,
     scope: ProfileScope,
     item_id: String,
+    favorite: bool,
     result: Result<VideoUserDataUpdate, String>,
   },
   ArtworkLoaded(ImageCompletion),
@@ -385,8 +388,6 @@ pub fn refresh(
 pub fn leave_view(surface: &mut Surface) {
   surface.favorites_generation = 0;
   surface.watchlist_generation = 0;
-  surface.mutations.clear();
-  surface.busy_items.clear();
   surface.favorites.loading = false;
   surface.watchlist.loading = false;
   begin_artwork_view(surface);
@@ -441,7 +442,9 @@ pub fn update(
       };
       mutate_watchlist_by_id(surface, kernel, runtime, item_id)
     }
-    PersonalListsMessage::RemoveFavorite(item) => remove_favorite(surface, kernel, runtime, item),
+    PersonalListsMessage::RemoveFavorite(item) => {
+      set_favorite(surface, kernel, runtime, item.id, false)
+    }
     PersonalListsMessage::FavoritesLoaded {
       session,
       generation,
@@ -535,21 +538,23 @@ pub fn update(
         result,
       },
     ),
-    PersonalListsMessage::FavoriteRemovalFinished {
+    PersonalListsMessage::FavoriteMutationFinished {
       session,
       operation,
       scope,
       item_id,
+      favorite,
       result,
-    } => settle_favorite_removal(
+    } => settle_favorite_mutation(
       surface,
       kernel,
       runtime,
-      FavoriteRemovalSettlement {
+      FavoriteMutationSettlement {
         session,
         operation,
         scope,
         item_id,
+        favorite,
         result,
       },
     ),
@@ -904,16 +909,17 @@ fn settle_watchlist_mutation(
   }
 }
 
-fn remove_favorite(
+pub(crate) fn set_favorite(
   surface: &mut Surface,
   kernel: &mut Kernel,
   runtime: &Runtime,
-  item: VideoLibraryItem,
+  item_id: String,
+  favorite: bool,
 ) -> Task<Message> {
   let Some(scope) = current_scope(surface, kernel) else {
     return Task::none();
   };
-  let item_id = item.id.trim().to_owned();
+  let item_id = item_id.trim().to_owned();
   if item_id.is_empty() || surface.busy_items.contains(&item_id) {
     return Task::none();
   }
@@ -938,42 +944,49 @@ fn remove_favorite(
         .library()
         .update_user_data(VideoUserDataUpdateRequest {
           item_id,
-          action: VideoUserDataAction::Unfavorite,
+          action: if favorite {
+            VideoUserDataAction::Favorite
+          } else {
+            VideoUserDataAction::Unfavorite
+          },
         })
         .await
         .map_err(|error| error.to_string())
     },
     move |result| {
-      Message::PersonalLists(PersonalListsMessage::FavoriteRemovalFinished {
+      Message::PersonalLists(PersonalListsMessage::FavoriteMutationFinished {
         session,
         operation,
         scope: result_scope,
         item_id: result_id,
+        favorite,
         result,
       })
     },
   )
 }
 
-struct FavoriteRemovalSettlement {
+struct FavoriteMutationSettlement {
   session: SessionToken,
   operation: u64,
   scope: ProfileScope,
   item_id: String,
+  favorite: bool,
   result: Result<VideoUserDataUpdate, String>,
 }
 
-fn settle_favorite_removal(
+fn settle_favorite_mutation(
   surface: &mut Surface,
   kernel: &mut Kernel,
   runtime: &Runtime,
-  settlement: FavoriteRemovalSettlement,
+  settlement: FavoriteMutationSettlement,
 ) -> Task<Message> {
-  let FavoriteRemovalSettlement {
+  let FavoriteMutationSettlement {
     session,
     operation,
     scope,
     item_id,
+    favorite,
     result,
   } = settlement;
   let session_ok = kernel.request_gate.is_current_session(session);
@@ -983,8 +996,10 @@ fn settle_favorite_removal(
   if !session_ok || !scope_ok || !operation_ok {
     if session_ok && active_scope(kernel).ok().as_ref() == Some(&scope) {
       let error = match &result {
-        Err(error) => Some(list_failure("lists-favorite-remove-error", error)),
-        Ok(update) if update.favorite => Some(UiText::new("lists-favorite-not-removed")),
+        Err(error) => Some(list_failure("lists-favorite-update-error", error)),
+        Ok(update) if update.favorite != favorite || update.item_id != item_id => {
+          Some(UiText::new("lists-favorite-not-updated"))
+        }
         Ok(_) => None,
       };
       if let Some(error) = error {
@@ -992,6 +1007,7 @@ fn settle_favorite_removal(
       }
     }
     if session_ok && scope_ok && result.is_ok() {
+      surface.collection_change = Some(super::collections::Change::Invalidated(item_id));
       return load_favorites(surface, kernel, runtime, scope);
     }
     return Task::none();
@@ -999,30 +1015,33 @@ fn settle_favorite_removal(
   surface.mutations.remove(&item_id);
   surface.busy_items.remove(&item_id);
   match result {
-    Ok(update) if !update.favorite => {
-      surface
-        .favorites
-        .entries
-        .retain(|entry| entry.id != item_id);
-      surface.favorites.total = surface.favorites.total.saturating_sub(1);
-      surface.favorites.offset = surface
-        .favorites
-        .offset
-        .min((surface.favorites.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
+    Ok(update) if update.favorite == favorite && update.item_id == item_id => {
+      if !favorite {
+        surface
+          .favorites
+          .entries
+          .retain(|entry| entry.id != item_id);
+        surface.favorites.total = surface.favorites.total.saturating_sub(1);
+        surface.favorites.offset = surface
+          .favorites
+          .offset
+          .min((surface.favorites.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
+      }
       for entry in &mut surface.watchlist.entries {
         if let Some(item) = entry.item.as_mut().filter(|item| item.id == item_id) {
-          item.favorite = false;
+          item.favorite = favorite;
         }
       }
+      surface.collection_change = Some(super::collections::Change::Confirmed(update));
       load_favorites(surface, kernel, runtime, scope)
     }
     Ok(_) => {
-      let error = UiText::new("lists-favorite-not-removed");
+      let error = UiText::new("lists-favorite-not-updated");
       surface.mutation_error = Some(error.clone());
       kernel.show_toast(NoticeLevel::Error, error)
     }
     Err(error) => {
-      let error = list_failure("lists-favorite-remove-error", &error);
+      let error = list_failure("lists-favorite-update-error", &error);
       surface.mutation_error = Some(error.clone());
       kernel.show_toast(NoticeLevel::Error, error)
     }
@@ -1076,6 +1095,7 @@ fn apply_store_snapshot(
     return false;
   }
   surface.store_revision = revision;
+  surface.membership_loaded = true;
   surface.watchlist_records = records;
   surface.watchlist_ids = surface
     .watchlist_records
@@ -1473,15 +1493,16 @@ mod tests {
     };
     surface.mutations.insert("last".to_owned(), 9);
     let session = state.kernel.request_gate.current_session();
-    drop(settle_favorite_removal(
+    drop(settle_favorite_mutation(
       &mut surface,
       &mut state.kernel,
       &runtime,
-      FavoriteRemovalSettlement {
+      FavoriteMutationSettlement {
         session,
         operation: 9,
         scope: scope.clone(),
         item_id: "last".to_owned(),
+        favorite: false,
         result: Ok(VideoUserDataUpdate {
           item_id: "last".to_owned(),
           played: false,

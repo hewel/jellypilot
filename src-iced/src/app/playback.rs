@@ -1722,6 +1722,10 @@ fn execute_controller_command(
           ControllerSettlement::Controlled(controller.set_paused(paused).await),
           None,
         ),
+        ControllerCommand::ToggleFullscreen => (
+          ControllerSettlement::Controlled(controller.toggle_fullscreen().await),
+          None,
+        ),
         ControllerCommand::Seek(position) => (
           ControllerSettlement::Controlled(controller.seek(position).await),
           None,

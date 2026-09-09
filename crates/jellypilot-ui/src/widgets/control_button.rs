@@ -11,10 +11,11 @@ use iced::advanced::widget::{self, Operation, Tree, Widget};
 use iced::advanced::Shell;
 use iced::keyboard::{key, Key};
 use iced::touch;
+use iced::widget::svg::{self, Svg};
 use iced::widget::{button, space, text, Row};
 use iced::{Background, Element, Event, Length, Padding, Rectangle, Size, Theme};
 
-use crate::icons::{icon_for_control_state, Icon, IconControlState, IconSize};
+use crate::icons::{Icon, IconControlState, IconSize};
 use crate::tokens::TOKENS;
 use crate::variants::ButtonVariant;
 
@@ -166,6 +167,7 @@ pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     padding: Padding,
     width: Length,
     min_height: f32,
+    radius: Option<f32>,
     id: Option<widget::Id>,
     on_press: Option<Message>,
 }
@@ -190,6 +192,7 @@ where
             icon,
             label.as_deref(),
             variant,
+            crate::widgets::button::style,
             icon_size,
             trailing_icon,
             label_size,
@@ -215,6 +218,7 @@ where
             padding: button::DEFAULT_PADDING,
             width: Length::Fit,
             min_height: 0.0,
+            radius: None,
             id: None,
             on_press: None,
         }
@@ -299,13 +303,23 @@ where
         self
     }
 
-    /// Selects a semantic Catalog style without changing content colors or focus feedback.
+    /// Overrides the corner radius returned by the selected style for this
+    /// control. When unset, the style's radius is preserved.
+    #[must_use]
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = Some(radius.max(0.0));
+        self
+    }
+
+    /// Selects a semantic Catalog style. The style's text color drives icon
+    /// and label tint, so content is rebuilt when the style changes.
     #[must_use]
     pub fn style(
         mut self,
         style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
     ) -> Self {
         self.style = style;
+        self.rebuild_contents();
         self
     }
 
@@ -352,6 +366,7 @@ where
             self.icon,
             self.label.as_deref(),
             self.variant,
+            self.style,
             self.icon_size,
             self.trailing_icon,
             self.label_size,
@@ -381,6 +396,27 @@ pub fn control_button_content<'a, Message: Clone + 'a>(
     ControlButton::with_content(build, variant)
 }
 
+fn icon_for_style_state<'a>(
+    icon: Icon,
+    size: impl Into<IconSize>,
+    variant: ButtonVariant,
+    state: IconControlState,
+    style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
+) -> Svg<'a, Theme> {
+    let px = size.into().pixels();
+    let status = match state {
+        IconControlState::Rest => button::Status::Active,
+        IconControlState::Hovered => button::Status::Hovered,
+        IconControlState::Disabled => button::Status::Disabled,
+    };
+    Svg::new(icon.handle())
+        .width(Length::Fixed(px))
+        .height(Length::Fixed(px))
+        .style(move |theme: &Theme, _status| svg::Style {
+            color: Some(style(theme, variant, status).text_color),
+        })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "content rows mirror the public visual builders"
@@ -389,6 +425,7 @@ fn build_contents<'a, Message, Renderer>(
     icon: Option<Icon>,
     label: Option<&str>,
     variant: ButtonVariant,
+    style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
     icon_size: IconSize,
     trailing_icon: bool,
     label_size: f32,
@@ -408,6 +445,7 @@ where
             icon,
             label,
             variant,
+            style,
             icon_size,
             trailing_icon,
             label_size,
@@ -420,6 +458,7 @@ where
             icon,
             label,
             variant,
+            style,
             icon_size,
             trailing_icon,
             label_size,
@@ -432,6 +471,7 @@ where
             icon,
             label,
             variant,
+            style,
             icon_size,
             trailing_icon,
             label_size,
@@ -451,6 +491,7 @@ fn build_content<'a, Message, Renderer>(
     icon: Option<Icon>,
     label: Option<&str>,
     variant: ButtonVariant,
+    style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
     icon_size: IconSize,
     trailing_icon: bool,
     label_size: f32,
@@ -472,17 +513,18 @@ where
         content = content.push(space::horizontal());
     }
 
-    let icon = icon.map(|icon| icon_for_control_state(icon, icon_size, variant, state));
+    let status = match state {
+        IconControlState::Rest => button::Status::Active,
+        IconControlState::Hovered => button::Status::Hovered,
+        IconControlState::Disabled => button::Status::Disabled,
+    };
+
+    let icon = icon.map(|icon| icon_for_style_state(icon, icon_size, variant, state, style));
     let label = label.map(|label| {
-        let status = match state {
-            IconControlState::Rest => button::Status::Active,
-            IconControlState::Hovered => button::Status::Hovered,
-            IconControlState::Disabled => button::Status::Disabled,
-        };
         let mut label = text(label.to_owned())
             .size(label_size)
             .style(move |theme: &Theme| text::Style {
-                color: Some(crate::widgets::button::style(theme, variant, status).text_color),
+                color: Some(style(theme, variant, status).text_color),
             });
         if label_fill {
             label = label.width(Length::Fill);
@@ -732,8 +774,17 @@ where
         let bounds = layout.bounds();
         let status = status(self, tree.state.downcast_ref::<State>(), bounds, cursor);
         let mut style = (self.style)(theme, self.variant, status);
+        if let Some(radius) = self.radius {
+            style.border.radius = radius.into();
+        }
+
         if tree.state.downcast_ref::<State>().is_focus_visible() {
-            style.border.color = crate::tokens::palette(theme).colors.primary;
+            let colors = crate::tokens::palette(theme).colors;
+            style.border.color = if self.variant == ButtonVariant::Primary {
+                colors.secondary
+            } else {
+                colors.primary
+            };
             style.border.width = 2.0;
         }
 
@@ -828,6 +879,7 @@ mod tests {
     use iced::advanced::widget::{Id, Operation, Tree, Widget};
     use iced::advanced::Shell;
     use iced::keyboard::{key, Event as KeyboardEvent, Key, Location, Modifiers};
+    use iced::widget::button;
     use iced::{Event, Length, Point, Rectangle, Size, Theme};
 
     use super::{ControlButton, State};
@@ -838,6 +890,79 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TestMessage {
         Clicked,
+    }
+
+    #[test]
+    fn radius_is_unset_by_default_and_builder_overrides() {
+        let pill = ControlButton::<TestMessage>::new(None, None, ButtonVariant::Pill);
+        assert_eq!(
+            pill.radius, None,
+            "default radius must come from the selected style"
+        );
+
+        let overridden = pill.radius(20.0);
+        assert_eq!(
+            overridden.radius,
+            Some(20.0),
+            "radius builder must set an explicit override"
+        );
+    }
+
+    #[test]
+    fn unset_radius_preserves_style_radius() {
+        use iced::border::Radius;
+
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let button = ControlButton::<TestMessage>::new(None, None, ButtonVariant::Tonal);
+        assert_eq!(button.radius, None);
+
+        let style = (button.style)(&theme, button.variant, button::Status::Active);
+        assert_eq!(
+            style.border.radius,
+            Radius::from(TOKENS.radii.xl),
+            "Tonal controls keep the catalog xl radius when no override is set"
+        );
+    }
+
+    #[test]
+    fn status_reflects_disabled_pressed_and_hover() {
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(100.0, 40.0));
+        let inside = mouse::Cursor::Available(Point::new(10.0, 10.0));
+        let outside = mouse::Cursor::Available(Point::new(200.0, 200.0));
+
+        let disabled = ControlButton::<TestMessage>::new(None, None, ButtonVariant::Tonal);
+        let mut state = State {
+            is_pressed: false,
+            status: None,
+            is_focused: false,
+            pointer_interaction: false,
+            focus_visibility: None,
+            focus_generation: 0,
+        };
+
+        assert_eq!(
+            super::status(&disabled, &state, bounds, inside),
+            button::Status::Disabled,
+            "on_press=None must force Disabled status"
+        );
+
+        let enabled = disabled.on_press(TestMessage::Clicked);
+        state.is_pressed = true;
+        assert_eq!(
+            super::status(&enabled, &state, bounds, outside),
+            button::Status::Pressed,
+            "is_pressed must map to Pressed status"
+        );
+
+        state.is_pressed = false;
+        assert_eq!(
+            super::status(&enabled, &state, bounds, inside),
+            button::Status::Hovered
+        );
+        assert_eq!(
+            super::status(&enabled, &state, bounds, outside),
+            button::Status::Active
+        );
     }
 
     #[test]

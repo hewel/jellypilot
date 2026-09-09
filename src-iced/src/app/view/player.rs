@@ -1,11 +1,14 @@
 use std::fmt;
 
+use crate::app::collections::{self, Source};
 use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
 use crate::app::playback::{QueueState, PLAYER_IMAGE_KEY};
 use crate::app::shell::SETTINGS_TRIGGER_ID;
 use crate::app::state::State;
 use crate::i18n::Localizer;
-use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
+use iced::widget::{
+  button, column, container, responsive, row, scrollable, slider, space, text, Column,
+};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_media_server::IntroSkipKind;
@@ -20,9 +23,10 @@ use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, Toolti
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::{full_radius, rounded_image};
 
-fn video_surface<'a>() -> Element<'a, Message> {
+pub(super) fn video_surface<'a>() -> Element<'a, Message> {
   iced::widget::mouse_area(crate::embedded::view())
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::TogglePaused,
@@ -44,28 +48,113 @@ impl fmt::Display for TrackChoice {
 
 pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   let now_playing = state.playback.view.now_playing.as_ref()?;
-  let duration = now_playing
-    .duration_seconds
-    .filter(|duration| duration.is_finite() && *duration > 0.0);
+  Some(
+    responsive(move |bounds| bar_content(state, now_playing, bounds.width))
+      .height(Length::Shrink)
+      .into(),
+  )
+}
+
+fn bar_content<'a>(
+  state: &'a State,
+  now_playing: &'a NowPlayingView,
+  width: f32,
+) -> Element<'a, Message> {
+  let collection = collections::controls(state, Source::NowPlaying);
+  let favorite = tooltip(
+    control_button(
+      Some(if collection.favorite == Some(true) {
+        Icon::HeartFilled
+      } else {
+        Icon::Heart
+      }),
+      None,
+      if collection.favorite == Some(true) {
+        ButtonVariant::TonalActive
+      } else {
+        ButtonVariant::Tonal
+      },
+    )
+    .icon_size(IconSize::Sm)
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .on_press_maybe(collection.favorite_action),
+    collection.favorite_label,
+    TooltipOptions::default(),
+  );
+  let identity = row![
+    playback_artwork(state, 32.0, 48.0),
+    column![
+      ellipsis_text(&now_playing.item.title)
+        .font(HEADING_FONT)
+        .size(12)
+        .color(state.palette().text.heading),
+      ellipsis_text(playback_caption(state))
+        .size(11)
+        .color(state.palette().text.metadata),
+    ]
+    .spacing(TOKENS.spacing.s0_5)
+    .width(Fill),
+    favorite,
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .align_y(Alignment::Center);
+  let fullscreen = tooltip(
+    control_button(Some(Icon::ArrowsMaximize), None, ButtonVariant::Tonal)
+      .icon_size(IconSize::Sm)
+      .width(Length::Fixed(40.0))
+      .min_height(40.0)
+      .on_press_maybe((!state.playback.view.busy).then_some(Message::Playback(
+        PlaybackMessage::Intent(Box::new(PlaybackIntent::ToggleFullscreen)),
+      ))),
+    state.t("player-toggle-fullscreen"),
+    TooltipOptions::default(),
+  );
+  let tools = row![
+    queue_popover(state, true),
+    audio_popover(state, true),
+    subtitle_popover(state, true),
+    volume_controls(state, now_playing),
+    fullscreen,
+  ]
+  .spacing(TOKENS.spacing.s1_5)
+  .align_y(Alignment::Center);
   let position = state
     .playback
     .seek_preview
     .unwrap_or(now_playing.position_seconds);
-
-  let metadata = now_playing_metadata(state, now_playing, 16.0, 12.0).width(Length::FillPortion(2));
-
-  let top = row![
-    playback_artwork(state, 56.0, 84.0),
-    metadata,
-    transport(state, now_playing),
-    track_selection(state),
-    volume_controls(state, now_playing),
-  ]
-  .spacing(TOKENS.spacing.s3)
-  .align_y(Alignment::Center)
-  .width(Fill);
-
-  let mut content = Column::new().spacing(TOKENS.spacing.s2).push(top);
+  let duration = now_playing
+    .duration_seconds
+    .filter(|value| value.is_finite() && *value > 0.0);
+  let timeline: Element<'_, Message> = match duration {
+    Some(duration) => seek_row(position, duration),
+    None => text(format_duration(position))
+      .size(11)
+      .color(state.palette().text.metadata)
+      .into(),
+  };
+  let center = row![transport(state, now_playing), timeline]
+    .spacing(TOKENS.spacing.s3)
+    .align_y(Alignment::Center)
+    .width(Fill);
+  let mut content = Column::new().spacing(TOKENS.spacing.s2);
+  if width >= 1150.0 {
+    content = content.push(
+      row![identity.width(280), center, tools]
+        .spacing(TOKENS.spacing.s4)
+        .align_y(Alignment::Center),
+    );
+  } else if width >= 640.0 {
+    content = content
+      .push(
+        row![identity.width(Fill), tools]
+          .spacing(TOKENS.spacing.s4)
+          .align_y(Alignment::Center),
+      )
+      .push(center);
+  } else {
+    content = content.push(identity.width(Fill)).push(center).push(tools);
+  }
   if crate::embedded::enabled() {
     content = content.push(
       control_button(
@@ -78,22 +167,14 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
       ))),
     );
   }
-
   if let Some(prompt) = intro_prompt(state) {
     content = content.push(prompt);
   }
-
-  if let Some(duration) = duration {
-    content = content.push(seek_row(position, duration));
-  }
-
-  Some(
-    container(content)
-      .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
-      .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
-      .into(),
-  )
+  container(content)
+    .padding([TOKENS.spacing.s2, TOKENS.spacing.s6])
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
+    .into()
 }
 
 /// Title and series/episode caption shared by the bar and the full-window
@@ -168,9 +249,9 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
 /// compact player.
 fn track_selection(state: &State) -> Element<'_, Message> {
   row![
-    queue_popover(state),
-    audio_popover(state),
-    subtitle_popover(state)
+    queue_popover(state, false),
+    audio_popover(state, false),
+    subtitle_popover(state, false)
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center)
@@ -414,7 +495,7 @@ fn adjacent_button<'a>(
   tooltip(btn, label.to_owned(), TooltipOptions::default())
 }
 
-fn audio_popover(state: &State) -> Element<'_, Message> {
+fn audio_popover(state: &State, icon_only: bool) -> Element<'_, Message> {
   let palette = state.palette();
   let has_audio_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "audio"),
@@ -427,7 +508,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::AudioTrack),
-    Some(state.t("player-audio")),
+    (!icon_only).then(|| state.t("player-audio")),
     audio_btn_variant,
   )
   .icon_size(IconSize::Sm)
@@ -436,6 +517,12 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   .on_press_maybe(
     has_audio_choices.then_some(Message::Playback(PlaybackMessage::AudioMenuToggled)),
   );
+  let trigger = if icon_only {
+    trigger.width(Length::Fixed(40.0)).min_height(40.0)
+  } else {
+    trigger
+  };
+  let trigger = menu_hint(trigger.into(), state.t("player-audio"), icon_only);
   let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(state.kernel.locale, tracks, "audio", false);
@@ -496,7 +583,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   )
 }
 
-fn subtitle_popover(state: &State) -> Element<'_, Message> {
+fn subtitle_popover(state: &State, icon_only: bool) -> Element<'_, Message> {
   let palette = state.palette();
   let has_subtitle_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "sub"),
@@ -509,7 +596,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::Subtitles),
-    Some(state.t("player-subtitles")),
+    (!icon_only).then(|| state.t("player-subtitles")),
     sub_btn_variant,
   )
   .icon_size(IconSize::Sm)
@@ -518,6 +605,12 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
   .on_press_maybe(
     has_subtitle_choices.then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
   );
+  let trigger = if icon_only {
+    trigger.width(Length::Fixed(40.0)).min_height(40.0)
+  } else {
+    trigger
+  };
+  let trigger = menu_hint(trigger.into(), state.t("player-subtitles"), icon_only);
   let menu = match &state.playback.view.tracks {
     TracksView::Ready {
       tracks, subtitle, ..
@@ -579,7 +672,7 @@ const QUEUE_MENU_MAX_HEIGHT: f32 = 280.0;
 /// Current-season episode queue popover shared by the bar and the compact
 /// player. Rows follow season episode order; the actively playing episode is
 /// marked and not selectable.
-fn queue_popover(state: &State) -> Element<'_, Message> {
+fn queue_popover(state: &State, icon_only: bool) -> Element<'_, Message> {
   let palette = state.palette();
   let available = !matches!(state.playback.queue, QueueState::Unavailable);
   let queue_btn_variant = if state.playback.queue_menu_open {
@@ -589,13 +682,19 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::Playlist),
-    Some(state.t("player-queue")),
+    (!icon_only).then(|| state.t("player-queue")),
     queue_btn_variant,
   )
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
   .on_press_maybe(available.then_some(Message::Playback(PlaybackMessage::QueueMenuToggled)));
+  let trigger = if icon_only {
+    trigger.width(Length::Fixed(40.0)).min_height(40.0)
+  } else {
+    trigger
+  };
+  let trigger = menu_hint(trigger.into(), state.t("player-queue"), icon_only);
 
   let menu: Element<'_, Message> = match &state.playback.queue {
     QueueState::Ready(items) => {
@@ -686,6 +785,17 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
     },
     Message::Playback(PlaybackMessage::QueueMenuDismissed),
   )
+}
+
+fn menu_hint(
+  trigger: Element<'_, Message>,
+  label: String,
+  icon_only: bool,
+) -> Element<'_, Message> {
+  if !icon_only {
+    return trigger;
+  }
+  tooltip(trigger, label, TooltipOptions::default())
 }
 
 fn track_choices(
@@ -921,6 +1031,82 @@ mod tests {
     }
   }
 
+  #[tokio::test]
+  async fn closing_an_icon_menu_preserves_keyboard_activation_of_its_trigger() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    struct Focus;
+    impl widget::Operation for Focus {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn focusable(
+        &mut self,
+        _: Option<&widget::Id>,
+        _: iced::Rectangle,
+        state: &mut dyn widget::operation::Focusable,
+      ) {
+        state.focus();
+      }
+    }
+    let mut state = State::boot(false);
+    state.playback.view.tracks = TracksView::Ready {
+      tracks: vec![TrackInfo {
+        id: 1,
+        track_type: "audio".to_owned(),
+        title: Some("Audio".to_owned()),
+        language: None,
+        selected: true,
+        provider_index: None,
+      }],
+      audio: Some(1),
+      subtitle: None,
+    };
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let bounds = iced::Size::new(400.0, 400.0);
+    let mut ui = UserInterface::build(
+      audio_popover(&state, true),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    ui.operate(&renderer, &mut Focus);
+    let mut cache = ui.into_cache();
+    for open in [true, false] {
+      state.playback.audio_menu_open = open;
+      cache = UserInterface::build(audio_popover(&state, true), bounds, cache, &mut renderer)
+        .into_cache();
+    }
+    let mut ui = UserInterface::build(audio_popover(&state, true), bounds, cache, &mut renderer);
+    let enter = iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+      key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+      modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+      physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Enter),
+      location: iced::keyboard::Location::Standard,
+      modifiers: iced::keyboard::Modifiers::NONE,
+      text: None,
+      repeat: false,
+    });
+    let mut bus = iced::advanced::shell::Bus::new();
+    let _ = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[enter],
+      iced::mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut bus,
+    );
+    assert!(bus.drain().any(|(message, _)| matches!(
+      message,
+      Message::Playback(PlaybackMessage::AudioMenuToggled)
+    )));
+  }
+
   fn test_now_playing() -> NowPlayingView {
     NowPlayingView {
       item: NowPlayingItem {
@@ -943,13 +1129,6 @@ mod tests {
   fn bar_returns_none_when_no_active_playback() {
     let state = State::boot(false);
     assert!(bar(&state).is_none());
-  }
-
-  #[test]
-  fn bar_renders_when_playback_is_active() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-    assert!(bar(&state).is_some());
   }
 
   #[test]

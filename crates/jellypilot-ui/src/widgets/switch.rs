@@ -14,17 +14,18 @@ use super::control_button::{control_button_content, ControlButton};
 pub fn switch<'a, Message: Clone + 'a>(enabled: bool) -> ControlButton<'a, Message> {
     control_button_content(
         move |state| {
+            let disabled = state == IconControlState::Disabled;
             let knob = container(space()).width(18).height(18).style(move |theme| {
-                let colors = palette(theme).colors;
+                let palette = palette(theme);
+                let color = if disabled {
+                    palette.text.muted
+                } else if enabled {
+                    palette.colors.onPrimary
+                } else {
+                    palette.colors.onControl
+                };
                 container::Style {
-                    background: Some(
-                        if enabled {
-                            colors.onPrimary
-                        } else {
-                            colors.onControl
-                        }
-                        .into(),
-                    ),
+                    background: Some(color.into()),
                     border: Border::default().rounded(TOKENS.radii.full),
                     ..container::Style::default()
                 }
@@ -40,19 +41,18 @@ pub fn switch<'a, Message: Clone + 'a>(enabled: bool) -> ControlButton<'a, Messa
                 })
                 .style(move |theme| {
                     let colors = palette(theme).colors;
-                    let background = if enabled {
+                    let background = if disabled {
+                        colors.control
+                    } else if enabled {
                         colors.primary
                     } else if state == IconControlState::Hovered {
                         colors.controlHover
                     } else {
-                        colors.control
+                        colors.surfaceContainerHighest
                     };
                     container::Style {
                         background: Some(background.into()),
-                        border: Border::default()
-                            .rounded(TOKENS.radii.full)
-                            .width(1)
-                            .color(colors.outlineVariant),
+                        border: Border::default().rounded(TOKENS.radii.full),
                         ..container::Style::default()
                     }
                 })
