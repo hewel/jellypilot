@@ -109,13 +109,19 @@ plugin synchronization has populated them.
 
 #### Arch Linux
 
-Until `jellypilot-bin` is published to the AUR, download the native
-`jellypilot-2.0.0-1-x86_64.pkg.tar.zst` asset from the
-[v2.0.0 release](https://github.com/hewel/jellypilot/releases/tag/v2.0.0) and install it directly:
+Install the prebuilt package from the AUR:
 
 ```bash
-sudo pacman -U ./jellypilot-2.0.0-1-x86_64.pkg.tar.zst
+paru -S jellypilot-bin
 ```
+
+Or build from source:
+
+```bash
+paru -S jellypilot
+```
+
+`yay` and other AUR helpers work the same way. The two packages conflict; pick one.
 
 #### Build from Source
 

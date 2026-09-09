@@ -4,7 +4,10 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-09
+
 ### Added
+- Published the prebuilt Arch package to the AUR as `jellypilot-bin`, and updated the source `jellypilot` AUR package to the native iced build.
 - Added English, Simplified Chinese, and Follow system interface preferences shared by Login and Settings, with immediate relocalization of screens, retained feedback, and available tray controls without resetting login or playback.
 - Added embedded Fluent resources, localized count/duration grammar, and font license notices in Settings.
 - Added default-enabled per-season player volume memory, stored locally per server and account, with a Playback setting that pauses saving/restoring without deleting records. Unknown seasons and movies use MPV startup volume; temporary mute carries across continuous episode playback only.
@@ -128,6 +131,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/hewel/jellypilot/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/hewel/jellypilot/compare/v1.4.2...v2.0.0
 [1.4.2]: https://github.com/hewel/jellypilot/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/hewel/jellypilot/compare/v1.4.0...v1.4.1

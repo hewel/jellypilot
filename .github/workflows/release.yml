@@ -35,14 +35,19 @@ jobs:
           package = json.loads(Path('package.json').read_text())
           packager = tomllib.loads(Path('Packager.toml').read_text())
           pkgbuild = Path('packaging/arch/PKGBUILD').read_text()
+          bin_pkgbuild = Path('packaging/arch/bin/PKGBUILD').read_text()
           pkgver_match = re.search(r'^pkgver=([^\s#]+)', pkgbuild, re.MULTILINE)
+          bin_pkgver_match = re.search(r'^pkgver=([^\s#]+)', bin_pkgbuild, re.MULTILINE)
           if pkgver_match is None:
               raise SystemExit('packaging/arch/PKGBUILD does not declare pkgver')
+          if bin_pkgver_match is None:
+              raise SystemExit('packaging/arch/bin/PKGBUILD does not declare pkgver')
           versions = {
               'Cargo workspace': cargo['workspace']['package']['version'],
               'package.json': package['version'],
               'Packager.toml': packager['version'],
               'PKGBUILD': pkgver_match.group(1).strip("'\""),
+              'bin PKGBUILD': bin_pkgver_match.group(1).strip("'\""),
           }
           if len(set(versions.values())) != 1:
               raise SystemExit(f'Release versions disagree: {json.dumps(versions, sort_keys=True)}')
