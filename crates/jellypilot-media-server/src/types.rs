@@ -221,6 +221,8 @@ pub struct VideoLibraryItem {
   pub name: String,
   pub item_type: String,
   pub production_year: Option<i32>,
+  /// Premiere timestamp supplied by the server, encoded as RFC 3339.
+  pub premiere_date: Option<String>,
   pub runtime_seconds: Option<f64>,
   pub played: bool,
   pub favorite: bool,
@@ -283,6 +285,16 @@ pub struct VideoSearchPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
+/// A credited actor with optional character and server-provided portrait.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoCastMember {
+  pub name: String,
+  pub role: Option<String>,
+  /// Encoded Library Image reference; absent without a person ID and image tag.
+  pub image_id: Option<String>,
+}
+
 /// Provider-neutral credits and ratings shared by item and show detail views.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,7 +302,7 @@ pub struct VideoDetailMetadata {
   pub community_rating: Option<f32>,
   pub official_rating: Option<String>,
   pub creators: Vec<String>,
-  pub cast: Vec<String>,
+  pub cast: Vec<VideoCastMember>,
 }
 
 /// File-level media facts for the detail media-info section.

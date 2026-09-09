@@ -15,186 +15,20 @@ use crate::app::message::Message;
 
 type View<'a> = dyn Fn(f32, f32) -> Element<'a, Message> + 'a;
 
-/// Measures both blocks once before allocating spare backdrop height to the
-/// gap. A Fill child in a normal column cannot do this under the scrollable's
-/// unbounded height: a fixed height compresses copy, while Fill is unbounded.
-pub(super) fn hero_foreground<'a>(
-  back: Element<'a, Message>,
-  copy: Element<'a, Message>,
-  min_height: f32,
-) -> Element<'a, Message> {
-  Element::new(HeroForeground {
-    content: [back, copy],
-    min_height,
-  })
-}
-
-struct HeroForeground<'a> {
-  content: [Element<'a, Message>; 2],
-  min_height: f32,
-}
-
-impl Widget<Message, Theme, iced::Renderer> for HeroForeground<'_> {
-  fn diff(&mut self, tree: &mut widget::Tree) {
-    tree.diff_children(&mut self.content);
-  }
-
-  fn size(&self) -> Size<Length> {
-    Size::new(Length::Fill, Length::Fit)
-  }
-
-  fn layout(
-    &mut self,
-    tree: &mut widget::Tree,
-    renderer: &iced::Renderer,
-    limits: &layout::Limits,
-  ) -> layout::Node {
-    let padding = jellypilot_ui::tokens::TOKENS.spacing.s6;
-    let spacing = jellypilot_ui::tokens::TOKENS.spacing.s5;
-    let width = limits.max().width;
-    let child_limits = layout::Limits::new(
-      Size::ZERO,
-      Size::new((width - 2.0 * padding).max(0.0), f32::INFINITY),
-    );
-    let back =
-      self.content[0]
-        .as_widget_mut()
-        .layout(&mut tree.children[0], renderer, &child_limits);
-    let copy =
-      self.content[1]
-        .as_widget_mut()
-        .layout(&mut tree.children[1], renderer, &child_limits);
-    let height =
-      (back.size().height + spacing + copy.size().height + 2.0 * padding).max(self.min_height);
-    let copy_y = height - padding - copy.size().height;
-    layout::Node::with_children(
-      Size::new(width, height),
-      vec![
-        back.move_to((padding, padding)),
-        copy.move_to((padding, copy_y)),
-      ],
-    )
-  }
-
-  fn update(
-    &mut self,
-    tree: &mut widget::Tree,
-    event: &Event,
-    layout: Layout<'_>,
-    cursor: mouse::Cursor,
-    renderer: &iced::Renderer,
-    shell: &mut Shell<'_, Message>,
-    viewport: &Rectangle,
-  ) {
-    for ((child, tree), layout) in self
-      .content
-      .iter_mut()
-      .zip(&mut tree.children)
-      .zip(layout.children())
-    {
-      child
-        .as_widget_mut()
-        .update(tree, event, layout, cursor, renderer, shell, viewport);
-    }
-  }
-
-  fn draw(
-    &self,
-    tree: &widget::Tree,
-    renderer: &mut iced::Renderer,
-    theme: &Theme,
-    style: &renderer::Style,
-    layout: Layout<'_>,
-    cursor: mouse::Cursor,
-    viewport: &Rectangle,
-  ) {
-    for ((child, tree), layout) in self
-      .content
-      .iter()
-      .zip(&tree.children)
-      .zip(layout.children())
-    {
-      child
-        .as_widget()
-        .draw(tree, renderer, theme, style, layout, cursor, viewport);
-    }
-  }
-
-  fn mouse_interaction(
-    &self,
-    tree: &widget::Tree,
-    layout: Layout<'_>,
-    cursor: mouse::Cursor,
-    viewport: &Rectangle,
-    renderer: &iced::Renderer,
-  ) -> mouse::Interaction {
-    self
-      .content
-      .iter()
-      .zip(&tree.children)
-      .zip(layout.children())
-      .map(|((child, tree), layout)| {
-        child
-          .as_widget()
-          .mouse_interaction(tree, layout, cursor, viewport, renderer)
-      })
-      .max()
-      .unwrap_or_default()
-  }
-
-  fn operate(
-    &mut self,
-    tree: &mut widget::Tree,
-    layout: Layout<'_>,
-    renderer: &iced::Renderer,
-    operation: &mut dyn widget::Operation,
-  ) {
-    operation.container(None, layout.bounds());
-    operation.traverse(&mut |operation| {
-      for ((child, tree), layout) in self
-        .content
-        .iter_mut()
-        .zip(&mut tree.children)
-        .zip(layout.children())
-      {
-        child
-          .as_widget_mut()
-          .operate(tree, layout, renderer, operation);
-      }
-    });
-  }
-
-  fn overlay<'a>(
-    &'a mut self,
-    tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
-    renderer: &iced::Renderer,
-    viewport: &Rectangle,
-    translation: Vector,
-  ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    overlay::from_children(
-      &mut self.content,
-      tree,
-      layout,
-      renderer,
-      viewport,
-      translation,
-    )
-  }
-}
-
 /// Builds the child with its available width and the full overview height.
 /// `copy_inset` is the horizontal space occupied by padding and sibling controls.
 pub(super) fn overview_layout<'a>(
   overview: Option<&'a str>,
   copy_inset: f32,
   text_size: f32,
+  line_height: f32,
   view: impl Fn(f32, f32) -> Element<'a, Message> + 'a,
 ) -> Element<'a, Message> {
   Element::new(OverviewLayout {
     overview: overview.filter(|value| !value.trim().is_empty()),
     copy_inset,
     text_size: Pixels(text_size),
+    line_height: text::LineHeight::Absolute(Pixels(line_height)),
     view: Box::new(view),
     content: iced::widget::space().into(),
   })
@@ -204,6 +38,7 @@ struct OverviewLayout<'a> {
   overview: Option<&'a str>,
   copy_inset: f32,
   text_size: Pixels,
+  line_height: text::LineHeight,
   view: Box<View<'a>>,
   content: Element<'a, Message>,
 }
@@ -239,12 +74,12 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
         content: overview,
         bounds: Size::new((width - self.copy_inset).max(1.0), f32::INFINITY),
         size: self.text_size,
-        line_height: renderer.line_height(),
+        line_height: self.line_height,
         font: renderer.font(),
         align_x: text::Alignment::Default,
         align_y: alignment::Vertical::Top,
         shaping: text::Shaping::default(),
-        wrapping: text::Wrapping::Word,
+        wrapping: text::Wrapping::WordOrGlyph,
         ellipsis: text::Ellipsis::default(),
         hint_factor: renderer.hint_factor(),
       });
@@ -396,7 +231,7 @@ mod tests {
         Some("tiny-skia"),
       ))
       .expect("headless renderer");
-      let mut element = overview_layout(content, inset, size, |_, height| {
+      let mut element = overview_layout(content, inset, size, 24.0, |_, height| {
         iced::widget::space().height(height).into()
       });
       tree.diff(element.as_widget_mut());
@@ -409,7 +244,11 @@ mod tests {
       let expected = content
         .filter(|text| !text.trim().is_empty())
         .map_or(0.0, |content| {
-          let mut text: Element<'_, Message> = iced::widget::text(content).size(size).into();
+          let mut text: Element<'_, Message> = iced::widget::text(content)
+            .size(size)
+            .line_height(text::LineHeight::Absolute(Pixels(24.0)))
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .into();
           let mut text_tree = widget::Tree::new(&text);
           text_tree.diff(text.as_widget_mut());
           text

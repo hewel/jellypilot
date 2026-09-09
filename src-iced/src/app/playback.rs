@@ -2120,6 +2120,7 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      premiere_date: None,
       logo_image_id: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),

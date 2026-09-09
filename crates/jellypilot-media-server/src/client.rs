@@ -4299,6 +4299,7 @@ fn map_video_home_item(
     episode_number: item.index_number.flatten(),
     index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
+    premiere_date: item.premiere_date.flatten().map(|date| date.to_rfc3339()),
     end_year: item.end_date.flatten().map(|date| date.year()),
     series_continuing: item.status.flatten().as_deref() == Some("Continuing"),
     unplayed_item_count: user_data
@@ -4408,6 +4409,7 @@ fn map_video_library_item(
       .unwrap_or_else(|| "Untitled".to_string()),
     item_type,
     production_year: item.production_year.flatten(),
+    premiere_date: item.premiere_date.flatten().map(|date| date.to_rfc3339()),
     end_year: item.end_date.flatten().map(|date| date.year()),
     series_continuing: item.status.flatten().as_deref() == Some("Continuing"),
     unplayed_item_count: user_data_ref
@@ -4457,7 +4459,7 @@ fn map_video_show_detail(
     return None;
   }
 
-  let metadata = jellyfin_detail_metadata(&item);
+  let metadata = jellyfin_detail_metadata(server_url, &item);
 
   let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
@@ -4689,7 +4691,7 @@ fn map_video_item_detail(
     return None;
   }
 
-  let metadata = jellyfin_detail_metadata(&item);
+  let metadata = jellyfin_detail_metadata(server_url, &item);
   let media_info = map_jellyfin_video_media_info(&item);
 
   let id = jellyfin_id(item.id?);
@@ -5423,7 +5425,10 @@ fn emby_home_fields() -> String {
   "PrimaryImageAspectRatio,Overview,DateCreated".to_string()
 }
 
-fn jellyfin_detail_metadata(item: &jellyfin_api::models::BaseItemDto) -> VideoDetailMetadata {
+fn jellyfin_detail_metadata(
+  server_url: &str,
+  item: &jellyfin_api::models::BaseItemDto,
+) -> VideoDetailMetadata {
   let people = item
     .people
     .as_ref()
@@ -5453,16 +5458,31 @@ fn jellyfin_detail_metadata(item: &jellyfin_api::models::BaseItemDto) -> VideoDe
         })
         .filter_map(|person| person.name.as_ref().and_then(|name| name.as_ref())),
     ),
-    cast: dedupe_preserving_order(
+    cast: cast_preserving_order(
+      MediaServerProvider::Jellyfin,
+      server_url,
       people
         .iter()
         .filter(|person| matches!(person.r#type, Some(jellyfin_api::models::PersonKind::Actor)))
-        .filter_map(|person| person.name.as_ref().and_then(|name| name.as_ref())),
+        .filter_map(|person| {
+          Some((
+            person.name.as_ref()?.as_deref()?,
+            person.role.as_ref().and_then(|role| role.as_deref()),
+            person.id.map(jellyfin_id),
+            person
+              .primary_image_tag
+              .as_ref()
+              .and_then(|tag| tag.as_deref()),
+          ))
+        }),
     ),
   }
 }
 
-fn emby_detail_metadata(item: &emby_api::models::BaseItemDto) -> VideoDetailMetadata {
+fn emby_detail_metadata(
+  server_url: &str,
+  item: &emby_api::models::BaseItemDto,
+) -> VideoDetailMetadata {
   let people = item.people.as_deref().unwrap_or_default();
 
   VideoDetailMetadata {
@@ -5478,13 +5498,64 @@ fn emby_detail_metadata(item: &emby_api::models::BaseItemDto) -> VideoDetailMeta
         .filter(|person| matches!(person.r#type, Some(emby_api::models::PersonType::Director)))
         .filter_map(|person| person.name.as_ref()),
     ),
-    cast: dedupe_preserving_order(
+    cast: cast_preserving_order(
+      MediaServerProvider::Emby,
+      server_url,
       people
         .iter()
         .filter(|person| matches!(person.r#type, Some(emby_api::models::PersonType::Actor)))
-        .filter_map(|person| person.name.as_ref()),
+        .filter_map(|person| {
+          Some((
+            person.name.as_deref()?,
+            person.role.as_deref(),
+            person.id.as_deref(),
+            person.primary_image_tag.as_deref(),
+          ))
+        }),
     ),
   }
+}
+
+fn cast_preserving_order<'a>(
+  provider: MediaServerProvider,
+  server_url: &str,
+  people: impl Iterator<
+    Item = (
+      &'a str,
+      Option<&'a str>,
+      Option<impl AsRef<str>>,
+      Option<&'a str>,
+    ),
+  >,
+) -> Vec<VideoCastMember> {
+  let mut seen = HashSet::new();
+  people
+    .filter_map(|(name, role, id, image_tag)| {
+      let name = name.trim();
+      let role = role.map(str::trim).filter(|role| !role.is_empty());
+      if name.is_empty() || !seen.insert((name, role)) {
+        return None;
+      }
+      let image_id = id
+        .as_ref()
+        .map(AsRef::as_ref)
+        .filter(|id| !id.trim().is_empty())
+        .and_then(|id| {
+          image_id_for_tagged_artwork(
+            provider,
+            server_url,
+            id,
+            "Primary",
+            image_tag.filter(|tag| !tag.trim().is_empty()),
+          )
+        });
+      Some(VideoCastMember {
+        name: name.to_owned(),
+        role: role.map(ToOwned::to_owned),
+        image_id,
+      })
+    })
+    .collect()
 }
 
 fn dedupe_preserving_order<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
@@ -5658,6 +5729,7 @@ fn map_emby_video_home_item(
     episode_number: item.index_number.flatten(),
     index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
+    premiere_date: item.premiere_date.flatten().map(|date| date.to_rfc3339()),
     end_year: item.end_date.flatten().map(|date| date.year()),
     series_continuing: item.status.as_deref() == Some("Continuing"),
     unplayed_item_count: user_data
@@ -5755,6 +5827,7 @@ fn map_emby_video_library_item(
       .and_then(|data| data.unplayed_item_count.flatten())
       .and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
+    premiere_date: item.premiere_date.flatten().map(|date| date.to_rfc3339()),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     played,
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
@@ -5785,7 +5858,7 @@ fn map_emby_video_show_detail(
     return None;
   }
 
-  let metadata = emby_detail_metadata(&item);
+  let metadata = emby_detail_metadata(server_url, &item);
 
   let id = item.id?;
   let user_data = item.user_data.as_deref();
@@ -5953,7 +6026,7 @@ fn map_emby_video_item_detail(
     return None;
   }
 
-  let metadata = emby_detail_metadata(&item);
+  let metadata = emby_detail_metadata(server_url, &item);
   let media_info = map_emby_video_media_info(&item);
   let item_type = item.r#type?;
 
@@ -9342,7 +9415,21 @@ mod tests {
     assert_eq!(movie.metadata.community_rating, Some(8.7));
     assert_eq!(movie.metadata.official_rating.as_deref(), Some("PG-13"));
     assert_eq!(movie.metadata.creators, vec!["Director A"]);
-    assert_eq!(movie.metadata.cast, vec!["Actor One", "Actor Two"]);
+    assert_eq!(
+      movie.metadata.cast,
+      vec![
+        VideoCastMember {
+          name: "Actor One".to_owned(),
+          role: None,
+          image_id: None
+        },
+        VideoCastMember {
+          name: "Actor Two".to_owned(),
+          role: None,
+          image_id: None
+        },
+      ]
+    );
     let expected_artwork =
       format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-detail");
     assert_image_ref_url(movie.artwork_image_id.as_ref(), &expected_artwork);
@@ -9368,7 +9455,14 @@ mod tests {
     assert_eq!(episode.metadata.community_rating, Some(9.1));
     assert_eq!(episode.metadata.official_rating.as_deref(), Some("TV-14"));
     assert_eq!(episode.metadata.creators, vec!["Episode Director"]);
-    assert_eq!(episode.metadata.cast, vec!["Guest Actor"]);
+    assert_eq!(
+      episode.metadata.cast,
+      vec![VideoCastMember {
+        name: "Guest Actor".to_owned(),
+        role: None,
+        image_id: None
+      }]
+    );
 
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items/00000000000000000000000000000050?"));
@@ -9451,7 +9545,14 @@ mod tests {
       detail.metadata.creators,
       vec!["Show Creator", "Pilot Director"]
     );
-    assert_eq!(detail.metadata.cast, vec!["Series Actor"]);
+    assert_eq!(
+      detail.metadata.cast,
+      vec![VideoCastMember {
+        name: "Series Actor".to_owned(),
+        role: None,
+        image_id: None
+      }]
+    );
     assert_eq!(detail.seasons.len(), 1);
     assert_eq!(detail.seasons[0].id, season_id);
     assert_eq!(detail.seasons[0].season_number, Some(1));
@@ -9943,6 +10044,70 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn provider_details_preserve_cast_order_roles_and_only_real_portraits() {
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let body = serde_json::json!({
+        "Id": "00000000000000000000000000000050",
+        "Name": "Movie",
+        "Type": "Movie",
+        "People": [
+          { "Name": " First ", "Role": " Lead ", "Type": "Actor",
+            "Id": "ABCDEF00-0000-0000-0000-000000000001", "PrimaryImageTag": "portrait" },
+          { "Name": "No ID", "Role": " ", "Type": "Actor", "PrimaryImageTag": "orphan" },
+          { "Name": "No image", "Type": "Actor", "Id": "00000000000000000000000000000002" },
+          { "Name": "First", "Role": "Lead", "Type": "Actor" },
+          { "Name": "First", "Role": "Other character", "Type": "Actor" },
+          { "Name": "Empty tag", "Type": "Actor",
+            "Id": "00000000000000000000000000000003", "PrimaryImageTag": " " },
+          { "Name": " ", "Type": "Actor" },
+          { "Role": "Unnamed", "Type": "Actor" },
+          { "Name": "Director", "Type": "Director" }
+        ]
+      })
+      .to_string();
+      let (server_url, _) =
+        serve_owned_responses_with_requests(vec![("200 OK".to_owned(), body)]).await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url.clone()),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url.clone()),
+      }
+      let detail = client
+        .library()
+        .item_detail("00000000000000000000000000000050".to_owned())
+        .await
+        .expect("provider detail should load");
+      let cast = detail.metadata.cast;
+      assert_eq!(
+        cast
+          .iter()
+          .map(|member| (member.name.as_str(), member.role.as_deref()))
+          .collect::<Vec<_>>(),
+        vec![
+          ("First", Some("Lead")),
+          ("No ID", None),
+          ("No image", None),
+          ("First", Some("Other character")),
+          ("Empty tag", None),
+        ],
+        "{provider:?}",
+      );
+      let person_id = match provider {
+        MediaServerProvider::Jellyfin => "abcdef00000000000000000000000001",
+        MediaServerProvider::Emby => "ABCDEF00-0000-0000-0000-000000000001",
+      };
+      assert_image_ref_url(
+        cast[0].image_id.as_ref(),
+        &format!("{server_url}/Items/{person_id}/Images/Primary?tag=portrait"),
+      );
+      assert!(
+        cast[1..].iter().all(|member| member.image_id.is_none()),
+        "{provider:?}"
+      );
+    }
+  }
+
+  #[tokio::test]
   async fn emby_details_show_and_episodes_tolerate_missing_optional_fields() {
     let movie_id = "00000000000000000000000000000250";
     let series_id = "00000000000000000000000000000260";
@@ -10032,7 +10197,14 @@ mod tests {
     assert_eq!(movie.metadata.community_rating, Some(7.5));
     assert_eq!(movie.metadata.official_rating.as_deref(), Some("R"));
     assert_eq!(movie.metadata.creators, vec!["Emby Director"]);
-    assert_eq!(movie.metadata.cast, vec!["Emby Actor"]);
+    assert_eq!(
+      movie.metadata.cast,
+      vec![VideoCastMember {
+        name: "Emby Actor".to_owned(),
+        role: None,
+        image_id: None
+      }]
+    );
     assert_eq!(show.metadata.creators, vec!["Emby Show Creator"]);
     assert_eq!(
       episodes.episodes[0].overview.as_deref(),

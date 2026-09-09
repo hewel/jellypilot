@@ -123,6 +123,7 @@ mod tests {
 
     fn video_item(item_type: &str) -> VideoLibraryItem {
         VideoLibraryItem {
+            premiere_date: None,
             id: "item-1".to_owned(),
             name: "Item".to_owned(),
             item_type: item_type.to_owned(),

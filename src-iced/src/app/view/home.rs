@@ -1687,6 +1687,7 @@ mod tests {
   #[test]
   fn unplayed_badge_only_formats_nonzero_latest_series_counts() {
     let mut item = VideoLibraryItem {
+      premiere_date: None,
       logo_image_id: None,
       id: "series-1".to_owned(),
       name: "Series".to_owned(),

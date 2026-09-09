@@ -38,6 +38,7 @@ pub struct Surface {
   pub items: HashMap<String, VideoLibraryItem>,
   pub data: DetailState,
   pub artwork: ImageCollection,
+  pub(crate) season_menu_open: bool,
   pub(crate) collection_change: Option<super::collections::Change>,
   pub(crate) pending_user_data: HashMap<String, jellypilot_core::request_gate::DetailAuxToken>,
   refresh_token: Option<DetailToken>,
@@ -66,7 +67,21 @@ pub fn update(
       }
       Task::none()
     }
+    DetailMessage::SeasonMenuToggled => {
+      surface.season_menu_open = !surface.season_menu_open
+        && matches!(&surface.data.content, jellypilot_core::LoadState::Ready(DetailContent::Show(show)) if !show.seasons.is_empty())
+        && !matches!(
+          surface.data.season_episodes,
+          jellypilot_core::LoadState::Loading
+        );
+      Task::none()
+    }
+    DetailMessage::SeasonMenuDismissed => {
+      surface.season_menu_open = false;
+      Task::none()
+    }
     DetailMessage::SeasonSelected(season_id) => {
+      surface.season_menu_open = false;
       if !select_season(&mut surface.data, &season_id) {
         return Task::none();
       }
@@ -173,6 +188,7 @@ pub fn start_load(
   kernel: &mut Kernel,
   item_id: Option<&str>,
 ) -> Task<Message> {
+  surface.season_menu_open = false;
   let Some(item_id) = item_id else {
     return Task::none();
   };
@@ -306,8 +322,8 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool
   enum Followup {
     Episode {
       item_id: String,
-      series_id: String,
-      season_number: i32,
+      series_id: Option<String>,
+      season_number: Option<i32>,
     },
     Movie(String),
     Show {
@@ -321,13 +337,10 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool
     jellypilot_core::LoadState::Ready(DetailContent::Item(item))
       if item.item_type.eq_ignore_ascii_case("episode") =>
     {
-      match (item.series_id.as_ref(), item.season_number) {
-        (Some(series_id), Some(season_number)) => Followup::Episode {
-          item_id: item.id.clone(),
-          series_id: series_id.clone(),
-          season_number,
-        },
-        _ => Followup::None,
+      Followup::Episode {
+        item_id: item.id.clone(),
+        series_id: item.series_id.clone(),
+        season_number: item.season_number,
       }
     }
     jellypilot_core::LoadState::Ready(DetailContent::Item(item))
@@ -357,16 +370,34 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool
       series_id,
       season_number,
     } => {
-      if only_missing
-        && !matches!(
+      let similar = if !only_missing
+        || matches!(
+          surface.data.similar_items,
+          jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
+        ) {
+        start_similar_load(
+          surface,
+          kernel,
+          series_id.as_ref().unwrap_or(&item_id).clone(),
+        )
+      } else {
+        Task::none()
+      };
+      let neighbors = if !only_missing
+        || matches!(
           surface.data.season_neighbors,
           jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
-        )
-      {
-        return Task::none();
-      }
-      surface.data.similar_items = jellypilot_core::LoadState::Idle;
-      start_neighbors_load(surface, kernel, item_id, series_id, season_number)
+        ) {
+        if let (Some(series_id), Some(season_number)) = (series_id, season_number) {
+          start_neighbors_load(surface, kernel, item_id, series_id, season_number)
+        } else {
+          surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
+          Task::none()
+        }
+      } else {
+        Task::none()
+      };
+      Task::batch([neighbors, similar])
     }
     Followup::Movie(item_id) => {
       if only_missing
@@ -626,6 +657,16 @@ fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
   if let jellypilot_core::LoadState::Ready(content) = &surface.data.content {
     specs.extend(hero_image_spec(content, DETAIL_LOGO_KEY));
     specs.extend(hero_image_spec(content, DETAIL_BACKDROP_KEY));
+    let cast = match content {
+      DetailContent::Item(item) => &item.metadata.cast,
+      DetailContent::Show(show) => &show.metadata.cast,
+    };
+    specs.extend(
+      cast
+        .iter()
+        .enumerate()
+        .filter_map(|(index, member)| cast_image_spec(index, member)),
+    );
     match content {
       DetailContent::Item(_) => {
         if let jellypilot_core::LoadState::Ready(items) = &surface.data.season_neighbors {
@@ -667,6 +708,19 @@ pub(crate) fn card_image_spec(key: String, item: &VideoLibraryItem) -> Option<Im
   Some(ImageSpec {
     key,
     image_id: item.artwork_image_id.clone()?,
+    size_class: ArtworkSizeClass::Card,
+    derived: DerivedArtwork::default(),
+  })
+}
+
+pub(crate) fn cast_image_spec(
+  index: usize,
+  member: &jellypilot_media_server::VideoCastMember,
+) -> Option<ImageSpec> {
+  let image_id = member.image_id.as_ref()?;
+  Some(ImageSpec {
+    key: format!("detail-cast:{index}"),
+    image_id: image_id.clone(),
     size_class: ArtworkSizeClass::Card,
     derived: DerivedArtwork::default(),
   })
@@ -724,6 +778,7 @@ pub(crate) fn episode_image_spec(
 
 /// Leaving Detail revokes only its own images and invalidates metadata work.
 pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
+  surface.season_menu_open = false;
   kernel.request_gate.navigate();
   surface.artwork.clear();
   surface.data.clear();
@@ -799,6 +854,7 @@ mod tests {
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
       production_year: None,
+      premiere_date: None,
       runtime_seconds: Some(1_800.0),
       played: false,
       favorite: false,
@@ -1075,6 +1131,67 @@ mod tests {
   }
 
   #[test]
+  fn season_menu_closes_on_selection_and_does_not_restart_the_current_season() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    kernel
+      .request_gate
+      .set_detail_item(Some("show-1".to_owned()));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    surface.data.selected_season_id = Some("season-1".to_owned());
+    surface.data.season_episodes = jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonMenuToggled,
+    ));
+    assert!(surface.season_menu_open);
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonSelected("season-1".to_owned()),
+    ));
+    assert!(!surface.season_menu_open);
+    assert!(matches!(
+      surface.data.season_episodes,
+      jellypilot_core::LoadState::Failed(_)
+    ));
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonMenuToggled,
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonSelected("season-2".to_owned()),
+    ));
+    assert!(!surface.season_menu_open);
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
+    assert!(matches!(
+      surface.data.season_episodes,
+      jellypilot_core::LoadState::Loading
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonMenuToggled,
+    ));
+    assert!(
+      !surface.season_menu_open,
+      "a pending season cannot open another selection"
+    );
+  }
+
+  #[test]
   fn season_switching_uses_the_selected_seasons_exact_identity() {
     let show = show_detail();
     assert_eq!(
@@ -1103,22 +1220,29 @@ mod tests {
   }
 
   #[test]
-  fn episode_followup_never_starts_similar_items() {
+  fn episode_restore_loads_missing_recommendations_without_reloading_neighbors() {
     let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("episode-1");
     item.item_type = "Episode".to_owned();
     item.series_id = Some("show-1".to_owned());
     item.season_number = Some(1);
     surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
+    surface.data.season_neighbors =
+      jellypilot_core::LoadState::Ready(vec![episode("episode-2", 1)]);
     kernel
       .request_gate
       .set_detail_item(Some("episode-1".to_owned()));
 
-    drop(start_followup(&mut surface, &mut kernel, false));
+    drop(start_followup(&mut surface, &mut kernel, true));
 
     assert!(matches!(
       surface.data.similar_items,
-      jellypilot_core::LoadState::Idle
+      jellypilot_core::LoadState::Loading
+    ));
+    assert!(matches!(
+      &surface.data.season_neighbors,
+      jellypilot_core::LoadState::Ready(items) if items.iter().any(|item| item.id == "episode-2")
     ));
   }
 

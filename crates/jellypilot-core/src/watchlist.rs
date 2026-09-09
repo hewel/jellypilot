@@ -439,6 +439,7 @@ mod tests {
 
     fn item(id: &str, name: &str, item_type: &str) -> VideoLibraryItem {
         VideoLibraryItem {
+            premiere_date: None,
             id: id.to_owned(),
             name: name.to_owned(),
             item_type: item_type.to_owned(),

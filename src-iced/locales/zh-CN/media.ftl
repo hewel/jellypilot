@@ -8,6 +8,7 @@ media-type-music-video = 音乐视频
 
 media-item-caption = { $year } · { $type }
 media-year = { $year }
+media-premiere-date = { $year }年{ $month }月{ $day }日
 media-year-ongoing = { $year } - 至今
 media-year-range = { $year } - { $end }
 media-episode-caption = { $code } - { $name }

@@ -12,6 +12,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added explicit HTTP(S)/HLS sources to the isolated player/demo, with a cancellable same-origin authenticated relay, bounded playlist rewriting, network deadlines, buffering/seek-window state, and a credential-safe `--url-env` launch path. Production Jellyfin/Emby playback remains External MPV Playback.
 - Added opt-in native maintenance regressions for real-tray locale startup, missing embedded-dependency recovery, and GPU video-copy/window lifecycle, with fresh run-identified reports and separate human color acceptance.
 - Added movie/series collection controls to Home and the playback bar: Hero Favorites/Watchlist target the movie or parent series, while the player Favorite follows Now Playing independently. Unknown state remains disabled; mutations retain account and in-flight ownership.
+- Added real Jellyfin/Emby cast portraits and credited roles to details, plus localized episode premiere dates and related-series recommendations on episode pages.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.
@@ -27,6 +28,7 @@ All notable changes to JellyPilot are documented in this file.
 - Removed decorative translucent borders from Hero glass controls while preserving their fills, blur, and independent keyboard focus indication.
 - Restyled the docked playback bar while retaining direct Stop and existing transport/track controls; its expand action toggles the current player, with Escape and browser-state restoration for existing embedded playback.
 - Reworked only the embedded player with full-window video, a translucent nonblurred control bar, centered responsive transport, real landscape artwork and hover/drag time previews. Controls reveal near the bottom region rather than on every pointer movement; Back has its own top-left reveal region. Added repeatable five-second seek and five-point volume keys, F fullscreen, and stop-before-return navigation; external player interfaces remain unchanged.
+- Redesigned movie, series and episode details with full-bleed 520px heroes, below-hero metadata/actions, measured two-line overviews, a season dropdown, flat episode rows, cast carousels and smaller similar-title posters. Preserved real playback, collection actions, neighbor navigation and media information.
 
 ### Fixed
 - Decoupled embedded-player cursor recovery from control reveal, padded the title/chevron queue trigger without including its subtitle, and corrected right-side spacing, reference audio/volume glyphs and the volume/fullscreen separator. Centering no longer compresses narrow button icons; the mute target uses adjacent whitespace without shifting the icon or slider.
@@ -43,7 +45,7 @@ All notable changes to JellyPilot are documented in this file.
 - Kept Browse poster placeholders at the image's fixed height, preventing repeated image admission and cancellation at prefetch boundaries and the resulting redraw-invalidation loop while scrolling.
 - Rejected late browse deliveries across history restoration and model recreation, kept failed refreshes retryable, and tied refresh activity to the captured page/query rather than the lifetime of its first task.
 - Sized Browse columns from the actual opened window instead of the requested startup size, preventing clipped posters when the window manager constrains the default window.
-- Let detail hero content grow beyond the backdrop's fixed 16:9 frame and wrap action rows, keeping buttons and labels readable at narrower widths and with longer localized copy.
+- Kept expanded detail copy and wrapped actions below the fixed-height hero; bounded artwork outlines and placeholders prevent infinite cast-shelf layout, and duplicate cast credits retain independent portrait visibility.
 - Shared disk-cache coordination between Library Images and account avatars, keeping their authentication and in-memory lifecycles independent while coordinating cache clearing, writes, and eviction.
 
 ## [2.0.0] - 2026-09-02

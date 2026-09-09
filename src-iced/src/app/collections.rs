@@ -433,6 +433,7 @@ mod tests {
       .set_detail_item(Some("series".to_owned()));
     state.shell.destination = Destination::Detail("series".to_owned());
     let episode = VideoLibraryItem {
+      premiere_date: None,
       id: "episode".to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
@@ -461,6 +462,7 @@ mod tests {
       unplayed_item_count: None,
     };
     let series = VideoLibraryItem {
+      premiere_date: None,
       id: "series".to_owned(),
       item_type: "Series".to_owned(),
       ..episode.clone()

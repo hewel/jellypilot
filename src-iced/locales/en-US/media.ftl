@@ -8,6 +8,7 @@ media-type-music-video = Music video
 
 media-item-caption = { $year } · { $type }
 media-year = { $year }
+media-premiere-date = { $month }/{ $day }/{ $year }
 media-year-ongoing = { $year } - Present
 media-year-range = { $year } - { $end }
 media-episode-caption = { $code } - { $name }

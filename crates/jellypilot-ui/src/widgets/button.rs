@@ -140,6 +140,30 @@ pub fn hero_glass(theme: &Theme, variant: ButtonVariant, status: button::Status)
     style
 }
 
+/// Detail navigation over the hero's sampled, blurred backdrop.
+pub fn detail_back(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
+    let mut style = style(theme, variant, status);
+    let palette = palette(theme);
+    let alpha = match status {
+        button::Status::Hovered => 0.5,
+        button::Status::Pressed => 0.6,
+        button::Status::Disabled => 0.2,
+        button::Status::Active => 0.4,
+    };
+    style.background = Some(palette.colors.background.scale_alpha(alpha).into());
+    style.border.width = 0.0;
+    style.border.color = Color::TRANSPARENT;
+    style.text_color = palette
+        .text
+        .heading
+        .scale_alpha(if status == button::Status::Disabled {
+            0.5
+        } else {
+            1.0
+        });
+    style
+}
+
 #[cfg(test)]
 mod tests {
     use iced::border::Radius;

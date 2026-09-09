@@ -993,6 +993,7 @@ mod tests {
 
   fn video_item(id: &str) -> VideoLibraryItem {
     VideoLibraryItem {
+      premiere_date: None,
       logo_image_id: None,
       id: id.to_owned(),
       name: format!("Movie {id}"),

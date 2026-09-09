@@ -189,6 +189,8 @@ pub enum DetailMessage {
   RetrySeason,
   OverviewToggled,
   EpisodeOverviewToggled(String),
+  SeasonMenuToggled,
+  SeasonMenuDismissed,
   SeasonSelected(String),
   FavoriteToggled,
   WatchlistToggled,

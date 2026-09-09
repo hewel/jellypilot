@@ -83,6 +83,31 @@ pub(crate) fn runtime_caption(locale: Localizer, runtime_seconds: f64) -> Option
   (runtime_seconds.is_finite() && runtime_seconds > 0.0).then(|| locale.duration(runtime_seconds))
 }
 
+/// Premiere dates are calendar dates; preserve the server's date rather than
+/// shifting midnight across days when displaying in the desktop's time zone.
+pub(crate) fn episode_premiere_date(locale: Localizer, iso: &str) -> Option<String> {
+  let (date, _) = iso.split_once('T')?;
+  let mut parts = date.split('-');
+  let year = parts.next()?;
+  let month = parts.next()?.parse::<u8>().ok()?;
+  let day = parts.next()?.parse::<u8>().ok()?;
+  if parts.next().is_some()
+    || year.parse::<u16>().is_err()
+    || !(1..=12).contains(&month)
+    || !(1..=31).contains(&day)
+  {
+    return None;
+  }
+  Some(locale.format(
+    "media-premiere-date",
+    &[
+      ("year", year.into()),
+      ("month", month.to_string().into()),
+      ("day", day.to_string().into()),
+    ],
+  ))
+}
+
 pub(crate) fn hero_metadata(locale: Localizer, item: &VideoLibraryItem) -> String {
   let runtime = item
     .runtime_seconds

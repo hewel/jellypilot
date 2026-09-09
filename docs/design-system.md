@@ -116,7 +116,7 @@ Composite Sidebar and profile rows use `control_button_content` for whole-contro
 
 `PosterCard` draws no hover or press overlay, lift, or tint — the artwork and copy render exactly as provided, and interaction only publishes the press message. Media images use radius `lg`.
 
-The detail hero keeps its backdrop scrim, simplified to two stops: transparent at the top → `surfaceContainerLowest` at 0.85 alpha at the bottom.
+Detail Backdrops use the two-layer canvas scrim and fixed-height composition specified in [Accepted Paper Detail Composition](#accepted-paper-detail-composition).
 
 ### Native Image and Modal Blur
 
@@ -188,7 +188,7 @@ Missing icon assets may be obtained directly from [Reicon](https://reicon.dev); 
 
 ### Surfaces and Edges
 
-- **Image outline**: all artwork (posters, episode thumbnails, avatars, cast photos) carries a 1px pure-white 10% outline (`imageOutline`, dark mode). Never a tinted near-white — tinted outlines pick up the surface beneath and read as dirt. Full-bleed hero backdrops and transparent title logos are exempt. Paper-only token for now; add to `tokens.rs` when implemented.
+- **Image outline**: all artwork (posters, episode thumbnails, avatars, cast photos) carries the `imageOutline` token's 1px pure-white 10% outline. Never a tinted near-white — tinted outlines pick up the surface beneath and read as dirt. Full-bleed hero backdrops and transparent title logos are exempt.
 - **Quiet control edge**: secondary/tonal controls filled `surfaceContainerHigh` gain a 1px neutral structural edge (`border-subtle`, white 8%) so they hold their shape over imagery and canvas. Primary buttons stay borderless — the fill is the boundary. One primary action per section stands.
 - **Sidebar background** uses a Paper-only `sidebar-bg` (#0F1016) between `surfaceContainerLowest` and `surfaceContainerLow`; add a semantic token when implemented. `border-subtle` (white 8%) stays a Paper-only semantic until the code has an equivalent translucent neutral.
 
@@ -254,7 +254,7 @@ Minimum viable chrome around 400×580: ambient blurred-artwork backdrop (dimmed 
 ### Pills
 
 - **Filter Pill**: default `surfaceContainerHigh` fill + 1px `borderSubtle` edge, 12px text. `PillActive` uses `primaryContainer` fill with `secondary` content; browse filters and season buttons now use the `Pill`/`PillActive` pair. Other switch groups retain their existing active treatments.
-- **Season Pill**: same pill spec plus a trailing chevron. Whether the detail-page season scroll row becomes a pill-triggered popover is deferred to the detail-page batch; this section records only the control form.
+- **Season Pill**: same pill spec plus a trailing chevron. Detail pages now use one selected-season trigger and a bounded native popover; see [Accepted Paper Detail Composition](#accepted-paper-detail-composition).
 
 ### Toggle
 
@@ -306,3 +306,22 @@ The [Home specification](home-hero-design-spec.md#accepted-paper-home-synchroniz
 - Slider drag lifetime follows actual pointer press/release, including pressing the existing knob without changing its value. Keyboard/wheel adjustments submit immediately without holding a drag open. An actual fullscreen transition cancels unfinished previews and resets the slider's private interaction state, so a later release cannot submit a cancelled target. Clicking the picture while a player menu is open dismisses the menu without toggling playback.
 
 Human acceptance: check windowed/fullscreen video proportions, 1099/900/768/400px layouts, true transport centering, thumbnail removal at ≤900px, title-triggered queue and track menus, readable translucent chrome and scrims under both browser themes, bottom-only reveal and independent Back reveal, three-second hiding/cursor recovery, hover/drag times, held arrows, F/Esc, and Back restoring the source page after playback stops. Headless layout tests measure actual card/control bounds and exercise pointer events; native smoke proves startup, not appearance or actual media presentation.
+
+## Accepted Paper Detail Composition
+
+**Implemented; human visual acceptance pending.** References: [single episode](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/102-0), [series](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2BU-0), and [movie](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2I6-0). This section supersedes older Detail geometry and scrim descriptions, not the Home or player compositions.
+
+- The hero is full-bleed within the content lane, 520 logical pixels high, with centered `Cover` artwork. Unlike actual playback video, decorative Detail Backdrops are deliberately cropped. Logos preserve their intrinsic aspect near the lower-left; unavailable logos fall back to the real title.
+- Two independent canvas-colored scrims provide legibility: bottom fade (top-to-bottom alpha 0.30, 0.28 at 45%, 0.72 at 78%, 1.0 at the bottom) and left darkening (0.55 at the left to transparent at 55% width). Both resolve through the active theme.
+- Back sits 18px from the top/left, with native 10px blur sampled from the same full hero frame, a scoped 40% canvas tint, and no decorative border. Its localized label, keyboard focus and disabled behavior remain sharp and independent of the blur.
+- Metadata, overview and actions live **below** the hero on Canvas. Sections start with 28px top spacing and 36px horizontal insets; content widths below 600px use 18px insets. Metadata is 14px/18px; the overview is 16px/24px. Actions use the 36px M tier with 10px inter-button spacing and wrap instead of disappearing.
+- Overview disclosure measures actual shaped text, clamps to two lines with an end fade, and exposes More/Less only on overflow. Expanding text moves subsequent content without resizing the hero. These prose-disclosure links are not primary action buttons.
+- Summary information uses a 360px genre/creator column and a remaining-width cast summary separated by 40px, stacking when narrow. The summary lists four real cast credits plus a localized remaining count.
+- Series pages retain Next Up and replace the horizontal season-button strip with one 32px Season Pill and a bounded, keyboard-operable popover. Choosing the current season closes the menu without reloading; changing seasons preserves exact server IDs. Pending season loads disable selection, and leaving/reloading Detail closes the menu.
+- The episode reference contains series-level sample copy; production episode pages keep the actual episode identity and existing current-season neighbor navigation rather than presenting that sample as real data. Next Up remains series-only. Movies have no episode shelf. All three types include Cast and Similar; file-level media information remains available after those core sections.
+- Episode rows are flat, with 300×169 artwork, 20px between lanes, 16px titles, 12px metadata and 12px/20px two-line overviews. Below 720px content width, rows stack without losing actions. Play, Resume and Replay retain their actual playback start semantics. Watched rows show a check; in-progress artwork carries the reference's **4px** progress rail, a Detail-specific exception to the older generic 6px target.
+- Cast cells are 96px wide with 72px round portraits, 24px spacing, wrapped 12px names/roles, and honest missing-art placeholders. Jellyfin and Emby supply real names, roles and tagged portrait references; no reference assets or fabricated credits are bundled. Each credit has a separate visibility slot even when multiple roles share an image, while the underlying image cache remains shared.
+- Similar cards are 150×225 posters with 18px spacing and real title/year/type metadata. Both Cast and Similar scroll horizontally, retain measured visibility admission, and show explicit empty states. Decorative outlines and placeholders preserve the requested image box; they must not inflate an unbounded scroll layout.
+- Premiere dates preserve the server's calendar date rather than shifting midnight through the desktop time zone. Missing dates, portraits and roles remain absent or use the established empty presentation.
+
+Human acceptance: compare a movie, series and episode against the references in both themes; check hero crop/logo/scrims, below-hero copy, season popover and its dismissal, Next Up only on series, Play/Resume/Replay, long-text disclosure, real cast photos/roles, horizontal shelves, and narrow-width reflow. Headless tests exercise layout and pointer/state behavior; they do not establish visual acceptance.

@@ -2227,6 +2227,7 @@ mod tests {
     let start_effects = state.playback.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(VideoLibraryItem {
+          premiere_date: None,
           logo_image_id: None,
           id: "episode-1".to_owned(),
           name: "Pilot Episode".to_owned(),

@@ -931,6 +931,7 @@ mod tests {
     fn items(start: u32, count: u32) -> Vec<VideoLibraryItem> {
         (start..start + count)
             .map(|index| VideoLibraryItem {
+                premiere_date: None,
                 id: format!("item-{index}"),
                 name: format!("Item {index}"),
                 item_type: "Movie".to_owned(),

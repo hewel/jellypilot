@@ -449,6 +449,43 @@ mod tests {
   }
 
   #[test]
+  fn offscreen_credit_does_not_release_a_visible_shared_portrait() {
+    let (client, adapter, image) = fixture();
+    let mut member = jellypilot_media_server::VideoCastMember {
+      name: "Actor".to_owned(),
+      role: Some("First role".to_owned()),
+      image_id: Some(image.image_id),
+    };
+    let visible = super::super::detail::cast_image_spec(0, &member).unwrap();
+    member.role = Some("Second role".to_owned());
+    let offscreen = super::super::detail::cast_image_spec(1, &member).unwrap();
+    let mut images = ImageCollection::default();
+    observe(
+      &mut images,
+      &client,
+      &adapter,
+      &visible,
+      ImagePriority::Visible,
+    );
+    let shown = images.get(&visible.key).unwrap().handle().unwrap().id();
+
+    observe(
+      &mut images,
+      &client,
+      &adapter,
+      &offscreen,
+      ImagePriority::Prefetch,
+    );
+    images.retain(&[visible.clone(), offscreen.clone()]);
+
+    assert_eq!(
+      images.get(&visible.key).unwrap().handle().unwrap().id(),
+      shown
+    );
+    assert!(images.get(&offscreen.key).unwrap().handle().is_none());
+  }
+
+  #[test]
   fn prefetch_drops_display_handles_and_promotion_uses_current_raster_cache() {
     let (client, adapter, spec) = fixture();
     let mut images = ImageCollection::default();

@@ -3406,6 +3406,7 @@ mod tests {
 
   fn library_item(item_type: &str) -> VideoLibraryItem {
     VideoLibraryItem {
+      premiere_date: None,
       logo_image_id: None,
       id: "item-1".to_owned(),
       name: "Pilot".to_owned(),
