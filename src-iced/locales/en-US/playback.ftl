@@ -2,6 +2,7 @@ player-mute = Mute
 player-unmute = Unmute
 player-full-library = Full library mode
 player-waiting = Waiting for playback
+player-show-video = Show video
 player-skip-intro = Skip intro?
 player-skip-credits = Skip credits?
 player-skip = Skip

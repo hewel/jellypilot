@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Cross-platform Jellyfin/Emby companion app built with iced 0.14 (ADR 0027). Fully custom-drawn
-native UI; playback is always External MPV Playback controlled through JSON IPC — no embedded
-playback, no libmpv, no webview, no Tauri.
+Cross-platform Jellyfin/Emby companion app built with a pinned iced fork (ADR 0027 native architecture). Fully custom-drawn
+native UI; External MPV Playback remains the default. Explicit Embedded MPV Playback uses the
+accepted Linux Vulkan SDR host path; see README's embedded build/selection contract. No webview/Tauri.
 
 ## Role Separation
 
@@ -18,11 +18,12 @@ playback, no libmpv, no webview, no Tauri.
 
 ## Stack
 
-- **Application**: Rust + iced 0.14 in `src-iced` (package `jellypilot-iced`, binary `jellypilot`)
+- **Application**: safe Rust + iced in `src-iced` (`jellypilot-iced` library); private `jellypilot-launcher` binary `jellypilot` owns the two trusted engine/surface handoffs
 - **Design system**: `crates/jellypilot-ui` — tokens, theme/Catalog styles, custom widgets, overlay
 - **Domain crates**: `jellypilot-core` (display-free browse/config/diagnostics),
   `jellypilot-media-server` (Jellyfin/Emby HTTP + artwork), `jellypilot-auth` (login + keyring),
   `jellypilot-mpv` (process + JSON IPC), `jellypilot-session` (WebSocket remote sessions)
+- **Embedded host**: `crates/jellypilot-mpv-host` owns Vulkan/libmpv FFI; `src-iced/src/embedded` supplies the closed official compositor and player primitive
 - **Generated API clients**: `crates/media-server-api/{jellyfin,emby}` (OpenAPI, regenerate via
   `bun run task api`)
 - **Tooling**: Bun exists only for the `scripts/task.ts` dispatcher; Oxc formats/lints `scripts/**`;
@@ -76,6 +77,8 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
   ADRs record accepted decisions; do not re-litigate them, amend them with new ADRs.
 - **Styling**: the only styling system is `jellypilot-ui` tokens + Catalog styles (ADR 0027).
   Do not add CSS frameworks, per-widget ad-hoc colors outside tokens, or a second theme mechanism.
+  Component patterns and accepted visual decisions live in `docs/design-system.md`; new UI work must
+  follow it, and deviations from it require updating the doc in the same change.
 - **Validation**: proportionate verification policy in
   [docs/agents/validation.md](docs/agents/validation.md); scale test scope to blast radius and
   never skip verification.
@@ -100,9 +103,9 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
 - **Treating the project as a web app**: this is cross-platform desktop software (Windows, macOS,
   Linux) drawn by iced; there is no DOM, no CSS, no browser target. Do not propose web tooling,
   webview shells, or browser-based verification.
-- **Webview-era resurrection**: the Tauri/Solid.js stack, embedded playback chain, ffmpeg sidecars,
-  and specta bindings were deleted (ADR 0027 retirement). Do not reintroduce them; playback is
-  External MPV Playback only.
+- **Webview-era resurrection**: Tauri/Solid.js, the old embedded playback chain, ffmpeg sidecars,
+  and specta bindings remain retired. The newly accepted embedded option is the pinned Linux
+  Vulkan SDR mpv host, not the excluded GStreamer experiment or a revival of the retired stack.
 
 ## Agent Skills
 

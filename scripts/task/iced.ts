@@ -2,20 +2,46 @@ import { Effect } from 'effect';
 
 import { command, type CommandSpec } from './commands';
 import type { TaskProcessError } from './errors';
+import { embeddedMpvEnvironment, embeddedMpvPaths } from './mpv';
 import type { TaskCommand } from './parse';
 import { runCommand } from './process';
 
-export function icedRunCommand(smoke: boolean, release: boolean): CommandSpec {
-  return command('cargo', [
-    'run',
-    '--manifest-path',
-    'Cargo.toml',
-    '--package',
-    'jellypilot-iced',
-    ...(release ? ['--release'] : []),
-    ...(smoke ? ['--', '--smoke-test'] : []),
-  ]);
+export function icedRunCommand(
+  smoke: boolean,
+  release: boolean,
+  embedded = false,
+  environment?: Readonly<Record<string, string>>,
+): CommandSpec {
+  return command(
+    'cargo',
+    [
+      'run',
+      '--manifest-path',
+      'Cargo.toml',
+      '--package',
+      'jellypilot-launcher',
+      ...(release ? ['--release'] : []),
+      ...(smoke || embedded ? ['--'] : []),
+      ...(smoke ? ['--smoke-test'] : []),
+      ...(embedded ? ['--embedded'] : []),
+    ],
+    environment,
+  );
 }
+
+export const buildIced = Effect.fn('task.iced.build')((release: boolean) =>
+  runCommand(
+    command('cargo', [
+      'build',
+      '--locked',
+      '--manifest-path',
+      'Cargo.toml',
+      '--package',
+      'jellypilot-launcher',
+      ...(release ? ['--release'] : []),
+    ]),
+  ).pipe(Effect.asVoid),
+);
 
 export function icedHotCommand(): CommandSpec {
   return command('cargo', [
@@ -23,7 +49,7 @@ export function icedHotCommand(): CommandSpec {
     '--manifest-path',
     'Cargo.toml',
     '--package',
-    'jellypilot-iced',
+    'jellypilot-launcher',
     '--features',
     'dev',
   ]);
@@ -81,8 +107,16 @@ const printSmokeFailure = (error: TaskProcessError): Effect.Effect<void> =>
     );
   });
 
-export const runIced = Effect.fn('task.iced')((smoke: boolean, release: boolean) =>
-  runCommand(icedRunCommand(smoke, release)).pipe(
+export const runIced = Effect.fn('task.iced')(function* (
+  smoke: boolean,
+  release: boolean,
+  embedded: boolean,
+  environment: Readonly<Record<string, string | undefined>>,
+) {
+  const childEnvironment = embedded
+    ? yield* embeddedMpvEnvironment(environment)
+    : embeddedMpvPaths(environment);
+  yield* runCommand(icedRunCommand(smoke, release, embedded, childEnvironment)).pipe(
     smoke
       ? Effect.catchTag('TaskProcessError', (error: TaskProcessError) =>
           Effect.gen(function* () {
@@ -92,6 +126,9 @@ export const runIced = Effect.fn('task.iced')((smoke: boolean, release: boolean)
         )
       : (effect) => effect,
     Effect.asVoid,
-  ),
+  );
+});
+export const runHot = Effect.fn('task.hot')(
+  (environment: Readonly<Record<string, string | undefined>>) =>
+    runCommand({ ...icedHotCommand(), env: embeddedMpvPaths(environment) }).pipe(Effect.asVoid),
 );
-export const runHot = Effect.fn('task.hot')(() => runCommand(icedHotCommand()).pipe(Effect.asVoid));

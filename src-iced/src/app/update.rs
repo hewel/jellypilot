@@ -565,12 +565,22 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       {
         return Task::none();
       }
+      let had_playback = state.playback.view.now_playing.is_some();
       let task = playback::update(
         &mut state.playback,
         &mut state.kernel,
         state.shell.quit_requested,
         message,
       );
+      let task = if crate::embedded::enabled()
+        && !had_playback
+        && state.playback.view.now_playing.is_some()
+        && state.app_mode() == AppMode::Full
+      {
+        Task::batch([task, shell::navigate(state, Destination::NowPlaying)])
+      } else {
+        task
+      };
       if let Some((generation, result)) =
         playback::take_account_handoff_settlement(&mut state.playback)
       {

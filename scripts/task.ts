@@ -3,9 +3,11 @@ import { Cause, Effect, Exit, Fiber, Match } from 'effect';
 import { runCheck } from './task/check';
 import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
-import { runHot, runIced, runLocalVideo } from './task/iced';
+import { buildIced, runHot, runIced, runLocalVideo } from './task/iced';
+import { prepareIced } from './task/iced-source';
 import { runApi } from './task/misc';
 import { runMonitor } from './task/monitor';
+import { buildMpv } from './task/mpv';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
 import { runRust } from './task/rust';
@@ -17,6 +19,15 @@ const program = Effect.try({
       message: `${cause instanceof Error ? cause.message : String(cause)}\n\n${TASK_HELP}`,
     }),
 }).pipe(
+  Effect.tap((task) =>
+    task._tag === 'check' ||
+    task._tag === 'rust' ||
+    task._tag === 'iced' ||
+    task._tag === 'icedHot' ||
+    task._tag === 'icedBuild'
+      ? prepareIced(null)
+      : Effect.void,
+  ),
   Effect.flatMap((task) =>
     Match.value(task).pipe(
       Match.when({ _tag: 'help' }, () => Effect.sync(() => console.log(TASK_HELP))),
@@ -25,8 +36,13 @@ const program = Effect.try({
       Match.when({ _tag: 'lint' }, ({ fix }) => runLint(fix)),
       Match.when({ _tag: 'typecheck' }, () => runTypecheck()),
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
-      Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
-      Match.when({ _tag: 'icedHot' }, () => runHot()),
+      Match.when({ _tag: 'iced' }, ({ smoke, release, embedded }) =>
+        runIced(smoke, release, embedded, process.env),
+      ),
+      Match.when({ _tag: 'mpvBuild' }, ({ source }) => buildMpv(source)),
+      Match.when({ _tag: 'icedHot' }, () => runHot(process.env)),
+      Match.when({ _tag: 'icedBuild' }, ({ release }) => buildIced(release)),
+      Match.when({ _tag: 'icedPrepare' }, ({ source }) => prepareIced(source)),
       Match.when({ _tag: 'icedLocalVideo' }, (task) => runLocalVideo(task)),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),

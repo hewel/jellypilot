@@ -16,8 +16,21 @@ Rust:
   rust test [crate...]
 
 Application:
-  iced run [--smoke] [--release] (env: JELLYPILOT_SMOKE_SIZE=WxH)
+  iced run [--smoke] [--release] [--embedded] (env: JELLYPILOT_SMOKE_SIZE=WxH)
+  iced build [--release]          (build the official launcher without running it)
   iced hot                       (hot reload via cargo-hot, dev feature)
+  iced prepare [--source <checkout>] (pinned base plus verified checked-in iced extension patch)
+    All maintained Cargo tasks automatically use the same prepared target/vendor iced source.
+    --embedded selects staged libmpv and baseline; explicit env overrides must be absolute:
+    JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. External playback remains the default.
+
+Embedded mpv dependency (Linux Vulkan):
+  mpv build [--source <checkout>]
+    Requires pinned clean mpv source, Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
+    Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1 and libass.
+    Without --source, fetches the pinned revision from git@github.com:hewel/mpv.git.
+    Stages target/embedded-mpv/{lib/jellypilot/libmpv.so,share/jellypilot/mpv-baseline.conf,manifest.json}.
+    Source/options pinned; host dependency versions recorded, not bit-reproducible.
 
 Local video experiment:
   iced local-video run [--smoke] [--release] [--file <path> | --url-env | --url <http(s)url>]
@@ -35,5 +48,6 @@ Crate short names:
   core           jellypilot-core
   media-server   jellypilot-media-server
   mpv            jellypilot-mpv
+  mpv-host       jellypilot-mpv-host
   session        jellypilot-session
-  iced           jellypilot-ui, jellypilot-iced`;
+  iced           jellypilot-ui, jellypilot-mpv-host, jellypilot-iced, jellypilot-launcher`;

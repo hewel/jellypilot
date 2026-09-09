@@ -19,8 +19,16 @@ export type TaskCommand =
       readonly action: 'check' | 'clippy' | 'test';
       readonly crates: readonly CrateShortName[];
     }
-  | { readonly _tag: 'iced'; readonly smoke: boolean; readonly release: boolean }
+  | {
+      readonly _tag: 'iced';
+      readonly smoke: boolean;
+      readonly release: boolean;
+      readonly embedded: boolean;
+    }
+  | { readonly _tag: 'mpvBuild'; readonly source: string | null }
   | { readonly _tag: 'icedHot' }
+  | { readonly _tag: 'icedPrepare'; readonly source: string | null }
+  | { readonly _tag: 'icedBuild'; readonly release: boolean }
   | {
       readonly _tag: 'icedLocalVideo';
       readonly action: 'run';
@@ -133,6 +141,22 @@ function parseLocalVideo(args: readonly string[]): TaskCommand {
   );
 }
 
+function parseSourceOptions(command: string, rest: readonly string[]): string | null {
+  let source: string | null = null;
+  for (let index = 0; index < rest.length; index += 1) {
+    const argument = rest[index];
+    if (argument !== '--source') unknownOption(command, argument);
+    if (source !== null) throw new Error('Specify --source only once.');
+    const value = rest[index + 1];
+    if (value === undefined || value.trim().length === 0 || value.startsWith('-')) {
+      throw new Error(`${command} --source requires a non-empty checkout path.`);
+    }
+    source = value;
+    index += 1;
+  }
+  return source;
+}
+
 export function parseCli(argv: readonly string[]): TaskCommand {
   const [command, ...args] = argv;
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
@@ -159,10 +183,24 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     return { _tag: command, fix };
   }
   if (command === 'rust') return parseRust(args);
+  if (command === 'mpv') {
+    const [action, ...rest] = args;
+    if (action !== 'build') throw new Error('Expected mpv build [--source <checkout>].');
+    return { _tag: 'mpvBuild', source: parseSourceOptions('mpv build', rest) };
+  }
   if (command === 'monitor') return parseMonitor(args);
   if (command === 'iced') {
     const [action, ...rest] = args;
     if (action === 'local-video') return parseLocalVideo(rest);
+    if (action === 'prepare') {
+      return { _tag: 'icedPrepare', source: parseSourceOptions('iced prepare', rest) };
+    }
+    if (action === 'build') {
+      for (const argument of rest) {
+        if (argument !== '--release') unknownOption('iced build', argument);
+      }
+      return { _tag: 'icedBuild', release: rest.includes('--release') };
+    }
     if (action === 'hot') {
       expectNoArguments('iced hot', rest);
       return { _tag: 'icedHot' };
@@ -174,12 +212,14 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     }
     let smoke = false;
     let release = false;
+    let embedded = false;
     for (const argument of rest) {
       if (argument === '--smoke') smoke = true;
       else if (argument === '--release') release = true;
+      else if (argument === '--embedded') embedded = true;
       else unknownOption('iced run', argument);
     }
-    return { _tag: command, smoke, release };
+    return { _tag: command, smoke, release, embedded };
   }
   throw new Error(`Unknown task command: ${command}`);
 }

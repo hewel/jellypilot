@@ -10,9 +10,6 @@ version.workspace = true
 [features]
 debug = ["iced/hot"]
 dev = ["iced/hot"]
-[[bin]]
-name = "jellypilot"
-path = "src/main.rs"
 
 [dependencies]
 jellypilot-auth = { path = "../crates/jellypilot-auth" }
@@ -24,7 +21,6 @@ jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { workspace = true }
 fluent-templates = "0.15.1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-mimalloc = { version = "0.1.48", default-features = false }
 sys-locale = "0.3"
 tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
 interprocess = "2"
@@ -36,6 +32,8 @@ zeroize = "1.8.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
+jellypilot-mpv-host = { path = "../crates/jellypilot-mpv-host" }
+iced_wgpu = { workspace = true }
 
 [dev-dependencies]
 fluent-syntax = "0.12"

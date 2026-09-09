@@ -1,6 +1,6 @@
 use iced::widget::{column, container, row, scrollable, space, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
-use jellypilot_core::config::{AppMode, IntroMode, ShortcutKind, ThemeMode};
+use jellypilot_core::config::{AppMode, IntroMode, PlaybackBackend, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
@@ -184,6 +184,35 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
     Icon::Cpu,
     state.t("settings-mpv"),
     column![
+      text(state.t("settings-player-backend")),
+      row![
+        control_button(
+          None,
+          Some(state.t("settings-player-external")),
+          if state.kernel.settings.snapshot().playback_backend() == PlaybackBackend::External {
+            ButtonVariant::Tonal
+          } else {
+            ButtonVariant::Text
+          },
+        )
+        .on_press(Message::Settings(SettingsMessage::PlaybackBackendSelected(
+          PlaybackBackend::External,
+        ))),
+        control_button(
+          None,
+          Some(state.t("settings-player-embedded")),
+          if state.kernel.settings.snapshot().playback_backend() == PlaybackBackend::Embedded {
+            ButtonVariant::Tonal
+          } else {
+            ButtonVariant::Text
+          },
+        )
+        .on_press(Message::Settings(SettingsMessage::PlaybackBackendSelected(
+          PlaybackBackend::Embedded,
+        ))),
+      ]
+      .spacing(TOKENS.spacing.s2),
+      text(state.t("settings-player-backend-help")).size(13),
       labeled_field(
         palette,
         state.kernel.locale,

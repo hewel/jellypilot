@@ -2,6 +2,7 @@ player-mute = 静音
 player-unmute = 取消静音
 player-full-library = 完整媒体库模式
 player-waiting = 等待播放
+player-show-video = 显示视频
 player-skip-intro = 跳过片头？
 player-skip-credits = 跳过片尾？
 player-skip = 跳过

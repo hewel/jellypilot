@@ -93,6 +93,8 @@ jobs:
             asset: '*.dmg'
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - name: Install Linux packaging prerequisites
         if: runner.os == 'Linux'
         run: |
@@ -123,7 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install declared Arch dependencies
-        run: pacman -Syu --noconfirm --needed git rust gtk3 mpv libxkbcommon wayland
+        run: pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland
       - name: Validate PKGBUILD tag
         run: |
           pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"

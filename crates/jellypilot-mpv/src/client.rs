@@ -110,12 +110,14 @@ pub struct MpvClient {
   demuxer_cache_dir: Arc<Mutex<Option<PathBuf>>>,
   runtime: Arc<Mutex<RuntimeState>>,
   lifecycle: Arc<AsyncMutex<()>>,
+  embedded_ipc: Option<Arc<PathBuf>>,
 }
 
 #[derive(Default)]
 struct RuntimeState {
   process: Option<Child>,
   ipc: Option<Arc<MpvIpc>>,
+  embedded_cleanup_pending: bool,
   #[cfg(test)]
   fail_next_cleanup: bool,
 }
@@ -162,7 +164,18 @@ impl MpvClient {
       demuxer_cache_dir: Arc::new(Mutex::new(None)),
       runtime: Arc::new(Mutex::new(RuntimeState::default())),
       lifecycle: Arc::new(AsyncMutex::new(())),
+      embedded_ipc: None,
     }
+  }
+
+  /// Connect to an application-owned libmpv host instead of spawning a process.
+  ///
+  /// The host owns its private IPC endpoint and must outlive this client.
+  /// Closing a playback session stops the file, never destroys that host.
+  pub fn embedded(ipc: PathBuf) -> Self {
+    let mut client = Self::new(None);
+    client.embedded_ipc = Some(Arc::new(ipc));
+    client
   }
 
   /// Update MPV path (takes effect on next start).
@@ -189,6 +202,17 @@ impl MpvClient {
       if runtime.process.is_some() || runtime.ipc.is_some() {
         return Err(MpvError::AlreadyRunning);
       }
+    }
+
+    if let Some(path) = &self.embedded_ipc {
+      let path = path
+        .to_str()
+        .ok_or_else(|| MpvError::IpcConnectionFailed("Embedded IPC path is not UTF-8".into()))?;
+      let ipc = MpvIpc::connect(path, 10).await?;
+      let mut runtime = self.runtime.lock();
+      runtime.ipc = Some(Arc::new(ipc));
+      runtime.embedded_cleanup_pending = true;
+      return Ok(());
     }
 
     cleanup_ipc();
@@ -242,6 +266,37 @@ impl MpvClient {
 
   async fn stop_and_confirm_cleanup(&self) -> bool {
     let _lifecycle = self.lifecycle.lock().await;
+    if let Some(path) = &self.embedded_ipc {
+      // The host outlives its socket. Losing IPC does not prove the old media
+      // stopped; reconnect and obtain an acknowledgement before any handoff.
+      self.refresh_runtime();
+      let needs_connection = {
+        let runtime = self.runtime.lock();
+        if runtime.ipc.is_none() && !runtime.embedded_cleanup_pending {
+          return true;
+        }
+        runtime.ipc.is_none()
+      };
+      if needs_connection {
+        let Some(path) = path.to_str() else {
+          return false;
+        };
+        let Ok(ipc) = MpvIpc::connect(path, 10).await else {
+          return false;
+        };
+        self.runtime.lock().ipc = Some(Arc::new(ipc));
+      }
+      self.runtime.lock().embedded_cleanup_pending = true;
+      if self.send(MpvCommand::stop_playback()).await.is_err() {
+        return false;
+      }
+      let mut runtime = self.runtime.lock();
+      runtime.embedded_cleanup_pending = false;
+      if let Some(ipc) = runtime.ipc.take() {
+        ipc.close();
+      }
+      return true;
+    }
     log::info!("stop() called - closing IPC connection");
     let (ipc, mut child, cleanup_failure_injected) = {
       let mut runtime = self.runtime.lock();
@@ -547,6 +602,13 @@ impl MpvClient {
 
   /// Quit MPV gracefully.
   pub async fn quit(&self) -> Result<(), MpvError> {
+    if self.embedded_ipc.is_some() {
+      return if self.stop_and_confirm_cleanup().await {
+        Ok(())
+      } else {
+        Err(MpvError::CommandFailed)
+      };
+    }
     let result = self.send(MpvCommand::quit()).await.map(|_| ());
     self.stop().await;
     result
@@ -557,6 +619,9 @@ impl MpvClient {
   /// The IPC command result is deliberately advisory: the local process
   /// cleanup establishes whether ownership can safely cross a handoff.
   pub(crate) async fn quit_and_confirm_cleanup(&self) -> bool {
+    if self.embedded_ipc.is_some() {
+      return self.stop_and_confirm_cleanup().await;
+    }
     let _ = self.send(MpvCommand::quit()).await;
     self.stop_and_confirm_cleanup().await
   }
@@ -626,6 +691,7 @@ impl Clone for MpvClient {
       demuxer_cache_dir: self.demuxer_cache_dir.clone(),
       runtime: self.runtime.clone(),
       lifecycle: self.lifecycle.clone(),
+      embedded_ipc: self.embedded_ipc.clone(),
     }
   }
 }
@@ -729,6 +795,83 @@ mod tests {
     });
 
     (client, peer)
+  }
+
+  #[tokio::test]
+  async fn embedded_session_cleanup_stops_media_without_terminating_host() {
+    let (client_stream, peer_stream) = duplex(1024);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let mut client = MpvClient::from_io_for_test(reader, writer).await.unwrap();
+    client.embedded_ipc = Some(Arc::new(PathBuf::from("/unused-test-host.sock")));
+    let (peer_reader, mut peer_writer) = tokio::io::split(peer_stream);
+    let peer = tokio::spawn(async move {
+      let mut lines = BufReader::new(peer_reader).lines();
+      // Refuse the first stop: a failed handoff must remain retryable.
+      for status in ["command failed", "success"] {
+        let line = lines.next_line().await.unwrap().unwrap();
+        let command: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(command["command"], serde_json::json!(["stop"]));
+        let response = serde_json::json!({
+          "request_id": command["request_id"],
+          "error": status,
+        });
+        peer_writer
+          .write_all(format!("{response}\n").as_bytes())
+          .await
+          .unwrap();
+      }
+      assert!(lines.next_line().await.unwrap().is_none());
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+      assert!(!client.quit_and_confirm_cleanup().await);
+      assert!(client.is_connected());
+      assert!(client.quit_and_confirm_cleanup().await);
+      assert!(!client.is_connected());
+      peer.await.unwrap();
+    })
+    .await
+    .expect("embedded cleanup must settle without killing the host");
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn disconnected_embedded_session_reconnects_before_confirming_cleanup() {
+    let path = std::env::temp_dir().join(format!("jellypilot-cleanup-{}.sock", std::process::id()));
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let client = MpvClient::embedded(path.clone());
+    client.start().await.unwrap();
+    drop(listener.accept().await.unwrap().0);
+
+    let result = tokio::time::timeout(Duration::from_secs(2), async {
+      while client.is_connected() {
+        tokio::task::yield_now().await;
+      }
+      let host = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let line = BufReader::new(reader)
+          .lines()
+          .next_line()
+          .await
+          .unwrap()
+          .unwrap();
+        let command: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(command["command"], serde_json::json!(["stop"]));
+        let response = serde_json::json!({
+          "request_id": command["request_id"],
+          "error": "success",
+        });
+        writer
+          .write_all(format!("{response}\n").as_bytes())
+          .await
+          .unwrap();
+      });
+      assert!(client.quit_and_confirm_cleanup().await);
+      host.await.unwrap();
+    })
+    .await;
+    std::fs::remove_file(path).unwrap();
+    result.expect("a disconnected host still requires an acknowledged stop");
   }
 
   #[test]

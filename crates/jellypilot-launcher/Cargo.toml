@@ -1,0 +1,30 @@
+[package]
+name = "jellypilot-launcher"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[[bin]]
+name = "jellypilot"
+path = "src/main.rs"
+
+[features]
+dev = ["jellypilot-iced/dev"]
+debug = ["jellypilot-iced/debug"]
+
+[dependencies]
+jellypilot-iced = { path = "../../src-iced" }
+mimalloc = { version = "0.1.48", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
+iced_wgpu = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"

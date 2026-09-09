@@ -24,8 +24,30 @@ describe('parseCli', () => {
       _tag: 'iced',
       smoke: true,
       release: true,
+      embedded: false,
     });
     expect(parseCli(['iced', 'hot'])).toEqual({ _tag: 'icedHot' });
+  });
+
+  test('rejects missing, duplicate, option-like and extra mpv source arguments', () => {
+    for (const args of [
+      ['build', '--source'],
+      ['build', '--source', ' '],
+      ['build', '--source', '--release'],
+      ['build', '--source', 'checkout', '--source', 'other'],
+      ['build', 'checkout'],
+      ['build', '--source', 'checkout', '--push'],
+      ['build', '--release'],
+      ['run'],
+    ]) {
+      expect(() => parseCli(['mpv', ...args])).toThrow();
+    }
+  });
+
+  test('does not accept embedded selection on unrelated iced commands or as a valued option', () => {
+    expect(() => parseCli(['iced', 'hot', '--embedded'])).toThrow();
+    expect(() => parseCli(['iced', 'run', '--embedded', 'false'])).toThrow();
+    expect(() => parseCli(['iced', 'run', '--embedded=false'])).toThrow();
   });
 
   test('preserves a local video path as one application argument, not cargo options', () => {

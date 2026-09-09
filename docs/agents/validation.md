@@ -21,13 +21,16 @@ checks; do not add an approval pause solely because the applicable tier is broad
    acceptance crosses application startup, window/shell wiring, subscriptions, tray behavior, or
    configuration persistence. The smoke gate proves startup, not appearance — visual acceptance
    remains human (see root AGENTS.md).
+   The standard smoke skips tray creation. GTK/tray startup changes also need a nonvisual
+   probe that enables the real tray before embedded-host creation under a non-C `LC_ALL`,
+   using an isolated D-Bus session and Xvfb. A tray-free smoke cannot verify that boundary.
 
 ## Diagnosing Smoke and Playback Failures
 
 When the smoke gate or MPV playback fails, follow this route instead of ad-hoc spelunking:
 
 - **App logging**: `JELLYPILOT_LOG` (tracing EnvFilter syntax) controls app diagnostics; default
-  `warn`, output goes to **stderr** (`src-iced/src/main.rs`). Typical values: `error`, `warn`,
+  `warn`, output goes to **stderr** (`src-iced/src/runner.rs`). Typical values: `error`, `warn`,
   `info`, `debug`, `trace`, or module-scoped `jellypilot_iced=debug`. Re-run a failing gate as
   `JELLYPILOT_LOG=debug bun run task iced run --smoke`.
 - **Stream anatomy**: the dispatcher pipes child output through, so cargo compile lines come first

@@ -11,6 +11,8 @@ on:
       - "src-iced/**"
       - "crates/**"
       - "assets/icons/**"
+      - "scripts/**"
+      - "tools/embedded-mpv/**"
   pull_request:
     branches: ["main"]
     paths:
@@ -22,6 +24,8 @@ on:
       - "src-iced/**"
       - "crates/**"
       - "assets/icons/**"
+      - "scripts/**"
+      - "tools/embedded-mpv/**"
 
 jobs:
   compile:
@@ -35,9 +39,11 @@ jobs:
       HUSKY: 0
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
       - name: Compile workspace
-        run: cargo check --locked --workspace
+        run: bun run task rust check

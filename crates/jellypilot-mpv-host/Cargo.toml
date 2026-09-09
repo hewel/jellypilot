@@ -1,0 +1,18 @@
+[package]
+name = "jellypilot-mpv-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Intentionally not inheriting workspace unsafe_code=forbid: this crate is the
+# audited Vulkan/libmpv boundary. lib.rs denies unsafe_op_in_unsafe_fn instead.
+[target.'cfg(target_os = "linux")'.dependencies]
+iced_wgpu = { workspace = true, features = ["web-colors"] }
+wgpu = { version = "29", features = ["vulkan"] }
+ash = "0.38"
+libloading = "0.8"
+parking_lot = "0.12"
+thiserror = "2"

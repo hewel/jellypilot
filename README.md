@@ -6,12 +6,12 @@
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
-[![iced](https://img.shields.io/badge/iced-0.14-blue)](https://iced.rs/)
+[![iced](https://img.shields.io/badge/iced-pinned_fork-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — always playing through your own MPV.**
+**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — using your own external MPV by default.**
 
-Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview, no embedded player, no forced transcoding.
+Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview or forced transcoding. Optional Linux Vulkan SDR playback inside the app.
 
 </div>
 
@@ -19,7 +19,7 @@ Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview,
 
 ## 📖 Overview
 
-JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and drives **External MPV Playback**: a standalone MPV process controlled over JSON IPC. Your MPV configuration, shaders, and scripts stay in charge — JellyPilot never embeds `libmpv`, never uses a webview, and never asks the server to transcode.
+JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and defaults to **External MPV Playback**: a standalone MPV process controlled over JSON IPC. Your MPV configuration, shaders, and scripts stay in charge. **Embedded MPV Playback** is an explicit Linux Vulkan SDR option with a separate application-owned baseline; it does not load your external MPV configuration.
 
 Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emby sessions can mirror supported remote transport commands to the app, the player bar, and the system tray.
 
@@ -102,7 +102,8 @@ plugin synchronization has populated them.
 
 ### Runtime prerequisites
 
-- [MPV](https://mpv.io/) with Lua scripting support, available on `PATH` or selected explicitly in Settings — it is the only playback engine. A bundled Lua hook captures volume and temporary mute before MPV resets file-local options at the end of playback.
+- External playback: [MPV](https://mpv.io/) with Lua scripting support, available on `PATH` or selected explicitly in Settings. A bundled Lua hook captures volume and temporary mute before MPV resets file-local options at the end of playback.
+- Embedded playback: the exact host-enabled libmpv build and baseline below, plus Linux Vulkan with a supported `Rgb10a2Unorm` presentation surface. Missing capability is an error, not an eight-bit, software, system-libmpv, or external-player fallback.
 
 ### Installation
 
@@ -131,10 +132,76 @@ sudo pacman -U ./jellypilot-2.0.0-1-x86_64.pkg.tar.zst
 git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
 bun install --frozen-lockfile
-bun run task iced run --release
+bun run task iced build --release
 ```
 
 The release binary is `target/release/jellypilot`.
+
+Maintained Cargo tasks prepare `target/vendor/iced` before building. Its exact base revision and
+the checked-in extension patch SHA-256 are pinned in `tools/embedded-mpv/iced-source.json`;
+the base checkout is verified and the patch is applied without modifying a sibling checkout.
+An unavailable remote revision fails explicitly. Before the fork revisions are published,
+supply an accessible checkout containing the exact pinned commit:
+
+```bash
+bun run task iced prepare --source /absolute/path/to/iced
+```
+
+### Embedded MPV: build, select, and recover
+
+This accepted integration supersedes ADR 0027's external-only playback restriction, not its
+native iced/no-webview decision. External remains the default, including existing settings
+files. In **Settings → Playback**, select Embedded and restart; the same player, transport,
+queue, volume, subtitles, and remote-session controller are reused. **Show video** opens the
+player surface while browsing. Switching back preserves the external executable and arguments.
+
+```bash
+# Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
+# Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1, libass.
+bun run task mpv build --source /absolute/path/to/mpv
+bun run task iced run --embedded
+```
+
+`tools/embedded-mpv/source.json` pins mpv to
+`6430785cab693d103ea5a7b70de6efa92c5700d4`, its baseline, and Meson options.
+The supplied source must be at that revision with no tracked changes. Without `--source`,
+the task fetches that revision from the configured fork; an unpublished or inaccessible
+revision is a hard prerequisite failure. No source commit or push is performed.
+
+The build stages `target/embedded-mpv/lib/jellypilot/libmpv.so`,
+`target/embedded-mpv/share/jellypilot/mpv-baseline.conf`, and `manifest.json`.
+The manifest records source, configuration, tool/dependency versions and artifact hashes.
+Source and options are pinned; host libraries/compiler and auto-selected dependencies are
+recorded, **not pinned**, so this is not a bit-reproducible or self-contained distribution.
+Vulkan headers may be supplied explicitly through `CFLAGS=-I/absolute/sdk/include` (and
+dependencies through `PKG_CONFIG_PATH`); neither is silently obtained from another build tree.
+
+For this workstation, the explicit SDK came from
+`vulkan-headers-1:1.4.357.0-1-any.pkg.tar.zst`
+(SHA-256 `2f6c34cc829c4b63c0cf08cf147841c8ded023b746324540fb02322d9c415c07`),
+extracted under `target/sdk/vulkan-headers-1.4.357.0`. Its `usr/include` was passed in `CFLAGS`
+to the build command; the staged library was rebuilt from the pinned mpv source.
+
+Development run/hot commands pass staged asset paths even when Embedded is selected through
+saved settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
+supported; only trusted files implementing the pinned host ABI may be loaded. A directly
+launched binary instead looks beside itself for `lib/jellypilot/libmpv.so` and
+`share/jellypilot/mpv-baseline.conf`. Existing native packages remain external-first and do
+not silently bundle host system libraries. To recover from an unavailable embedded setup,
+launch `jellypilot --external`, select External in Settings, and restart.
+
+The host retains the actual enabled Vulkan feature chain and shares its device/queue with
+the official iced renderer. Video reaches a private 10-bit texture through three ordered
+command buffers: tracked `COPY_DST` transition, raw copy, tracked `RESOURCE` transition.
+Queue submissions, acquisition/presentation/discard and image/screenshot submits share a
+gate; device polling and synchronous mpv calls stay outside it. MPV owns playback time.
+The private launcher contains only the two unsafe engine/surface handoffs; Vulkan/libmpv
+FFI lives in `jellypilot-mpv-host`, while `src-iced` retains its unsafe-code prohibition.
+This does not claim HDR, hardware decoding, zero-copy playback, or downstream compositor
+presentation feedback. Non-Linux embedded startup is explicitly unavailable.
+The daemon factory retains the host/device resources across last-window close; reopening
+creates a new surface and renderer for the same playback session. Daemon exit terminates
+mpv before removing its process-private IPC directory.
 
 ### Usage
 
@@ -183,9 +250,14 @@ flowchart LR
     MS <-->|REST| Server
     Server -->|original/direct source| MPV[External MPV process]
     Mpv <-->|JSON IPC| MPV
+    Mpv <-->|JSON IPC, explicit Linux option| Host[Embedded MPV host]
+    Server -->|original/direct source| Host
+    Host -->|10-bit Vulkan copy and sample| App
 ```
 
 - `src-iced` — the application: shell, screens, tray, subscriptions, orchestration.
+- `crates/jellypilot-launcher` — executable-only entry point and private unsafe engine/surface handoffs.
+- `crates/jellypilot-mpv-host` — Linux host ABI, retained Vulkan device/features, bounded producer images and GPU copy lifecycle.
 - `crates/jellypilot-ui` — the design system: tokens, theme/Catalog styles, custom widgets, overlay.
 - `crates/jellypilot-core` — display-free browse model, configuration, request gate, diagnostics, artwork load planning.
 - `crates/jellypilot-media-server` — Jellyfin/Emby HTTP adapter over the generated OpenAPI clients in `crates/media-server-api/`.

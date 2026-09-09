@@ -36,6 +36,11 @@ fn update_settings(
   message: SettingsMessage,
 ) -> Task<Message> {
   match message {
+    SettingsMessage::PlaybackBackendSelected(backend) => {
+      let result = kernel.settings.set_playback_backend(backend);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
     SettingsMessage::FontLicensesToggled => {
       surface.view.font_licenses_expanded = !surface.view.font_licenses_expanded;
       Task::none()

@@ -13,9 +13,11 @@ export const RUST_FORMAT_PACKAGES = [
   'jellypilot-core',
   'jellypilot-media-server',
   'jellypilot-mpv',
+  'jellypilot-mpv-host',
   'jellypilot-session',
   'jellypilot-ui',
   'jellypilot-iced',
+  'jellypilot-launcher',
 ];
 
 export function command(

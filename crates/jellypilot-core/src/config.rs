@@ -221,6 +221,15 @@ impl From<BrowseFilterSettings> for BrowsePreferences {
     }
 }
 
+/// Playback presentation backend. Changes take effect on the next application start.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlaybackBackend {
+    #[default]
+    External,
+    Embedded,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Settings {
     remember: bool,
@@ -240,6 +249,8 @@ pub struct Settings {
     ui_language: LanguagePreference,
     #[serde(default)]
     app_mode: AppMode,
+    #[serde(default)]
+    playback_backend: PlaybackBackend,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     mpv_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_list")]
@@ -293,6 +304,7 @@ impl Default for Settings {
             theme_mode: ThemeMode::System,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
+            playback_backend: PlaybackBackend::External,
             mpv_path: None,
             mpv_args: Vec::new(),
             playback_target_name: None,
@@ -336,6 +348,10 @@ impl Settings {
     }
     pub const fn app_mode(&self) -> AppMode {
         self.app_mode
+    }
+
+    pub const fn playback_backend(&self) -> PlaybackBackend {
+        self.playback_backend
     }
 
     pub fn mpv_path(&self) -> Option<&str> {
@@ -547,6 +563,16 @@ impl SettingsStore {
     pub fn set_app_mode(&mut self, mode: AppMode) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.app_mode = mode;
+            Ok(())
+        })
+    }
+
+    pub fn set_playback_backend(
+        &mut self,
+        backend: PlaybackBackend,
+    ) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.playback_backend = backend;
             Ok(())
         })
     }
@@ -1039,6 +1065,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn embedded_selection_preserves_external_configuration_across_reload() {
+        let path = test_path("playback-backend");
+        let original = remembered_settings();
+        let mut store = store_at(path.clone(), original.clone());
+        assert!(store
+            .set_playback_backend(PlaybackBackend::Embedded)
+            .unwrap());
+        let embedded = read_from(&path).unwrap();
+        assert_eq!(embedded.playback_backend(), PlaybackBackend::Embedded);
+        assert_eq!(embedded.mpv_path(), original.mpv_path());
+        assert_eq!(embedded.mpv_args(), original.mpv_args());
+        assert!(store
+            .set_playback_backend(PlaybackBackend::External)
+            .unwrap());
+        assert_eq!(read_from(&path).unwrap(), original);
+        fs::remove_file(path).unwrap();
+    }
+
     fn remembered_settings() -> Settings {
         Settings {
             remember: true,
@@ -1050,6 +1095,7 @@ mod tests {
             theme_mode: ThemeMode::Dark,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
+            playback_backend: PlaybackBackend::External,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],
             playback_target_name: Some("Living Room".to_owned()),

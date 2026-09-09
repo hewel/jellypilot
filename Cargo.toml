@@ -5,7 +5,9 @@ members = [
   "crates/jellypilot-ui",
   "crates/jellypilot-media-server",
   "crates/jellypilot-mpv",
+  "crates/jellypilot-mpv-host",
   "crates/jellypilot-session",
+  "crates/jellypilot-launcher",
   "src-iced",
 ]
 exclude = [
@@ -13,12 +15,16 @@ exclude = [
   "crates/media-server-api/jellyfin",
   "experiments/iced-local-video",
   "crates/jellypilot-player",
+  "target/vendor/iced",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-iced = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
-iced_runtime = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95" }
+# Exact upstream revision and extension hash: tools/embedded-mpv/iced-source.json.
+# The dispatcher materializes this repository-relative tree before invoking Cargo.
+iced = { path = "target/vendor/iced", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
+iced_runtime = { path = "target/vendor/iced/runtime" }
+iced_wgpu = { path = "target/vendor/iced/wgpu" }
 
 [workspace.package]
 edition = "2021"

@@ -1,6 +1,6 @@
 # JellyPilot Context
 
-JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through a standalone MPV process.
+JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through MPV.
 
 These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md); the [Video Home Hero specification](docs/home-hero-design-spec.md) records the carousel design separately from its implementation status.
 
@@ -17,15 +17,22 @@ The JellyPilot install as it appears to media-server users when they choose wher
 _Avoid_: Generic app instance
 
 **Playback Session**:
-One active presentation of a media item through External MPV Playback.
+One active presentation of a media item through the selected Playback Backend.
 _Avoid_: Player process, transcode job
 
 **External MPV Playback**:
 Playback presented by a standalone MPV process so the user's MPV configuration, scripts, and shaders remain available.
 _Avoid_: Embedded MPV, libmpv
 
+**Embedded MPV Playback**:
+Playback presented inside JellyPilot's existing player surface. It is an explicit Linux SDR option with an application-owned playback baseline, independent of the user's External MPV Playback configuration.
+_Avoid_: External player window, zero-copy playback, hardware-decoding guarantee
+
+**Playback Backend**:
+The persisted choice between External MPV Playback (the default) and Embedded MPV Playback. A changed choice takes effect on application restart; it is independent of App Mode.
+
 **Provider Transcode**:
-Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through External MPV Playback and does not request a Provider Transcode.
+Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through the selected Playback Backend and does not request a Provider Transcode.
 
 **Quick Connect**:
 A Jellyfin authentication method where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default Jellyfin login method and authenticates to a known Server URL; it does not discover or choose servers.

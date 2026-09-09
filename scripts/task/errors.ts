@@ -19,3 +19,13 @@ export class TaskMonitorError extends Data.TaggedError('TaskMonitorError')<{
   readonly pid: number;
   readonly message: string;
 }> {}
+
+export class TaskMpvBuildError extends Data.TaggedError('TaskMpvBuildError')<{
+  readonly step: string;
+  readonly message: string;
+}> {}
+
+export class TaskMpvArtifactError extends Data.TaggedError('TaskMpvArtifactError')<{
+  readonly path: string;
+  readonly message: string;
+}> {}

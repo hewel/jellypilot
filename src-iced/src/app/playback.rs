@@ -901,6 +901,11 @@ pub(crate) fn initialize_playback(
 }
 
 fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
+  if let Some(options) = crate::embedded::options() {
+    return PlaybackControllerConfig::default()
+      .with_embedded_ipc(options.ipc.clone())
+      .with_volume_memory_enabled(settings.remember_season_volume());
+  }
   let config = PlaybackControllerConfig::default()
     .with_extra_args(configured_mpv_args(settings))
     .with_volume_memory_enabled(settings.remember_season_volume());

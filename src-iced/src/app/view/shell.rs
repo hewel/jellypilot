@@ -66,8 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::PersonalLists(_) => personal_lists::view(state),
     Destination::Detail(_) => detail::view(state),
-    // Now Playing is the Control-Only root; the router never routes here in
-    // Full mode, where the player is a bar.
+    Destination::NowPlaying if crate::embedded::enabled() => player::full(state),
     Destination::NowPlaying => home::view(state),
   };
   let content = super::scroll_memory::remember(content, &state.shell.scroll_memory);

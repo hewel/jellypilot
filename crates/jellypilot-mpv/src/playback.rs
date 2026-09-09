@@ -39,9 +39,17 @@ pub struct PlaybackControllerConfig {
   extra_args: Vec<String>,
   demuxer_cache_dir: Option<PathBuf>,
   volume_memory_disabled: bool,
+  embedded_ipc: Option<PathBuf>,
 }
 
 impl PlaybackControllerConfig {
+  /// Use the application's already-initialized embedded host.
+  #[must_use]
+  pub fn with_embedded_ipc(mut self, path: PathBuf) -> Self {
+    self.embedded_ipc = Some(path);
+    self
+  }
+
   /// Enable per-season volume restoration and capture without changing current volume.
   #[must_use]
   pub fn with_volume_memory_enabled(mut self, enabled: bool) -> Self {
@@ -709,11 +717,15 @@ impl PlaybackController {
     server: Arc<JellyfinClient>,
     config: PlaybackControllerConfig,
   ) -> Result<Self, PlaybackError> {
-    let mpv_path = match config.mpv_path {
-      Some(path) => path,
-      None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
+    let mpv = if let Some(path) = config.embedded_ipc {
+      MpvClient::embedded(path)
+    } else {
+      let mpv_path = match config.mpv_path {
+        Some(path) => path,
+        None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
+      };
+      MpvClient::new(Some(mpv_path))
     };
-    let mpv = MpvClient::new(Some(mpv_path));
     mpv.set_extra_args(config.extra_args.clone());
     if let Some(cache_dir) = config.demuxer_cache_dir {
       mpv.set_demuxer_cache_dir(cache_dir);
@@ -850,11 +862,13 @@ impl PlaybackController {
         .set_volume_memory_enabled(!config.volume_memory_disabled)
         .await;
     }
-    let mpv_path = match config.mpv_path {
-      Some(path) => path,
-      None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
-    };
-    self.mpv.set_mpv_path(Some(mpv_path));
+    if config.embedded_ipc.is_none() {
+      let mpv_path = match config.mpv_path {
+        Some(path) => path,
+        None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
+      };
+      self.mpv.set_mpv_path(Some(mpv_path));
+    }
     self.mpv.set_extra_args(config.extra_args.clone());
     if let Some(cache_dir) = config.demuxer_cache_dir {
       self.mpv.set_demuxer_cache_dir(cache_dir);

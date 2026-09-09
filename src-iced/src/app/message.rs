@@ -213,6 +213,7 @@ pub enum SettingsMessage {
   OpenAccounts,
   Close,
   SectionSelected(super::state::SettingsSection),
+  PlaybackBackendSelected(jellypilot_core::config::PlaybackBackend),
   MpvPathChanged(String),
   SaveMpvPath,
   MpvArgsChanged(String),

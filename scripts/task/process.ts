@@ -63,7 +63,7 @@ const spawnOwnedProcess = (request: CommandRequest) =>
   Effect.tryPromise({
     try: () => {
       const spawned = Promise.withResolvers<OwnedProcess>();
-      const child = spawn(request.command, [...request.args], {
+      const child = spawn(request.command, request.args, {
         cwd: REPO_ROOT,
         detached: true,
         env: { ...process.env, ...request.env },

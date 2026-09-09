@@ -19,6 +19,7 @@ depends=(
 makedepends=(
   'git'
   'rust'
+  'bun'
 )
 source=(
   "git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"
@@ -32,7 +33,8 @@ sha256sums=(
 build() {
   cd "$srcdir/$pkgname"
 
-  cargo build --release --locked -p jellypilot-iced
+  bun install --frozen-lockfile
+  bun run task iced build --release
 }
 
 package() {

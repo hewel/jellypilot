@@ -1,8 +1,10 @@
 //! Cross-platform iced application shell for JellyPilot.
 
 mod app;
+mod embedded;
 mod i18n;
 mod instance;
+mod runner;
 mod tray;
 
 use std::cell::RefCell;
@@ -26,13 +28,28 @@ pub(crate) fn decode_icon(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
   Some((image.into_raw(), width, height))
 }
 
-/// Starts the cross-platform iced daemon and blocks until it exits.
-pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  run_application(false)
+/// Engine construction is supplied only by the thin trusted launcher.
+/// The application never exposes the resulting engine or accepts custom widgets.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+pub struct EmbeddedEngineFactory {
+  pub create_engine: fn(
+    &jellypilot_mpv_host::DeviceContext,
+    Option<iced::advanced::graphics::Antialiasing>,
+    iced::advanced::graphics::Shell,
+  ) -> iced_wgpu::Engine,
+  pub configure_surface: fn(
+    &jellypilot_mpv_host::DeviceContext,
+    &iced_wgpu::wgpu::Surface<'_>,
+    &iced_wgpu::wgpu::SurfaceConfiguration,
+  ),
 }
-/// Starts the iced daemon and exits after its first rendered window frame.
-pub fn run_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  run_application(true)
+#[cfg(not(target_os = "linux"))]
+pub type EmbeddedEngineFactory = ();
+
+/// Runs the fixed JellyPilot application and its command-line startup behavior.
+pub fn run(factory: EmbeddedEngineFactory) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  runner::run(factory)
 }
 
 /// Parses a `WxH` geometry string (e.g., `"1024x640"`) into an [`iced::Size`].
@@ -50,7 +67,10 @@ pub(crate) fn parse_smoke_size(input: &str) -> Option<Size> {
   Some(Size::new(width, height))
 }
 
-fn run_application(smoke: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn run_application(
+  smoke: bool,
+  factory: EmbeddedEngineFactory,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   tracing::debug!(smoke, "daemon booting");
   let instance = if smoke {
     None
@@ -61,6 +81,7 @@ fn run_application(smoke: bool) -> Result<(), Box<dyn std::error::Error + Send +
       instance::Startup::Unavailable => None,
     }
   };
+  embedded::initialize(smoke, factory)?;
   jellypilot_ui::fonts::initialize()?;
   let instance = RefCell::new(instance);
   let mut daemon = iced::daemon(
@@ -81,6 +102,26 @@ fn run_application(smoke: bool) -> Result<(), Box<dyn std::error::Error + Send +
 
   for font in jellypilot_ui::fonts::fonts() {
     daemon = daemon.font(font);
+  }
+
+  #[cfg(target_os = "linux")]
+  if embedded::enabled() {
+    use embedded::retained::RetainedCompositor;
+    use iced::advanced::graphics::Compositor;
+    let retained = std::rc::Rc::new(RefCell::new(None::<RetainedCompositor>));
+    return daemon
+      .run_with_compositor(move |settings, display, window, shell| {
+        let retained = retained.clone();
+        async move {
+          if let Some(compositor) = retained.borrow().as_ref() {
+            return Ok(compositor.clone());
+          }
+          let compositor = RetainedCompositor::new(settings, display, window, shell).await?;
+          *retained.borrow_mut() = Some(compositor.clone());
+          Ok(compositor)
+        }
+      })
+      .map_err(Into::into);
   }
 
   daemon.run().map_err(Into::into)

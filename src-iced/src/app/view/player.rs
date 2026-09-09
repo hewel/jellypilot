@@ -58,6 +58,18 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .width(Fill);
 
   let mut content = Column::new().spacing(TOKENS.spacing.s2).push(top);
+  if crate::embedded::enabled() {
+    content = content.push(
+      control_button(
+        Some(Icon::Movie),
+        Some(state.t("player-show-video")),
+        ButtonVariant::Tonal,
+      )
+      .on_press(Message::Home(crate::app::message::HomeMessage::Navigate(
+        crate::app::state::Destination::NowPlaying,
+      ))),
+    );
+  }
 
   if let Some(prompt) = intro_prompt(state) {
     content = content.push(prompt);
@@ -253,7 +265,14 @@ pub fn full(state: &State) -> Element<'_, Message> {
         .spacing(TOKENS.spacing.s3)
         .align_x(Alignment::Center)
         .width(Fill)
-        .push(playback_artwork(state, 200.0, 300.0))
+        .push(if crate::embedded::enabled() {
+          container(crate::embedded::view())
+            .width(Fill)
+            .height(Length::FillPortion(1))
+            .into()
+        } else {
+          playback_artwork(state, 200.0, 300.0)
+        })
         .push(
           now_playing_metadata(state, now_playing, 22.0, 13.0)
             .align_x(Alignment::Center)

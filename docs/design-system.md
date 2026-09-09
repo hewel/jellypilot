@@ -65,18 +65,20 @@ Buttons never cast a shadow. `ShadowToken` keeps the CSS spread/inset fields; th
 
 ## Radii
 
-The scale is `none` (0), `sm` (2), `md` (6), `lg` (8), `full` (9999). Usage mapping:
+The scale in `tokens.rs` is `none` (0), `sm` (2), `md` (6), `lg` (8), `xl` (12), `x2l` (20), `full` (9999) — `tokens.rs` is authoritative. Usage mapping:
 
 | Radius | Use |
 |---|---|
-| `none` (0) | Docked blocks (sidebar, player bar), canvas |
+| `none` (0) | Docked blocks (sidebar), canvas |
 | `sm` (2) | Small inline chrome (toast dismiss button) |
-| `md` (6) | Controls: buttons, fields, badges, tooltips |
-| `lg` (8) | Floating layers, media images, poster artwork, skeletons |
-| `full` | Scrollbars, status dots |
+| `md` (6) | Small controls: compact icon buttons, badges, tooltips, list-view thumbnail artwork |
+| `lg` (8) | Library-row level chrome, skeletons |
+| `xl` (12) | Media cards and poster artwork, buttons, fields, popovers, floating player bar |
+| `x2l` (20) | Modal cards (settings, account popover) |
+| `full` | Scrollbars, status dots, toggle switches |
 
 Nested rounding follows the concentric rule: inner radius = parent radius − padding, floored at 0.
-The Sidebar surface revision adds scoped role targets of 12 and 20 without changing these existing token values or their default consumers.
+The Sidebar surface revision's scoped role targets of 12 and 20 correspond to `xl` and `x2l`.
 
 ## Buttons
 
@@ -168,3 +170,38 @@ All UI icons are vendored from the Reicon set (MIT, `crates/jellypilot-ui/assets
 - UI sounds or haptics.
 - Raw URL playback controls.
 - Fake artwork or fake playback state.
+
+## 2026-09-08 Paper Design Sync (Media Streamer file)
+
+**Design reference accepted in the Paper file; implementation acceptance pending.** The Paper file ("Media Streamer") is the visual reference for the home, library browse, detail pages, player bar, control-only window, account popover, and settings window. Where this section differs from older text above, this section wins for new work; `tokens.rs` remains authoritative for token values.
+
+### Surfaces and Edges
+
+- **Image outline**: all artwork (posters, episode thumbnails, avatars, cast photos) carries a 1px pure-white 10% outline (`imageOutline`, dark mode). Never a tinted near-white — tinted outlines pick up the surface beneath and read as dirt. Full-bleed hero backdrops and transparent title logos are exempt. Paper-only token for now; add to `tokens.rs` when implemented.
+- **Quiet control edge**: secondary/tonal controls filled `surfaceContainerHigh` gain a 1px neutral structural edge (`border-subtle`, white 8%) so they hold their shape over imagery and canvas. Primary buttons stay borderless — the fill is the boundary. One primary action per section stands.
+- **Sidebar background** uses a Paper-only `sidebar-bg` (#0F1016) between `surfaceContainerLowest` and `surfaceContainerLow`; add a semantic token when implemented. `border-subtle` (white 8%) stays a Paper-only semantic until the code has an equivalent translucent neutral.
+
+### Player Bar
+
+- Floating card, radius `xl`, 1px `border-subtle` edge, margins 12 off the content edges — not docked full-width.
+- Three zones: now-playing (poster 2:3, never square-cropped; title + remaining time; favorite) | transport + integrated progress | icon-only cluster (queue, audio, subtitles, volume, fullscreen). No stop button; labels live in tooltips.
+- Progress: 6px track with native-blurred sampling, times flanking the track, buffered layer, knob + time bubble on hover. Card progress bars share the 6px blurred track.
+- Intro/outro media segments on the track: 9% white wash plus a 2px tick at each skip boundary. No amber fills, no always-visible skip buttons; the skip affordance appears only while the playhead is inside a segment.
+- Queue/audio/subtitle popovers: radius `xl`, `surfaceContainer` fill, 1px `border-subtle`, no header titles, selected row = `primaryContainer` + `secondary` check, max-height with scroll fade + thin scrollbar. Volume slider is permanent (no expand animation).
+
+### Control-Only Window
+
+Minimum viable chrome around 400×580: ambient blurred-artwork backdrop (dimmed to 55%), flexible poster area (artwork grows with the window; never letterbox the UI), one-line episode title + series subline, 6px progress with persistent knob, ghost prev/next + 52px primary play/pause, icon-only queue/audio/subtitles + permanent volume slider pinned to the bottom. Static color extraction is the fallback if live blur is too expensive.
+
+### Content Patterns
+
+- **Long overviews**: clamp to 2 lines with an end-fade and a 展开/收起 toggle, shown only when the text actually overflows (measured, not character-counted). No animation.
+- **Library browse**: grid/list segmented toggle; grid posters carry watch-progress bars; long titles single-line ellipsis; infinite scroll shows a loading indicator. List view lanes: index, 40×60 poster, title + episode count, year, rating (amber, tabular-nums), watch progress, favorite — fixed-width slots keep the lanes aligned.
+- **Empty/loading/focus**: empty states are centered icon + message + one primary recovery action; loading uses flat breathing skeleton blocks; keyboard focus is a 2px `primary` outer ring.
+- **Detail pages** share one skeleton (full-bleed hero with two-layer scrim — bottom fade to canvas plus a left darkening lane for the logo/legibility — action row, info columns, cast carousel, similar posters). 接下来观看 exists only on the series page, never on the single-episode page. Episode rows show watched check + 重看, in-progress bar + 继续, or plain 播放.
+
+### Settings and Account Popover
+
+- Settings is a floating modal card (radius `x2l`, `raised_high`, 1px `border-subtle`) over a dimmed blurred backdrop: 208px section nav with the shared active treatment (`primaryContainer` fill, `secondary` content), content column per section.
+- Boolean settings use real switches (40×22 track, 18px knob) — never 开启/关闭 text buttons. Destructive actions (`退出登录`) render in `error` and sit right; recovery actions sit left.
+- The Account Popover shows the current identity zero times in its switch list — the header is the server row (URL + copy + 已连接 badge); only alternative accounts are listed. The sidebar identity card carries the switch affordance (transfer-v icon), a structural 1px edge, and the human-readable `Jellyfin · 10.0.0.27` subline, not the raw device ID.

@@ -83,9 +83,15 @@ impl Tray {
       .name("tray".to_owned())
       .spawn(move || {
         #[cfg(target_os = "linux")]
-        if let Err(error) = gtk::init() {
-          let _ = init_tx.send(Err(error.to_string()));
-          return;
+        {
+          // GTK's default setlocale(LC_ALL, "") changes process-wide numeric
+          // parsing and makes libmpv reject startup. UI language is owned by
+          // Localizer; keep Rust's initial C locale instead of mutating it here.
+          gtk::disable_setlocale();
+          if let Err(error) = gtk::init() {
+            let _ = init_tx.send(Err(error.to_string()));
+            return;
+          }
         }
 
         let play_pause = MenuItem::with_id(PLAY_PAUSE_ID, locale.text("common-play"), false, None);
