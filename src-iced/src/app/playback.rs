@@ -1306,7 +1306,11 @@ fn update_playback(
       surface.queue_menu_open = !surface.queue_menu_open;
       surface.audio_menu_open = false;
       surface.subtitle_menu_open = false;
-      Task::none()
+      if surface.queue_menu_open {
+        super::view::player::reveal_current_queue_item()
+      } else {
+        Task::none()
+      }
     }
     PlaybackMessage::QueueMenuDismissed => {
       surface.queue_menu_open = false;
@@ -1329,6 +1333,7 @@ fn update_playback(
       season_number,
       result,
     } => {
+      let was_loading = matches!(surface.queue, QueueState::Loading);
       apply_queue_loaded(
         surface,
         kernel,
@@ -1338,7 +1343,11 @@ fn update_playback(
         season_number,
         result,
       );
-      Task::none()
+      if was_loading && surface.queue_menu_open && matches!(surface.queue, QueueState::Ready(_)) {
+        super::view::player::reveal_current_queue_item()
+      } else {
+        Task::none()
+      }
     }
     PlaybackMessage::ControllerSettled {
       id,

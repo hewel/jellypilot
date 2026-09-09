@@ -1130,6 +1130,151 @@ mod tests {
     ));
   }
 
+  #[tokio::test]
+  async fn opening_play_queue_reveals_current_episode_without_pinning_manual_scroll() {
+    use crate::app::message::PlaybackMessage;
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::futures::StreamExt;
+    use iced::{Element, Rectangle, Size, Vector};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use jellypilot_mpv::playback::NowPlayingItem;
+    use jellypilot_mpv::playback_session::NowPlayingView;
+
+    #[derive(Default)]
+    struct QueuePosition {
+      viewport: Option<Rectangle>,
+      current: Option<Rectangle>,
+      translation: Vector,
+    }
+    impl widget::Operation for QueuePosition {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _: Rectangle,
+        translation: Vector,
+        _: &mut dyn widget::operation::Scrollable,
+      ) {
+        if id == Some(&widget::Id::new("player-queue")) {
+          self.viewport = Some(bounds);
+          self.translation = translation;
+        }
+      }
+      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+        if id == Some(&widget::Id::new("player-queue-current")) {
+          self.current = Some(bounds);
+        }
+      }
+    }
+    fn player(state: &State) -> Element<'_, Message> {
+      iced::widget::container(crate::app::view::player::bar(state).unwrap())
+        .width(iced::Fill)
+        .height(iced::Fill)
+        .align_y(iced::Alignment::End)
+        .into()
+    }
+    let mut state = State::boot(false);
+    state.playback.queue = crate::app::playback::QueueState::Ready(
+      (0..30)
+        .map(|index| {
+          let mut item = episode(&format!("episode-{index}"), 1);
+          item.episode_number = Some(index + 1);
+          item.name = "A long episode title that wraps within the queue ".repeat(3);
+          item
+        })
+        .collect(),
+    );
+    state.playback.view.now_playing = Some(NowPlayingView {
+      item: NowPlayingItem {
+        item_id: String::new(),
+        title: "Current episode".to_owned(),
+        item_type: "Episode".to_owned(),
+        runtime_seconds: Some(1800.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".to_owned(),
+      },
+      paused: false,
+      position_seconds: 0.0,
+      duration_seconds: Some(1800.0),
+      volume: 80.0,
+      muted: false,
+    });
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .unwrap();
+    let bounds = Size::new(900.0, 600.0);
+    let mut cache = Cache::new();
+    // Reopen the same episode after scrolling away, then exercise both list ends.
+    for current in [24, 24, 0, 29] {
+      state
+        .playback
+        .view
+        .now_playing
+        .as_mut()
+        .unwrap()
+        .item
+        .item_id = format!("episode-{current}");
+      let task = update(
+        &mut state,
+        Message::Playback(PlaybackMessage::QueueMenuToggled),
+      );
+      let mut ui = UserInterface::build(player(&state), bounds, cache, &mut renderer);
+      if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+        while let Some(action) = stream.next().await {
+          if let iced_runtime::Action::Widget(mut operation) = action {
+            loop {
+              ui.operate(&renderer, operation.as_mut());
+              match operation.finish() {
+                widget::operation::Outcome::Chain(next) => operation = next,
+                _ => break,
+              }
+            }
+          }
+        }
+      }
+      let mut position = QueuePosition::default();
+      ui.operate(&renderer, &mut position);
+      let viewport = position.viewport.expect("open queue viewport");
+      let row = position.current.expect("current episode row");
+      let top = row.y - position.translation.y;
+      assert!(
+        top >= viewport.y - 0.5 && top + row.height <= viewport.y + viewport.height + 0.5,
+        "episode {current} must be visible: row={row:?}, viewport={viewport:?}, offset={:?}",
+        position.translation
+      );
+
+      ui.operate(
+        &renderer,
+        &mut widget::operation::scrollable::scroll_to::<()>(
+          widget::Id::new("player-queue"),
+          iced::widget::scrollable::AbsoluteOffset {
+            x: None,
+            y: Some(0.0),
+          },
+        ),
+      );
+      let mut ui = UserInterface::build(player(&state), bounds, ui.into_cache(), &mut renderer);
+      let mut manual = QueuePosition::default();
+      ui.operate(&renderer, &mut manual);
+      assert_eq!(
+        manual.translation.y, 0.0,
+        "ordinary redraws must not recenter the queue"
+      );
+      cache = ui.into_cache();
+      let _ = update(
+        &mut state,
+        Message::Playback(PlaybackMessage::QueueMenuToggled),
+      );
+      cache = UserInterface::build(player(&state), bounds, cache, &mut renderer).into_cache();
+    }
+  }
+
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
       community_rating: None,

@@ -91,7 +91,7 @@ Track eligibility by item identity, not the item's previous index. If the select
 
 ### Hero
 
-- Use a movie's Backdrop or an episode's series Backdrop as the principal image.
+- Use a movie's Backdrop or an episode's series Backdrop as the principal image. As in Details, fall back to the item's Primary image when no Backdrop is available; episodes keep the order series Backdrop → item Backdrop → item Primary. This is image-reference selection, not a retry policy for failed downloads.
 - Use its Title Logo, or the series Title Logo for an episode, with the existing text-headline fallback. Keep logo aspect ratio and alpha; do not introduce a portrait poster slot.
 - Show the episode number and episode title when the Featured Item is an episode. A shared series Backdrop must not make the concrete playback target ambiguous.
 - Keep the foreground action-led: title treatment, essential episode identification, available duration, and the primary playback action plus Details. Observable progress remains on the separate Continue Watching cards, not as a detached Hero indicator.

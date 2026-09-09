@@ -536,7 +536,10 @@ fn embedded_action<'a>(
   );
   let size = if variant == ButtonVariant::Primary {
     44.0
-  } else if matches!(icon, Icon::ChevronLeft | Icon::ArrowsMaximize) {
+  } else if matches!(
+    icon,
+    Icon::ChevronLeft | Icon::ArrowsMaximize | Icon::ArrowsMinimize
+  ) {
     36.0
   } else if volume_icon {
     34.0
@@ -546,7 +549,10 @@ fn embedded_action<'a>(
   focus_tooltip(
     control_button(Some(icon), None, variant)
       .style(
-        if matches!(icon, Icon::ChevronLeft | Icon::ArrowsMaximize) {
+        if matches!(
+          icon,
+          Icon::ChevronLeft | Icon::ArrowsMaximize | Icon::ArrowsMinimize
+        ) {
           cinema::framed_control
         } else if volume_icon {
           cinema::volume_control
@@ -556,7 +562,7 @@ fn embedded_action<'a>(
       )
       .icon_size(IconSize::Custom(match icon {
         Icon::Previous | Icon::Next => 22.0,
-        Icon::ChevronLeft | Icon::ArrowsMaximize => 16.0,
+        Icon::ChevronLeft | Icon::ArrowsMaximize | Icon::ArrowsMinimize => 16.0,
         _ => 18.0,
       }))
       .padding(0)
@@ -677,7 +683,11 @@ fn embedded_bar<'a>(
       .height(18)
       .style(cinema::separator),
     embedded_action(
-      Icon::ArrowsMaximize,
+      if state.shell.player_fullscreen {
+        Icon::ArrowsMinimize
+      } else {
+        Icon::ArrowsMaximize
+      },
       state.t("player-fullscreen-shortcut"),
       ButtonVariant::Tonal,
       intent(PlaybackIntent::ToggleFullscreen)
@@ -1355,6 +1365,65 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
 
 /// Maximum height of the episode queue list before it scrolls.
 const QUEUE_MENU_MAX_HEIGHT: f32 = 280.0;
+const QUEUE_SCROLL_ID: &str = "player-queue";
+const QUEUE_CURRENT_ID: &str = "player-queue-current";
+
+/// Reveal the active row after the popover is laid out. Measure the row instead
+/// of multiplying an index by a fixed height: localized titles can wrap.
+pub(crate) fn reveal_current_queue_item() -> iced::Task<Message> {
+  use iced::advanced::widget;
+
+  struct Reveal {
+    queue_id: widget::Id,
+    current_id: widget::Id,
+    viewport: Option<(iced::Rectangle, iced::Rectangle)>,
+    current: Option<iced::Rectangle>,
+  }
+  impl<T: 'static> widget::Operation<T> for Reveal {
+    fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<T>)) {
+      visit(self);
+    }
+
+    fn scrollable(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      content: iced::Rectangle,
+      _translation: iced::Vector,
+      _state: &mut dyn widget::operation::Scrollable,
+    ) {
+      if id == Some(&self.queue_id) {
+        self.viewport = Some((bounds, content));
+      }
+    }
+
+    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      if id == Some(&self.current_id) {
+        self.current = Some(bounds);
+      }
+    }
+
+    fn finish(&self) -> widget::operation::Outcome<T> {
+      let (Some((viewport, content)), Some(current)) = (self.viewport, self.current) else {
+        return widget::operation::Outcome::None;
+      };
+      let inset = ((viewport.height - current.height) / 2.0).max(0.0);
+      widget::operation::Outcome::Chain(Box::new(widget::operation::scrollable::scroll_to(
+        self.queue_id.clone(),
+        scrollable::AbsoluteOffset {
+          x: None,
+          y: Some((current.y - content.y - inset).max(0.0)),
+        },
+      )))
+    }
+  }
+  widget::operate(Reveal {
+    queue_id: widget::Id::new(QUEUE_SCROLL_ID),
+    current_id: widget::Id::new(QUEUE_CURRENT_ID),
+    viewport: None,
+    current: None,
+  })
+}
 
 /// Current-season episode queue popover shared by the bar and the compact
 /// player. Rows follow season episode order; the actively playing episode is
@@ -1448,22 +1517,26 @@ fn queue_content(state: &State) -> Element<'_, Message> {
           } else {
             space::horizontal().width(14).into()
           };
-          rows = rows.push(
-            button(row![label, marker].align_y(Alignment::Center))
-              .padding(if embedded { [11, 10] } else { [6, 10] })
-              .width(Fill)
-              .on_press_maybe(
-                (!is_current && (!embedded || !state.playback.view.busy)).then_some(
-                  Message::Playback(PlaybackMessage::QueueItemSelected(Box::new(item.clone()))),
-                ),
-              )
-              .style(move |theme, status| {
-                jellypilot_ui::theme::button_variant(theme, status, row_variant)
-              }),
-          );
+          let row = button(row![label, marker].align_y(Alignment::Center))
+            .padding(if embedded { [11, 10] } else { [6, 10] })
+            .width(Fill)
+            .on_press_maybe(
+              (!is_current && (!embedded || !state.playback.view.busy)).then_some(
+                Message::Playback(PlaybackMessage::QueueItemSelected(Box::new(item.clone()))),
+              ),
+            )
+            .style(move |theme, status| {
+              jellypilot_ui::theme::button_variant(theme, status, row_variant)
+            });
+          rows = rows.push(if is_current {
+            Element::from(container(row).id(QUEUE_CURRENT_ID).width(Fill))
+          } else {
+            row.into()
+          });
         }
         container(
           scrollable(rows)
+            .id(QUEUE_SCROLL_ID)
             .width(Fill)
             .style(jellypilot_ui::theme::scrollable),
         )

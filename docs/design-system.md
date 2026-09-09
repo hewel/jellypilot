@@ -112,6 +112,12 @@ Composite Sidebar and profile rows use `control_button_content` for whole-contro
 - **Toast**: floating-layer treatment (opaque severity container fill, `raised_high` shadow, radius `lg`, 1px `outlineVariant` edge). Severity is shown by icon, text color, and fill — the structural edge is always neutral.
 - **Modal cards** (settings, add-account, confirmation): `Floating` role. Narrow or control-only layouts that render edge-to-edge use `Canvas` and stay borderless.
 
+## Scrollbars
+
+- Both axes use a minimum 32px thumb length, capped to the available track.
+- Default track and drag hit width is 14px; the thumb remains 10px wide before the existing transparent border treatment. Side padding retains the axial grab position rather than jumping to the track center.
+- Dragging maps through the actual movable track distance and reaches both content ends. A track too short for thumb travel preserves the current offset; native wheel and touch scrolling remain available.
+
 ## Media Cards
 
 `PosterCard` draws no hover or press overlay, lift, or tint — the artwork and copy render exactly as provided, and interaction only publishes the press message. Media images use radius `lg`.
@@ -120,7 +126,7 @@ Detail Backdrops use the two-layer canvas scrim and fixed-height composition spe
 
 ### Native Image and Modal Blur
 
-- Home Hero actions sample only the original Backdrop, at its full-width natural-aspect `Contain` frame with the same theme fade. Native image blur sits below local semantic button tint, sharp labels/icons, and focus borders. Missing artwork retains normal opaque button surfaces; Title Logos are never the blur source.
+- Home Hero actions sample only the selected Hero background (Backdrop, or Primary when no Backdrop reference exists), at its full-width natural-aspect `Contain` frame with the same theme fade. Native image blur sits below local semantic button tint, sharp labels/icons, and focus borders. Missing artwork retains normal opaque button surfaces; Title Logos are never the blur source.
 - Card progress samples the original artwork with native blur. The full card frame, radius, smoothing, and snap policy define the mask; a separate rectangular reveal exposes the bottom four logical pixels. Track tint precedes the percentage-clipped played color, with selection/focus treatment above both. Updating progress does not change blur parameters.
 - Wide Settings and account dialogs blur the live lower scene before dimming it; dialogs and higher Toasts remain sharp. Account dialogs retain the underlying widget tree while shielding its input, focus traversal, and overlays. Account-over-Settings uses one scene marker. Narrow and Control-Only full-screen Settings, and ordinary Popovers, keep their existing presentation.
 - Modal backdrop blur uses the shared mode-independent `TOKENS.modal.backdrop_blur_sigma` token (`40.0`, approximate Gaussian sigma in logical pixels). Hero/card image blur and shadow radii are separate semantics.
@@ -286,6 +292,7 @@ The [Home specification](home-hero-design-spec.md#accepted-paper-home-synchroniz
 - Sidebar: expanded 220, compact 72; expanded padding 16 vertically/12 horizontally, gaps 8, 38-pixel navigation/library/tool targets. Account trigger is 54 high; Account Popover is 320 wide, radius 16, padding 10.
 - Player bar remains docked, with metadata/Favorite, transport/seek, and queue/audio/subtitle/volume/fullscreen controls. Preserve direct Stop; reflow at narrow widths rather than discarding controls.
 - Fullscreen operates the current playback backend. External MPV receives its fullscreen command. Embedded playback uses the scoped composition below, preserving the concealed browser's widget state when fullscreen is entered from browsing.
+- Opening or reopening a playback queue scrolls the current episode into view, centered where the list bounds permit. This uses the rendered row bounds, including wrapped titles, and also runs when an open queue finishes loading. Ordinary redraws preserve manual scrolling.
 - Dark and light themes resolve separately through semantic tokens/Catalogs. Hero glass controls stay borderless, including disabled states; keyboard focus remains distinct.
 
 ## Accepted Paper Library and Personal Lists
@@ -314,6 +321,7 @@ These measurements supersede the older generic browse geometry. Human visual acc
 - Floating chrome uses scoped `jellypilot-ui::widgets::embedded_player` Catalog styles, independently of the browser theme. Wide composition uses 36px outer insets, 24px horizontal/20px vertical card padding, and `x2l` radius. The 14px timeline row, 16px gap and 48px controls row produce a 118px card. At ≤900 logical pixels the thumbnail is hidden and the card is 114px tall; the single controls row and centered transport remain through the 768px reference. Only smaller widths reflow controls; below 600px, outer insets reduce to 12px.
 - The left identity uses real 85×48 landscape artwork, the unprefixed media title, series/episode metadata and remaining time. Metadata truncates within symmetric side slots, without displacing transport. The title/chevron queue trigger is content-sized with 6px horizontal and 4px vertical padding around its 20px line, giving a 28px-high target. The subtitle is separately aligned with the title text and is not clickable; unused side-slot width remains noninteractive. There is no duplicate queue icon on the right. Audio/subtitle menus remain anchored to their controls; Intro skip/dismiss appears above the card.
 - Primary play/pause is 44×44 with an 18px glyph; previous/next have 40px targets and 22px glyphs. Framed Back/audio/subtitle/fullscreen controls use the reference's 36px targets, 12px radius and centered 16px glyphs. The [Right Zone reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/6Y8-0) retains its 251×36 extent and 8px visual gaps: audio, subtitles, volume, a 1×18 separator, and fullscreen. Volume retains the 18px glyph and 84px rail. Its 34×36 mute target incorporates the 8px whitespace on each side of the glyph without moving the glyph or rail or overlapping adjacent targets. The square-headband and sound-wave glyphs use the supplied reference geometry, leaving external-player icons unchanged.
+- The embedded fullscreen control uses Reicon `maximize` to enter fullscreen and `minimize` to leave it. Both retain the same framed 36px target and centered 16px glyph.
 - Centered control buttons apply spacing only between actual icon/label content, not between the content and its centering spacers. Glyph dimensions and pointer-target dimensions are independent.
 - Embedded volume follows the [four-state reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/4-0/7GC-0): crossed speaker for mute or zero volume, bare speaker through 33%, one wave through 66%, two waves above 66%. These numeric boundaries are an implementation choice; the reference does not specify them. Drag previews update the glyph immediately. All states remain 18px within the unchanged 34×36 target; rest uses white at 85%, hover/press uses white at 100%, and neither paints a background block. Keyboard focus indication remains available.
 - Timeline uses a 4px track and persistent 14px indigo knob with a 2px white border; volume uses an 84px white 4px track and reveals its small knob on hover/drag. Timestamps use monospace type. No fabricated buffering or chapter markers are shown when real data is unavailable.

@@ -269,8 +269,12 @@ fn artwork_image_id(placement: ArtworkPlacement, item: &VideoLibraryItem) -> Opt
     ArtworkPlacement::HeroBackdrop if item.item_type.eq_ignore_ascii_case("Episode") => item
       .series_backdrop_image_id
       .as_deref()
-      .or(item.backdrop_image_id.as_deref()),
-    ArtworkPlacement::HeroBackdrop => item.backdrop_image_id.as_deref(),
+      .or(item.backdrop_image_id.as_deref())
+      .or(item.artwork_image_id.as_deref()),
+    ArtworkPlacement::HeroBackdrop => item
+      .backdrop_image_id
+      .as_deref()
+      .or(item.artwork_image_id.as_deref()),
     ArtworkPlacement::Card(section) if section.is_action() => landscape_image_id(item),
     ArtworkPlacement::Selection(_) => landscape_image_id(item),
     ArtworkPlacement::Card(_) if item.item_type.eq_ignore_ascii_case("Episode") => item
@@ -624,6 +628,30 @@ mod tests {
         .collect::<Vec<_>>(),
       vec!["movie-item", "show-item"]
     );
+  }
+
+  #[test]
+  fn hero_background_falls_back_to_primary_without_overriding_backdrops() {
+    let selected = |item: &VideoLibraryItem| {
+      ArtworkPlacement::HeroBackdrop
+        .spec(item)
+        .map(|spec| spec.image_id)
+    };
+    let mut item = episode("hero", 1);
+    item.artwork_image_id = Some("primary".to_owned());
+    assert_eq!(selected(&item).as_deref(), Some("primary"));
+
+    item.backdrop_image_id = Some("backdrop".to_owned());
+    assert_eq!(selected(&item).as_deref(), Some("backdrop"));
+    item.series_backdrop_image_id = Some("series-backdrop".to_owned());
+    assert_eq!(selected(&item).as_deref(), Some("series-backdrop"));
+
+    item.item_type = "Movie".to_owned();
+    assert_eq!(selected(&item).as_deref(), Some("backdrop"));
+    item.backdrop_image_id = None;
+    assert_eq!(selected(&item).as_deref(), Some("primary"));
+    item.artwork_image_id = None;
+    assert!(selected(&item).is_none());
   }
 
   #[test]

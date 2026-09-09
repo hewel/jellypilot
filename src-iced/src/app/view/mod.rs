@@ -6,7 +6,7 @@ pub(crate) mod image_observer;
 mod login;
 mod modal_dismiss;
 mod personal_lists;
-mod player;
+pub(crate) mod player;
 pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;

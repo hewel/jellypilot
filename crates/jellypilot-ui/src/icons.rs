@@ -170,6 +170,7 @@ pub enum Icon {
     // App mode switching
     PictureInPicture,
     ArrowsMaximize,
+    ArrowsMinimize,
 
     // Diagnostics export
     Download,
@@ -247,6 +248,7 @@ impl Icon {
             Self::UserCheck => include_bytes!("../assets/icons/user-check.svg"),
             Self::PictureInPicture => include_bytes!("../assets/icons/picture-in-picture.svg"),
             Self::ArrowsMaximize => include_bytes!("../assets/icons/arrows-maximize.svg"),
+            Self::ArrowsMinimize => include_bytes!("../assets/icons/arrows-minimize.svg"),
             Self::Download => include_bytes!("../assets/icons/download.svg"),
             Self::Grid => include_bytes!("../assets/icons/grid.svg"),
             Self::List => include_bytes!("../assets/icons/list.svg"),
@@ -343,6 +345,7 @@ impl Icon {
             Self::UserCheck,
             Self::PictureInPicture,
             Self::ArrowsMaximize,
+            Self::ArrowsMinimize,
             Self::Download,
             Self::Grid,
             Self::List,
