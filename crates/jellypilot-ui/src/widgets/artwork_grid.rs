@@ -113,6 +113,7 @@ pub fn artwork_grid<'a, Message, Builder>(
     item_count: usize,
     metrics: ArtworkGridMetrics,
     viewport: ArtworkGridViewport,
+    column_gap: f32,
     cell_builder: Builder,
 ) -> Element<'a, Message>
 where
@@ -142,7 +143,7 @@ where
             metrics.row_height
         };
         let mut row = Row::new()
-            .spacing(COLUMN_GAP)
+            .spacing(column_gap)
             .width(Length::Fill)
             .height(row_height);
 
@@ -241,7 +242,8 @@ mod tests {
     use iced::Element;
 
     use super::{
-        artwork_grid, row_window, ArtworkGridMetrics, ArtworkGridViewport, RowWindow, ROW_GAP,
+        artwork_grid, row_window, ArtworkGridMetrics, ArtworkGridViewport, RowWindow, COLUMN_GAP,
+        ROW_GAP,
     };
 
     const ROW_HEIGHT: f32 = 100.0;
@@ -472,10 +474,11 @@ mod tests {
             offset_y: 200_025.0,
             height: 2_025.0,
         };
-        let _element: Element<'_, ()> = artwork_grid(1_000_000, metrics, viewport, |index| {
-            built_indexes.borrow_mut().push(index);
-            iced::widget::Space::new().into()
-        });
+        let _element: Element<'_, ()> =
+            artwork_grid(1_000_000, metrics, viewport, COLUMN_GAP, |index| {
+                built_indexes.borrow_mut().push(index);
+                iced::widget::Space::new().into()
+            });
 
         let indexes = built_indexes.into_inner();
         let expected_rows = 1_980..2_041;
@@ -499,7 +502,7 @@ mod tests {
             offset_y: 0.0,
             height: 300.0,
         };
-        let _element: Element<'_, ()> = artwork_grid(0, metrics, viewport, |index| {
+        let _element: Element<'_, ()> = artwork_grid(0, metrics, viewport, COLUMN_GAP, |index| {
             built_indexes.borrow_mut().push(index);
             iced::widget::Space::new().into()
         });

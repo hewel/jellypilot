@@ -37,6 +37,7 @@ enum PageState {
     Box<(
       super::personal_lists::ListPage,
       super::personal_lists::ListPage,
+      super::personal_lists::ListPage,
     )>,
   ),
 }
@@ -522,6 +523,7 @@ fn capture_page(state: &mut State) -> Option<PageState> {
     Destination::PersonalLists(_) => Some(PageState::PersonalLists(Box::new((
       std::mem::take(&mut full.personal_lists.favorites),
       std::mem::take(&mut full.personal_lists.watchlist),
+      std::mem::take(&mut full.personal_lists.history),
     )))),
     Destination::Home => Some(PageState::Home),
     Destination::NowPlaying => None,
@@ -806,7 +808,11 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
         detail::restore(&mut full.detail, &mut state.kernel, item_id, *snapshot)
       }
       PageState::PersonalLists(snapshot) => {
-        (full.personal_lists.favorites, full.personal_lists.watchlist) = *snapshot;
+        (
+          full.personal_lists.favorites,
+          full.personal_lists.watchlist,
+          full.personal_lists.history,
+        ) = *snapshot;
         let Destination::PersonalLists(route) = destination else {
           return Task::none();
         };

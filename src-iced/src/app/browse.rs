@@ -19,13 +19,26 @@ use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, Diagnos
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::VideoLibrarySortDirection;
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
+use jellypilot_ui::widgets::artwork_grid::ArtworkGridViewport;
 
 use super::artwork::{ImageCollection, ImageSpec};
 use super::kernel::Kernel;
 use super::message::{BrowseMessage, Message};
 use super::state::BrowseViewport;
-use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
+use super::view::browse::{browse_metrics, grid_available_width};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ViewMode {
+  #[default]
+  Grid,
+  List,
+}
+
+struct ScrollSnapshot {
+  viewport: BrowseViewport,
+  grid_viewport: Option<ArtworkGridViewport>,
+  id: iced::widget::Id,
+}
 
 /// Browse surface slice: the Library Browser model and its derived view, the
 /// artwork cells bound for the grid cards, the in-flight page request
@@ -41,6 +54,8 @@ pub struct Surface {
   pub sort_menu_open: bool,
   pub search_input: String,
   pub filters: Option<BrowseFilterSettings>,
+  pub mode: ViewMode,
+  alternate_scroll: Option<ScrollSnapshot>,
 }
 
 impl Default for Surface {
@@ -56,6 +71,8 @@ impl Default for Surface {
       sort_menu_open: false,
       search_input: String::new(),
       filters: None,
+      mode: ViewMode::Grid,
+      alternate_scroll: None,
     }
   }
 }
@@ -78,6 +95,8 @@ pub(crate) struct Snapshot {
   scroll_id: iced::widget::Id,
   filters: Option<BrowseFilterSettings>,
   search_input: String,
+  mode: ViewMode,
+  alternate_scroll: Option<ScrollSnapshot>,
 }
 
 pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> Snapshot {
@@ -92,6 +111,8 @@ pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> 
     scroll_id: surface.scroll_id.clone(),
     filters: surface.filters,
     search_input: submitted_query.unwrap_or(&surface.search_input).to_owned(),
+    mode: surface.mode,
+    alternate_scroll: surface.alternate_scroll.take(),
   }
 }
 
@@ -109,6 +130,8 @@ pub(crate) fn restore(
   surface.scroll_id = snapshot.scroll_id;
   surface.filters = snapshot.filters;
   surface.search_input = snapshot.search_input;
+  surface.mode = snapshot.mode;
+  surface.alternate_scroll = snapshot.alternate_scroll;
   surface.sort_menu_open = false;
   let effects = match surface.data.resume() {
     Ok(effects) => effects,
@@ -157,6 +180,36 @@ pub fn update(
       surface.search_input = value;
       Task::none()
     }
+    BrowseMessage::ViewModeSelected(mode) => {
+      if surface.mode == mode {
+        return Task::none();
+      }
+      let next = surface
+        .alternate_scroll
+        .take()
+        .unwrap_or_else(|| ScrollSnapshot {
+          viewport: BrowseViewport::default(),
+          grid_viewport: None,
+          id: iced::widget::Id::unique(),
+        });
+      surface.alternate_scroll = Some(ScrollSnapshot {
+        viewport: surface.viewport,
+        grid_viewport: surface.grid_viewport,
+        id: surface.scroll_id.clone(),
+      });
+      surface.mode = mode;
+      surface.viewport = next.viewport;
+      surface.grid_viewport = next.grid_viewport;
+      surface.scroll_id = next.id;
+      surface.sort_menu_open = false;
+      // A fresh observer epoch rejects geometry and image visibility events
+      // emitted by the departed presentation, without discarding metadata.
+      surface.artwork.clear();
+      Task::batch([
+        sync_scroll_window(surface, kernel, window_size),
+        prepare_artwork(surface),
+      ])
+    }
     BrowseMessage::SortMenuToggled => {
       surface.sort_menu_open = !surface.sort_menu_open;
       Task::none()
@@ -172,6 +225,7 @@ pub fn update(
       })
     }
     BrowseMessage::SortDirectionToggled => {
+      surface.sort_menu_open = false;
       persist_filters(surface, kernel, source, in_library, |filters| {
         let direction = match filters.sort_direction() {
           VideoLibrarySortDirection::Ascending => VideoLibrarySortDirection::Descending,
@@ -375,10 +429,7 @@ pub(crate) fn sync_scroll_window(
   };
   let total = *total_record_count;
   let class = SizeClass::from_width(window_size.width);
-  let metrics = ArtworkGridMetrics::for_cards(
-    grid_available_width(window_size.width, class),
-    CARD_COPY_HEIGHT,
-  );
+  let metrics = browse_metrics(grid_available_width(window_size.width, class), surface.mode);
   let viewport = surface.grid_viewport(window_size);
   let range = visible_display_range(
     viewport.offset_y,
@@ -440,6 +491,33 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Messag
   ])
 }
 
+pub(crate) fn apply_user_data_update(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  update: &jellypilot_media_server::VideoUserDataUpdate,
+) -> Task<Message> {
+  let effects = match surface.data.apply_user_data_update(update) {
+    Ok(effects) => effects,
+    Err(error) => {
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not refresh confirmed library changes: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
+      );
+      sync_view(surface);
+      return Task::none();
+    }
+  };
+  sync_view(surface);
+  Task::batch([
+    apply_effects(surface, kernel, effects),
+    prepare_artwork(surface),
+  ])
+}
+
 fn apply_effects(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -455,6 +533,7 @@ fn apply_effects(
       BrowseEffect::ResetViewport => {
         surface.viewport.offset_y = 0.0;
         surface.grid_viewport = None;
+        surface.alternate_scroll = None;
         // Loading placeholders have no ready-grid ID. A new query identity
         // also resets remembered offsets when its first real layout appears.
         surface.scroll_id = iced::widget::Id::unique();
@@ -538,6 +617,7 @@ pub(crate) fn leave_view(surface: &mut Surface) {
   begin_artwork_view(surface);
   surface.data.reset();
   sync_view(surface);
+  surface.alternate_scroll = None;
 }
 
 /// Browse portion of the router's connected-surface reset: aborts in-flight
@@ -596,6 +676,77 @@ mod tests {
       profile_avatars: Default::default(),
     };
     (Surface::default(), kernel)
+  }
+
+  #[test]
+  fn view_modes_retain_the_query_and_restore_independent_navigation_scrolls() {
+    let (mut surface, mut kernel) = test_fixture();
+    let source = search_source(&kernel, "retained query");
+    let request = browse_request(surface.data.configure(source).unwrap());
+    settle_page(&mut surface.data, request, 240);
+    sync_view(&mut surface);
+    surface.search_input = "retained query".to_owned();
+    surface.filters = Some(kernel.settings.snapshot().browse_filters());
+    surface.viewport.offset_y = 600.0;
+    surface.grid_viewport = Some(ArtworkGridViewport {
+      offset_y: 600.0,
+      height: 500.0,
+    });
+    let grid_id = surface.scroll_id.clone();
+    let filters = surface.filters;
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::ViewModeSelected(ViewMode::List),
+    ));
+    let list_id = surface.scroll_id.clone();
+    assert_ne!(list_id, grid_id);
+    let epoch = surface.artwork.epoch();
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        offset_y: 810.0,
+        height: 405.0,
+      },
+    ));
+    let expected = visible_display_range(810.0, 405.0, 1, 81.0, 240);
+    assert_eq!(surface.data.peek_display_range(), Some(expected));
+    surface.viewport.offset_y = 810.0;
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::ViewModeSelected(ViewMode::Grid),
+    ));
+    assert_eq!(surface.viewport.offset_y, 600.0);
+    assert_eq!(surface.scroll_id, grid_id);
+    assert_eq!(surface.filters, filters);
+    assert_eq!(surface.search_input, "retained query");
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::ViewModeSelected(ViewMode::List),
+    ));
+    let saved = snapshot(&mut surface, Some("retained query"));
+    leave_view(&mut surface);
+    drop(restore(&mut surface, &mut kernel, saved, window_size()));
+    assert_eq!(surface.mode, ViewMode::List);
+    assert_eq!(surface.viewport.offset_y, 810.0);
+    assert_eq!(surface.scroll_id, list_id);
+    assert_eq!(surface.search_input, "retained query");
   }
 
   #[tokio::test]
@@ -844,6 +995,9 @@ mod tests {
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
       premiere_date: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       logo_image_id: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
@@ -976,6 +1130,9 @@ mod tests {
         items: (0..24)
           .map(|index| VideoLibraryItem {
             premiere_date: None,
+            community_rating: None,
+            episode_count: None,
+            last_played_date: None,
             logo_image_id: None,
             id: format!("item-{index}"),
             name: format!("Item {index}"),
@@ -1015,9 +1172,9 @@ mod tests {
       BrowseMessage::PageSettled(settlement),
     ));
 
-    let metrics = ArtworkGridMetrics::for_cards(
+    let metrics = browse_metrics(
       grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
-      CARD_COPY_HEIGHT,
+      surface.mode,
     );
     let initial = surface.data.display_range().expect("metadata window");
     assert_eq!(initial.start, 0);
@@ -1134,15 +1291,16 @@ mod tests {
   #[test]
   fn initial_short_grid_materializes_cards_without_scroll_input_or_image_demand() {
     let (surface, _) = test_fixture();
-    let metrics = ArtworkGridMetrics::for_cards(
+    let metrics = browse_metrics(
       grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
-      CARD_COPY_HEIGHT,
+      surface.mode,
     );
     let built = std::cell::RefCell::new(Vec::new());
     let _grid: iced::Element<'_, Message> = jellypilot_ui::widgets::artwork_grid::artwork_grid(
       3,
       metrics,
       surface.grid_viewport(window_size()),
+      super::super::view::browse::GRID_COLUMN_GAP,
       |index| {
         built.borrow_mut().push(index);
         iced::widget::Space::new().into()

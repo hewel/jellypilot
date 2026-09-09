@@ -850,6 +850,9 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),

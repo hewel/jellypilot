@@ -272,7 +272,6 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
           &message,
           super::personal_lists::PersonalListsMessage::ToggleWatchlist(_)
             | super::personal_lists::PersonalListsMessage::RemoveWatchlist(_)
-            | super::personal_lists::PersonalListsMessage::RemoveFavorite(_)
         )
       {
         return state.kernel.show_toast(
@@ -283,11 +282,6 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      if matches!(&message, super::personal_lists::PersonalListsMessage::RemoveFavorite(item)
-        if super::collections::busy(full, &item.id))
-      {
-        return Task::none();
-      }
       super::personal_lists::update(
         &mut full.personal_lists,
         &mut state.kernel,
@@ -456,7 +450,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
     Message::OpenDetail(item) => {
       let destination = Destination::Detail(item.id.clone());
       if shell::destination_allowed(state.app_mode(), &destination) {
-        shell::open_detail(state, item)
+        shell::open_detail(state, *item)
       } else {
         Task::none()
       }
@@ -483,7 +477,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         &mut full.personal_lists,
         &mut state.kernel,
         &state.watchlist,
-        super::personal_lists::PersonalListsMessage::ToggleWatchlist(item),
+        super::personal_lists::PersonalListsMessage::ToggleWatchlist(Box::new(item)),
       )
     }
     Message::Detail(message) => {
@@ -1138,6 +1132,9 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       premiere_date: None,
       logo_image_id: None,
       id: id.to_owned(),
@@ -2104,10 +2101,10 @@ mod tests {
     drop(update(
       &mut state,
       Message::PersonalLists(
-        super::super::personal_lists::PersonalListsMessage::ToggleWatchlist(episode(
+        super::super::personal_lists::PersonalListsMessage::ToggleWatchlist(Box::new(episode(
           "late-write",
           1,
-        )),
+        ))),
       ),
     ));
     assert!(state
@@ -2766,7 +2763,7 @@ mod tests {
 
     drop(update(
       &mut state,
-      Message::OpenDetail(episode("movie-1", 1)),
+      Message::OpenDetail(Box::new(episode("movie-1", 1))),
     ));
     assert_eq!(state.shell.destination, Destination::NowPlaying);
 

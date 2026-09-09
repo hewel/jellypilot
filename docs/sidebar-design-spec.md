@@ -20,7 +20,7 @@ Quoted Chinese UI labels below preserve the copy agreed during the interview; th
 
 ## 1. Content Scope and Navigation
 
-Home, Search, libraries, Favorites, and Watchlist all belong to the **current provider, Server URL, and server user**.
+Home, Search, libraries, Favorites, Watchlist, and Watch History all belong to the **current provider, Server URL, and server user**.
 Multiple saved logins support switching, not simultaneous connections or aggregation across servers. A server name, username, or item ID alone cannot identify the account scope.
 
 ### Returning to a page
@@ -115,7 +115,7 @@ Do not promise original-title/tag matching, AND/OR/NOT syntax, or typo-tolerant 
 ### Refresh
 
 The bottom action is named Refresh. It reloads the current account's library directory and current page content; it is not a server scan task.
-Personal Lists refreshes Favorites and server information for currently visible Watchlist entries without changing local Watchlist membership.
+Personal Lists refreshes Favorites, Watch History, and server information for currently visible Watchlist entries without changing local Watchlist membership.
 Show real request activity and coalesce repeated triggers. Preserve current navigation, retain usable content on failure, and provide retry.
 If a directory refresh confirms that the current library is no longer accessible, return to Home and explain why. Refresh results from the old account must not update the new account.
 
@@ -138,8 +138,8 @@ Retain existing playback shortcuts. Shortcut recording must detect conflicts wit
 
 ## 3. Personal Lists
 
-Use one navigation entry and one overview page, with **Favorites above Watchlist**. Each section has its own count, empty state, loading/error feedback, and View all action.
-Do not combine both counts into an ambiguous badge. The overview reuses Home card rows, showing one page of data per section. View all opens the corresponding paginated grid, with navigation back to the overview.
+Use one navigation entry and one overview page, ordered **Watchlist, Favorites, Watch History**, following [Paper 7XI-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/7XI-0). Each section has its own count, empty state, loading/error feedback, and View all action.
+The heading summarizes separately labeled counts, never an ambiguous combined badge. Watchlist and History use landscape shelves; Favorites uses posters. View all opens the corresponding paginated page, with navigation back to the overview.
 
 | Contract | Favorites | Watchlist |
 | --- | --- | --- |
@@ -149,6 +149,10 @@ Do not combine both counts into an ambiguous badge. The overview reuses Home car
 | Successful update | Server accepts favorite/unfavorite | Local records are successfully persisted |
 | Cross-device behavior | Existing server-side favorite state | Independent on each device |
 | Relationship to watched status | Independent | Independent; removal is manual only |
+
+Watch History belongs to the current server user and contains movies and individual episodes that are played or resumable. It lists each item once by its latest server playback timestamp, not one row per playback event; manually marked items may have no timestamp. There is no unsupported history-removal action.
+
+Neither provider exposes a single played-OR-resumable query. Fetch disjoint played and unplayed/resumable streams, each ordered by DatePlayed descending, and merge them with accurate summed server totals. A page requires both prefixes through its requested end, so deeper pages refetch more records; this favors correct ordering/counts over incorrectly applying the same offset to both streams. Each request is bounded, but the pair is not a transactional server snapshot. Failures retain visible data and allow retry.
 
 Detail views expose separate Favorites and Watchlist actions; list cards provide the corresponding removal action.
 Episodes show the series title and episode number. An item can belong to both lists; changing one membership does not change the other.
@@ -231,7 +235,7 @@ Follow the existing App Mode contract: release Full browse state while preservin
 
 | Boundary | Required capabilities and constraints | Existing entry points |
 | --- | --- | --- |
-| media-server | Root-level, recursive Movie/Series/Episode Favorites pagination and total count for the current user; batch retrieval of Watchlist items by ID | [Request types](../crates/jellypilot-media-server/src/types.rs), [client](../crates/jellypilot-media-server/src/client.rs) |
+| media-server | Root-level recursive Favorites pagination for all three video types; merged played/resumable Watch History with server totals; batch Watchlist enrichment and real landscape artwork | [Request types](../crates/jellypilot-media-server/src/types.rs), [client](../crates/jellypilot-media-server/src/client.rs) |
 | core | Serializable Profile Scope, local Watchlist model and storage; separate file, serialized updates, memory updated only after replacement writes succeed | [Configuration storage pattern](../crates/jellypilot-core/src/config.rs) |
 | auth | Saved-login summaries, candidate validation, selected-profile deletion, and last successful activation record; secrets remain in the keyring | [Authentication and storage](../crates/jellypilot-auth/src/lib.rs) |
 | iced runtime | Candidate authentication and single-active-connection handoff, account/request-generation gates, UI messages, focus, and navigation | [Login orchestration](../src-iced/src/app/login.rs), [shell view](../src-iced/src/app/view/shell.rs) |
@@ -257,6 +261,7 @@ The checkboxes below track end-to-end acceptance with representative accounts an
 - [ ] Jellyfin and Emby Favorites requests cover all three video types and all video libraries; pagination, totals, and name ordering are correct.
 - [ ] Favorites and Watchlist do not leak across servers with matching usernames, different users, or duplicate item IDs.
 - [ ] Watchlist restores after restart, sorts by most recent addition, deduplicates, and removes entries only manually; watched status does not change membership.
+- [ ] Watch History merges completed and partial playback in date order, preserves real totals across pages, and handles missing timestamps and provider errors without inventing entries.
 - [ ] File-write failure preserves old records; network failure is not treated as deletion; confirmed unavailable entries remain identifiable and removable.
 - [ ] Sign Out retains the list by default, honors explicit cleanup, and retries failed cleanup in the original scope without modifying other accounts.
 
@@ -274,7 +279,7 @@ The checkboxes below track end-to-end acceptance with representative accounts an
 
 - [ ] At Full mode's minimum window size, both sides of the 1280 threshold, and wider windows, check the 72/220 Sidebar, content layout, and long-name tooltips.
 - [ ] With 0, 15, and 50 video libraries, check independent scrolling and continued access to top navigation and bottom account/tools.
-- [ ] Check the two vertically stacked list sections, their counts and View all actions, episode titles, unavailable items, and empty/error states.
+- [ ] Check Watchlist, Favorites and Watch History shelves, their distinct counts and View all actions, real landscape/poster artwork, episode titles, unavailable items, and empty/error states.
 - [ ] Check expanded/icon-only search inputs, Account Popover boundaries, long account lists, copy feedback, and keyboard focus restoration.
 - [ ] Check settings categories, scrolling, dismissal, and complete account management in wide windows, narrow windows, and Control-Only.
 - [ ] Under Dark, Light, System, and reduced-motion preferences, check readability, status differentiation, and contrast of actual color pairings.

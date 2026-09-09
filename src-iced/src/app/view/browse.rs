@@ -1,12 +1,16 @@
 use super::image_observer::{observe_grid_viewport, observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageStatus};
 use crate::app::artwork::{ImageCell, ImageSpec};
+use crate::app::browse::ViewMode;
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{Destination, State};
-use crate::i18n::media::item_caption;
+use crate::app::{accounts, collections};
+use crate::i18n::media::{item_caption, media_type};
 use crate::i18n::Localizer;
-use iced::widget::{column, container, row, scrollable, stack, text, Column, Row};
-use iced::{Alignment, Color, ContentFit, Element, Fill};
+use iced::widget::{
+  column, container, progress_bar, row, scrollable, space, stack, text, Column, Row,
+};
+use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::diagnostics::sanitize_message;
 use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
@@ -17,22 +21,22 @@ use jellypilot_media_server::{
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::overlay::{popover, PopoverOptions};
+use jellypilot_ui::overlay::{focus_tooltip, popover, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics};
-use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::widgets::artwork_progress::ArtworkProgress;
+use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
+use jellypilot_ui::widgets::library;
 use jellypilot_ui::widgets::skeleton::{
   skeleton_block, skeleton_block_with_radius, skeleton_panel,
 };
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
-pub(crate) const PAGE_PADDING: f32 = 32.0;
+pub(crate) const PAGE_PADDING: f32 = TOKENS.spacing.s9;
 
-/// Horizontal page padding for browse screens, tier-dependent:
-/// [`SizeClass::Compact`] uses tighter spacing ([`TOKENS.spacing.s4`] = 16.0),
-/// while [`SizeClass::Standard`] and [`SizeClass::Wide`] use [`PAGE_PADDING`] (32.0).
+/// Browse content keeps the Paper inset on desktop and reflows on compact windows.
 pub(crate) fn page_padding(class: SizeClass) -> f32 {
   match class {
     SizeClass::Compact => TOKENS.spacing.s4,
@@ -54,7 +58,39 @@ pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
     .max(1.0)
 }
 
-pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
+pub(crate) const CARD_COPY_HEIGHT: f32 = 50.0;
+pub(crate) const GRID_COLUMN_GAP: f32 = TOKENS.spacing.s5;
+const LIST_ROW_HEIGHT: f32 = 81.0;
+const NARROW_LIST_ROW_HEIGHT: f32 = 112.0;
+const LIST_COLUMNS_MIN_WIDTH: f32 = 860.0;
+
+pub(crate) fn browse_metrics(available_width: f32, mode: ViewMode) -> ArtworkGridMetrics {
+  let width = available_width.max(1.0);
+  if mode == ViewMode::List {
+    let height = if width < LIST_COLUMNS_MIN_WIDTH {
+      NARROW_LIST_ROW_HEIGHT
+    } else {
+      LIST_ROW_HEIGHT
+    };
+    return ArtworkGridMetrics {
+      columns: 1,
+      cell_width: width,
+      cell_height: height,
+      row_height: height,
+    };
+  }
+  let columns = ((width + GRID_COLUMN_GAP) / (160.0 + GRID_COLUMN_GAP))
+    .floor()
+    .max(1.0) as usize;
+  let cell_width = (width - GRID_COLUMN_GAP * columns.saturating_sub(1) as f32) / columns as f32;
+  let cell_height = card_artwork_height(cell_width) + CARD_COPY_HEIGHT;
+  ArtworkGridMetrics {
+    columns,
+    cell_width,
+    cell_height,
+    row_height: cell_height + TOKENS.spacing.s6,
+  }
+}
 pub fn view(state: &State) -> Element<'_, Message> {
   let class = SizeClass::from_width(state.shell.window_size.width);
   let library_label = state.t("browse-library");
@@ -89,19 +125,26 @@ pub fn view(state: &State) -> Element<'_, Message> {
     | Destination::Detail(_)
     | Destination::NowPlaying => title.to_owned(),
   };
-  let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
+  let mut header = Column::new().spacing(TOKENS.spacing.s4).push(
     text(heading)
       .font(DISPLAY_FONT)
-      .size(34)
+      .size(36)
+      .line_height(iced::widget::text::LineHeight::Absolute(40.0.into()))
       .color(state.palette().text.heading),
   );
   if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(toolbar(state));
   }
+  header = header.push(presentation_bar(state));
 
   column![
     container(header)
-      .padding([TOKENS.spacing.s5, TOKENS.spacing.s8])
+      .padding(iced::Padding {
+        top: TOKENS.spacing.s7,
+        right: page_padding(class),
+        bottom: TOKENS.spacing.s2,
+        left: page_padding(class),
+      })
       .width(Fill),
     browse_body(state, class),
   ]
@@ -111,31 +154,26 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 fn toolbar(state: &State) -> Element<'_, Message> {
-  let filters = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .browse
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  let filters = browse
     .filters
     .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
   let sort_trigger = control_button(
     Some(Icon::ChevronDown),
-    Some(state.format(
-      "browse-sort",
-      &[(
-        "sort",
-        sort_label(state.kernel.locale, filters.sort()).into(),
-      )],
-    )),
+    Some(sort_label(state.kernel.locale, filters.sort())),
     ButtonVariant::Pill,
   )
   .icon_size(IconSize::Sm)
-  .spacing(7.0)
+  .spacing(TOKENS.spacing.s2)
   .padding([8, 12])
   .min_height(32.0)
   .label_size(12.0)
   .trailing_icon(true)
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled));
+  let (direction_icon, direction_label) = match filters.sort_direction() {
+    VideoLibrarySortDirection::Ascending => (Icon::SortAscending, state.t("browse-ascending")),
+    VideoLibrarySortDirection::Descending => (Icon::SortDescending, state.t("browse-descending")),
+  };
   let sort_menu = column![
     sort_option(state.t("browse-sort-title"), VideoLibrarySort::Title),
     sort_option(
@@ -146,93 +184,130 @@ fn toolbar(state: &State) -> Element<'_, Message> {
       state.t("browse-sort-release-date"),
       VideoLibrarySort::ReleaseDate
     ),
+    control_button(
+      Some(direction_icon),
+      Some(direction_label),
+      ButtonVariant::Text
+    )
+    .padding([6, 10])
+    .width(Fill)
+    .label_fill(true)
+    .label_size(12.0)
+    .on_press(Message::Browse(BrowseMessage::SortDirectionToggled)),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
   let sort = popover(
     sort_trigger,
     sort_menu,
-    state
-      .full
-      .as_ref()
-      .expect("FullUi required")
-      .browse
-      .sort_menu_open,
+    browse.sort_menu_open,
     PopoverOptions {
-      width: Some(190.0),
+      width: Some(210.0),
       ..PopoverOptions::default()
     },
     Message::Browse(BrowseMessage::SortMenuDismissed),
   );
-  let (direction_icon, direction_label) = match filters.sort_direction() {
-    VideoLibrarySortDirection::Ascending => (Icon::SortAscending, state.t("browse-ascending")),
-    VideoLibrarySortDirection::Descending => (Icon::SortDescending, state.t("browse-descending")),
-  };
-  let direction = control_button(
-    Some(direction_icon),
-    Some(direction_label),
-    ButtonVariant::Pill,
+  let favorites = control_button(
+    Some(if filters.favorites_only() {
+      Icon::HeartFilled
+    } else {
+      Icon::Heart
+    }),
+    Some(state.t("browse-favorites")),
+    if filters.favorites_only() {
+      ButtonVariant::PillActive
+    } else {
+      ButtonVariant::Pill
+    },
   )
   .icon_size(IconSize::Sm)
-  .spacing(7.0)
+  .spacing(TOKENS.spacing.s2)
   .padding([8, 12])
   .min_height(32.0)
   .label_size(12.0)
-  .on_press(Message::Browse(BrowseMessage::SortDirectionToggled));
-  let favorites: Element<'_, Message> = if filters.favorites_only() {
-    control_button(
-      Some(Icon::HeartFilled),
-      Some(state.t("browse-favorites-on")),
-      ButtonVariant::PillActive,
-    )
-    .icon_size(IconSize::Sm)
-    .spacing(7.0)
-    .padding([8, 12])
-    .min_height(32.0)
-    .label_size(12.0)
-    .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
-    .into()
-  } else {
-    control_button(
-      Some(Icon::Heart),
-      Some(state.t("browse-favorites-off")),
-      ButtonVariant::Pill,
-    )
-    .icon_size(IconSize::Sm)
-    .spacing(7.0)
-    .padding([8, 12])
-    .min_height(32.0)
-    .label_size(12.0)
-    .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
-    .into()
-  };
-
+  .on_press(Message::Browse(BrowseMessage::FavoritesToggled));
   row![
     sort,
-    direction,
     played_option(
       Icon::CircleDot,
       state.t("browse-all"),
       VideoLibraryPlayedFilter::All,
-      filters.played_filter(),
+      filters.played_filter()
     ),
     played_option(
       Icon::CircleCheck,
       state.t("browse-played"),
       VideoLibraryPlayedFilter::Played,
-      filters.played_filter(),
+      filters.played_filter()
     ),
     played_option(
       Icon::Circle,
       state.t("browse-unplayed"),
       VideoLibraryPlayedFilter::Unplayed,
-      filters.played_filter(),
+      filters.played_filter()
     ),
     favorites,
   ]
-  .spacing(TOKENS.spacing.s2)
+  .spacing(TOKENS.spacing.s2_5)
   .align_y(Alignment::Center)
+  .wrap()
   .into()
+}
+
+fn presentation_bar(state: &State) -> Element<'_, Message> {
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  let count = match &browse.view {
+    LibraryBrowseView::Ready {
+      total_record_count, ..
+    } => state.format(
+      "browse-item-count",
+      &[("count", (*total_record_count).into())],
+    ),
+    LibraryBrowseView::Empty => state.format("browse-item-count", &[("count", 0.into())]),
+    _ => String::new(),
+  };
+  let segments = row![
+    mode_button(state, ViewMode::Grid, Icon::Grid, "browse-grid"),
+    mode_button(state, ViewMode::List, Icon::List, "browse-list"),
+  ]
+  .spacing(TOKENS.spacing.s0_5);
+  row![
+    text(count).size(12).color(state.palette().text.metadata),
+    space::horizontal(),
+    container(segments)
+      .padding(TOKENS.spacing.s0_5)
+      .style(library::segments),
+  ]
+  .align_y(Alignment::Center)
+  .width(Fill)
+  .into()
+}
+
+fn mode_button<'a>(
+  state: &'a State,
+  mode: ViewMode,
+  icon: Icon,
+  label: &str,
+) -> Element<'a, Message> {
+  let selected = state.full.as_ref().expect("FullUi required").browse.mode == mode;
+  let control = control_button(
+    Some(icon),
+    None,
+    if selected {
+      ButtonVariant::Secondary
+    } else {
+      ButtonVariant::Text
+    },
+  )
+  .icon_size(IconSize::Xs)
+  .padding([5, 6])
+  .width(26.into())
+  .min_height(24.0)
+  .style(|theme, variant, status| {
+    library::segment(theme, status, variant == ButtonVariant::Secondary)
+  })
+  .on_press(Message::Browse(BrowseMessage::ViewModeSelected(mode)));
+  focus_tooltip(control, state.t(label), TooltipOptions::default())
 }
 
 fn sort_option(label: String, sort: VideoLibrarySort) -> Element<'static, Message> {
@@ -344,14 +419,21 @@ fn ready_surface<'a>(
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
   let available_width = grid_available_width(state.shell.window_size.width, class);
-  let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
+  let metrics = browse_metrics(
+    available_width,
+    state.full.as_ref().expect("FullUi required").browse.mode,
+  );
   let surface = &state.full.as_ref().expect("FullUi required").browse;
   let viewport = surface.grid_viewport(state.shell.window_size);
   let grid = artwork_grid(
     total_record_count as usize,
     metrics,
     viewport,
+    GRID_COLUMN_GAP,
     |index| match item_at(visible_start, items, index) {
+      Some(item) if surface.mode == ViewMode::List => {
+        video_row(state, item, index, metrics.cell_width)
+      }
       Some(item) => video_card(
         state,
         item,
@@ -359,22 +441,25 @@ fn ready_surface<'a>(
         skeleton_phase,
         reduced_motion,
       ),
+      None if surface.mode == ViewMode::List => {
+        list_skeleton(metrics.cell_width, skeleton_phase, reduced_motion)
+      }
       None => skeleton_cell(metrics.cell_width, skeleton_phase, reduced_motion),
     },
   );
   let grid = observe_grid_viewport(grid, surface.artwork.epoch());
-  let content = Column::new()
-    .width(Fill)
-    .push(
-      row![
-        text(state.format("browse-item-count", &[("count", total_record_count.into())]))
-          .size(13)
-          .color(state.palette().text.metadata),
-      ]
-      .padding([TOKENS.spacing.s3, padding])
-      .align_y(Alignment::Center),
-    )
-    .push(container(grid).padding([0.0, padding]).width(Fill));
+  let mut content = Column::new().width(Fill);
+  if surface.mode == ViewMode::List && available_width >= LIST_COLUMNS_MIN_WIDTH {
+    content = content.push(list_heading(state));
+  }
+  let content = container(content.push(grid))
+    .padding(iced::Padding {
+      top: 0.0,
+      right: padding,
+      bottom: TOKENS.spacing.s10,
+      left: padding,
+    })
+    .width(Fill);
 
   let body = scrollable(content)
     .id(
@@ -431,8 +516,19 @@ fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
-  let metrics = skeleton_grid_metrics(state.shell.window_size.width, class);
-  let grid = browse_skeleton_grid(metrics, skeleton_phase, reduced_motion);
+  let mode = state.full.as_ref().expect("FullUi required").browse.mode;
+  let metrics = browse_metrics(
+    grid_available_width(state.shell.window_size.width, class),
+    mode,
+  );
+  let grid = if mode == ViewMode::Grid {
+    browse_skeleton_grid(metrics, skeleton_phase, reduced_motion)
+  } else {
+    Column::with_children(
+      (0..12).map(|_| list_skeleton(metrics.cell_width, skeleton_phase, reduced_motion)),
+    )
+    .into()
+  };
   let content = Column::new()
     .width(Fill)
     .push(container(grid).padding([0.0, padding]).width(Fill));
@@ -444,11 +540,6 @@ fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a
     .into()
 }
 
-pub(crate) fn skeleton_grid_metrics(window_width: f32, class: SizeClass) -> ArtworkGridMetrics {
-  let available_width = grid_available_width(window_width, class);
-  ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT)
-}
-
 fn browse_skeleton_grid<'a>(
   metrics: ArtworkGridMetrics,
   skeleton_phase: f32,
@@ -456,12 +547,12 @@ fn browse_skeleton_grid<'a>(
 ) -> Element<'a, Message> {
   let total_cells = LIBRARY_BROWSE_PAGE_SIZE as usize;
   let row_count = total_cells.div_ceil(metrics.columns);
-  let mut grid = Column::new().spacing(TOKENS.spacing.s4).width(Fill);
+  let mut grid = Column::new().spacing(TOKENS.spacing.s6).width(Fill);
 
   for row_index in 0..row_count {
     let start = row_index * metrics.columns;
     let end = (start + metrics.columns).min(total_cells);
-    let mut row = Row::new().spacing(TOKENS.spacing.s4);
+    let mut row = Row::new().spacing(GRID_COLUMN_GAP);
     for _ in start..end {
       row = row.push(
         container(skeleton_cell(
@@ -498,9 +589,9 @@ fn skeleton_cell<'a>(
   );
   let copy = column![
     skeleton_block(cell_width, 18.0, skeleton_phase, reduced_motion),
-    skeleton_block(cell_width * 0.6, 14.0, skeleton_phase, reduced_motion),
+    skeleton_block(cell_width * 0.6, 16.0, skeleton_phase, reduced_motion),
   ]
-  .spacing(TOKENS.spacing.s1)
+  .spacing(TOKENS.spacing.s2)
   .padding(iced::Padding {
     top: TOKENS.spacing.s2,
     right: 0.0,
@@ -524,31 +615,125 @@ fn video_card<'a>(
 ) -> Element<'a, Message> {
   let palette = state.palette();
   let artwork_height = card_artwork_height(cell_width);
-  let artwork = artwork(
+  let card = control_button_content(
+    move |_| {
+      poster_card(
+        item_artwork(
+          state,
+          item,
+          artwork_height,
+          false,
+          skeleton_phase,
+          reduced_motion,
+        ),
+        column![
+          ellipsis_text(&item.name)
+            .font(HEADING_FONT)
+            .size(14)
+            .line_height(iced::Pixels(18.0))
+            .color(palette.text.secondary),
+          ellipsis_text(item_caption(state.kernel.locale, item))
+            .size(12)
+            .line_height(iced::Pixels(16.0))
+            .color(palette.text.metadata),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .padding(iced::Padding {
+          top: TOKENS.spacing.s2,
+          ..iced::Padding::ZERO
+        })
+        .width(Fill),
+      )
+      .width(Fill)
+      .into()
+    },
+    ButtonVariant::Text,
+  )
+  .padding(0)
+  .width(Fill)
+  .style(jellypilot_ui::widgets::button::media_artwork)
+  .on_press(Message::OpenDetail(Box::new(item.clone())));
+  let mut overlay = Column::new()
+    .push(row![space::horizontal(), favorite_button(state, item)])
+    .push(space::vertical());
+  if let Some(rating) = item.community_rating.filter(|rating| rating.is_finite()) {
+    overlay = overlay.push(
+      container(
+        row![
+          text("★").size(12).line_height(iced::Pixels(14.0)).color(
+            jellypilot_ui::tokens::DARK_PALETTE
+              .colors
+              .onWarningContainer
+          ),
+          text(format!("{rating:.1}"))
+            .font(HEADING_FONT)
+            .size(12)
+            .line_height(iced::Pixels(14.0)),
+        ]
+        .spacing(TOKENS.spacing.s1),
+      )
+      .padding([4, 8])
+      .style(library::rating),
+    );
+  }
+  let mut card = stack![
+    card,
+    container(overlay)
+      .padding(TOKENS.spacing.s2)
+      .width(Fill)
+      .height(artwork_height),
+  ];
+  if let Some(progress) =
+    item_progress(item).filter(|progress| *progress > 0.0 && *progress < 100.0)
+  {
+    card = card.push(
+      container(ArtworkProgress::new(
+        f64::from(progress),
+        artwork_height,
+        4.0,
+        full_radius(TOKENS.radii.xl),
+        state
+          .full
+          .as_ref()
+          .expect("FullUi required")
+          .browse
+          .artwork
+          .get(&item.id)
+          .and_then(ImageCell::handle)
+          .cloned(),
+        library::artwork_progress_style(&jellypilot_ui::theme::theme(state.theme_mode()), true),
+      ))
+      .width(Fill)
+      .height(artwork_height)
+      .align_y(Alignment::End),
+    );
+  }
+  focus_tooltip(card, item.name.clone(), TooltipOptions::default())
+}
+
+fn item_artwork<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  height: f32,
+  compact: bool,
+  phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  let image = artwork(
     state,
-    state
-      .full
-      .as_ref()
-      .expect("FullUi required")
-      .browse
-      .artwork
-      .get(&item.id),
+    browse.artwork.get(&item.id),
     &item.name,
-    artwork_height,
-    skeleton_phase,
+    height,
+    compact,
+    phase,
     reduced_motion,
   );
-  let artwork = if let Some(image_id) = &item.artwork_image_id {
+  if let Some(image_id) = &item.artwork_image_id {
     observe_image(
-      artwork,
+      image,
       ArtworkSurface::Browse,
-      state
-        .full
-        .as_ref()
-        .expect("FullUi required")
-        .browse
-        .artwork
-        .epoch(),
+      browse.artwork.epoch(),
       ImageSpec {
         key: item.id.clone(),
         image_id: image_id.clone(),
@@ -558,29 +743,290 @@ fn video_card<'a>(
       ImageAxis::Vertical,
     )
   } else {
-    artwork
-  };
-  let copy = column![
-    ellipsis_text(&item.name)
-      .size(14)
-      .color(palette.text.heading),
-    ellipsis_text(item_caption(state.kernel.locale, item))
+    image
+  }
+}
+
+fn favorite_button<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Message> {
+  let full = state.full.as_ref().expect("FullUi required");
+  let enabled = state.kernel.client.is_some()
+    && !state.shell.quit_requested
+    && !accounts::content_mutations_blocked(&state.accounts)
+    && !collections::busy(full, &item.id);
+  let action = enabled.then(|| {
+    Message::Collections(collections::CollectionMessage::Favorite {
+      session: state.kernel.request_gate.current_session(),
+      item_id: item.id.clone(),
+      favorite: !item.favorite,
+    })
+  });
+  let control = control_button_content(
+    move |_| {
+      icon_with_color(
+        if item.favorite {
+          Icon::HeartFilled
+        } else {
+          Icon::Heart
+        },
+        IconSize::Sm,
+        if item.favorite {
+          state.palette().colors.favorite
+        } else {
+          state.palette().text.metadata
+        },
+      )
+      .into()
+    },
+    ButtonVariant::Icon,
+  )
+  .padding(12)
+  .width(40.into())
+  .min_height(40.0)
+  .style(|theme, _, status| library::row(theme, status))
+  .on_press_maybe(action);
+  focus_tooltip(
+    control,
+    state.t(if item.favorite {
+      "browse-unfavorite"
+    } else {
+      "browse-favorite"
+    }),
+    TooltipOptions::default(),
+  )
+}
+
+fn item_progress(item: &VideoLibraryItem) -> Option<f32> {
+  if item.played {
+    return Some(100.0);
+  }
+  if let Some(value) = item.played_percentage.filter(|value| value.is_finite()) {
+    return Some(value.clamp(0.0, 100.0) as f32);
+  }
+  match (item.resume_position_seconds, item.runtime_seconds) {
+    (Some(position), Some(runtime))
+      if position.is_finite() && position >= 0.0 && runtime.is_finite() && runtime > 0.0 =>
+    {
+      Some((position / runtime * 100.0).clamp(0.0, 100.0) as f32)
+    }
+    _ => None,
+  }
+}
+
+fn progress_caption(state: &State, item: &VideoLibraryItem) -> String {
+  if item.played {
+    state.t("browse-played")
+  } else if let Some(progress) = item_progress(item).filter(|progress| *progress > 0.0) {
+    state.format(
+      "browse-progress-percent",
+      &[("percent", f64::from(progress.round()).into())],
+    )
+  } else {
+    state.t("browse-unplayed")
+  }
+}
+
+fn row_progress<'a>(state: &'a State, item: &VideoLibraryItem) -> Element<'a, Message> {
+  let mut content = Row::new()
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center);
+  if let Some(progress) =
+    item_progress(item).filter(|progress| *progress > 0.0 && *progress < 100.0)
+  {
+    content = content.push(
+      progress_bar(0.0..=100.0, progress)
+        .girth(4)
+        .length(Fill)
+        .style(library::progress),
+    );
+  }
+  content
+    .push(
+      text(progress_caption(state, item))
+        .size(12)
+        .color(if item.played {
+          state.palette().colors.tertiary
+        } else {
+          state.palette().text.metadata
+        }),
+    )
+    .width(170)
+    .into()
+}
+
+fn list_heading(state: &State) -> Element<'_, Message> {
+  let label = |id: &str, width: Length| {
+    text(state.t(id))
       .size(12)
+      .line_height(iced::Pixels(14.0))
+      .color(state.palette().text.metadata)
+      .width(width)
+  };
+  let headings = row![
+    text("#")
+      .size(12)
+      .line_height(iced::Pixels(14.0))
+      .color(state.palette().text.metadata)
+      .width(36),
+    space::horizontal().width(40),
+    label("browse-column-title", Fill),
+    label("browse-column-year", 90.into()),
+    label("browse-column-rating", 90.into()),
+    label("browse-column-progress", 170.into()),
+    space::horizontal().width(40),
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .align_y(Alignment::Center);
+  column![
+    container(headings).padding([10, 12]).height(34).width(Fill),
+    iced::widget::rule::horizontal(1).style(library::divider),
+  ]
+  .into()
+}
+
+fn row_contents<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  index: usize,
+  width: f32,
+) -> Element<'a, Message> {
+  let narrow = width < LIST_COLUMNS_MIN_WIDTH;
+  let palette = state.palette();
+  let kind = media_type(state.kernel.locale, &item.item_type);
+  let subtitle = match item.episode_count {
+    Some(count) => state.format(
+      "browse-kind-episodes",
+      &[("kind", kind.into()), ("count", count.into())],
+    ),
+    None => kind,
+  };
+  let mut copy = column![
+    ellipsis_text(&item.name)
+      .font(HEADING_FONT)
+      .size(14)
+      .line_height(iced::Pixels(18.0))
+      .color(palette.text.secondary),
+    ellipsis_text(subtitle)
+      .size(12)
+      .line_height(iced::Pixels(16.0))
       .color(palette.text.metadata),
   ]
   .spacing(TOKENS.spacing.s1)
-  .padding(iced::Padding {
-    top: TOKENS.spacing.s2,
-    right: 0.0,
-    bottom: 0.0,
-    left: 0.0,
-  })
   .width(Fill);
+  let rating = item.community_rating.filter(|rating| rating.is_finite());
+  if narrow {
+    let mut metadata = Row::new()
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center);
+    if let Some(year) = item.production_year {
+      metadata = metadata.push(text(year).size(12).color(palette.text.metadata));
+    }
+    if let Some(rating) = rating {
+      metadata = metadata.push(
+        text(format!("★ {rating:.1}"))
+          .size(12)
+          .color(palette.colors.warning),
+      );
+    }
+    copy = copy.push(metadata).push(
+      text(progress_caption(state, item))
+        .size(12)
+        .color(palette.text.metadata),
+    );
+  }
+  let poster = container(item_artwork(
+    state,
+    item,
+    60.0,
+    true,
+    state.shell.skeleton_phase,
+    state.kernel.settings.snapshot().reduced_motion(),
+  ))
+  .width(40)
+  .height(60);
+  let mut main = row![
+    text(index + 1)
+      .size(12)
+      .color(palette.text.metadata)
+      .width(if narrow { 24 } else { 36 }),
+    poster,
+    copy,
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .align_y(Alignment::Center)
+  .width(Fill);
+  if !narrow {
+    main = main
+      .push(
+        text(
+          item
+            .production_year
+            .map_or_else(String::new, |year| year.to_string()),
+        )
+        .size(12)
+        .color(palette.text.body)
+        .width(90),
+      )
+      .push(
+        text(rating.map_or_else(String::new, |rating| format!("★ {rating:.1}")))
+          .size(12)
+          .color(palette.colors.warning)
+          .width(90),
+      )
+      .push(row_progress(state, item));
+  }
+  main.into()
+}
 
-  poster_card(artwork, copy)
-    .width(Fill)
-    .on_press(Message::OpenDetail(item.clone()))
-    .into()
+fn video_row<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  index: usize,
+  width: f32,
+) -> Element<'a, Message> {
+  let height = browse_metrics(width, ViewMode::List).cell_height;
+  let open = control_button_content(
+    move |_| row_contents(state, item, index, width),
+    ButtonVariant::Text,
+  )
+  .padding([10, 0])
+  .min_height(height - 1.0)
+  .width(Fill)
+  .style(|theme, _, status| library::row(theme, status))
+  .on_press(Message::OpenDetail(Box::new(item.clone())));
+  let open = focus_tooltip(open, item.name.clone(), TooltipOptions::default());
+  let row = container(
+    row![open, favorite_button(state, item)]
+      .spacing(TOKENS.spacing.s4)
+      .align_y(Alignment::Center),
+  )
+  .padding([0, 12])
+  .width(Fill);
+  column![
+    row,
+    iced::widget::rule::horizontal(1).style(library::divider)
+  ]
+  .into()
+}
+
+fn list_skeleton<'a>(width: f32, phase: f32, reduced_motion: bool) -> Element<'a, Message> {
+  let height = browse_metrics(width, ViewMode::List).cell_height;
+  container(
+    row![
+      skeleton_block(36.0, 14.0, phase, reduced_motion),
+      skeleton_block(40.0, 60.0, phase, reduced_motion),
+      column![
+        skeleton_block((width * 0.4).min(300.0), 18.0, phase, reduced_motion),
+        skeleton_block((width * 0.25).min(160.0), 14.0, phase, reduced_motion),
+      ]
+      .spacing(TOKENS.spacing.s1),
+    ]
+    .spacing(TOKENS.spacing.s4)
+    .align_y(Alignment::Center),
+  )
+  .padding([10, 12])
+  .width(Fill)
+  .height(height)
+  .into()
 }
 
 fn artwork<'a>(
@@ -588,18 +1034,30 @@ fn artwork<'a>(
   cell: Option<&ImageCell>,
   name: &'a str,
   height: f32,
+  compact: bool,
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
+  let radius = full_radius(if compact {
+    TOKENS.radii.lg
+  } else {
+    TOKENS.radii.xl
+  });
   if let Some(cell) = cell {
     if cell.state == ImageStatus::Ready {
       if let Some(handle) = cell.handle() {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
-          .content_fit(ContentFit::Cover)
-          .width(Fill)
-          .height(height)
-          .into();
+        return stack![
+          rounded_image(handle.clone(), radius)
+            .content_fit(ContentFit::Cover)
+            .width(Fill)
+            .height(height),
+          container(space::horizontal())
+            .width(Fill)
+            .height(height)
+            .style(move |theme| library::artwork_outline(theme, compact)),
+        ]
+        .into();
       }
     }
   }
@@ -620,10 +1078,14 @@ fn artwork<'a>(
       .unwrap_or_else(|| "•".to_owned());
     return container(
       column![
-        icon_with_color(Icon::Movie, IconSize::Custom(36.0), placeholder_color),
+        icon_with_color(
+          Icon::Movie,
+          IconSize::Custom(if compact { 20.0 } else { 36.0 }),
+          placeholder_color
+        ),
         text(initial)
           .font(HEADING_FONT)
-          .size(24)
+          .size(if compact { 14 } else { 24 })
           .color(placeholder_color),
       ]
       .spacing(TOKENS.spacing.s1)
@@ -633,17 +1095,10 @@ fn artwork<'a>(
     .height(height)
     .center_x(Fill)
     .align_y(Alignment::Center)
-    .style(|_theme| container::Style {
-      background: Some(iced::Background::Color(
-        palette.colors.surfaceContainerLowest,
-      )),
-      border: iced::Border {
-        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-        radius: full_radius(TOKENS.radii.xl),
-        width: 0.0,
-        color: iced::Color::TRANSPARENT,
-      },
-      ..container::Style::default()
+    .style(move |theme| {
+      let mut style = library::poster_placeholder(theme);
+      style.border.radius = radius;
+      style
     })
     .into();
   }
@@ -652,7 +1107,7 @@ fn artwork<'a>(
     Fill,
     height,
     palette.colors.surfaceContainerLowest,
-    full_radius(TOKENS.radii.xl),
+    radius,
     phase,
     reduced_motion,
   )
@@ -795,7 +1250,6 @@ fn sort_label(locale: Localizer, sort: VideoLibrarySort) -> String {
 mod tests {
   use super::*;
   use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
-  use iced::futures::StreamExt;
   use iced::{Font, Size};
 
   #[test]
@@ -862,7 +1316,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn browse_rows_keep_complete_equal_posters_at_responsive_window_widths() {
+  async fn browse_presentations_fit_their_paging_cells_at_desktop_and_narrow_widths() {
     let renderer = iced::Renderer::new(
       renderer::Settings {
         font: Font::DEFAULT,
@@ -877,123 +1331,84 @@ mod tests {
     let mut state = State::boot(true);
     state.kernel.settings = jellypilot_core::config::SettingsStore::default();
     state.full = Some(crate::app::state::FullUi::default());
-    state.shell.window_size = Size::new(1760.0, 900.0);
-    let window_id = iced::window::Id::unique();
-    let items: Vec<_> = (0..LIBRARY_BROWSE_PAGE_SIZE)
-      .map(|index| LibraryItemSlot {
-        item: Some(video_item(&index.to_string())),
-      })
-      .collect();
-
-    for (index, width) in [
-      1280.0, 800.0, 1024.0, 1279.5, 1440.0, 1760.0, 1919.5, 1920.0,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-      let size = Size::new(width, 900.0);
-      let event = if index == 0 {
-        iced::window::Event::Opened {
-          position: None,
-          size,
-          scale_factor: 1.25,
-        }
-      } else {
-        iced::window::Event::Resized(size)
-      };
-      let input = iced::advanced::subscription::Event::Interaction {
-        window: window_id,
-        event: iced::Event::Window(event),
-        status: iced::event::Status::Ignored,
-      };
-      let streams = iced::advanced::subscription::into_recipes(crate::app::subscription(&state))
-        .into_iter()
-        .map(|recipe| recipe.stream(Box::pin(iced::futures::stream::iter(vec![input.clone()]))));
-      let messages: Vec<_> = iced::futures::stream::select_all(streams).collect().await;
-      for message in messages {
-        drop(crate::app::update(&mut state, message));
-      }
-      if index == 0 {
-        // iced delivers Opened before the open task resolves with the window id.
-        drop(crate::app::update(
-          &mut state,
-          Message::Window(crate::app::message::WindowMessage::ShowRequested(Some(
-            window_id,
-          ))),
-        ));
-      }
-      let class = SizeClass::from_width(width);
-      let content_width =
-        width - super::super::shell::sidebar_width(class) - super::super::shell::HAIRLINE_WIDTH;
-      let metrics = skeleton_grid_metrics(width, class);
-      let limits = layout::Limits::new(Size::ZERO, Size::new(content_width, 700.0));
-      let mut ready = ready_surface(
-        &state,
-        &items,
-        0,
-        LIBRARY_BROWSE_PAGE_SIZE,
-        None,
-        false,
-        class,
-      );
-      let mut tree = Tree::new(&ready);
-      tree.diff(ready.as_widget_mut());
-      let ready_node = ready.as_widget_mut().layout(&mut tree, &renderer, &limits);
-      let scroll = &ready_node.children()[0];
-      let grid_container = &scroll.children()[0].children()[1];
-      let grid = &grid_container.children()[0];
-      assert!(
-        (grid.size().width - grid_available_width(width, class)).abs() < 0.01,
-        "render and paging widths diverged at window width {width}"
-      );
-      // The first and last grid children are virtualization spacers.
-      for row in &grid.children()[1..grid.children().len() - 1] {
-        for cell in row.children() {
-          let card = &cell.children()[0];
-          let poster = &card.children()[0];
-          assert!(
-            cell.bounds().x >= 0.0
-              && cell.bounds().x + cell.size().width <= grid.size().width + 0.01
-              && (cell.size().width - metrics.cell_width).abs() < 0.01
-              && (card.size().width - metrics.cell_width).abs() < 0.01
-              && (poster.size().width - metrics.cell_width).abs() < 0.01
-              && (poster.size().height - card_artwork_height(metrics.cell_width)).abs() < 0.01
-              && poster.size().height <= card.size().height,
-            "incomplete or unequal poster at window width {width}: cell={:?}, card={:?}, poster={:?}",
-            cell.bounds(),
-            card.bounds(),
-            poster.bounds(),
-          );
-        }
-      }
-      assert_eq!(grid.children()[1].children().len(), metrics.columns);
-
-      let mut loading = browse_loading_skeleton(&state, class);
-      let mut tree = Tree::new(&loading);
-      tree.diff(loading.as_widget_mut());
-      let loading_node = loading
-        .as_widget_mut()
-        .layout(&mut tree, &renderer, &limits);
-      let skeleton_grid = &loading_node.children()[0].children()[0].children()[0];
-      let skeleton_row = &skeleton_grid.children()[0];
-      for (skeleton, loaded) in skeleton_row
-        .children()
-        .iter()
-        .zip(grid.children()[1].children())
-      {
+    let mut item = video_item("long-title");
+    item.name =
+      "A long library title that must not push the favorite action off the edge".to_owned();
+    item.community_rating = Some(8.7);
+    item.episode_count = Some(18);
+    item.played_percentage = Some(45.0);
+    for width in [360.0, 700.0, 860.0, 1148.0] {
+      for mode in [ViewMode::Grid, ViewMode::List] {
+        let metrics = browse_metrics(width, mode);
+        let mut cell = match mode {
+          ViewMode::Grid => video_card(&state, &item, metrics.cell_width, 0.0, true),
+          ViewMode::List => video_row(&state, &item, 0, metrics.cell_width),
+        };
+        let mut tree = Tree::new(&cell);
+        tree.diff(cell.as_widget_mut());
+        let node = cell.as_widget_mut().layout(
+          &mut tree,
+          &renderer,
+          &layout::Limits::new(Size::ZERO, Size::new(metrics.cell_width, 1000.0)),
+        );
         assert!(
-          (skeleton.size().width - loaded.size().width).abs() < 0.01
-            && (skeleton.size().height - loaded.size().height).abs() < 0.01,
-          "loading and loaded cells shift geometry at window width {width}"
+          (node.size().height - metrics.cell_height).abs() < 0.1,
+          "{mode:?} content clips or overlaps its next paging row at width {width}: {:?}",
+          node.size(),
+        );
+        assert_fits_width(&node);
+        let mut placeholder = match mode {
+          ViewMode::Grid => skeleton_cell(metrics.cell_width, 0.0, true),
+          ViewMode::List => list_skeleton(metrics.cell_width, 0.0, true),
+        };
+        let mut tree = Tree::new(&placeholder);
+        tree.diff(placeholder.as_widget_mut());
+        let loading = placeholder.as_widget_mut().layout(
+          &mut tree,
+          &renderer,
+          &layout::Limits::new(Size::ZERO, Size::new(metrics.cell_width, 1000.0)),
+        );
+        assert!(
+          (loading.size().height - node.size().height).abs() < 0.1,
+          "loading and loaded presentation must not shift the viewport"
         );
       }
-      assert_eq!(skeleton_row.children().len(), metrics.columns);
     }
+  }
+
+  fn assert_fits_width(node: &layout::Node) {
+    for child in node.children() {
+      assert!(
+        child.bounds().x >= -0.1
+          && child.bounds().x + child.size().width <= node.size().width + 0.1,
+        "content escapes its horizontal bounds: parent={:?}, child={:?}",
+        node.bounds(),
+        child.bounds(),
+      );
+      assert_fits_width(child);
+    }
+  }
+
+  #[test]
+  fn progress_uses_server_completion_and_rejects_invalid_ratios() {
+    let mut item = video_item("progress");
+    assert_eq!(item_progress(&item), None);
+    item.played_percentage = Some(f64::NAN);
+    item.resume_position_seconds = Some(45.0);
+    item.runtime_seconds = Some(100.0);
+    assert_eq!(item_progress(&item), Some(45.0));
+    item.runtime_seconds = Some(0.0);
+    assert_eq!(item_progress(&item), None);
+    item.played = true;
+    assert_eq!(item_progress(&item), Some(100.0));
   }
 
   fn video_item(id: &str) -> VideoLibraryItem {
     VideoLibraryItem {
       premiere_date: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       logo_image_id: None,
       id: id.to_owned(),
       name: format!("Movie {id}"),

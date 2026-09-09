@@ -13,7 +13,7 @@ use jellypilot_core::watchlist::{ProfileScope, WatchlistRecord, WatchlistStore};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataAction, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest,
+  VideoUserDataUpdateRequest, WatchHistoryPage, WatchHistoryPageRequest,
 };
 
 use super::artwork::{ImageCollection, ImageCompletion, ImageSpec};
@@ -29,12 +29,14 @@ pub enum Route {
   Overview,
   Favorites,
   Watchlist,
+  History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
   Favorites,
   Watchlist,
+  History,
 }
 
 /// Whether current server metadata has resolved a locally stored item.
@@ -68,6 +70,7 @@ pub struct ListPage {
 pub struct Surface {
   pub favorites: ListPage,
   pub watchlist: ListPage,
+  pub history: ListPage,
   pub watchlist_ids: HashSet<String>,
   pub(crate) membership_loaded: bool,
   pub busy_items: HashSet<String>,
@@ -79,6 +82,7 @@ pub struct Surface {
   store_revision: u64,
   favorites_generation: u64,
   watchlist_generation: u64,
+  history_generation: u64,
   membership_generation: u64,
   mutations: HashMap<String, u64>,
 }
@@ -296,14 +300,19 @@ pub enum PersonalListsMessage {
   Retry(Kind),
   NextPage(Kind),
   PreviousPage(Kind),
-  ToggleWatchlist(VideoLibraryItem),
+  ToggleWatchlist(Box<VideoLibraryItem>),
   RemoveWatchlist(String),
-  RemoveFavorite(VideoLibraryItem),
   FavoritesLoaded {
     session: SessionToken,
     generation: u64,
     scope: ProfileScope,
     result: Result<FavoritesPage, String>,
+  },
+  HistoryLoaded {
+    session: SessionToken,
+    generation: u64,
+    scope: ProfileScope,
+    result: Result<WatchHistoryPage, String>,
   },
   MembershipLoaded {
     session: SessionToken,
@@ -352,15 +361,25 @@ pub fn start(
 
   match route {
     Route::Overview => {
-      surface.favorites.offset = 0;
-      surface.watchlist.offset = 0;
+      for page in [
+        &mut surface.favorites,
+        &mut surface.watchlist,
+        &mut surface.history,
+      ] {
+        if page.offset != 0 {
+          page.entries.clear();
+        }
+        page.offset = 0;
+      }
       Task::batch([
         load_favorites(surface, kernel, runtime, scope.clone()),
-        load_membership_for_scope(surface, kernel, runtime, scope),
+        load_membership_for_scope(surface, kernel, runtime, scope.clone()),
+        load_history(surface, kernel, runtime, scope),
       ])
     }
     Route::Favorites => load_favorites(surface, kernel, runtime, scope),
     Route::Watchlist => load_membership_for_scope(surface, kernel, runtime, scope),
+    Route::History => load_history(surface, kernel, runtime, scope),
   }
 }
 
@@ -380,7 +399,8 @@ pub fn refresh(
   };
   Task::batch([
     load_favorites(surface, kernel, runtime, scope.clone()),
-    load_watchlist_metadata(surface, kernel, runtime, scope),
+    load_watchlist_metadata(surface, kernel, runtime, scope.clone()),
+    load_history(surface, kernel, runtime, scope),
   ])
 }
 
@@ -388,8 +408,10 @@ pub fn refresh(
 pub fn leave_view(surface: &mut Surface) {
   surface.favorites_generation = 0;
   surface.watchlist_generation = 0;
+  surface.history_generation = 0;
   surface.favorites.loading = false;
   surface.watchlist.loading = false;
+  surface.history.loading = false;
   begin_artwork_view(surface);
 }
 
@@ -423,6 +445,12 @@ pub fn update(
       };
       load_favorites(surface, kernel, runtime, scope)
     }
+    PersonalListsMessage::Retry(Kind::History) => {
+      let Some(scope) = current_scope(surface, kernel) else {
+        return Task::none();
+      };
+      load_history(surface, kernel, runtime, scope)
+    }
     PersonalListsMessage::Retry(Kind::Watchlist) => {
       let Some(scope) = current_scope(surface, kernel) else {
         return Task::none();
@@ -435,15 +463,14 @@ pub fn update(
     }
     PersonalListsMessage::NextPage(kind) => change_page(surface, kernel, runtime, kind, true),
     PersonalListsMessage::PreviousPage(kind) => change_page(surface, kernel, runtime, kind, false),
-    PersonalListsMessage::ToggleWatchlist(item) => mutate_watchlist(surface, kernel, runtime, item),
+    PersonalListsMessage::ToggleWatchlist(item) => {
+      mutate_watchlist(surface, kernel, runtime, *item)
+    }
     PersonalListsMessage::RemoveWatchlist(item_id) => {
       let Some(item_id) = nonempty(item_id) else {
         return Task::none();
       };
       mutate_watchlist_by_id(surface, kernel, runtime, item_id)
-    }
-    PersonalListsMessage::RemoveFavorite(item) => {
-      set_favorite(surface, kernel, runtime, item.id, false)
     }
     PersonalListsMessage::FavoritesLoaded {
       session,
@@ -469,6 +496,32 @@ pub fn update(
           }
         }
         Err(error) => surface.favorites.error = Some(list_failure("lists-favorites-error", &error)),
+      }
+      prepare_artwork(surface)
+    }
+    PersonalListsMessage::HistoryLoaded {
+      session,
+      generation,
+      scope,
+      result,
+    } => {
+      if !settlement_is_current(surface, kernel, Kind::History, session, generation, &scope) {
+        return Task::none();
+      }
+      surface.history.loading = false;
+      surface.history_generation = 0;
+      match result {
+        Ok(page) => {
+          if apply_server_page(
+            &mut surface.history,
+            page.start_index,
+            page.total_record_count,
+            page.items,
+          ) {
+            return load_history(surface, kernel, runtime, scope);
+          }
+        }
+        Err(error) => surface.history.error = Some(list_failure("lists-history-error", &error)),
       }
       prepare_artwork(surface)
     }
@@ -618,6 +671,8 @@ fn reset_for_scope(surface: &mut Surface, runtime: &Runtime, scope: ProfileScope
 fn settle_missing_connection(surface: &mut Surface, error: UiText) {
   surface.favorites.loading = false;
   surface.watchlist.loading = false;
+  surface.history.loading = false;
+  surface.history.error = Some(error.clone());
   surface.favorites.error = Some(error.clone());
   surface.watchlist.error = Some(error);
 }
@@ -652,6 +707,45 @@ fn load_favorites(
     },
     move |result| {
       Message::PersonalLists(PersonalListsMessage::FavoritesLoaded {
+        session,
+        generation,
+        scope,
+        result,
+      })
+    },
+  )
+}
+
+fn load_history(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  runtime: &Runtime,
+  scope: ProfileScope,
+) -> Task<Message> {
+  let generation = runtime.next_generation();
+  surface.history_generation = generation;
+  surface.history.loading = true;
+  surface.history.error = None;
+  let session = kernel.request_gate.current_session();
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    surface.history.loading = false;
+    surface.history.error = Some(UiText::new("lists-session-error"));
+    return Task::none();
+  };
+  let start_index = i32::try_from(surface.history.offset).unwrap_or(i32::MAX);
+  Task::perform(
+    async move {
+      client
+        .library()
+        .history(WatchHistoryPageRequest {
+          start_index,
+          limit: PAGE_SIZE as i32,
+        })
+        .await
+        .map_err(|error| error.to_string())
+    },
+    move |result| {
+      Message::PersonalLists(PersonalListsMessage::HistoryLoaded {
         session,
         generation,
         scope,
@@ -747,6 +841,7 @@ fn change_page(
   let page = match kind {
     Kind::Favorites => &mut surface.favorites,
     Kind::Watchlist => &mut surface.watchlist,
+    Kind::History => &mut surface.history,
   };
   if page.loading {
     return Task::none();
@@ -764,9 +859,12 @@ fn change_page(
     return Task::none();
   }
   page.offset = new_offset;
+  page.entries.clear();
+  begin_artwork_view(surface);
   match kind {
     Kind::Favorites => load_favorites(surface, kernel, runtime, scope),
     Kind::Watchlist => load_watchlist_metadata(surface, kernel, runtime, scope),
+    Kind::History => load_history(surface, kernel, runtime, scope),
   }
 }
 
@@ -1027,7 +1125,12 @@ fn settle_favorite_mutation(
           .offset
           .min((surface.favorites.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
       }
-      for entry in &mut surface.watchlist.entries {
+      for entry in surface
+        .watchlist
+        .entries
+        .iter_mut()
+        .chain(&mut surface.history.entries)
+      {
         if let Some(item) = entry.item.as_mut().filter(|item| item.id == item_id) {
           item.favorite = favorite;
         }
@@ -1059,6 +1162,7 @@ fn settlement_is_current(
   let expected_generation = match kind {
     Kind::Favorites => surface.favorites_generation,
     Kind::Watchlist => surface.watchlist_generation,
+    Kind::History => surface.history_generation,
   };
   generation != 0
     && generation == expected_generation
@@ -1070,8 +1174,22 @@ fn settlement_is_current(
 /// Returns true when the requested page disappeared and must be loaded again
 /// at the corrected final-page offset.
 fn apply_favorites_page(target: &mut ListPage, page: FavoritesPage) -> bool {
-  let offset = usize::try_from(page.start_index.max(0)).unwrap_or(usize::MAX);
-  let total = usize::try_from(page.total_record_count.max(0)).unwrap_or(usize::MAX);
+  apply_server_page(
+    target,
+    page.start_index,
+    page.total_record_count,
+    page.items,
+  )
+}
+
+fn apply_server_page(
+  target: &mut ListPage,
+  start_index: i32,
+  total_record_count: i32,
+  items: Vec<VideoLibraryItem>,
+) -> bool {
+  let offset = usize::try_from(start_index.max(0)).unwrap_or(usize::MAX);
+  let total = usize::try_from(total_record_count.max(0)).unwrap_or(usize::MAX);
   if total > 0 && offset >= total {
     target.entries.clear();
     target.offset = ((total - 1) / PAGE_SIZE) * PAGE_SIZE;
@@ -1081,7 +1199,7 @@ fn apply_favorites_page(target: &mut ListPage, page: FavoritesPage) -> bool {
   }
   target.offset = if total == 0 { 0 } else { offset };
   target.total = total;
-  target.entries = page.items.into_iter().map(entry_from_item).collect();
+  target.entries = items.into_iter().map(entry_from_item).collect();
   target.error = None;
   false
 }
@@ -1173,7 +1291,7 @@ fn apply_watchlist_metadata(page: &mut ListPage, result: Result<Vec<VideoLibrary
   page.error = None;
 }
 
-fn entry_from_item(item: VideoLibraryItem) -> ListEntry {
+pub(crate) fn entry_from_item(item: VideoLibraryItem) -> ListEntry {
   ListEntry {
     id: item.id.clone(),
     name: item.name.clone(),
@@ -1253,6 +1371,7 @@ fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
   let specs = [
     (Kind::Favorites, &surface.favorites),
     (Kind::Watchlist, &surface.watchlist),
+    (Kind::History, &surface.history),
   ]
   .into_iter()
   .flat_map(|(kind, page)| {
@@ -1270,6 +1389,7 @@ pub(crate) fn artwork_key(kind: Kind, item_id: &str) -> String {
   let list = match kind {
     Kind::Favorites => "favorites",
     Kind::Watchlist => "watchlist",
+    Kind::History => "history",
   };
   format!("{list}:{item_id}")
 }
@@ -1278,7 +1398,17 @@ pub(crate) fn artwork_spec(kind: Kind, entry: &ListEntry) -> Option<ImageSpec> {
   let item = entry.item.as_ref()?;
   Some(ImageSpec {
     key: artwork_key(kind, &entry.id),
-    image_id: list_artwork_image_id(item)?.to_owned(),
+    image_id: match kind {
+      Kind::Favorites => list_artwork_image_id(item),
+      Kind::Watchlist | Kind::History => item
+        .episode_thumb_image_id
+        .as_deref()
+        .or(item.backdrop_image_id.as_deref())
+        .or(item.series_thumb_image_id.as_deref())
+        .or(item.series_backdrop_image_id.as_deref())
+        .or(item.artwork_image_id.as_deref()),
+    }?
+    .to_owned(),
     size_class: ArtworkSizeClass::Card,
     derived: DerivedArtwork::default(),
   })
@@ -1327,6 +1457,9 @@ mod tests {
       item_type: "Movie".to_owned(),
       production_year: Some(2026),
       runtime_seconds: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       played: false,
       favorite: false,
       artwork_image_id: None,
@@ -1601,6 +1734,183 @@ mod tests {
     clamp_watchlist_offset(&mut surface);
 
     assert_eq!(surface.watchlist.offset, 0);
+  }
+
+  fn connected_state() -> crate::app::state::State {
+    let mut state = crate::app::state::State::boot(false);
+    let client = Arc::new(jellypilot_media_server::JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://media.example.test/".to_owned(),
+        user_id: "user-1".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    state.kernel.client = Some(client);
+    state
+  }
+
+  #[test]
+  fn history_rejects_superseded_route_account_and_session_completions() {
+    for boundary in ["new request", "leave", "account", "session"] {
+      let mut state = connected_state();
+      let runtime = Runtime::default();
+      let mut surface = Surface::default();
+      drop(start(
+        &mut surface,
+        &mut state.kernel,
+        &runtime,
+        Route::History,
+      ));
+      let session = state.kernel.request_gate.current_session();
+      let generation = surface.history_generation;
+      let scope = surface.scope.clone().expect("scope");
+      match boundary {
+        "new request" => {
+          drop(load_history(
+            &mut surface,
+            &mut state.kernel,
+            &runtime,
+            scope.clone(),
+          ));
+        }
+        "leave" => leave_view(&mut surface),
+        "account" => {
+          surface.scope = Some(
+            ProfileScope::new(scope.provider(), scope.server_url(), "other-user")
+              .expect("other scope"),
+          )
+        }
+        "session" => state.kernel.request_gate.disconnect(),
+        _ => unreachable!(),
+      }
+      drop(update(
+        &mut surface,
+        &mut state.kernel,
+        &runtime,
+        PersonalListsMessage::HistoryLoaded {
+          session,
+          generation,
+          scope,
+          result: Ok(WatchHistoryPage {
+            items: vec![item("stale", "Stale")],
+            total_record_count: 1,
+            start_index: 0,
+            limit: PAGE_SIZE as i32,
+            has_more: false,
+          }),
+        },
+      ));
+      assert!(surface.history.entries.is_empty(), "{boundary}");
+      assert_eq!(surface.history.total, 0, "{boundary}");
+    }
+  }
+
+  #[test]
+  fn history_page_shrink_reloads_correct_offset_and_keeps_retryable_errors() {
+    let mut state = connected_state();
+    let runtime = Runtime::default();
+    let mut surface = Surface::default();
+    drop(start(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      Route::History,
+    ));
+    let session = state.kernel.request_gate.current_session();
+    let scope = surface.scope.clone().expect("scope");
+    let mut watched = item("watched", "Watched");
+    watched.last_played_date = Some("2026-09-08T20:15:00Z".to_owned());
+    let generation = surface.history_generation;
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::HistoryLoaded {
+        session,
+        generation,
+        scope: scope.clone(),
+        result: Ok(WatchHistoryPage {
+          items: vec![watched],
+          total_record_count: 25,
+          start_index: 0,
+          limit: 24,
+          has_more: true,
+        }),
+      },
+    ));
+    assert_eq!(
+      surface.history.entries[0]
+        .item
+        .as_ref()
+        .expect("watched item")
+        .last_played_date
+        .as_deref(),
+      Some("2026-09-08T20:15:00Z")
+    );
+    drop(change_page(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      Kind::History,
+      true,
+    ));
+    assert!(surface.history.entries.is_empty());
+    assert!(surface.history.loading);
+    let generation = surface.history_generation;
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::HistoryLoaded {
+        session,
+        generation,
+        scope: scope.clone(),
+        result: Ok(WatchHistoryPage {
+          items: Vec::new(),
+          total_record_count: 24,
+          start_index: 24,
+          limit: 24,
+          has_more: false,
+        }),
+      },
+    ));
+    assert_eq!(surface.history.offset, 0);
+    assert!(surface.history.loading);
+    let generation = surface.history_generation;
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::HistoryLoaded {
+        session,
+        generation,
+        scope,
+        result: Err("server unavailable".to_owned()),
+      },
+    ));
+    assert!(!surface.history.loading);
+    assert!(surface.history.error.is_some());
+    assert_eq!(surface.history.total, 24);
+  }
+
+  #[test]
+  fn history_and_watchlist_artwork_do_not_share_admission_identity() {
+    use jellypilot_core::image_lifecycle::{ImageLifecycle, ImagePriority, ImageStatus};
+    let mut metadata = item("same", "Same");
+    metadata.backdrop_image_id = Some("landscape".to_owned());
+    let entry = entry_from_item(metadata);
+    let history = artwork_spec(Kind::History, &entry).expect("history artwork");
+    let watchlist = artwork_spec(Kind::Watchlist, &entry).expect("watchlist artwork");
+    let mut lifecycle = ImageLifecycle::default();
+    drop(lifecycle.observe(history.clone(), Some(ImagePriority::Visible)));
+    drop(lifecycle.observe(watchlist.clone(), Some(ImagePriority::Visible)));
+    drop(lifecycle.observe(history, None));
+    assert_eq!(lifecycle.status(&watchlist.key), Some(ImageStatus::Loading));
   }
 
   #[tokio::test]

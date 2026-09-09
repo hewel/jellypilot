@@ -327,6 +327,31 @@ impl BrowseModel {
         Ok(effects)
     }
 
+    /// Applies confirmed flags immediately, then reloads membership/order from the server.
+    /// Any refresh begun before the write is cancelled so it cannot restore stale flags.
+    pub fn apply_user_data_update(
+        &mut self,
+        update: &jellypilot_media_server::VideoUserDataUpdate,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        let mut found = false;
+        for item in self.committed.pages.values_mut().flatten() {
+            if item.id == update.item_id {
+                item.favorite = update.favorite;
+                item.played = update.played;
+                found = true;
+            }
+        }
+        if !found && !self.committed.preferences.favorites_only {
+            return Ok(Vec::new());
+        }
+        let mut effects = self
+            .refresh
+            .take()
+            .map_or_else(Vec::new, |mut refresh| refresh.replacement.suspend());
+        effects.extend(self.refresh()?);
+        Ok(effects)
+    }
+
     #[must_use]
     pub fn is_refreshing(&self) -> bool {
         self.refresh.is_some()
@@ -931,6 +956,9 @@ mod tests {
     fn items(start: u32, count: u32) -> Vec<VideoLibraryItem> {
         (start..start + count)
             .map(|index| VideoLibraryItem {
+                community_rating: None,
+                episode_count: None,
+                last_played_date: None,
                 premiere_date: None,
                 id: format!("item-{index}"),
                 name: format!("Item {index}"),
@@ -1023,6 +1051,57 @@ mod tests {
             .iter()
             .map(|slot| slot.display_index)
             .collect()
+    }
+
+    #[test]
+    fn confirmed_unfavorite_survives_old_refresh_and_reloads_filtered_membership() {
+        let mut model = BrowseModel::default();
+        let first = request(
+            model
+                .configure_with_preferences(
+                    BrowseSource::Library {
+                        session: session(),
+                        shortcut: shortcut(),
+                    },
+                    BrowsePreferences {
+                        favorites_only: true,
+                        ..BrowsePreferences::default()
+                    },
+                )
+                .unwrap(),
+        );
+        let mut records = items(0, 1);
+        records[0].favorite = true;
+        model
+            .settle(BrowsePageSettlement {
+                source_id: first.source_id.clone(),
+                token: first.token,
+                result: Ok(BrowsePagePayload {
+                    start_index: 0,
+                    limit: first.limit,
+                    total_record_count: 1,
+                    has_more: false,
+                    items: records,
+                }),
+            })
+            .unwrap();
+        let stale = request(model.refresh().unwrap());
+        let current = request(
+            model
+                .apply_user_data_update(&jellypilot_media_server::VideoUserDataUpdate {
+                    item_id: "item-0".to_owned(),
+                    favorite: false,
+                    played: false,
+                })
+                .unwrap(),
+        );
+        settle(&mut model, &stale, 0, 0);
+        let LibraryBrowseView::Ready { visible_items, .. } = model.view() else {
+            panic!("stale refresh replaced the confirmed visible item");
+        };
+        assert!(!visible_items[0].item.as_ref().unwrap().favorite);
+        settle(&mut model, &current, 0, 0);
+        assert!(matches!(model.view(), LibraryBrowseView::Empty));
     }
 
     #[test]

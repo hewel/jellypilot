@@ -6,6 +6,10 @@ use std::time::Duration;
 
 use iced::{Color, Shadow, Theme, Vector};
 
+/// Image-local playback tracks remain white in both desktop color schemes.
+pub const POSTER_PROGRESS_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+pub const LANDSCAPE_PROGRESS_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.24);
+
 /// Complete JellyPilot design-token set.
 #[derive(Debug, Clone, Copy)]
 pub struct DesignTokens {

@@ -127,6 +127,9 @@ mod tests {
 
     fn item(id: &str, item_type: &str, series_id: Option<&str>) -> VideoLibraryItem {
         VideoLibraryItem {
+            community_rating: None,
+            episode_count: None,
+            last_played_date: None,
             premiere_date: None,
             id: id.to_owned(),
             name: "Pilot".to_owned(),

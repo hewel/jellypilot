@@ -1454,7 +1454,7 @@ fn queue_content(state: &State) -> Element<'_, Message> {
               .width(Fill)
               .on_press_maybe(
                 (!is_current && (!embedded || !state.playback.view.busy)).then_some(
-                  Message::Playback(PlaybackMessage::QueueItemSelected(item.clone())),
+                  Message::Playback(PlaybackMessage::QueueItemSelected(Box::new(item.clone()))),
                 ),
               )
               .style(move |theme, status| {
@@ -2227,6 +2227,9 @@ mod tests {
     let start_effects = state.playback.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(VideoLibraryItem {
+          community_rating: None,
+          episode_count: None,
+          last_played_date: None,
           premiere_date: None,
           logo_image_id: None,
           id: "episode-1".to_owned(),

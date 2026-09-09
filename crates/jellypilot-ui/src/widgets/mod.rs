@@ -1,6 +1,7 @@
 //! Catalog style functions for JellyPilot's basic iced widgets.
 
 pub mod artwork_grid;
+pub mod artwork_progress;
 pub mod badge;
 pub mod button;
 pub mod container;
@@ -11,6 +12,7 @@ pub mod escape_input;
 pub mod field;
 pub mod focus_scope;
 pub mod inert;
+pub mod library;
 pub mod poster_card;
 pub mod rounded_image;
 pub mod scrollable;

@@ -2715,6 +2715,163 @@ impl<'a> JellyfinLibrary<'a> {
     })
   }
 
+  /// Loads completed/marked-played and unplayed resumable Movie/Episode records.
+  ///
+  /// Each disjoint server stream is fetched through the requested page end and
+  /// merged by DatePlayed. Missing dates sort last; equal dates prefer played
+  /// items while retaining each server stream's order. This is not an event log.
+  pub async fn history(
+    &self,
+    request: WatchHistoryPageRequest,
+  ) -> Result<WatchHistoryPage, JellyfinError> {
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let end = start_index
+      .checked_add(limit)
+      .ok_or_else(|| JellyfinError::HttpError("Watch history page offset overflow".to_owned()))?;
+    let (played_items, played_total) = self.history_prefix(end, true).await?;
+    let (resumable_items, resumable_total) = self.history_prefix(end, false).await?;
+    let total_record_count = played_total.checked_add(resumable_total).ok_or_else(|| {
+      JellyfinError::HttpError("Watch history total record count overflow".to_owned())
+    })?;
+    let dated = |item: VideoLibraryItem| {
+      let date = item
+        .last_played_date
+        .as_deref()
+        .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok());
+      (date, item)
+    };
+    let mut played = played_items.into_iter().map(dated).peekable();
+    let mut resumable = resumable_items.into_iter().map(dated).peekable();
+    let merged = std::iter::from_fn(|| {
+      let take_played = match (played.peek(), resumable.peek()) {
+        (Some(left), Some(right)) => left.0 >= right.0,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => return None,
+      };
+      if take_played {
+        played.next()
+      } else {
+        resumable.next()
+      }
+      .map(|(_, item)| item)
+    });
+    let items = merged
+      .skip(start_index as usize)
+      .take(limit as usize)
+      .collect();
+    Ok(WatchHistoryPage {
+      start_index,
+      limit,
+      total_record_count,
+      has_more: end < total_record_count,
+      items,
+    })
+  }
+
+  async fn history_prefix(
+    &self,
+    end: i32,
+    played: bool,
+  ) -> Result<(Vec<VideoLibraryItem>, i32), JellyfinError> {
+    let mut items = Vec::new();
+    let mut start_index = 0;
+    let mut total = None;
+    loop {
+      let page = self
+        .history_stream_page(
+          WatchHistoryPageRequest {
+            start_index,
+            limit: (end - start_index).min(100),
+          },
+          played,
+        )
+        .await?;
+      if total.is_some_and(|total| total != page.total_record_count) {
+        return Err(JellyfinError::HttpError(
+          "Watch history changed while paging".to_owned(),
+        ));
+      }
+      total = Some(page.total_record_count);
+      let returned = i32::try_from(page.items.len())
+        .map_err(|_| JellyfinError::HttpError("Watch history page size overflow".to_owned()))?;
+      start_index = start_index
+        .checked_add(returned)
+        .ok_or_else(|| JellyfinError::HttpError("Watch history page offset overflow".to_owned()))?;
+      items.extend(page.items);
+      if start_index >= end || start_index >= page.total_record_count {
+        return Ok((items, page.total_record_count));
+      }
+      if returned == 0 {
+        return Err(JellyfinError::HttpError(
+          "Watch history returned an incomplete prefix".to_owned(),
+        ));
+      }
+    }
+  }
+
+  async fn history_stream_page(
+    &self,
+    request: WatchHistoryPageRequest,
+    played: bool,
+  ) -> Result<WatchHistoryPage, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_history_stream_page(request, played).await;
+    }
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let mut params = video_root_items_params(user_id, start_index, limit, false);
+    params.include_item_types = Some(vec![
+      jellyfin_api::models::BaseItemKind::Movie,
+      jellyfin_api::models::BaseItemKind::Episode,
+    ]);
+    params.is_played = Some(played);
+    params.filters = (!played).then(|| vec![jellyfin_api::models::ItemFilter::IsResumable]);
+    params.sort_by = Some(vec![jellyfin_api::models::ItemSortBy::DatePlayed]);
+    params.sort_order = Some(vec![jellyfin_api::models::SortOrder::Descending]);
+    let response = jellyfin_api::apis::library_api::get_items(&configuration, params)
+      .await
+      .map_err(|err| JellyfinClient::openapi_error("Watch history", err))?;
+    let total_record_count = response
+      .total_record_count
+      .filter(|&total| total >= 0)
+      .ok_or_else(|| {
+        JellyfinError::HttpError(
+          "Watch history response omitted a valid total record count".to_owned(),
+        )
+      })?;
+    let returned_count = response
+      .items
+      .as_ref()
+      .map_or(0, |items| i32::try_from(items.len()).unwrap_or(i32::MAX));
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .map(|item| {
+        map_video_library_item(&server_url, item).ok_or_else(|| {
+          JellyfinError::HttpError(
+            "Watch history response contained an item without an id or type".to_owned(),
+          )
+        })
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    Ok(WatchHistoryPage {
+      start_index,
+      limit,
+      total_record_count,
+      has_more: start_index.saturating_add(returned_count) < total_record_count,
+      items,
+    })
+  }
+
   /// Resolves the existing video items for a batch of IDs.
   ///
   /// A successful response may omit missing or inaccessible IDs. Transport and
@@ -3472,6 +3629,70 @@ impl<'a> JellyfinLibrary<'a> {
     })
   }
 
+  async fn emby_history_stream_page(
+    &self,
+    request: WatchHistoryPageRequest,
+    played: bool,
+  ) -> Result<WatchHistoryPage, JellyfinError> {
+    let server_url = self.client.server_url()?;
+    let user_id = self.client.user_id()?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let mut query = emby_root_video_items_query(start_index, limit);
+    for (key, value) in &mut query {
+      if *key == "IncludeItemTypes" {
+        *value = "Movie,Episode".to_owned();
+      }
+    }
+    query.extend([
+      ("IsPlayed", played.to_string()),
+      ("SortBy", "DatePlayed".to_owned()),
+      ("SortOrder", "Descending".to_owned()),
+      ("GroupItemsIntoCollections", "false".to_owned()),
+    ]);
+    if !played {
+      query.push(("Filters", "IsResumable".to_owned()));
+    }
+    let response = self
+      .client
+      .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
+        &format!("/Users/{user_id}/Items"),
+        &query,
+      )
+      .await?;
+    let total_record_count = response
+      .total_record_count
+      .filter(|&total| total >= 0)
+      .ok_or_else(|| {
+        JellyfinError::HttpError(
+          "Watch history response omitted a valid total record count".to_owned(),
+        )
+      })?;
+    let returned_count = response
+      .items
+      .as_ref()
+      .map_or(0, |items| i32::try_from(items.len()).unwrap_or(i32::MAX));
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .map(|item| {
+        map_emby_video_library_item(&server_url, item).ok_or_else(|| {
+          JellyfinError::HttpError(
+            "Watch history response contained an item without an id or type".to_owned(),
+          )
+        })
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    Ok(WatchHistoryPage {
+      start_index,
+      limit,
+      total_record_count,
+      has_more: start_index.saturating_add(returned_count) < total_record_count,
+      items,
+    })
+  }
+
   async fn emby_video_items_by_ids(
     &self,
     item_ids: &[String],
@@ -3878,6 +4099,7 @@ async fn latest_video_items(
       fields: Some(vec![
         jellyfin_api::models::ItemFields::PrimaryImageAspectRatio,
         jellyfin_api::models::ItemFields::Path,
+        jellyfin_api::models::ItemFields::RecursiveItemCount,
       ]),
       include_item_types: None,
       is_played: None,
@@ -4033,6 +4255,8 @@ fn video_browse_items_params(
     enable_image_types: Some(vec![
       jellyfin_api::models::ImageType::Primary,
       jellyfin_api::models::ImageType::Logo,
+      jellyfin_api::models::ImageType::Backdrop,
+      jellyfin_api::models::ImageType::Thumb,
     ]),
     person: None,
     person_ids: None,
@@ -4143,6 +4367,7 @@ fn video_home_fields() -> Vec<jellyfin_api::models::ItemFields> {
     jellyfin_api::models::ItemFields::PrimaryImageAspectRatio,
     jellyfin_api::models::ItemFields::Overview,
     jellyfin_api::models::ItemFields::DateCreated,
+    jellyfin_api::models::ItemFields::RecursiveItemCount,
   ]
 }
 
@@ -4287,6 +4512,19 @@ fn map_video_home_item(
     .flatten();
 
   Some(VideoLibraryItem {
+    community_rating: item.community_rating.flatten(),
+    episode_count: (item_type == "Series")
+      .then(|| {
+        item
+          .recursive_item_count
+          .flatten()
+          .and_then(nonnegative_u32)
+      })
+      .flatten(),
+    last_played_date: user_data
+      .as_ref()
+      .and_then(|data| data.last_played_date.flatten())
+      .map(|date| date.to_rfc3339()),
     id,
     name: item
       .name
@@ -4344,6 +4582,20 @@ fn map_video_library_item(
   let is_episode = matches!(item_kind, jellyfin_api::models::BaseItemKind::Episode);
   let user_data = item.user_data.flatten();
   let image_tags = item.image_tags.flatten();
+  let episode_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        &id,
+        "Thumb",
+        image_tags
+          .as_ref()
+          .and_then(|tags| tags.get("Thumb"))
+          .map(String::as_str),
+      )
+    })
+    .flatten();
   let logo_image_id = if is_episode {
     let parent_id = item.parent_logo_item_id.flatten().map(jellyfin_id);
     let parent_tag = item.parent_logo_image_tag.flatten();
@@ -4387,6 +4639,45 @@ fn map_video_library_item(
     series_id.as_deref(),
     series_primary_image_tag.as_deref(),
   );
+  let series_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        series_id.as_deref()?,
+        "Thumb",
+        item.series_thumb_image_tag.flatten().as_deref(),
+      )
+    })
+    .flatten();
+  let parent_backdrop_item_id = item.parent_backdrop_item_id.flatten().map(jellyfin_id);
+  let parent_backdrop_image_tags = item.parent_backdrop_image_tags.flatten();
+  let series_backdrop_image_id = is_episode
+    .then(|| {
+      image_id_for_remote_url(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        parent_backdrop_url(
+          server_url,
+          parent_backdrop_item_id.as_deref(),
+          parent_backdrop_image_tags.as_deref(),
+        ),
+        ImageRefKind::Backdrop,
+      )
+    })
+    .flatten();
+  let backdrop_image_id = image_id_for_remote_url(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    backdrop_url(
+      server_url,
+      &id,
+      item.backdrop_image_tags.flatten(),
+      parent_backdrop_item_id,
+      parent_backdrop_image_tags,
+    ),
+    ImageRefKind::Backdrop,
+  );
 
   let user_data_ref = user_data.as_ref();
   let played = user_data_ref.and_then(|data| data.played).unwrap_or(false);
@@ -4402,6 +4693,18 @@ fn map_video_library_item(
   let overview = item.overview.flatten();
 
   Some(VideoLibraryItem {
+    community_rating: item.community_rating.flatten(),
+    episode_count: (item_type == "Series")
+      .then(|| {
+        item
+          .recursive_item_count
+          .flatten()
+          .and_then(nonnegative_u32)
+      })
+      .flatten(),
+    last_played_date: user_data_ref
+      .and_then(|data| data.last_played_date.flatten())
+      .map(|date| date.to_rfc3339()),
     id,
     name: item
       .name
@@ -4421,12 +4724,12 @@ fn map_video_library_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
-    backdrop_image_id: None,
+    backdrop_image_id,
     logo_image_id,
     series_poster_image_id,
-    episode_thumb_image_id: None,
-    series_thumb_image_id: None,
-    series_backdrop_image_id: None,
+    episode_thumb_image_id,
+    series_thumb_image_id,
+    series_backdrop_image_id,
     season_poster_image_id: None,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
@@ -5315,7 +5618,10 @@ fn emby_root_video_items_query(start_index: i32, limit: i32) -> Vec<(&'static st
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary,Logo".to_string()),
+    (
+      "EnableImageTypes",
+      "Primary,Logo,Backdrop,Thumb".to_string(),
+    ),
     ("EnableTotalRecordCount", "true".to_string()),
   ]
 }
@@ -5720,6 +6026,12 @@ fn map_emby_video_home_item(
   .flatten();
 
   Some(VideoLibraryItem {
+    community_rating: item.community_rating.flatten(),
+    // Emby only documents recursive descendants, not an episode-only count.
+    episode_count: None,
+    last_played_date: user_data
+      .and_then(|data| data.last_played_date.flatten())
+      .map(|date| date.to_rfc3339()),
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
@@ -5763,6 +6075,20 @@ fn map_emby_video_library_item(
   let is_episode = item_type == "Episode";
   let user_data = item.user_data.as_deref();
   let image_tags = item.image_tags;
+  let episode_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        &id,
+        "Thumb",
+        image_tags
+          .as_ref()
+          .and_then(|tags| tags.get("Thumb"))
+          .map(String::as_str),
+      )
+    })
+    .flatten();
   let logo_image_id = if is_episode {
     item.parent_logo_item_id.as_deref().and_then(|parent_id| {
       image_id_for_tagged_artwork(
@@ -5804,6 +6130,46 @@ fn map_emby_video_library_item(
     item.series_id.as_deref(),
     item.series_primary_image_tag.as_deref(),
   );
+  let series_thumb_image_id = (is_episode
+    && item.parent_thumb_item_id.as_deref() == item.series_id.as_deref())
+  .then(|| {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
+      server_url,
+      item.series_id.as_deref()?,
+      "Thumb",
+      item.parent_thumb_image_tag.as_deref(),
+    )
+  })
+  .flatten();
+  let parent_backdrop_item_id = item.parent_backdrop_item_id;
+  let parent_backdrop_image_tags = item.parent_backdrop_image_tags;
+  let series_backdrop_image_id = is_episode
+    .then(|| {
+      image_id_for_remote_url(
+        MediaServerProvider::Emby,
+        server_url,
+        parent_backdrop_url(
+          server_url,
+          parent_backdrop_item_id.as_deref(),
+          parent_backdrop_image_tags.as_deref(),
+        ),
+        ImageRefKind::Backdrop,
+      )
+    })
+    .flatten();
+  let backdrop_image_id = image_id_for_remote_url(
+    MediaServerProvider::Emby,
+    server_url,
+    backdrop_url(
+      server_url,
+      &id,
+      item.backdrop_image_tags,
+      parent_backdrop_item_id,
+      parent_backdrop_image_tags,
+    ),
+    ImageRefKind::Backdrop,
+  );
 
   let played = user_data.and_then(|data| data.played).unwrap_or(false);
   let resume_ticks = user_data
@@ -5818,6 +6184,12 @@ fn map_emby_video_library_item(
   let overview = item.overview;
 
   Some(VideoLibraryItem {
+    community_rating: item.community_rating.flatten(),
+    // Emby only documents recursive descendants, not an episode-only count.
+    episode_count: None,
+    last_played_date: user_data
+      .and_then(|data| data.last_played_date.flatten())
+      .map(|date| date.to_rfc3339()),
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
@@ -5832,12 +6204,12 @@ fn map_emby_video_library_item(
     played,
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
-    backdrop_image_id: None,
+    backdrop_image_id,
     logo_image_id,
     series_poster_image_id,
-    episode_thumb_image_id: None,
-    series_thumb_image_id: None,
-    series_backdrop_image_id: None,
+    episode_thumb_image_id,
+    series_thumb_image_id,
+    series_backdrop_image_id,
     season_number: item.parent_index_number.flatten(),
     season_poster_image_id: None,
     episode_number: item.index_number.flatten(),
@@ -8876,6 +9248,294 @@ mod tests {
     assert!(captured[2].contains("sortOrder=Descending"));
     assert!(captured[2].contains("isPlayed=true"));
     assert!(captured[2].contains("isFavorite=true"));
+  }
+
+  #[tokio::test]
+  async fn history_and_watchlist_lookups_expose_server_landscape_artwork() {
+    let response = r#"{"Items":[{"Id":"00000000000000000000000000000030","Name":"Movie","Type":"Movie","ImageTags":{"Primary":"movie-poster"},"BackdropImageTags":["movie-backdrop"]},{"Id":"00000000000000000000000000000031","Name":"Episode","Type":"Episode","SeriesId":"00000000000000000000000000000032","ImageTags":{"Primary":"episode-primary","Thumb":"episode-thumb"},"SeriesThumbImageTag":"series-thumb","ParentThumbItemId":"00000000000000000000000000000032","ParentThumbImageTag":"series-thumb","ParentBackdropItemId":"00000000000000000000000000000032","ParentBackdropImageTags":["series-backdrop"]}],"TotalRecordCount":2}"#;
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let (server_url, requests) = serve_responses_with_requests(vec![
+        ("200 OK", response),
+        ("200 OK", r#"{"Items":[],"TotalRecordCount":0}"#),
+        ("200 OK", response),
+      ])
+      .await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url.clone()),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url.clone()),
+      }
+      let history = client
+        .library()
+        .history(WatchHistoryPageRequest {
+          start_index: 0,
+          limit: 20,
+        })
+        .await
+        .expect("history landscape data");
+      let watchlist = client
+        .library()
+        .video_items_by_ids(vec![
+          "00000000000000000000000000000030".to_owned(),
+          "00000000000000000000000000000031".to_owned(),
+        ])
+        .await
+        .expect("watchlist landscape data");
+      for items in [history.items, watchlist] {
+        assert_image_ref_url(items[0].backdrop_image_id.as_ref(),
+          &format!("{server_url}/Items/00000000000000000000000000000030/Images/Backdrop/0?tag=movie-backdrop"));
+        assert_image_ref_url(
+          items[1].episode_thumb_image_id.as_ref(),
+          &format!(
+            "{server_url}/Items/00000000000000000000000000000031/Images/Thumb?tag=episode-thumb"
+          ),
+        );
+        assert_image_ref_url(
+          items[1].series_thumb_image_id.as_ref(),
+          &format!(
+            "{server_url}/Items/00000000000000000000000000000032/Images/Thumb?tag=series-thumb"
+          ),
+        );
+        assert_image_ref_url(items[1].series_backdrop_image_id.as_ref(),
+          &format!("{server_url}/Items/00000000000000000000000000000032/Images/Backdrop/0?tag=series-backdrop"));
+        assert_image_ref_url(items[1].backdrop_image_id.as_ref(),
+          &format!("{server_url}/Items/00000000000000000000000000000032/Images/Backdrop/0?tag=series-backdrop"));
+      }
+      for request in requests.lock().iter() {
+        let target = request.split_whitespace().nth(1).expect("request target");
+        let url = url::Url::parse(&format!("http://localhost{target}")).expect("request URL");
+        let image_types = url
+          .query_pairs()
+          .filter(|(key, _)| key.eq_ignore_ascii_case("EnableImageTypes"))
+          .flat_map(|(_, value)| value.split(',').map(str::to_owned).collect::<Vec<_>>())
+          .collect::<Vec<_>>();
+        assert!(image_types.iter().any(|kind| kind == "Backdrop"));
+        assert!(image_types.iter().any(|kind| kind == "Thumb"));
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn history_merges_disjoint_server_prefixes_with_exact_totals_and_nullable_dates() {
+    let completed = r#"{"Items":[{"Id":"00000000000000000000000000000030","Name":"Completed newest","Type":"Movie","UserData":{"Key":"p1","Played":true,"LastPlayedDate":"2026-08-01T12:00:00Z"}},{"Id":"00000000000000000000000000000031","Name":"Completed tie","Type":"Movie","CommunityRating":8.5,"UserData":{"Key":"p2","Played":true,"LastPlayedDate":"2026-08-01T12:00:00+02:00"}},{"Id":"00000000000000000000000000000032","Name":"Completed older","Type":"Episode","UserData":{"Key":"p3","Played":true,"LastPlayedDate":"2026-08-01T08:00:00Z"}},{"Id":"00000000000000000000000000000033","Name":"Completed unknown date","Type":"Movie","UserData":{"Key":"p4","Played":true,"LastPlayedDate":null}}],"TotalRecordCount":4}"#;
+    let resumable = r#"{"Items":[{"Id":"00000000000000000000000000000040","Name":"Partial newest","Type":"Episode","CommunityRating":null,"UserData":{"Key":"r1","Played":false,"PlaybackPositionTicks":4500000000,"LastPlayedDate":"2026-08-01T11:00:00Z"}},{"Id":"00000000000000000000000000000041","Name":"Partial tie","Type":"Movie","UserData":{"Key":"r2","Played":false,"PlaybackPositionTicks":7800000000,"LastPlayedDate":"2026-08-01T10:00:00Z"}},{"Id":"00000000000000000000000000000042","Name":"Partial unknown date","Type":"Movie","UserData":{"Key":"r3","Played":false,"PlaybackPositionTicks":100000000,"LastPlayedDate":null}}],"TotalRecordCount":3}"#;
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let (server_url, requests) = serve_responses_with_requests(vec![
+        ("200 OK", completed),
+        ("200 OK", resumable),
+        ("200 OK", completed),
+        ("200 OK", resumable),
+      ])
+      .await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url),
+      }
+      let page = client
+        .library()
+        .history(WatchHistoryPageRequest {
+          start_index: 1,
+          limit: 3,
+        })
+        .await
+        .expect("interleaved history page");
+      assert_eq!(
+        (
+          page.start_index,
+          page.limit,
+          page.total_record_count,
+          page.has_more
+        ),
+        (1, 3, 7, true)
+      );
+      assert_eq!(
+        page
+          .items
+          .iter()
+          .map(|item| item.name.as_str())
+          .collect::<Vec<_>>(),
+        ["Partial newest", "Completed tie", "Partial tie"]
+      );
+      assert_eq!(page.items[0].resume_position_seconds, Some(450.0));
+      assert_eq!(page.items[0].community_rating, None);
+      assert_eq!(page.items[1].community_rating, Some(8.5));
+      assert_eq!(
+        page.items[1].last_played_date.as_deref(),
+        Some("2026-08-01T12:00:00+02:00")
+      );
+      let last = client
+        .library()
+        .history(WatchHistoryPageRequest {
+          start_index: 4,
+          limit: 3,
+        })
+        .await
+        .expect("history final page");
+      assert_eq!(last.total_record_count, 7);
+      assert!(!last.has_more);
+      assert_eq!(
+        last
+          .items
+          .iter()
+          .map(|item| item.name.as_str())
+          .collect::<Vec<_>>(),
+        [
+          "Completed older",
+          "Completed unknown date",
+          "Partial unknown date"
+        ]
+      );
+      assert_eq!(last.items[1].last_played_date, None);
+      assert_eq!(last.items[2].last_played_date, None);
+      let captured = requests.lock();
+      assert_eq!(captured.len(), 4);
+      for (index, request) in captured.iter().enumerate() {
+        let query = request.split_whitespace().nth(1).expect("request target");
+        let url = url::Url::parse(&format!("http://localhost{query}")).expect("request URL");
+        let pairs = url
+          .query_pairs()
+          .map(|(key, value)| (key.to_ascii_lowercase(), value.into_owned()))
+          .collect::<Vec<_>>();
+        for (key, value) in [
+          ("startindex", "0"),
+          ("limit", if index < 2 { "4" } else { "7" }),
+          ("recursive", "true"),
+          ("isplayed", if index % 2 == 0 { "true" } else { "false" }),
+          ("sortby", "DatePlayed"),
+          ("sortorder", "Descending"),
+          ("enableuserdata", "true"),
+          ("enabletotalrecordcount", "true"),
+        ] {
+          assert!(
+            pairs.iter().any(|pair| pair.0 == key && pair.1 == value),
+            "{key}: {request}"
+          );
+        }
+        assert_eq!(
+          pairs
+            .iter()
+            .any(|pair| pair.0 == "filters" && pair.1 == "IsResumable"),
+          index % 2 == 1
+        );
+        let kinds = pairs
+          .iter()
+          .filter(|pair| pair.0 == "includeitemtypes")
+          .flat_map(|pair| pair.1.split(','))
+          .collect::<Vec<_>>();
+        assert_eq!(kinds, ["Movie", "Episode"]);
+        assert!(!pairs
+          .iter()
+          .any(|pair| matches!(pair.0.as_str(), "parentid" | "isfavorite")));
+        match provider {
+          MediaServerProvider::Jellyfin => {
+            assert_eq!(url.path(), "/Items");
+            assert!(pairs
+              .iter()
+              .any(|pair| pair.0 == "userid" && pair.1 == "00000000000000000000000000000001"));
+          }
+          MediaServerProvider::Emby => {
+            assert_eq!(url.path(), "/Users/00000000000000000000000000000001/Items")
+          }
+        }
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn history_rejects_page_and_combined_total_overflow() {
+    let client = JellyfinClient::new();
+    let overflow = client
+      .library()
+      .history(WatchHistoryPageRequest {
+        start_index: i32::MAX,
+        limit: 1,
+      })
+      .await
+      .expect_err("offset overflow must fail before making a request");
+    assert!(matches!(overflow, JellyfinError::HttpError(_)));
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let (server_url, _) = serve_responses_with_requests(vec![
+        ("200 OK", r#"{"Items":[{"Id":"00000000000000000000000000000030","Type":"Movie"}],"TotalRecordCount":2147483647}"#),
+        ("200 OK", r#"{"Items":[{"Id":"00000000000000000000000000000031","Type":"Episode"}],"TotalRecordCount":1}"#),
+      ]).await;
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url),
+      }
+      let error = client
+        .library()
+        .history(WatchHistoryPageRequest {
+          start_index: 0,
+          limit: 1,
+        })
+        .await
+        .expect_err("combined total must not wrap");
+      assert!(matches!(error, JellyfinError::HttpError(_)));
+    }
+  }
+
+  #[tokio::test]
+  async fn history_rejects_unknown_totals_and_provider_errors_instead_of_faking_empty_pages() {
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let (server_url, _) = serve_responses_with_requests(vec![
+        ("200 OK", r#"{"Items":[]}"#),
+        ("503 Service Unavailable", r#"{"Message":"unavailable"}"#),
+      ])
+      .await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url),
+      }
+      for _ in 0..2 {
+        assert!(client
+          .library()
+          .history(WatchHistoryPageRequest {
+            start_index: 0,
+            limit: 20
+          })
+          .await
+          .is_err());
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn series_summaries_use_recursive_episode_counts_not_season_child_counts() {
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let (server_url, requests) = serve_responses_with_requests(vec![(
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000000000000000000000000030","Type":"Series","Name":"Show","CommunityRating":7.5,"ChildCount":2,"RecursiveItemCount":24},{"Id":"00000000000000000000000000000031","Type":"Series","Name":"Unknown count","ChildCount":3,"RecursiveItemCount":null}],"TotalRecordCount":2}"#,
+      )]).await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url),
+      }
+      let page = client
+        .library()
+        .favorites(FavoritesPageRequest {
+          start_index: 0,
+          limit: 20,
+        })
+        .await
+        .expect("series summaries");
+      assert_eq!(
+        page.items[0].episode_count,
+        match provider {
+          MediaServerProvider::Jellyfin => Some(24),
+          MediaServerProvider::Emby => None,
+        }
+      );
+      assert_eq!(page.items[0].community_rating, Some(7.5));
+      assert_eq!(page.items[1].episode_count, None);
+      assert_eq!(page.items[1].last_played_date, None);
+      assert!(!page.has_more);
+      if provider == MediaServerProvider::Jellyfin {
+        assert!(requests.lock()[0].contains("RecursiveItemCount"));
+      }
+    }
   }
 
   #[tokio::test]

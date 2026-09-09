@@ -173,6 +173,8 @@ pub enum Icon {
 
     // Diagnostics export
     Download,
+    Grid,
+    List,
 }
 
 impl Icon {
@@ -246,6 +248,8 @@ impl Icon {
             Self::PictureInPicture => include_bytes!("../assets/icons/picture-in-picture.svg"),
             Self::ArrowsMaximize => include_bytes!("../assets/icons/arrows-maximize.svg"),
             Self::Download => include_bytes!("../assets/icons/download.svg"),
+            Self::Grid => include_bytes!("../assets/icons/grid.svg"),
+            Self::List => include_bytes!("../assets/icons/list.svg"),
         }
     }
 
@@ -340,6 +344,8 @@ impl Icon {
             Self::PictureInPicture,
             Self::ArrowsMaximize,
             Self::Download,
+            Self::Grid,
+            Self::List,
         ]
     }
 }

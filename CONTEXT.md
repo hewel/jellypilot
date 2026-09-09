@@ -158,7 +158,7 @@ The media server's episode-continuation suggestions for the current Profile Scop
 _Avoid_: Discovery recommendations, guaranteed zero-progress episodes
 
 **Personal Lists**:
-The Library Browser destination, labeled “我的清单” in Simplified Chinese, that presents Favorites and Watchlist as separate sections for the current Profile Scope. Both sections include movies, series, and individual episodes.
+The Library Browser destination, labeled “个人列表” in Simplified Chinese, that presents Watchlist, Favorites, and Watch History as separate sections for the current Profile Scope. Watchlist and Favorites include movies, series, and individual episodes.
 _Avoid_: Cross-server collection, merged favorite/watchlist state
 
 **Favorites**:
@@ -168,6 +168,10 @@ _Avoid_: Watchlist, planned viewing
 **Watchlist**:
 A viewing plan kept on this device for one Profile Scope, labeled “稍后观看” in Simplified Chinese. Its entries remain until explicitly removed, including after viewing or when an item becomes unavailable; Sign Out retains the list unless the user explicitly chooses to delete it.
 _Avoid_: Favorites, unwatched filter, cross-device list
+
+**Watch History**:
+The current server user's movies and individual episodes marked played or available to resume, ordered by their latest recorded playback time. It lists each item once, not every playback event, and is independent of device-local Watchlist membership.
+_Avoid_: Navigation history, per-play event log, viewing plan
 
 **Featured Item**:
 The media item selected for the Video Home hero, initially prioritizing Continue Watching; selecting it neither starts playback nor removes its direct-play entry from a home row. Its presentation uses the item's Backdrop and Title Logo (the parent series' for episodes), never a portrait poster; playback targets the Featured Item, while Favorites and Watchlist target the parent series for an episode or the movie itself for a movie.

@@ -108,6 +108,27 @@ pub(crate) fn episode_premiere_date(locale: Localizer, iso: &str) -> Option<Stri
   ))
 }
 
+pub(crate) fn history_timestamp(locale: Localizer, timestamp: Option<&str>) -> String {
+  let Some(instant) = timestamp.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+  else {
+    return locale.text("lists-history-played");
+  };
+  history_date(locale, instant.with_timezone(&chrono::Local).date_naive())
+}
+
+fn history_date(locale: Localizer, date: chrono::NaiveDate) -> String {
+  use chrono::Datelike;
+
+  locale.format(
+    "lists-history-date",
+    &[
+      ("year", date.year().to_string().into()),
+      ("month", format!("{:02}", date.month()).into()),
+      ("day", format!("{:02}", date.day()).into()),
+    ],
+  )
+}
+
 pub(crate) fn hero_metadata(locale: Localizer, item: &VideoLibraryItem) -> String {
   let runtime = item
     .runtime_seconds

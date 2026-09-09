@@ -13,6 +13,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added opt-in native maintenance regressions for real-tray locale startup, missing embedded-dependency recovery, and GPU video-copy/window lifecycle, with fresh run-identified reports and separate human color acceptance.
 - Added movie/series collection controls to Home and the playback bar: Hero Favorites/Watchlist target the movie or parent series, while the player Favorite follows Now Playing independently. Unknown state remains disabled; mutations retain account and in-flight ownership.
 - Added real Jellyfin/Emby cast portraits and credited roles to details, plus localized episode premiere dates and related-series recommendations on episode pages.
+- Added account-scoped Watch History for Jellyfin and Emby, merging played and resumable movies/episodes with real totals, paging, timestamps and landscape artwork.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.
@@ -29,8 +30,11 @@ All notable changes to JellyPilot are documented in this file.
 - Restyled the docked playback bar while retaining direct Stop and existing transport/track controls; its expand action toggles the current player, with Escape and browser-state restoration for existing embedded playback.
 - Reworked only the embedded player with full-window video, a translucent nonblurred control bar, centered responsive transport, real landscape artwork and hover/drag time previews. Controls reveal near the bottom region rather than on every pointer movement; Back has its own top-left reveal region. Added repeatable five-second seek and five-point volume keys, F fullscreen, and stop-before-return navigation; external player interfaces remain unchanged.
 - Redesigned movie, series and episode details with full-bleed 520px heroes, below-hero metadata/actions, measured two-line overviews, a season dropdown, flat episode rows, cast carousels and smaller similar-title posters. Preserved real playback, collection actions, neighbor navigation and media information.
+- Synchronized Library Grid/List and Personal Lists with the Paper layouts: responsive poster/list geometry, keyboard-operable view switching, independent scroll restoration, real ratings/progress and Watchlist/Favorites/History shelves.
 
 ### Fixed
+- Reserved space below Personal Lists card captions so horizontal scrollbars no longer cover text or intercept clicks on it.
+- Added horizontal padding to Personal Lists “View all” buttons so their hover backgrounds frame the label and chevron without crowding the edges.
 - Decoupled embedded-player cursor recovery from control reveal, padded the title/chevron queue trigger without including its subtitle, and corrected right-side spacing, reference audio/volume glyphs and the volume/fullscreen separator. Centering no longer compresses narrow button icons; the mute target uses adjacent whitespace without shifting the icon or slider.
 - Fixed embedded slider lifecycle for keyboard/wheel adjustments and unchanged-value presses; fullscreen transitions cancel unfinished drag previews without stray release commits. Dismissing a player menu by clicking the picture no longer also toggles playback.
 - Matched embedded volume to the four reference glyph states and replaced its hover background with icon-only brightness feedback, retaining the existing click target.
@@ -47,6 +51,7 @@ All notable changes to JellyPilot are documented in this file.
 - Sized Browse columns from the actual opened window instead of the requested startup size, preventing clipped posters when the window manager constrains the default window.
 - Kept expanded detail copy and wrapped actions below the fixed-height hero; bounded artwork outlines and placeholders prevent infinite cast-shelf layout, and duplicate cast credits retain independent portrait visibility.
 - Shared disk-cache coordination between Library Images and account avatars, keeping their authentication and in-memory lifecycles independent while coordinating cache clearing, writes, and eviction.
+- Propagated confirmed Favorites changes into browse results immediately and rejected pre-write refresh deliveries, including Favorites-only membership reloads.
 
 ## [2.0.0] - 2026-09-02
 

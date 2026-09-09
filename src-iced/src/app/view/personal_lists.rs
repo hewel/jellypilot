@@ -1,117 +1,139 @@
 use crate::i18n::{Localizer, UiText};
-use iced::widget::{column, container, row, scrollable, space, text, Column, Row};
-use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
-use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT};
+use iced::widget::{
+  column, container, responsive, row, scrollable, space, text, Column, Row, Stack,
+};
+use iced::{Alignment, ContentFit, Element, Fill, Length, Pixels};
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
+use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
-use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
-use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::variants::ButtonVariant;
+use jellypilot_ui::widgets::artwork_progress::ArtworkProgress;
+use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::skeleton_panel;
-use jellypilot_ui::{full_radius, poster_card, rounded_image};
+use jellypilot_ui::{full_radius, rounded_image};
 
 use super::image_observer::{observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageStatus};
+use crate::app::collections::{self, CollectionMessage};
 use crate::app::message::{HomeMessage, Message};
 use crate::app::personal_lists::{
   artwork_key, artwork_spec, ItemAvailability, Kind, ListEntry, ListPage, PersonalListsMessage,
-  Route,
+  Route, PAGE_SIZE,
 };
 use crate::app::state::{Destination, State};
 
-const CARD_ARTWORK_HEIGHT: f32 = 220.0;
-const OVERVIEW_LIMIT: usize = 6;
+const LANDSCAPE_WIDTH: f32 = 272.0;
+const POSTER_WIDTH: f32 = 174.66667;
+const COPY_HEIGHT: f32 = 50.0;
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let route = match state.shell.destination {
-    Destination::PersonalLists(route) => route,
-    _ => Route::Overview,
-  };
-  match route {
-    Route::Overview => overview(state),
-    Route::Favorites => list_page(state, Kind::Favorites),
-    Route::Watchlist => list_page(state, Kind::Watchlist),
-  }
+  responsive(move |bounds| {
+    let width = (bounds.width - TOKENS.spacing.s9 * 2.0).max(1.0);
+    match state.shell.destination {
+      Destination::PersonalLists(Route::Favorites) => list_page(state, Kind::Favorites, width),
+      Destination::PersonalLists(Route::Watchlist) => list_page(state, Kind::Watchlist, width),
+      Destination::PersonalLists(Route::History) => list_page(state, Kind::History, width),
+      _ => overview(state, width),
+    }
+  })
+  .into()
 }
 
-fn overview(state: &State) -> Element<'_, Message> {
+fn overview(state: &State, width: f32) -> Element<'_, Message> {
   let lists = &state.full.as_ref().expect("FullUi required").personal_lists;
+  let subtitle = state.format(
+    "lists-overview-counts",
+    &[
+      ("watchlist", count_label(&lists.watchlist).into()),
+      ("favorites", count_label(&lists.favorites).into()),
+      ("history", count_label(&lists.history).into()),
+    ],
+  );
   let content = column![
-    page_heading(
-      state.palette(),
-      state.t("lists-title"),
-      state.t("lists-separate-help")
-    ),
-    overview_section(state, Kind::Favorites, &lists.favorites),
-    overview_section(state, Kind::Watchlist, &lists.watchlist),
+    page_heading(state.palette(), state.t("lists-title"), subtitle),
+    space().height(TOKENS.spacing.s8),
+    overview_section(state, Kind::Watchlist, &lists.watchlist, width),
+    space().height(TOKENS.spacing.s10),
+    overview_section(state, Kind::Favorites, &lists.favorites, width),
+    space().height(TOKENS.spacing.s10),
+    overview_section(state, Kind::History, &lists.history, width),
   ]
-  .spacing(TOKENS.spacing.s6)
-  .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
+  .padding([TOKENS.spacing.s10, TOKENS.spacing.s9])
   .width(Fill);
   scrollable(content)
-    .id(iced::widget::Id::new(
-      if lists.favorites.entries.is_empty()
-        && lists.watchlist.entries.is_empty()
-        && (lists.favorites.loading || lists.watchlist.loading)
-      {
-        "personal-lists-overview-loading"
-      } else {
-        "personal-lists-overview"
-      },
-    ))
+    .id(iced::widget::Id::new("personal-lists-overview"))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
     .into()
 }
 
-fn overview_section<'a>(state: &'a State, kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
-  let route = route_for(kind);
-  let title = title_for(state.kernel.locale, kind);
-  let label = state.format(
-    "lists-section-count",
-    &[("title", title.into()), ("count", page.total.into())],
-  );
+fn count_label(page: &ListPage) -> String {
+  if page.total == 0 && (page.loading || page.error.is_some()) {
+    "—".to_owned()
+  } else {
+    page.total.to_string()
+  }
+}
+
+fn overview_section<'a>(
+  state: &'a State,
+  kind: Kind,
+  page: &'a ListPage,
+  width: f32,
+) -> Element<'a, Message> {
   let view_all = control_button(
     Some(Icon::ChevronRight),
     Some(state.t("lists-view-all")),
-    ButtonVariant::Tonal,
+    ButtonVariant::Text,
   )
   .trailing_icon(true)
-  .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
+  .icon_size(IconSize::Xs)
+  .label_size(12.0)
+  .spacing(TOKENS.spacing.s1)
   .padding([6, 10])
   .on_press(Message::Home(HomeMessage::Navigate(
-    Destination::PersonalLists(route),
+    Destination::PersonalLists(route_for(kind)),
   )));
-  let body = list_body(state, kind, page, OVERVIEW_LIMIT);
   column![
     row![
-      text(label)
-        .font(BODY_FONT)
+      text(title_for(state.kernel.locale, kind))
+        .font(HEADING_FONT)
         .size(20)
+        .line_height(Pixels(28.0))
         .color(state.palette().text.heading),
+      text(count_label(page))
+        .size(12)
+        .line_height(Pixels(16.0))
+        .color(state.palette().text.metadata),
       space::horizontal(),
       view_all,
     ]
+    .spacing(TOKENS.spacing.s2_5)
     .align_y(Alignment::Center),
-    body,
+    list_body(state, kind, page, width, true),
   ]
-  .spacing(TOKENS.spacing.s3)
+  .spacing(if kind == Kind::Favorites {
+    TOKENS.spacing.s4
+  } else {
+    TOKENS.spacing.s3
+  })
   .width(Fill)
   .into()
 }
 
-fn list_page<'a>(state: &'a State, kind: Kind) -> Element<'a, Message> {
+fn list_page(state: &State, kind: Kind, width: f32) -> Element<'_, Message> {
   let page = page_for(state, kind);
-  let title = title_for(state.kernel.locale, kind);
   let back = control_button(
     Some(Icon::ChevronLeft),
     Some(state.t("lists-title")),
-    ButtonVariant::Tonal,
+    ButtonVariant::Text,
   )
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
+  .label_size(12.0)
+  .min_height(40.0)
   .padding([6, 10])
   .on_press(Message::Home(HomeMessage::Navigate(
     Destination::PersonalLists(Route::Overview),
@@ -120,23 +142,20 @@ fn list_page<'a>(state: &'a State, kind: Kind) -> Element<'a, Message> {
     back,
     page_heading(
       state.palette(),
-      title,
-      state.format("lists-saved-count", &[("count", page.total.into())]),
+      title_for(state.kernel.locale, kind),
+      state.format("lists-item-count", &[("count", count_label(page).into())]),
     ),
-    list_body(state, kind, page, usize::MAX),
+    list_body(state, kind, page, width, false),
     pagination(state.kernel.locale, kind, page),
   ]
-  .spacing(TOKENS.spacing.s4)
-  .padding([TOKENS.spacing.s5, TOKENS.spacing.s8])
+  .spacing(TOKENS.spacing.s8)
+  .padding([TOKENS.spacing.s10, TOKENS.spacing.s9])
   .width(Fill);
   scrollable(content)
-    .id(iced::widget::Id::new(
-      if page.loading && page.entries.is_empty() {
-        "personal-list-loading"
-      } else {
-        "personal-list-page"
-      },
-    ))
+    .id(iced::widget::Id::from(format!(
+      "personal-list-{kind:?}-{}",
+      page.offset
+    )))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
@@ -152,49 +171,226 @@ fn page_heading(
     text(title.into())
       .font(DISPLAY_FONT)
       .size(28)
+      .line_height(Pixels(36.0))
       .color(palette.text.heading),
-    text(subtitle.into()).size(13).color(palette.text.metadata),
+    text(subtitle.into())
+      .size(12)
+      .line_height(Pixels(16.0))
+      .color(palette.text.metadata),
   ]
-  .spacing(TOKENS.spacing.s1)
+  .spacing(TOKENS.spacing.s2)
   .into()
+}
+
+fn frame_size(kind: Kind, width: f32, shelf: bool) -> (usize, f32, f32) {
+  let (reference_columns, preferred) = match kind {
+    Kind::Favorites => (6, POSTER_WIDTH),
+    Kind::Watchlist | Kind::History => (4, LANDSCAPE_WIDTH),
+  };
+  let gap = TOKENS.spacing.s5;
+  let columns = if shelf {
+    reference_columns
+  } else {
+    ((width + gap) / (preferred + gap)).floor().max(1.0) as usize
+  };
+  let card_width = ((width - gap * (columns - 1) as f32) / columns as f32).max(if shelf {
+    preferred
+  } else {
+    1.0
+  });
+  let height = match kind {
+    Kind::Favorites => card_width * 1.5,
+    Kind::Watchlist | Kind::History => card_width * 9.0 / 16.0,
+  };
+  (columns, card_width, height)
 }
 
 fn list_body<'a>(
   state: &'a State,
   kind: Kind,
   page: &'a ListPage,
-  limit: usize,
+  width: f32,
+  shelf: bool,
 ) -> Element<'a, Message> {
-  if page.loading && page.entries.is_empty() {
-    return skeleton_grid(state).into();
+  let (columns, card_width, art_height) = frame_size(kind, width, shelf);
+  let mut body = Column::new().spacing(TOKENS.spacing.s4).width(Fill);
+  if page.loading && !page.entries.is_empty() {
+    body = body.push(
+      text(state.t("common-loading"))
+        .size(12)
+        .color(state.palette().text.metadata),
+    );
   }
   if let Some(error) = &page.error {
-    return failure_surface(state.palette(), state.kernel.locale, kind, error).into();
+    body = body.push(failure_surface(
+      state.palette(),
+      state.kernel.locale,
+      kind,
+      error,
+    ));
   }
-  if page.entries.is_empty() {
-    return empty_surface(state.palette(), state.kernel.locale, kind).into();
-  }
-
-  let entries = page.entries.iter().take(limit).collect::<Vec<_>>();
-  let mut grid = Column::new().spacing(TOKENS.spacing.s5).width(Fill);
-  for row_entries in entries.chunks(4) {
-    let mut card_row = Row::new().spacing(TOKENS.spacing.s4).width(Fill);
-    for entry in row_entries {
-      card_row = card_row.push(
-        container(list_card(state, kind, entry))
-          .width(Length::FillPortion(1))
-          .height(Length::Fit),
-      );
+  if page.entries.is_empty() && !page.loading {
+    if page.error.is_none() {
+      body = body.push(empty_surface(state.palette(), state.kernel.locale, kind));
     }
-    grid = grid.push(card_row);
+    return body.into();
   }
-  grid.into()
+  let mut grid = Column::new().spacing(TOKENS.spacing.s8).width(Fill);
+  let rows = if shelf {
+    1
+  } else {
+    page.entries.len().max(columns).div_ceil(columns)
+  };
+  for row_index in 0..rows {
+    let mut cards = Row::new().spacing(TOKENS.spacing.s5);
+    if page.entries.is_empty() {
+      for _ in 0..columns {
+        cards = cards.push(skeleton_card(state, card_width, art_height));
+      }
+    } else {
+      for entry in page.entries.iter().skip(row_index * columns).take(columns) {
+        cards = cards.push(list_card(state, kind, entry, card_width, art_height, shelf));
+      }
+    }
+    if shelf {
+      return body
+        .push(
+          scrollable(cards)
+            .id(iced::widget::Id::from(format!("personal-shelf-{kind:?}")))
+            .direction(scrollable::Direction::Horizontal(
+              scrollable::Scrollbar::new(),
+            ))
+            .width(Fill)
+            // The floating scrollbar needs its own gutter below both text lines.
+            .height(art_height + COPY_HEIGHT + TOKENS.spacing.s4)
+            .style(jellypilot_ui::theme::scrollable),
+        )
+        .into();
+    }
+    grid = grid.push(cards);
+  }
+  body.push(grid).into()
 }
 
-fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<'a, Message> {
-  let artwork = list_artwork(state, kind, entry);
-  let artwork = if let Some(spec) = artwork_spec(kind, entry) {
-    observe_image(
+fn list_card<'a>(
+  state: &'a State,
+  kind: Kind,
+  entry: &'a ListEntry,
+  width: f32,
+  art_height: f32,
+  shelf: bool,
+) -> Element<'a, Message> {
+  let progress = entry.item.as_ref().and_then(item_progress).map(|value| {
+    (
+      value,
+      jellypilot_ui::widgets::library::artwork_progress_style(
+        &jellypilot_ui::theme::theme(state.theme_mode()),
+        kind == Kind::Favorites,
+      ),
+    )
+  });
+  let artwork = control_button_content(
+    move |_| {
+      let mut art = Stack::new().push(list_artwork(state, kind, entry, art_height));
+      if let Some((progress, style)) = progress {
+        let handle = state
+          .full
+          .as_ref()
+          .expect("FullUi required")
+          .personal_lists
+          .artwork
+          .get(&artwork_key(kind, &entry.id))
+          .and_then(|cell| cell.handle())
+          .cloned();
+        art = art.push(
+          container(ArtworkProgress::new(
+            progress,
+            art_height,
+            4.0,
+            full_radius(TOKENS.radii.xl),
+            handle,
+            style,
+          ))
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+        );
+      }
+      art
+        .push(
+          container(space().width(Fill).height(Fill))
+            .width(Fill)
+            .height(Fill)
+            .style(|theme| jellypilot_ui::widgets::library::artwork_outline(theme, false)),
+        )
+        .into()
+    },
+    ButtonVariant::Text,
+  )
+  .padding(0)
+  .width(Length::Fixed(width))
+  .min_height(art_height)
+  .overlay_border()
+  .style(jellypilot_ui::widgets::button::media_artwork)
+  .id(iced::widget::Id::from(format!(
+    "personal-open-{}",
+    artwork_key(kind, &entry.id)
+  )))
+  .on_press_maybe(
+    entry
+      .item
+      .as_ref()
+      .map(|item| Message::OpenDetail(Box::new(item.clone()))),
+  );
+  let artwork = focus_tooltip(artwork, entry.name.clone(), TooltipOptions::default());
+  let mut layers = Stack::new().width(width).height(art_height).push(artwork);
+  if let Some(action) = card_action(state, kind, entry) {
+    layers = layers.push(
+      container(action)
+        .padding(TOKENS.spacing.s2)
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start),
+    );
+  }
+  if kind == Kind::Favorites {
+    if let Some(rating) = entry
+      .item
+      .as_ref()
+      .and_then(|item| item.community_rating)
+      .filter(|rating| rating.is_finite() && (0.0..=10.0).contains(rating))
+    {
+      layers = layers.push(
+        container(
+          container(
+            row![
+              text("★").size(12).line_height(Pixels(14.0)).color(
+                jellypilot_ui::tokens::DARK_PALETTE
+                  .colors
+                  .onWarningContainer
+              ),
+              text(format!("{rating:.1}"))
+                .font(HEADING_FONT)
+                .size(12)
+                .line_height(Pixels(14.0)),
+            ]
+            .spacing(TOKENS.spacing.s1),
+          )
+          .padding([4, 8])
+          .style(jellypilot_ui::widgets::library::rating),
+        )
+        .padding(TOKENS.spacing.s2)
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::Start)
+        .align_y(Alignment::End),
+      );
+    }
+  }
+  let mut artwork: Element<'a, Message> = layers.into();
+  if let Some(spec) = artwork_spec(kind, entry) {
+    artwork = observe_image(
       artwork,
       ArtworkSurface::PersonalLists,
       state
@@ -205,13 +401,14 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
         .artwork
         .epoch(),
       spec,
-      ImageAxis::Vertical,
-    )
-  } else {
-    artwork
-  };
-  let unavailable = entry.availability == ItemAvailability::Unavailable;
-  let title = if unavailable {
+      if shelf {
+        ImageAxis::Horizontal
+      } else {
+        ImageAxis::Vertical
+      },
+    );
+  }
+  let title = if entry.availability == ItemAvailability::Unavailable {
     state.format(
       "lists-unavailable-item",
       &[("name", entry.name.as_str().into())],
@@ -219,65 +416,110 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
   } else {
     entry.name.clone()
   };
-  let copy = column![
-    ellipsis_text(title)
-      .size(14)
-      .color(state.palette().text.heading),
-    ellipsis_text(entry.subtitle.text(state.kernel.locale))
-      .size(12)
-      .color(state.palette().text.metadata),
-  ]
-  .spacing(TOKENS.spacing.s1)
-  .width(Fill);
-  let card: Element<'_, Message> = if let Some(item) = &entry.item {
-    poster_card(artwork, copy)
-      .width(Fill)
-      .on_press(Message::OpenDetail(item.clone()))
-      .into()
+  let subtitle = if kind == Kind::History {
+    let played = crate::i18n::media::history_timestamp(
+      state.kernel.locale,
+      entry
+        .item
+        .as_ref()
+        .and_then(|item| item.last_played_date.as_deref()),
+    );
+    format!("{} · {played}", entry.subtitle.text(state.kernel.locale))
   } else {
-    column![artwork, copy]
-      .spacing(TOKENS.spacing.s2)
-      .width(Fill)
-      .into()
+    entry.subtitle.text(state.kernel.locale)
   };
-  let remove = match (kind, &entry.item) {
-    (Kind::Favorites, Some(item)) => {
-      Message::PersonalLists(PersonalListsMessage::RemoveFavorite(item.clone()))
+  column![
+    artwork,
+    column![
+      ellipsis_text(title)
+        .font(HEADING_FONT)
+        .size(14)
+        .line_height(Pixels(18.0))
+        .color(state.palette().text.heading),
+      ellipsis_text(subtitle)
+        .size(12)
+        .line_height(Pixels(16.0))
+        .color(state.palette().text.metadata),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s3,
+      ..iced::Padding::ZERO
+    })
+    .height(COPY_HEIGHT)
+    .width(Fill),
+  ]
+  .width(width)
+  .into()
+}
+
+fn item_progress(item: &jellypilot_media_server::VideoLibraryItem) -> Option<f64> {
+  if let Some(percentage) = item.played_percentage.filter(|value| value.is_finite()) {
+    return Some(percentage.clamp(0.0, 100.0));
+  }
+  match (item.resume_position_seconds, item.runtime_seconds) {
+    (Some(position), Some(runtime))
+      if position.is_finite() && position > 0.0 && runtime.is_finite() && runtime > 0.0 =>
+    {
+      Some((position / runtime * 100.0).clamp(0.0, 100.0))
     }
-    (Kind::Favorites, None) => {
-      return card;
+    _ => None,
+  }
+}
+
+fn card_action<'a>(
+  state: &'a State,
+  kind: Kind,
+  entry: &'a ListEntry,
+) -> Option<Element<'a, Message>> {
+  let full = state.full.as_ref().expect("FullUi required");
+  let (icon, action) = match kind {
+    Kind::Favorites => {
+      let item = entry.item.as_ref()?;
+      (
+        Icon::HeartFilled,
+        Message::Collections(CollectionMessage::Favorite {
+          session: state.kernel.request_gate.current_session(),
+          item_id: item.id.clone(),
+          favorite: false,
+        }),
+      )
     }
-    (Kind::Watchlist, _) => {
-      Message::PersonalLists(PersonalListsMessage::RemoveWatchlist(entry.id.clone()))
-    }
+    Kind::Watchlist => (
+      Icon::Trash,
+      Message::PersonalLists(PersonalListsMessage::RemoveWatchlist(entry.id.clone())),
+    ),
+    Kind::History => return None,
   };
-  let busy = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .personal_lists
-    .busy_items
-    .contains(&entry.id);
-  let remove_button = control_button(
-    Some(Icon::Trash),
-    Some(if busy {
+  let busy = collections::busy(full, &entry.id);
+  let disabled = busy || crate::app::accounts::content_mutations_blocked(&state.accounts);
+  let control = control_button(Some(icon), None, ButtonVariant::Tonal)
+    .icon_size(IconSize::Sm)
+    .padding(12)
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .id(iced::widget::Id::from(format!(
+      "personal-remove-{}",
+      artwork_key(kind, &entry.id)
+    )))
+    .on_press_maybe((!disabled).then_some(action));
+  Some(focus_tooltip(
+    control,
+    if busy {
       state.t("lists-removing")
     } else {
       state.t("lists-remove")
-    }),
-    ButtonVariant::Tonal,
-  )
-  .icon_size(IconSize::Xs)
-  .spacing(TOKENS.spacing.s1_5)
-  .padding([5, 9])
-  .on_press_maybe((!busy).then_some(remove));
-  column![card, remove_button]
-    .spacing(TOKENS.spacing.s2)
-    .width(Fill)
-    .into()
+    },
+    TooltipOptions::default(),
+  ))
 }
 
-fn list_artwork<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<'a, Message> {
+fn list_artwork<'a>(
+  state: &'a State,
+  kind: Kind,
+  entry: &'a ListEntry,
+  height: f32,
+) -> Element<'a, Message> {
   let cell = state
     .full
     .as_ref()
@@ -291,98 +533,102 @@ fn list_artwork<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Eleme
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(Fill)
-          .height(CARD_ARTWORK_HEIGHT)
+          .height(height)
           .into();
       }
     }
-  }
-  let color = match cell.map(|cell| cell.state) {
-    Some(ImageStatus::Failed) => state.palette().colors.warning,
-    None if entry.availability == ItemAvailability::Unavailable => state.palette().colors.warning,
-    _ => state.palette().text.metadata,
-  };
-  let icon = if entry.availability == ItemAvailability::Unavailable {
-    Icon::Warning
-  } else {
-    Icon::Movie
-  };
-  container(icon_with_color(icon, IconSize::Custom(36.0), color))
-    .width(Fill)
-    .height(CARD_ARTWORK_HEIGHT)
-    .center_x(Fill)
-    .center_y(Fill)
-    .style(move |_theme| container::Style {
-      background: Some(iced::Background::Color(
+    if cell.state == ImageStatus::Loading {
+      return skeleton_panel(
+        Fill,
+        height,
         state.palette().colors.surfaceContainerLowest,
-      )),
-      border: iced::Border {
-        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-        color: Color::TRANSPARENT,
-        width: 0.0,
-        radius: full_radius(TOKENS.radii.xl),
-      },
-      ..container::Style::default()
-    })
-    .into()
+        full_radius(TOKENS.radii.xl),
+        state.shell.skeleton_phase,
+        state.kernel.settings.snapshot().reduced_motion(),
+      )
+      .into();
+    }
+  }
+  let unavailable = entry.availability == ItemAvailability::Unavailable;
+  container(icon_with_color(
+    if unavailable {
+      Icon::Warning
+    } else {
+      Icon::Movie
+    },
+    IconSize::Custom(36.0),
+    if unavailable {
+      state.palette().colors.warning
+    } else {
+      state.palette().text.metadata
+    },
+  ))
+  .width(Fill)
+  .height(height)
+  .center_x(Fill)
+  .center_y(Fill)
+  .style(jellypilot_ui::widgets::library::poster_placeholder)
+  .into()
 }
 
-fn skeleton_grid<'a>(state: &'a State) -> Column<'a, Message> {
+fn skeleton_card(state: &State, width: f32, height: f32) -> Element<'_, Message> {
   let base = state.palette().colors.surfaceContainerLowest;
   let phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
-  let mut row_cells = Row::new().spacing(TOKENS.spacing.s4).width(Fill);
-  for _ in 0..4 {
-    row_cells = row_cells.push(
-      column![
-        skeleton_panel(
-          Fill,
-          CARD_ARTWORK_HEIGHT,
-          base,
-          full_radius(TOKENS.radii.xl),
-          phase,
-          reduced_motion
-        ),
-        skeleton_panel(
-          Fill,
-          16.0,
-          base,
-          full_radius(TOKENS.radii.sm),
-          phase,
-          reduced_motion
-        ),
-        skeleton_panel(
-          Fill,
-          14.0,
-          base,
-          full_radius(TOKENS.radii.sm),
-          phase,
-          reduced_motion
-        ),
-      ]
-      .spacing(TOKENS.spacing.s2)
-      .width(Length::FillPortion(1)),
-    );
-  }
-  column![row_cells].width(Fill)
+  column![
+    skeleton_panel(
+      width,
+      height,
+      base,
+      full_radius(TOKENS.radii.xl),
+      phase,
+      reduced_motion
+    ),
+    column![
+      skeleton_panel(
+        width,
+        18.0,
+        base,
+        full_radius(TOKENS.radii.sm),
+        phase,
+        reduced_motion
+      ),
+      skeleton_panel(
+        width * 0.7,
+        16.0,
+        base,
+        full_radius(TOKENS.radii.sm),
+        phase,
+        reduced_motion
+      ),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s3,
+      ..iced::Padding::ZERO
+    })
+    .height(COPY_HEIGHT),
+  ]
+  .width(width)
+  .into()
 }
 
 fn empty_surface<'a>(
   palette: &'static ThemePalette,
   locale: Localizer,
   kind: Kind,
-) -> iced::widget::Container<'a, Message> {
-  let label = match kind {
-    Kind::Favorites => locale.text("lists-favorites-empty"),
-    Kind::Watchlist => locale.text("lists-watchlist-empty"),
-  };
-  let icon = match kind {
-    Kind::Favorites => Icon::Heart,
-    Kind::Watchlist => Icon::Bookmark,
+) -> Element<'a, Message> {
+  let (label, icon) = match kind {
+    Kind::Favorites => ("lists-favorites-empty", Icon::Heart),
+    Kind::Watchlist => ("lists-watchlist-empty", Icon::Bookmark),
+    Kind::History => ("lists-history-empty", Icon::Playlist),
   };
   container(
     column![
       icon_with_color(icon, IconSize::Xl, palette.text.metadata),
-      text(label).size(14).color(palette.text.secondary),
+      text(locale.text(label))
+        .size(14)
+        .color(palette.text.secondary),
     ]
     .spacing(TOKENS.spacing.s2)
     .align_x(Alignment::Center),
@@ -390,7 +636,7 @@ fn empty_surface<'a>(
   .padding(TOKENS.spacing.s6)
   .width(Fill)
   .center_x(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+  .into()
 }
 
 fn failure_surface<'a>(
@@ -398,48 +644,47 @@ fn failure_surface<'a>(
   locale: Localizer,
   kind: Kind,
   error: &'a UiText,
-) -> iced::widget::Container<'a, Message> {
+) -> Element<'a, Message> {
   let retry = control_button(
     Some(Icon::Refresh),
     Some(locale.text("lists-retry")),
-    ButtonVariant::Primary,
+    ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
+  .label_size(12.0)
   .padding([6, 12])
+  .min_height(40.0)
   .on_press(Message::PersonalLists(PersonalListsMessage::Retry(kind)));
-  container(
-    column![
-      text(locale.text("lists-load-heading"))
-        .size(15)
-        .color(palette.text.heading),
-      text(locale.message(error))
-        .size(13)
-        .color(palette.colors.error),
-      retry,
-    ]
-    .spacing(TOKENS.spacing.s2),
-  )
-  .padding(TOKENS.spacing.s5)
+  column![
+    text(locale.text("lists-load-heading"))
+      .font(HEADING_FONT)
+      .size(15)
+      .color(palette.text.heading),
+    text(locale.message(error))
+      .size(13)
+      .color(palette.colors.error),
+    retry,
+  ]
+  .spacing(TOKENS.spacing.s2)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+  .into()
 }
 
-fn pagination<'a>(locale: Localizer, kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
+fn pagination(locale: Localizer, kind: Kind, page: &ListPage) -> Element<'_, Message> {
   let previous = control_button(
     Some(Icon::ChevronLeft),
     Some(locale.text("lists-previous")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
+  .label_size(12.0)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(
     (page.offset > 0 && !page.loading).then_some(Message::PersonalLists(
       PersonalListsMessage::PreviousPage(kind),
     )),
   );
-  let has_next = page.offset.saturating_add(page.entries.len()) < page.total;
   let next = control_button(
     Some(Icon::ChevronRight),
     Some(locale.text("lists-next")),
@@ -447,10 +692,11 @@ fn pagination<'a>(locale: Localizer, kind: Kind, page: &'a ListPage) -> Element<
   )
   .trailing_icon(true)
   .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
+  .label_size(12.0)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(
-    (has_next && !page.loading)
+    (page.offset.saturating_add(PAGE_SIZE) < page.total && !page.loading)
       .then_some(Message::PersonalLists(PersonalListsMessage::NextPage(kind))),
   );
   row![previous, space::horizontal(), next]
@@ -463,6 +709,7 @@ fn route_for(kind: Kind) -> Route {
   match kind {
     Kind::Favorites => Route::Favorites,
     Kind::Watchlist => Route::Watchlist,
+    Kind::History => Route::History,
   }
 }
 
@@ -471,12 +718,244 @@ fn page_for(state: &State, kind: Kind) -> &ListPage {
   match kind {
     Kind::Favorites => &lists.favorites,
     Kind::Watchlist => &lists.watchlist,
+    Kind::History => &lists.history,
   }
 }
 
 fn title_for(locale: Localizer, kind: Kind) -> String {
-  match kind {
-    Kind::Favorites => locale.text("lists-favorites"),
-    Kind::Watchlist => locale.text("lists-watchlist"),
+  locale.text(match kind {
+    Kind::Favorites => "lists-favorites",
+    Kind::Watchlist => "lists-watchlist",
+    Kind::History => "lists-history",
+  })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use iced::advanced::{renderer::Headless, widget};
+  use iced_runtime::user_interface::{Cache, UserInterface};
+
+  fn entry() -> ListEntry {
+    crate::app::personal_lists::entry_from_item(jellypilot_media_server::VideoLibraryItem {
+      id: "movie".to_owned(),
+      name: "A movie with a long localized title that must stay inside its card".to_owned(),
+      item_type: "Movie".to_owned(),
+      production_year: Some(2026),
+      premiere_date: None,
+      runtime_seconds: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
+      played: false,
+      favorite: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      logo_image_id: None,
+      series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
+      season_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      index_number_end: None,
+      series_id: None,
+      series_name: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    })
+  }
+
+  #[tokio::test]
+  async fn card_layout_keeps_landscape_and_poster_copy_outside_action_bounds() {
+    let state = State::boot(false);
+    let entry = entry();
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    for (kind, expected_width, expected_height) in [
+      (Kind::Watchlist, 272.0, 203.0),
+      (Kind::Favorites, 174.66667, 312.0),
+      (Kind::History, 272.0, 203.0),
+    ] {
+      let (_, width, height) = frame_size(kind, 1148.0, true);
+      let mut card = list_card(&state, kind, &entry, width, height, true);
+      let mut tree = widget::Tree::new(card.as_widget());
+      tree.diff(card.as_widget_mut());
+      let node = card.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &iced::advanced::layout::Limits::new(iced::Size::ZERO, iced::Size::new(1148.0, 500.0)),
+      );
+      assert!(
+        (node.size().width - expected_width).abs() < 0.01,
+        "{kind:?}"
+      );
+      assert!(
+        (node.size().height - expected_height).abs() < 0.01,
+        "{kind:?}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn overflowing_shelves_keep_scrollbar_hits_below_card_captions() {
+    let state = State::boot(false);
+    let page = ListPage {
+      entries: (0..6)
+        .map(|index| {
+          let mut entry = entry();
+          entry.id = format!("movie-{index}");
+          entry.item.as_mut().unwrap().id.clone_from(&entry.id);
+          entry
+        })
+        .collect(),
+      ..ListPage::default()
+    };
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    for kind in [Kind::Watchlist, Kind::Favorites, Kind::History] {
+      let (_, _, art_height) = frame_size(kind, 700.0, true);
+      let mut ui = UserInterface::build(
+        list_body(&state, kind, &page, 700.0, true),
+        iced::Size::new(700.0, 500.0),
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut bus = iced::advanced::shell::Bus::new();
+      let (_, statuses) = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+          iced::mouse::Button::Left,
+        ))],
+        iced::mouse::Cursor::Available(iced::Point::new(100.0, art_height + COPY_HEIGHT - 6.0)),
+        &mut renderer,
+        &mut bus,
+      );
+      assert_eq!(
+        statuses,
+        [iced::event::Status::Ignored],
+        "{kind:?}: clicking caption text must not grab the scrollbar",
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn watchlist_remove_and_detail_targets_do_not_overlap_or_capture_copy() {
+    let state = State::boot(false);
+    let entry = entry();
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    for (position, expected) in [
+      (iced::Point::new(244.0, 28.0), "remove"),
+      (iced::Point::new(100.0, 80.0), "details"),
+      (iced::Point::new(100.0, 180.0), "none"),
+    ] {
+      let mut ui = UserInterface::build(
+        list_card(&state, Kind::Watchlist, &entry, 272.0, 153.0, true),
+        iced::Size::new(272.0, 203.0),
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut bus = iced::advanced::shell::Bus::new();
+      let _ = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[
+          iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+          iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+          )),
+        ],
+        iced::mouse::Cursor::Available(position),
+        &mut renderer,
+        &mut bus,
+      );
+      let actions = bus
+        .drain()
+        .map(|(message, _)| match message {
+          Message::OpenDetail(_) => "details",
+          Message::PersonalLists(PersonalListsMessage::RemoveWatchlist(_)) => "remove",
+          _ => "other",
+        })
+        .collect::<Vec<_>>();
+      assert_eq!(
+        actions,
+        if expected == "none" {
+          Vec::new()
+        } else {
+          vec![expected]
+        }
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn history_details_remain_keyboard_operable_without_a_remove_action() {
+    struct Focus;
+    impl widget::Operation for Focus {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn focusable(
+        &mut self,
+        _: Option<&widget::Id>,
+        _: iced::Rectangle,
+        state: &mut dyn widget::operation::Focusable,
+      ) {
+        state.focus();
+      }
+    }
+    let state = State::boot(false);
+    let entry = entry();
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut ui = UserInterface::build(
+      list_card(&state, Kind::History, &entry, 272.0, 153.0, true),
+      iced::Size::new(272.0, 203.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    ui.operate(&renderer, &mut Focus);
+    let mut bus = iced::advanced::shell::Bus::new();
+    let _ = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+        modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Enter),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })],
+      iced::mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut bus,
+    );
+    let actions = bus.drain().map(|(message, _)| message).collect::<Vec<_>>();
+    assert!(matches!(actions.as_slice(), [Message::OpenDetail(item)] if item.id == entry.id));
   }
 }

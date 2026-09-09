@@ -20,6 +20,7 @@ jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { workspace = true }
 fluent-templates = "0.15.1"
+chrono = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 sys-locale = "0.3"
 serde_json = "1.0.149"

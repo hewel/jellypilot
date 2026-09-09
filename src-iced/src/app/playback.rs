@@ -1319,7 +1319,7 @@ fn update_playback(
         surface,
         kernel,
         quit_requested,
-        queue_item_start_intent(item, intro),
+        queue_item_start_intent(*item, intro),
       )
     }
     PlaybackMessage::QueueLoaded {
@@ -2120,6 +2120,9 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       premiere_date: None,
       logo_image_id: None,
       id: id.to_owned(),

@@ -81,7 +81,7 @@ pub enum Message {
   Login(LoginMessage),
   Home(HomeMessage),
   Browse(BrowseMessage),
-  OpenDetail(VideoLibraryItem),
+  OpenDetail(Box<VideoLibraryItem>),
   Detail(DetailMessage),
   Playback(PlaybackMessage),
   EmbeddedPlayer(super::embedded_player::Message),
@@ -170,6 +170,7 @@ pub enum BrowseMessage {
   SortDirectionToggled,
   PlayedFilterChanged(VideoLibraryPlayedFilter),
   FavoritesToggled,
+  ViewModeSelected(super::browse::ViewMode),
   Scrolled(scrollable::Viewport),
   GridViewportMeasured {
     epoch: u64,
@@ -280,7 +281,7 @@ pub enum PlaybackMessage {
   SubtitleTrackSelected(Option<i64>),
   QueueMenuToggled,
   QueueMenuDismissed,
-  QueueItemSelected(VideoLibraryItem),
+  QueueItemSelected(Box<VideoLibraryItem>),
   QueueLoaded {
     session: SessionToken,
     generation: u64,

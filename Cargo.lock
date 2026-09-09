@@ -2802,6 +2802,7 @@ dependencies = [
 name = "jellypilot-iced"
 version = "2.0.0"
 dependencies = [
+ "chrono",
  "fluent-syntax",
  "fluent-templates",
  "gtk",

@@ -439,6 +439,9 @@ mod tests {
 
     fn item(id: &str, name: &str, item_type: &str) -> VideoLibraryItem {
         VideoLibraryItem {
+            community_rating: None,
+            episode_count: None,
+            last_played_date: None,
             premiere_date: None,
             id: id.to_owned(),
             name: name.to_owned(),

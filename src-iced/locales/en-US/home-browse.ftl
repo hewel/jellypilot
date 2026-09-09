@@ -17,8 +17,7 @@ browse-sort-recently-added = Recently added
 browse-sort-release-date = Release date
 browse-ascending = Ascending
 browse-descending = Descending
-browse-favorites-on = Favorites: On
-browse-favorites-off = Favorites: Off
+browse-favorites = Favorites
 browse-all = All
 browse-played = Played
 browse-unplayed = Unplayed
@@ -40,3 +39,16 @@ browse-save-filters-failed = Could not save library filters: { $details }
 browse-open-failed = Could not open library browsing: { $details }
 browse-load-more-failed = Could not load more items: { $details }
 browse-library-unavailable = The selected library is no longer available.
+browse-grid = Grid view
+browse-list = List view
+browse-favorite = Add to favorites
+browse-unfavorite = Remove from favorites
+browse-column-title = Title
+browse-column-year = Year
+browse-column-rating = Rating
+browse-column-progress = Watch progress
+browse-progress-percent = { $percent }%
+browse-kind-episodes = { $kind } · { $count ->
+    [one] { $count } episode
+   *[other] { $count } episodes
+    }

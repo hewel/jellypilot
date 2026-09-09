@@ -6,6 +6,23 @@ use iced::{Background, Border, Color, Theme};
 use crate::tokens::{palette, LIGHT_PALETTE, TOKENS};
 use crate::variants::ButtonVariant;
 
+/// Chrome-free artwork hit surface; ControlButton supplies its focus ring.
+pub fn media_artwork(
+    _theme: &Theme,
+    _variant: ButtonVariant,
+    _status: button::Status,
+) -> button::Style {
+    button::Style {
+        snap: false,
+        border: Border {
+            radius: super::rounded_image::full_radius(TOKENS.radii.xl),
+            ..Border::default()
+        }
+        .smoothing(super::container::SURFACE_SMOOTHING),
+        ..button::Style::default()
+    }
+}
+
 /// Resolves a button variant and interaction status to an iced style.
 pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let palette = palette(theme);

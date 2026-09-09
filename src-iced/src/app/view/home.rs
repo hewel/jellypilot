@@ -333,7 +333,7 @@ fn featured_hero<'a>(
   let details_label = state.t("home-details");
   let details = action(Icon::Info, details_label.clone(), ButtonVariant::Tonal)
     .id(iced::widget::Id::new("home-hero-details"))
-    .on_press(Message::OpenDetail(item.clone()));
+    .on_press(Message::OpenDetail(Box::new(item.clone())));
   let controls = collections::controls(state, Source::Hero);
   let favorite_variant = if controls.favorite == Some(true) {
     ButtonVariant::TonalActive
@@ -670,7 +670,7 @@ fn video_card<'a>(
       item.id
     )))
     .on_press_maybe(play_enabled.then(|| play_message(state, item)))
-    .style(artwork_button_style);
+    .style(jellypilot_ui::widgets::button::media_artwork);
     let mut artwork_layers = Stack::new()
       .width(frame_width)
       .height(frame_height)
@@ -688,7 +688,7 @@ fn video_card<'a>(
       let details = control_button(Some(Icon::Info), None, ButtonVariant::Tonal)
         .icon_size(IconSize::Xs)
         .padding(7)
-        .on_press(Message::OpenDetail(item.clone()));
+        .on_press(Message::OpenDetail(Box::new(item.clone())));
       artwork_layers = artwork_layers.push(
         container(details)
           .padding(TOKENS.spacing.s2)
@@ -766,7 +766,7 @@ fn video_card<'a>(
 
   poster_card(artwork_layers, copy)
     .width(frame_width)
-    .on_press(Message::OpenDetail(item.clone()))
+    .on_press(Message::OpenDetail(Box::new(item.clone())))
     .into()
 }
 
@@ -1308,25 +1308,6 @@ fn hero_fade(gradient: gradient::Linear) -> Element<'static, Message> {
     .into()
 }
 
-/// Chrome-free control style for artwork click surfaces: nothing draws at
-/// rest, on hover, or when disabled; ControlButton adds the keyboard focus
-/// ring on top with the artwork's corner radius.
-fn artwork_button_style(
-  _theme: &iced::Theme,
-  _variant: ButtonVariant,
-  _status: button::Status,
-) -> button::Style {
-  button::Style {
-    snap: false,
-    border: iced::Border {
-      radius: full_radius(TOKENS.radii.xl),
-      ..iced::Border::default()
-    }
-    .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
-    ..button::Style::default()
-  }
-}
-
 fn observe_home<'a>(
   content: Element<'a, Message>,
   state: &State,
@@ -1494,123 +1475,26 @@ fn progress_bar<'a>(
   frame_height: f32,
   artwork: Option<iced::widget::image::Handle>,
 ) -> Element<'a, Message> {
-  Element::new(ProgressOverlay {
-    progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
+  use jellypilot_ui::widgets::artwork_progress::{ArtworkProgress, Style};
+
+  let style = Style {
     fill: palette.colors.primary.scale_alpha(0.5),
     track: if artwork.is_some() {
       palette.colors.surfaceContainerLowest.scale_alpha(0.4)
     } else {
       palette.colors.surfaceContainerLow.scale_alpha(0.5)
     },
-    radius,
+    blur: 12.0,
+  };
+  ArtworkProgress::new(
+    progress,
     frame_height,
+    PROGRESS_BAR_HEIGHT,
+    radius,
     artwork,
-  })
-}
-
-/// The bottom strip uses the full artwork's native display-frame mask.
-/// Scissoring reveals only the strip; it never creates new rounded corners at
-/// the clipping edges or clamps the image radius to half the strip height.
-struct ProgressOverlay {
-  progress: f32,
-  fill: iced::Color,
-  track: iced::Color,
-  radius: iced::border::Radius,
-  frame_height: f32,
-  artwork: Option<iced::widget::image::Handle>,
-}
-
-impl Widget<Message, iced::Theme, iced::Renderer> for ProgressOverlay {
-  fn size(&self) -> iced::Size<Length> {
-    iced::Size::new(Fill, Length::Fixed(PROGRESS_BAR_HEIGHT))
-  }
-
-  fn layout(
-    &mut self,
-    _tree: &mut widget::Tree,
-    _renderer: &iced::Renderer,
-    limits: &layout::Limits,
-  ) -> layout::Node {
-    layout::atomic(limits, Fill, Length::Fixed(PROGRESS_BAR_HEIGHT))
-  }
-
-  fn draw(
-    &self,
-    _tree: &widget::Tree,
-    renderer: &mut iced::Renderer,
-    _theme: &iced::Theme,
-    _style: &renderer::Style,
-    layout: Layout<'_>,
-    _cursor: iced::mouse::Cursor,
-    viewport: &iced::Rectangle,
-  ) {
-    let smoothing = jellypilot_ui::widgets::container::SURFACE_SMOOTHING;
-    let strip = layout.bounds();
-    let Some(visible) = strip.intersection(viewport) else {
-      return;
-    };
-    let frame = iced::Rectangle {
-      y: strip.y + strip.height - self.frame_height,
-      height: self.frame_height,
-      ..strip
-    };
-    let border = iced::Border {
-      radius: self.radius,
-      smoothing,
-      ..iced::Border::default()
-    };
-    renderer.with_layer(visible, |renderer| {
-      if let Some(handle) = &self.artwork {
-        let local_frame = iced::Rectangle {
-          x: 0.0,
-          y: strip.height - self.frame_height,
-          width: strip.width,
-          height: self.frame_height,
-        };
-        let image = Image::new(handle.clone())
-          .content_fit(ContentFit::Cover)
-          .display_frame(local_frame)
-          .mask_frame(local_frame)
-          .visible_region(iced::Rectangle::new(iced::Point::ORIGIN, strip.size()))
-          .border_radius(self.radius)
-          .border_smoothing(smoothing)
-          .snap(false)
-          .blur(12.0);
-        <Image as Widget<Message, iced::Theme, iced::Renderer>>::draw(
-          &image, _tree, renderer, _theme, _style, layout, _cursor, viewport,
-        );
-      }
-      // A separate layer keeps the tint above the frosted image on WGPU.
-      renderer.with_layer(visible, |renderer| {
-        renderer.fill_quad(
-          renderer::Quad {
-            bounds: frame,
-            border,
-            snap: false,
-            ..renderer::Quad::default()
-          },
-          self.track,
-        );
-      });
-      let watched = iced::Rectangle {
-        width: strip.width * self.progress,
-        ..strip
-      };
-      if let Some(watched) = watched.intersection(&visible) {
-        renderer.with_layer(watched, |renderer| {
-          renderer.fill_quad(
-            renderer::Quad {
-              bounds: frame,
-              border,
-              snap: false,
-              ..renderer::Quad::default()
-            },
-            self.fill,
-          );
-        });
-      }
-    });
-  }
+    style,
+  )
+  .into()
 }
 
 fn section_skeleton<'a>(
@@ -1687,6 +1571,9 @@ mod tests {
   #[test]
   fn unplayed_badge_only_formats_nonzero_latest_series_counts() {
     let mut item = VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       premiere_date: None,
       logo_image_id: None,
       id: "series-1".to_owned(),

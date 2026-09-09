@@ -742,6 +742,7 @@ impl State {
       || full.detail.artwork.has_loading();
     let lists_loading = full.personal_lists.favorites.loading
       || full.personal_lists.watchlist.loading
+      || full.personal_lists.history.loading
       || full.personal_lists.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading || lists_loading
   }

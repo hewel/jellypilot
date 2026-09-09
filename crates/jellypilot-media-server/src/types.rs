@@ -213,6 +213,27 @@ pub struct FavoritesPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
+/// Root-level request for the current user's played and resumable Movie/Episode records.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchHistoryPageRequest {
+  pub start_index: i32,
+  pub limit: i32,
+}
+
+/// Disjoint played and unplayed-resumable items merged by descending DatePlayed.
+///
+/// Missing dates sort last. This is a latest-item listing, not a playback event log.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchHistoryPage {
+  pub start_index: i32,
+  pub limit: i32,
+  pub total_record_count: i32,
+  pub has_more: bool,
+  pub items: Vec<VideoLibraryItem>,
+}
+
 /// Media card summary for Video Home rows, Movies and Shows browse results, episode rows, and recommendation shelves.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,6 +244,12 @@ pub struct VideoLibraryItem {
   pub production_year: Option<i32>,
   /// Premiere timestamp supplied by the server, encoded as RFC 3339.
   pub premiere_date: Option<String>,
+  /// Community rating supplied by the provider.
+  pub community_rating: Option<f32>,
+  /// Server episode count for Series items; unavailable when provider count semantics are ambiguous.
+  pub episode_count: Option<u32>,
+  /// Current user's last played timestamp from server user data, encoded as RFC 3339.
+  pub last_played_date: Option<String>,
   pub runtime_seconds: Option<f64>,
   pub played: bool,
   pub favorite: bool,

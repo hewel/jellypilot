@@ -223,6 +223,11 @@ pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
   ] {
     match change {
       Some(Change::Confirmed(update)) => {
+        tasks.push(super::browse::apply_user_data_update(
+          &mut full.browse,
+          &mut state.kernel,
+          &update,
+        ));
         if let Some(entry) = full.collections.entries.get_mut(&update.item_id) {
           if let Some(item) = &mut entry.item {
             item.favorite = update.favorite;
@@ -376,31 +381,36 @@ pub(crate) fn update(state: &mut State, message: CollectionMessage) -> Task<Mess
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
-  if full.collections.session != Some(session)
-    || full.personal_lists.busy_items.contains(item_id)
-    || detail_busy(full, item_id)
-  {
+  if full.personal_lists.busy_items.contains(item_id) || detail_busy(full, item_id) {
     return Task::none();
   }
-  let Some(item) = full
-    .collections
-    .entries
-    .get(item_id)
-    .and_then(|entry| entry.item.as_ref())
-  else {
-    return Task::none();
-  };
   match message {
     CollectionMessage::Favorite {
       item_id, favorite, ..
-    } => personal_lists::set_favorite(
-      &mut full.personal_lists,
-      &mut state.kernel,
-      &state.watchlist,
-      item_id,
-      favorite,
-    ),
+    } => {
+      if !favorite_is_known(full, &state.shell.destination, session, &item_id) {
+        return Task::none();
+      }
+      personal_lists::set_favorite(
+        &mut full.personal_lists,
+        &mut state.kernel,
+        &state.watchlist,
+        item_id,
+        favorite,
+      )
+    }
     CollectionMessage::Watchlist { watchlisted, .. } => {
+      if full.collections.session != Some(session) {
+        return Task::none();
+      }
+      let Some(item) = full
+        .collections
+        .entries
+        .get(item_id)
+        .and_then(|entry| entry.item.as_ref())
+      else {
+        return Task::none();
+      };
       if !full.personal_lists.membership_loaded
         || full.personal_lists.watchlist_ids.contains(&item.id) == watchlisted
       {
@@ -411,10 +421,55 @@ pub(crate) fn update(state: &mut State, message: CollectionMessage) -> Task<Mess
         &mut full.personal_lists,
         &mut state.kernel,
         &state.watchlist,
-        PersonalListsMessage::ToggleWatchlist(item),
+        PersonalListsMessage::ToggleWatchlist(Box::new(item)),
       )
     }
     CollectionMessage::Loaded { .. } => Task::none(),
+  }
+}
+
+fn favorite_is_known(
+  full: &FullUi,
+  destination: &Destination,
+  session: SessionToken,
+  item_id: &str,
+) -> bool {
+  if full.collections.session == Some(session)
+    && full
+      .collections
+      .entries
+      .get(item_id)
+      .is_some_and(|entry| entry.item.is_some())
+  {
+    return true;
+  }
+  match destination {
+    Destination::Library { .. } | Destination::Search(_) => {
+      let jellypilot_core::browse_model::LibraryBrowseView::Ready { visible_items, .. } =
+        &full.browse.view
+      else {
+        return false;
+      };
+      visible_items
+        .iter()
+        .any(|slot| slot.item.as_ref().is_some_and(|item| item.id == item_id))
+    }
+    Destination::PersonalLists(route) => {
+      let lists = &full.personal_lists;
+      let pages: &[&personal_lists::ListPage] = match route {
+        personal_lists::Route::Overview => &[&lists.favorites, &lists.watchlist, &lists.history],
+        personal_lists::Route::Favorites => &[&lists.favorites],
+        personal_lists::Route::Watchlist => &[&lists.watchlist],
+        personal_lists::Route::History => &[&lists.history],
+      };
+      pages.iter().any(|page| {
+        page
+          .entries
+          .iter()
+          .any(|entry| entry.item.as_ref().is_some_and(|item| item.id == item_id))
+      })
+    }
+    _ => false,
   }
 }
 
@@ -433,6 +488,9 @@ mod tests {
       .set_detail_item(Some("series".to_owned()));
     state.shell.destination = Destination::Detail("series".to_owned());
     let episode = VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       premiere_date: None,
       id: "episode".to_owned(),
       name: "Episode".to_owned(),

@@ -80,8 +80,8 @@ The scale in `tokens.rs` is `none` (0), `sm` (2), `md` (6), `lg` (8), `xl` (12),
 |---|---|
 | `none` (0) | Docked blocks (sidebar), canvas |
 | `sm` (2) | Small inline chrome (toast dismiss button) |
-| `md` (6) | Small controls: compact icon buttons, badges, tooltips, list-view thumbnail artwork |
-| `lg` (8) | Library-row level chrome, skeletons |
+| `md` (6) | Small controls: compact icon buttons, badges, tooltips |
+| `lg` (8) | Segmented toggles, skeletons, list-view thumbnail artwork |
 | `xl` (12) | Media cards and poster artwork, buttons, fields, popovers, floating player bar |
 | `x2l` (20) | Modal cards (settings, account popover) |
 | `full` | Scrollbars, status dots, toggle switches |
@@ -287,6 +287,24 @@ The [Home specification](home-hero-design-spec.md#accepted-paper-home-synchroniz
 - Player bar remains docked, with metadata/Favorite, transport/seek, and queue/audio/subtitle/volume/fullscreen controls. Preserve direct Stop; reflow at narrow widths rather than discarding controls.
 - Fullscreen operates the current playback backend. External MPV receives its fullscreen command. Embedded playback uses the scoped composition below, preserving the concealed browser's widget state when fullscreen is entered from browsing.
 - Dark and light themes resolve separately through semantic tokens/Catalogs. Hero glass controls stay borderless, including disabled states; keyboard focus remains distinct.
+
+## Accepted Paper Library and Personal Lists
+
+References: [Library Grid TK-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/TK-0),
+[Library List 23D-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/23D-0),
+and [Personal Lists 7XI-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/7XI-0).
+These measurements supersede the older generic browse geometry. Human visual acceptance remains pending.
+
+- Library uses 36px desktop side insets and 28px top spacing, with a 36px/40px heading, wrapping 32px filters, real result count and keyboard-operable Grid/List segments.
+- At 1148px inner width, Grid shows six approximately 175×262 posters, 20px column gaps, 50px title/metadata areas and 24px row gaps. Sparse paging, loading placeholders and image visibility use the same measured cell geometry.
+- List uses a 35px header and 81px rows with 40×60 artwork, 8px thumbnail corners, and aligned index/title/year/rating/progress/favorite lanes. Narrow rows reflow metadata without losing detail or favorite actions.
+- Grid and List retain the same query, sorting and filters, but keep independent in-memory scroll positions through navigation. Confirmed collection changes update visible flags immediately and refresh server-side membership/order without accepting pre-write deliveries.
+- Personal Lists shows Watchlist, Favorites, then Watch History. Its header has 40px top/36px side spacing; the first section starts after 32px, subsequent sections after 40px. Watchlist/History use four approximately 272×153 landscape cards plus 50px copy areas; Favorites uses six posters. Narrow overviews scroll shelves horizontally; View all pages reflow.
+- Personal Lists shelves reserve a separate 16px bottom gutter below the full card copy area for the floating horizontal scrollbar; card dimensions do not include this gutter.
+- Artwork has a 1px `imageOutline`. New card progress strips are 4px: poster strips use a white-18% frosted track, landscape strips white-24%, with `primary` progress. Home retains its existing 6px treatment through the same native full-frame masking primitive.
+- Rating badges stay artwork-local in both themes: dark-background 65% scrim, 8px corners, light secondary digits and dark-palette `onWarningContainer` stars. Keyboard focus remains separate from pointer hover.
+- Counts, ratings, progress and landscape images come from real data. Jellyfin series episode totals use its episode-only recursive count; unknown Emby totals are omitted rather than relabeling descendants or issuing per-card count requests. Watchlist remains a local viewing plan, not Continue Watching.
+- Watch History merges server-played and resumable movie/episode records, newest first. It is a latest-item list, not a per-play event log. Timestamps show local calendar dates, with an honest Played fallback when absent; no sample counts or relative-time labels are fabricated. See [Personal Lists contract](sidebar-design-spec.md#3-personal-lists) for paging semantics.
 
 ## 2026-09-09 Embedded Player
 

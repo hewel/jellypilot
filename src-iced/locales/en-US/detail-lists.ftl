@@ -57,30 +57,30 @@ lists-user-error = The connected server user is unavailable.
 lists-scope-error = The connected account is unavailable. Reconnect and try again.
 lists-favorites-error = Could not load favorites. Try again.
 lists-watchlist-error = Could not load watchlist. Try again.
+lists-history-error = Could not load watch history. Try again.
 lists-metadata-error = Could not load current item details. Try again.
 lists-watchlist-update-error = Could not update watchlist. Try again.
 lists-favorite-update-error = Could not update favorites. Try again.
 lists-favorite-not-updated = The server did not confirm the favorite change.
 lists-title = Personal lists
-lists-separate-help = Favorites and watchlist are kept separate.
+lists-overview-counts = Watchlist { $watchlist } · Favorites { $favorites } · Watch history { $history }
 lists-view-all = View all
-lists-section-count = { $title } · { $count }
 lists-unavailable-item = { $name } · Unavailable
 lists-removing = Removing…
 lists-remove = Remove
 lists-favorites-empty = No favorites yet.
 lists-watchlist-empty = Your watchlist is empty.
+lists-history-empty = No watched movies or episodes yet.
+lists-history-date = { $year }-{ $month }-{ $day }
+lists-history-played = Played
 lists-retry = Retry
 lists-load-heading = Could not load this list
 lists-previous = Previous
 lists-next = Next
 lists-favorites = Favorites
 lists-watchlist = Watchlist
-lists-saved-count =
-    { $count ->
-        [one] { $count } saved item
-       *[other] { $count } saved items
-    }
+lists-history = Watch history
+lists-item-count = { $count } items
 
 collection-loading = Loading collection status…
 collection-unavailable = Collection status unavailable. Refresh to retry.

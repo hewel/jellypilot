@@ -1207,7 +1207,7 @@ fn similar_card<'a>(
     .padding(0)
     .min_height(16.0)
     .width(Fill)
-    .on_press(Message::OpenDetail(item.clone())),
+    .on_press(Message::OpenDetail(Box::new(item.clone()))),
     text(item_caption(state.kernel.locale, item))
       .size(12)
       .line_height(Pixels(14.0))
@@ -1223,7 +1223,7 @@ fn similar_card<'a>(
   .width(Fill);
   poster_card(poster, copy)
     .width(SIMILAR_CARD_WIDTH)
-    .on_press(Message::OpenDetail(item.clone()))
+    .on_press(Message::OpenDetail(Box::new(item.clone())))
     .into()
 }
 
@@ -1354,7 +1354,7 @@ fn episode_card<'a>(
     }
     let art = poster_card(art, space::vertical().height(0))
       .width(art_width)
-      .on_press(Message::OpenDetail(episode.clone()));
+      .on_press(Message::OpenDetail(Box::new(episode.clone())));
     let mut copy = column![control_button_content(
       move |_| text(format!(
         "{}  {}",
@@ -1373,7 +1373,7 @@ fn episode_card<'a>(
     .padding(0)
     .min_height(20.0)
     .width(Fill)
-    .on_press(Message::OpenDetail(episode.clone())),]
+    .on_press(Message::OpenDetail(Box::new(episode.clone()))),]
     .spacing(8)
     .width(Fill);
     let metadata = episode_metadata(state.kernel.locale, episode);
@@ -2230,6 +2230,9 @@ mod tests {
     played: bool,
   ) -> VideoLibraryItem {
     VideoLibraryItem {
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
       id: "episode-1".to_owned(),
       name: "Pilot".to_owned(),
       item_type: "Episode".to_owned(),
