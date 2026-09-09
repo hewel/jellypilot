@@ -22,6 +22,14 @@ use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::{full_radius, rounded_image};
 
+fn video_surface<'a>() -> Element<'a, Message> {
+  iced::widget::mouse_area(crate::embedded::view())
+    .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
+      PlaybackIntent::TogglePaused,
+    ))))
+    .into()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrackChoice {
   id: Option<i64>,
@@ -266,7 +274,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .width(Fill)
         .push(if crate::embedded::enabled() {
-          container(crate::embedded::view())
+          container(video_surface())
             .width(Fill)
             .height(Length::FillPortion(1))
             .into()
@@ -832,6 +840,87 @@ mod tests {
   };
   use jellypilot_mpv::PlayerState;
   use std::time::Instant;
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn video_surface_toggles_only_on_left_press_inside_picture() {
+    use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree, Layout, Shell};
+    use iced::{mouse, Event, Point, Rectangle, Size};
+
+    let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+      renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    ))
+    .expect("headless renderer");
+    let bounds = Rectangle::with_size(Size::new(320.0, 180.0));
+    let mut content = video_surface();
+    let mut tree = Tree::empty();
+    tree.diff(content.as_widget_mut());
+    let node = content.as_widget_mut().layout(
+      &mut tree,
+      &renderer,
+      &layout::Limits::new(bounds.size(), bounds.size()),
+    );
+    for (event, cursor, toggles) in [
+      (
+        mouse::Event::ButtonPressed(mouse::Button::Left),
+        Point::new(160.0, 90.0),
+        true,
+      ),
+      (
+        mouse::Event::ButtonReleased(mouse::Button::Left),
+        Point::new(160.0, 90.0),
+        false,
+      ),
+      (
+        mouse::Event::ButtonPressed(mouse::Button::Right),
+        Point::new(160.0, 90.0),
+        false,
+      ),
+      (
+        mouse::Event::ButtonPressed(mouse::Button::Left),
+        Point::new(350.0, 90.0),
+        false,
+      ),
+      (
+        mouse::Event::ButtonPressed(mouse::Button::Left),
+        Point::new(160.0, 90.0),
+        true,
+      ),
+    ] {
+      let mut messages = iced::advanced::shell::Bus::new();
+      content.as_widget_mut().update(
+        &mut tree,
+        &Event::Mouse(event),
+        Layout::new(&node),
+        mouse::Cursor::Available(cursor),
+        &renderer,
+        &mut Shell::new(
+          &iced::window::Headless,
+          iced::advanced::shell::Waker::noop(),
+          &mut messages,
+        ),
+        &bounds,
+      );
+      let toggles_emitted = messages
+        .drain()
+        .filter(|(message, _)| {
+          matches!(
+            message,
+            Message::Playback(PlaybackMessage::Intent(intent))
+              if matches!(**intent, PlaybackIntent::TogglePaused)
+          )
+        })
+        .count();
+      assert_eq!(toggles_emitted, usize::from(toggles));
+    }
+  }
+
   fn test_now_playing() -> NowPlayingView {
     NowPlayingView {
       item: NowPlayingItem {

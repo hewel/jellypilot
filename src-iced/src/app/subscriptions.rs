@@ -58,11 +58,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         && state.playback.view.now_playing.is_some()
       {
         subscriptions.push(
-          event::listen_with(|event, status, _| {
-            (status == event::Status::Ignored).then_some(event)
-          })
-          .with(playback_shortcuts(state.kernel.settings.snapshot()))
-          .filter_map(playback_shortcut),
+          event::listen_with(|event, status, _| Some((event, status)))
+            .with((
+              playback_shortcuts(state.kernel.settings.snapshot()),
+              crate::embedded::enabled(),
+            ))
+            .filter_map(playback_shortcut),
         );
       }
     }
@@ -167,9 +168,14 @@ fn playback_shortcuts(settings: &jellypilot_core::config::Settings) -> (String, 
   )
 }
 
+type PlaybackShortcutEvent = (((String, String, String), bool), (Event, event::Status));
+
 fn playback_shortcut(
-  ((next, previous, intro_skip), event): ((String, String, String), Event),
+  (((next, previous, intro_skip), embedded), (event, status)): PlaybackShortcutEvent,
 ) -> Option<Message> {
+  if status == event::Status::Captured {
+    return None;
+  }
   let Event::Keyboard(keyboard::Event::KeyPressed {
     modified_key,
     modifiers,
@@ -185,6 +191,11 @@ fn playback_shortcut(
     PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous)
   } else if shortcut_matches(&intro_skip, &modified_key, modifiers) {
     PlaybackIntent::SkipIntro
+  } else if embedded
+    && modifiers.is_empty()
+    && modified_key.as_ref() == keyboard::Key::Named(keyboard::key::Named::Space)
+  {
+    PlaybackIntent::TogglePaused
   } else {
     return None;
   };
@@ -368,6 +379,61 @@ mod tests {
       text: None,
       repeat: false,
     })
+  }
+
+  #[test]
+  fn embedded_space_toggles_pause_without_intercepting_typing_or_repeats() {
+    let bindings = playback_shortcuts(&jellypilot_core::config::Settings::default());
+    let space = key_pressed(
+      keyboard::Key::Named(keyboard::key::Named::Space),
+      keyboard::Modifiers::NONE,
+    );
+    assert!(matches!(
+      playback_shortcut(((bindings.clone(), true), (space.clone(), event::Status::Ignored))),
+      Some(Message::Playback(PlaybackMessage::Intent(intent)))
+        if matches!(*intent, PlaybackIntent::TogglePaused)
+    ));
+    assert!(playback_shortcut((
+      (bindings.clone(), true),
+      (space.clone(), event::Status::Captured)
+    ))
+    .is_none());
+    assert!(playback_shortcut((
+      (bindings.clone(), false),
+      (space.clone(), event::Status::Ignored)
+    ))
+    .is_none());
+    let mut repeated = space;
+    if let Event::Keyboard(keyboard::Event::KeyPressed { repeat, .. }) = &mut repeated {
+      *repeat = true;
+    }
+    assert!(
+      playback_shortcut(((bindings.clone(), true), (repeated, event::Status::Ignored))).is_none()
+    );
+    let modified = key_pressed(
+      keyboard::Key::Named(keyboard::key::Named::Space),
+      keyboard::Modifiers::CTRL,
+    );
+    assert!(playback_shortcut(((bindings, true), (modified, event::Status::Ignored))).is_none());
+  }
+
+  #[test]
+  fn configured_episode_shortcut_takes_precedence_over_default_space() {
+    let message = playback_shortcut((
+      (("Space".into(), "Shift+<".into(), "g".into()), true),
+      (
+        key_pressed(
+          keyboard::Key::Named(keyboard::key::Named::Space),
+          keyboard::Modifiers::NONE,
+        ),
+        event::Status::Ignored,
+      ),
+    ));
+    assert!(matches!(
+      message,
+      Some(Message::Playback(PlaybackMessage::Intent(intent)))
+        if matches!(*intent, PlaybackIntent::PlayAdjacent(AdjacentDirection::Next))
+    ));
   }
 
   #[test]
