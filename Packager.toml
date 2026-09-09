@@ -6,7 +6,7 @@ publisher = "hewel"
 authors = ["hewel"]
 license-file = "LICENSE"
 homepage = "https://github.com/hewel/jellypilot"
-description = "Jellyfin and Emby companion app: cast receiver and library browser driving external MPV"
+description = "Jellyfin and Emby companion app with embedded MPV from the pinned mpv fork"
 category = "Video"
 binaries-dir = "target/release"
 out-dir = "target/release/bundle"
@@ -31,7 +31,6 @@ depends = [
   "libgtk-3-0",
   "libxkbcommon0",
   "libwayland-client0",
-  "mpv",
   "libavcodec60",
   "libavfilter9",
   "libavformat60",

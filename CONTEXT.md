@@ -25,11 +25,11 @@ Playback presented by a standalone MPV process so the user's MPV configuration, 
 _Avoid_: Embedded MPV, libmpv
 
 **Embedded MPV Playback**:
-Playback presented inside JellyPilot's existing player surface. It is an explicit Linux SDR option with an application-owned playback baseline, independent of the user's External MPV Playback configuration.
-_Avoid_: External player window, zero-copy playback, hardware-decoding guarantee
+Playback presented inside JellyPilot's existing player surface on Linux, using the pinned host-enabled libmpv from the project-owned mpv fork and an application-owned playback baseline, independent of the user's External MPV Playback configuration.
+_Avoid_: External player window, zero-copy playback, hardware-decoding guarantee, system libmpv
 
 **Playback Backend**:
-The persisted choice between External MPV Playback (the default) and Embedded MPV Playback. A changed choice takes effect on application restart; it is independent of App Mode.
+The persisted choice between Embedded MPV Playback (the Linux default) and External MPV Playback (the default on other platforms, and an explicit Linux option). A changed choice takes effect on application restart; it is independent of App Mode.
 
 **Provider Transcode**:
 Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through the selected Playback Backend and does not request a Provider Transcode.

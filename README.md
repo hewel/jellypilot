@@ -9,9 +9,9 @@
 [![iced](https://img.shields.io/badge/iced-pinned_fork-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — using your own external MPV by default.**
+**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — Linux plays through the pinned Embedded MPV fork.**
 
-Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview or forced transcoding. Optional Linux Vulkan SDR playback inside the app.
+Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview or forced transcoding. External MPV remains available, and is the default on Windows and macOS.
 
 </div>
 
@@ -19,7 +19,7 @@ Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview 
 
 ## 📖 Overview
 
-JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and defaults to **External MPV Playback**: a standalone MPV process controlled over JSON IPC. Your MPV configuration, shaders, and scripts stay in charge. **Embedded MPV Playback** is an explicit Linux Vulkan SDR option with a separate application-owned baseline; it does not load your external MPV configuration.
+JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and on Linux defaults to **Embedded MPV Playback**: the pinned project-owned mpv fork presented inside the existing player surface with an application-owned baseline. It does not load your external MPV configuration. **External MPV Playback** remains available (your configuration, shaders, and scripts stay in charge) and is the default on Windows and macOS.
 
 Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emby sessions can mirror supported remote transport commands to the app, the player bar, and the system tray.
 
@@ -59,6 +59,7 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 | 📚 **Library Browser**        | Movies, shows, and search with persisted filters, virtualized grids, and disk-cached artwork         |
 | ⭐ **User Data Actions**     | Favorite or unfavorite items and mark them played or unplayed directly from item details             |
 | 📺 **Jellyfin Cast Target**   | Appears as a controllable device in Jellyfin's cast menu                                             |
+| 🎬 **Embedded MPV Playback**  | Linux default: pinned mpv fork inside the player surface, with an application-owned baseline         |
 | 🚀 **External MPV Playback**  | Standalone MPV over JSON IPC; your configuration, shaders, and scripts apply to the original source  |
 | 📑 **Episode Queue**          | Current-season episode list in the player bar and compact player — click any episode to switch       |
 | 💬 **External Subtitles**     | Server-hosted external subtitle tracks loaded into MPV, with the default selection applied           |
@@ -102,8 +103,8 @@ plugin synchronization has populated them.
 
 ### Runtime prerequisites
 
-- External playback: [MPV](https://mpv.io/) with Lua scripting support, available on `PATH` or selected explicitly in Settings. A bundled Lua hook captures volume and temporary mute before MPV resets file-local options at the end of playback.
-- Embedded playback: the exact host-enabled libmpv build and baseline below, plus Linux Vulkan with a supported `Rgb10a2Unorm` presentation surface. Missing capability is an error, not an eight-bit, software, system-libmpv, or external-player fallback.
+- Embedded playback (Linux default): the exact host-enabled libmpv build and baseline below, plus Linux Vulkan with a supported `Rgb10a2Unorm` presentation surface. Missing capability is an error, not an eight-bit, software, system-libmpv, or external-player fallback.
+- External playback: [MPV](https://mpv.io/) with Lua scripting support, available on `PATH` or selected explicitly in Settings. A bundled Lua hook captures volume and temporary mute before MPV resets file-local options at the end of playback. Default on Windows and macOS.
 
 ### Installation
 
@@ -123,8 +124,9 @@ paru -S jellypilot
 
 `yay` and other AUR helpers work the same way. The two packages conflict; pick one.
 Linux packages install the pinned mpv fork at `/usr/lib/jellypilot/libmpv.so` and
-`/usr/share/jellypilot/mpv-baseline.conf`, so Embedded MPV Playback works from the
-installed prefix. External MPV remains the settings default.
+`/usr/share/jellypilot/mpv-baseline.conf`. A packaged `/usr/bin/jellypilot` starts
+Embedded MPV Playback with that fork. External MPV is optional and requires a
+system `mpv` if you switch to it in Settings.
 
 #### Build from Source
 
@@ -161,10 +163,13 @@ bun run task iced prepare --source /absolute/path/to/iced
 ### Embedded MPV: build, select, and recover
 
 This accepted integration supersedes ADR 0027's external-only playback restriction, not its
-native iced/no-webview decision. External remains the default, including existing settings
-files. In **Settings → Playback**, select Embedded and restart; the same player, transport,
-queue, volume, subtitles, and remote-session controller are reused. **Show video** opens the
-player surface while browsing. Switching back preserves the external executable and arguments.
+native iced/no-webview decision. Linux defaults to Embedded MPV Playback with the pinned
+fork, including a one-time migration of existing settings that still recorded External.
+Windows and macOS keep External. In **Settings → Playback**, select External if you want
+your own MPV process, configuration, shaders, and scripts; restart to apply. Switching
+preserves the external executable and arguments. **Show video** opens the player surface
+while browsing. The same player, transport, queue, volume, subtitles, and remote-session
+controller are reused.
 
 The embedded player uses one full-window video surface with floating controls in both windowed
 and fullscreen playback; the video keeps its aspect ratio without cropping.
@@ -205,7 +210,7 @@ down to 768 logical pixels; at 900 pixels and below, the landscape thumbnail is 
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
 # Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1, libass.
 bun run task mpv build --source /absolute/path/to/mpv
-bun run task iced run --embedded
+bun run task iced run
 ```
 
 `tools/embedded-mpv/source.json` is the authority for the mpv revision, baseline and Meson
@@ -221,14 +226,14 @@ recorded, **not pinned**, so this is not a bit-reproducible or self-contained di
 Vulkan headers may be supplied explicitly through `CFLAGS=-I/absolute/sdk/include` (and
 dependencies through `PKG_CONFIG_PATH`); neither is silently obtained from another build tree.
 
-Development run/hot commands pass staged asset paths even when Embedded is selected through
-saved settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
+Development run/hot commands pass staged asset paths for the Linux Embedded default and for
+saved Embedded settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
 supported; only trusted files implementing the pinned host ABI may be loaded. A directly
 launched binary looks beside itself, then in the executable prefix (`../lib/jellypilot` and
 `../share/jellypilot`), so `/usr/bin/jellypilot` loads `/usr/lib/jellypilot/libmpv.so`.
-Linux packages ship that pinned fork; they do not use system libmpv. To recover from an
-unavailable embedded setup, launch `jellypilot --external`, select External in Settings, and
-restart.
+Linux packages ship that pinned fork; they do not use system libmpv. Missing Vulkan or
+host assets is an error, not a fallback to system libmpv or External MPV. To start External
+MPV instead, launch `jellypilot --external` or select External in Settings and restart.
 
 The host retains the actual enabled Vulkan feature chain and shares its device/queue with
 the official iced renderer. Video reaches a private 10-bit texture through three ordered
@@ -372,7 +377,7 @@ flowchart LR
     MS <-->|REST| Server
     Server -->|original/direct source| MPV[External MPV process]
     Mpv <-->|JSON IPC| MPV
-    Mpv <-->|JSON IPC, explicit Linux option| Host[Embedded MPV host]
+    Mpv <-->|JSON IPC, Linux default| Host[Embedded MPV host]
     Server -->|original/direct source| Host
     Host -->|10-bit Vulkan copy and sample| App
 ```
@@ -409,7 +414,7 @@ flowchart LR
 
 ## 📜 Project History
 
-Releases ≤ 1.4.x shipped a Tauri/Solid.js frontend with an embedded web player and a local FFmpeg HLS pipeline. That stack was retired per [ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md): the iced application always presents External MPV Playback, and settings/saved profiles start fresh — no Tauri Store data is imported.
+Releases ≤ 1.4.x shipped a Tauri/Solid.js frontend with an embedded web player and a local FFmpeg HLS pipeline. That stack was retired per [ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md). Linux now defaults to the pinned Embedded MPV fork ([ADR 0040](docs/adr/0040-linux-embedded-mpv-default.md)); settings and saved profiles start fresh — no Tauri Store data is imported.
 
 ## 🙏 Credits
 

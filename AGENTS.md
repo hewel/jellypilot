@@ -1,8 +1,9 @@
 # AGENTS.md
 
 Cross-platform Jellyfin/Emby companion app built with a pinned iced fork (ADR 0027 native architecture). Fully custom-drawn
-native UI; External MPV Playback remains the default. Explicit Embedded MPV Playback uses the
-accepted Linux Vulkan SDR host path; see README's embedded build/selection contract. No webview/Tauri.
+native UI; Linux defaults to Embedded MPV Playback with the pinned mpv fork. External MPV
+Playback remains the default on other platforms and an explicit Linux option. See README's
+embedded build/selection contract. No webview/Tauri.
 
 ## Role Separation
 

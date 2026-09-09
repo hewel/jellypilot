@@ -3,19 +3,21 @@
 pkgname=jellypilot-bin
 pkgver=2.1.1
 pkgrel=1
-pkgdesc='Jellyfin and Emby companion app: cast receiver and library browser driving external MPV (prebuilt binary)'
+pkgdesc='Jellyfin and Emby companion app with embedded MPV from the pinned mpv fork (prebuilt binary)'
 arch=('x86_64')
 url='https://github.com/hewel/jellypilot'
 license=('MIT')
 depends=(
   'gtk3'
-  'mpv'
   'libxkbcommon'
   'wayland'
   'ffmpeg'
   'libplacebo'
   'libass'
   'vulkan-icd-loader'
+)
+optdepends=(
+  'mpv: External MPV Playback'
 )
 provides=('jellypilot')
 conflicts=('jellypilot')

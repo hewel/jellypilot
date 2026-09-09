@@ -13,6 +13,8 @@ use crate::locale::LanguagePreference;
 
 pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
 const CONFIG_FILE: &str = "config.json";
+/// Revision 1 applies the Linux Embedded MPV default to files that still record External.
+const CURRENT_SETTINGS_REVISION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -222,12 +224,21 @@ impl From<BrowseFilterSettings> for BrowsePreferences {
 }
 
 /// Playback presentation backend. Changes take effect on the next application start.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlaybackBackend {
-    #[default]
     External,
     Embedded,
+}
+
+impl Default for PlaybackBackend {
+    fn default() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::Embedded
+        } else {
+            Self::External
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -251,6 +262,8 @@ pub struct Settings {
     app_mode: AppMode,
     #[serde(default)]
     playback_backend: PlaybackBackend,
+    #[serde(default)]
+    settings_revision: u32,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     mpv_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_list")]
@@ -304,7 +317,8 @@ impl Default for Settings {
             theme_mode: ThemeMode::System,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
-            playback_backend: PlaybackBackend::External,
+            playback_backend: PlaybackBackend::default(),
+            settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: None,
             mpv_args: Vec::new(),
             playback_target_name: None,
@@ -950,17 +964,40 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 fn load_from(path: &Path) -> Result<Settings, ConfigError> {
-    match read_from(path) {
+    match read_and_migrate(path) {
         Err(ConfigError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
             Ok(Settings::default())
         }
-        result => result,
+        Ok((settings, migrated)) => {
+            if migrated {
+                save_to(path, &settings)?;
+            }
+            Ok(settings)
+        }
+        Err(error) => Err(error),
     }
 }
 
 fn read_from(path: &Path) -> Result<Settings, ConfigError> {
+    Ok(read_and_migrate(path)?.0)
+}
+
+fn read_and_migrate(path: &Path) -> Result<(Settings, bool), ConfigError> {
     let contents = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&contents)?)
+    let settings = serde_json::from_str(&contents)?;
+    Ok(migrate_settings(settings))
+}
+
+fn migrate_settings(mut settings: Settings) -> (Settings, bool) {
+    if settings.settings_revision >= CURRENT_SETTINGS_REVISION {
+        return (settings, false);
+    }
+    #[cfg(target_os = "linux")]
+    if settings.playback_backend == PlaybackBackend::External {
+        settings.playback_backend = PlaybackBackend::Embedded;
+    }
+    settings.settings_revision = CURRENT_SETTINGS_REVISION;
+    (settings, true)
 }
 
 fn save_to(path: &Path, settings: &Settings) -> Result<(), ConfigError> {
@@ -1066,6 +1103,46 @@ mod tests {
     }
 
     #[test]
+    fn playback_backend_defaults_to_embedded_on_linux() {
+        if cfg!(target_os = "linux") {
+            assert_eq!(PlaybackBackend::default(), PlaybackBackend::Embedded);
+            assert_eq!(
+                Settings::default().playback_backend(),
+                PlaybackBackend::Embedded
+            );
+        } else {
+            assert_eq!(PlaybackBackend::default(), PlaybackBackend::External);
+        }
+    }
+
+    #[test]
+    fn linux_legacy_external_settings_adopt_embedded_default_once() {
+        let path = test_path("linux-embedded-default");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            r#"{"remember":false,"server_url":"","provider":"","username":"","playback_backend":"external"}"#,
+        )
+        .unwrap();
+
+        let loaded = load_from(&path).unwrap();
+        if cfg!(target_os = "linux") {
+            assert_eq!(loaded.playback_backend(), PlaybackBackend::Embedded);
+            let mut store = store_at(path.clone(), loaded);
+            assert!(store
+                .set_playback_backend(PlaybackBackend::External)
+                .unwrap());
+            assert_eq!(
+                load_from(&path).unwrap().playback_backend(),
+                PlaybackBackend::External
+            );
+        } else {
+            assert_eq!(loaded.playback_backend(), PlaybackBackend::External);
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn embedded_selection_preserves_external_configuration_across_reload() {
         let path = test_path("playback-backend");
         let original = remembered_settings();
@@ -1096,6 +1173,7 @@ mod tests {
             ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
             playback_backend: PlaybackBackend::External,
+            settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],
             playback_target_name: Some("Living Room".to_owned()),

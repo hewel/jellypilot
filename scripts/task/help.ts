@@ -21,8 +21,8 @@ Application:
   iced hot                       (hot reload via cargo-hot, dev feature)
   iced prepare [--source <checkout>] (exact published fork revision from iced-source.json)
     All maintained Cargo tasks automatically use the same prepared target/vendor iced source.
-    --embedded selects staged libmpv and baseline; explicit env overrides must be absolute:
-    JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. External playback remains the default.
+    --embedded forces the pinned staged libmpv; explicit env overrides must be absolute:
+    JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. Linux defaults to Embedded MPV Playback.
   iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>]
     Linux opt-in native probes; gpu/all requires a real readable local media file before startup.
     Fresh run-identified reports: target/native-regression by default. Color acceptance stays human.

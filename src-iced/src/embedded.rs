@@ -1,4 +1,4 @@
-//! Explicit embedded playback startup selection; the default path never loads libmpv.
+//! Linux Embedded MPV startup: load the pinned fork unless External is selected.
 
 #[cfg(target_os = "linux")]
 pub(crate) mod compositor;
