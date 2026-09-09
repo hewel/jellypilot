@@ -115,6 +115,11 @@ jobs:
     # Debian/Ubuntu baseline instead of Fedora 44.
     runs-on: jellypilot-lan
     steps:
+      - name: Restore leftover workspace ownership
+        run: |
+          if [[ -d "${GITHUB_WORKSPACE}" ]]; then
+            podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+          fi
       - uses: actions/checkout@v4
       - name: Build Debian and AppImage packages
         run: |
@@ -192,6 +197,9 @@ jobs:
           name: jellypilot-linux-x86_64-appimage
           path: target/release/bundle/*.AppImage
           if-no-files-found: error
+      - name: Restore workspace ownership
+        if: always()
+        run: podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
 
   arch:
     name: Package Arch Linux
@@ -201,6 +209,11 @@ jobs:
     # the host is not Arch and has no Docker CLI for job containers.
     runs-on: jellypilot-lan
     steps:
+      - name: Restore leftover workspace ownership
+        run: |
+          if [[ -d "${GITHUB_WORKSPACE}" ]]; then
+            podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+          fi
       - uses: actions/checkout@v4
       - name: Validate PKGBUILD tag
         run: |
@@ -241,6 +254,9 @@ jobs:
           name: jellypilot-linux-x86_64-arch-debug
           path: target/release/bundle/jellypilot-debug-*.pkg.tar.zst
           if-no-files-found: ignore
+      - name: Restore workspace ownership
+        if: always()
+        run: podman unshare chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
 
   release:
     name: Create draft GitHub release
