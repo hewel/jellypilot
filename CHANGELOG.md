@@ -4,6 +4,8 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-09-10
+
 ### Added
 - Linux packages install the pinned mpv fork and baseline under `/usr/lib/jellypilot` and `/usr/share/jellypilot` so Embedded MPV Playback works from the packaged prefix.
 
@@ -148,7 +150,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/hewel/jellypilot/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/hewel/jellypilot/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/hewel/jellypilot/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/hewel/jellypilot/compare/v1.4.2...v2.0.0
