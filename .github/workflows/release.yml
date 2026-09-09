@@ -125,12 +125,11 @@ jobs:
     name: Package Arch Linux
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: metadata
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    # Fedora LAN runner (10.0.0.28). Builds with rootless podman because
+    # the host is not Arch and has no Docker CLI for job containers.
+    runs-on: jellypilot-lan
     steps:
       - uses: actions/checkout@v4
-      - name: Install declared Arch dependencies
-        run: pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland
       - name: Validate PKGBUILD tag
         run: |
           pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
@@ -138,13 +137,24 @@ jobs:
             printf 'PKGBUILD pkgver %s does not match tag %s\n' "${pkgver}" "${GITHUB_REF_NAME}" >&2
             exit 1
           }
-      - name: Build native Arch package as an unprivileged user
+      - name: Build native Arch package
         run: |
           mkdir -p target/release/bundle
-          useradd --create-home builder
-          chown -R builder:builder "${GITHUB_WORKSPACE}"
-          runuser -u builder -- bash -c 'cd "$1" && PKGDEST="$2" makepkg --noconfirm --cleanbuild' _ \
-            "${GITHUB_WORKSPACE}/packaging/arch" "${GITHUB_WORKSPACE}/target/release/bundle"
+          podman run --rm \
+            --security-opt label=disable \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -w /work \
+            docker.io/library/archlinux:base-devel \
+            bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland
+              useradd --create-home builder
+              mkdir -p /work/target/release/bundle
+              chown -R builder:builder /work
+              runuser -u builder -- bash -c "cd \"\$1\" && PKGDEST=\"\$2\" makepkg --noconfirm --cleanbuild" _ \
+                /work/packaging/arch /work/target/release/bundle
+              chown -R root:root /work/target/release/bundle
+            '
       - name: Upload Arch package
         uses: actions/upload-artifact@v4
         with:
