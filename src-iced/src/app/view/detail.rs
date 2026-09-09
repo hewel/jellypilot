@@ -1912,7 +1912,13 @@ mod tests {
             Size::new(width, hero_height_for_width(width))
           );
           assert_eq!(back.bounds().y, TOKENS.spacing.s6, "Back stays at the top");
-          assert!(copy.bounds().y >= back.bounds().y + back.size().height + TOKENS.spacing.s5);
+          let copy_y = copy.bounds().y;
+          let min_copy_y = back.bounds().y + back.size().height + TOKENS.spacing.s5;
+          assert!(
+            copy_y + 0.01 >= min_copy_y,
+            "copy must stay below Back: language={language:?}, width={width}, \
+             expanded={expanded}, copy_y={copy_y}, min_copy_y={min_copy_y}"
+          );
           assert!(
             (copy.bounds().y + copy.size().height + TOKENS.spacing.s6 - node.size().height).abs()
               < 0.01
