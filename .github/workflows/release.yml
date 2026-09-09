@@ -119,17 +119,37 @@ jobs:
       - name: Build Debian and AppImage packages
         run: |
           cache="${HOME}/.cache/jellypilot-ci"
-          mkdir -p "${cache}/cargo" "${cache}/rustup" "${cache}/bun"
+          tools="${cache}/packager/AppImage"
+          mkdir -p "${cache}/cargo" "${cache}/rustup" "${cache}/bun" "${tools}"
+          download() {
+            local dest="$1" url="$2"
+            if [[ -s "${dest}" ]]; then
+              return
+            fi
+            curl --retry 8 --retry-all-errors --retry-delay 2 -fL --connect-timeout 20 \
+              -o "${dest}.part" "${url}"
+            chmod 764 "${dest}.part"
+            mv "${dest}.part" "${dest}"
+          }
+          download "${tools}/AppRun-x86_64" \
+            https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
+          download "${tools}/linuxdeploy-x86_64.AppImage" \
+            https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage
+          download "${tools}/linuxdeploy-plugin-appimage.AppImage" \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
           podman run --rm \
             --security-opt label=disable \
             -v "${GITHUB_WORKSPACE}:/work" \
             -v "${cache}/cargo:/opt/cargo" \
             -v "${cache}/rustup:/opt/rustup" \
             -v "${cache}/bun:/opt/bun" \
+            -v "${cache}/packager:/root/.cache/.cargo-packager" \
             -w /work \
             -e CARGO_HOME=/opt/cargo \
             -e RUSTUP_HOME=/opt/rustup \
             -e BUN_INSTALL=/opt/bun \
+            -e XDG_CACHE_HOME=/root/.cache \
+            -e APPIMAGE_EXTRACT_AND_RUN=1 \
             -e HUSKY=0 \
             docker.io/library/ubuntu:24.04 \
             bash -lc '
@@ -140,7 +160,7 @@ jobs:
               apt-get install -y --no-install-recommends \
                 ca-certificates curl build-essential pkg-config git unzip xz-utils \
                 libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-                libfuse2t64
+                libfuse2t64 file
               if ! command -v bun >/dev/null; then
                 curl -fsSL https://bun.sh/install | bash
               fi
@@ -152,7 +172,8 @@ jobs:
                 cargo install cargo-packager --version 0.11.8 --locked
               fi
               bun install --frozen-lockfile
-              cargo packager --config Packager.toml --formats deb --formats appimage
+              cargo packager --config Packager.toml --formats deb
+              cargo packager --config Packager.toml --formats appimage
             '
       - name: Upload deb package
         uses: actions/upload-artifact@v4
