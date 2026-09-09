@@ -8,6 +8,7 @@ All notable changes to JellyPilot are documented in this file.
 
 ### Added
 - Linux packages install the pinned mpv fork and baseline under `/usr/lib/jellypilot` and `/usr/share/jellypilot` so Embedded MPV Playback works from the packaged prefix.
+- Debian and AppImage packages are built on Ubuntu 26.04 so the pinned fork can link libplacebo 7.360.
 
 ### Changed
 - Linux now defaults to Embedded MPV Playback with the pinned mpv fork. Existing Linux settings that still recorded External migrate once; an explicit External choice after that is kept. Windows and macOS stay on External.

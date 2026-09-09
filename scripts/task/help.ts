@@ -30,7 +30,7 @@ Application:
 Embedded mpv dependency (Linux Vulkan):
   mpv build [--source <checkout>]
     Requires pinned clean mpv source, Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
-    Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1 and libass.
+    Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.0 and libass.
     Without --source, fetches the pinned revision from https://github.com/hewel/mpv.git.
     Stages target/embedded-mpv/{lib/jellypilot/libmpv.so,share/jellypilot/mpv-baseline.conf,manifest.json}.
     Source/options pinned; host dependency versions recorded, not bit-reproducible.

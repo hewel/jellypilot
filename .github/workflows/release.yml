@@ -111,8 +111,9 @@ jobs:
   linux:
     name: Package linux-x86_64 (deb, appimage)
     needs: metadata
-    # Fedora LAN runner. Build inside Ubuntu 24.04 so glibc matches a
-    # Debian/Ubuntu baseline instead of Fedora 44.
+    # Fedora LAN runner. Build inside Ubuntu 26.04 so libplacebo 7.360
+    # is available for the pinned mpv fork, with an Ubuntu LTS glibc
+    # instead of Fedora 44.
     runs-on: jellypilot-lan
     steps:
       - name: Restore leftover workspace ownership
@@ -158,7 +159,7 @@ jobs:
             -e XDG_CACHE_HOME=/root/.cache \
             -e APPIMAGE_EXTRACT_AND_RUN=1 \
             -e HUSKY=0 \
-            docker.io/library/ubuntu:24.04 \
+            docker.io/library/ubuntu:26.04 \
             bash -lc '
               set -euo pipefail
               export DEBIAN_FRONTEND=noninteractive
