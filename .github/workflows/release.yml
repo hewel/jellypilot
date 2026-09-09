@@ -176,6 +176,14 @@ jobs:
                 libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
                 libswresample-dev libswscale-dev libplacebo-dev libass-dev \
                 libvulkan-dev glslang-dev libshaderc-dev liblcms2-dev
+              # Ubuntu 26.04 ships libplacebo 7.360.0; pinned mpv meson wants 7.360.1.
+              curl --retry 8 --retry-all-errors --retry-delay 2 -fL \
+                -o /tmp/libplacebo360.deb \
+                https://archive.ubuntu.com/ubuntu/pool/universe/libp/libplacebo/libplacebo360_7.360.1-1_amd64.deb
+              curl --retry 8 --retry-all-errors --retry-delay 2 -fL \
+                -o /tmp/libplacebo-dev.deb \
+                https://archive.ubuntu.com/ubuntu/pool/universe/libp/libplacebo/libplacebo-dev_7.360.1-1_amd64.deb
+              dpkg -i /tmp/libplacebo360.deb /tmp/libplacebo-dev.deb
               if ! command -v bun >/dev/null; then
                 curl -fsSL https://bun.sh/install | bash
               fi

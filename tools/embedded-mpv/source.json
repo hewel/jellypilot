@@ -13,7 +13,7 @@
   ],
   "requiredPackages": [
     "vulkan >= 1.3.238",
-    "libplacebo >= 7.360.0",
+    "libplacebo >= 7.360.1",
     "libass >= 0.12.2",
     "libavcodec >= 60.31.102",
     "libavfilter >= 9.12.100",
