@@ -46,6 +46,7 @@ detail-retry = 重试
 detail-load-heading = 无法加载详情
 detail-episode = 剧集
 detail-watched-percent = 已观看 { $percent }%
+detail-original-language = 原始语言：{ $language }
 detail-more-people = { $people }，另有 { $count } 人
 detail-channels = { $count } 声道
 lists-session-error = 当前媒体服务器会话不可用。

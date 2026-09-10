@@ -333,6 +333,7 @@ mod tests {
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),
+        original_language: None,
       },
       paused: false,
       position_seconds: 0.0,

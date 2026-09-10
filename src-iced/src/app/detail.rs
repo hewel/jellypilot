@@ -845,6 +845,7 @@ mod tests {
       series_poster_image_id: None,
       media_info: None,
       metadata: Default::default(),
+      original_language: None,
     }
   }
 
@@ -910,6 +911,7 @@ mod tests {
       next_episode: Some(episode("episode-2", 2)),
       seasons: vec![season("season-1", 1), season("season-2", 2)],
       metadata: Default::default(),
+      original_language: None,
     }
   }
 

@@ -1167,6 +1167,12 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
   let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(state.kernel.locale, tracks, "audio", false);
+      let original_language = state
+        .playback
+        .view
+        .now_playing
+        .as_ref()
+        .and_then(|view| view.item.original_language.as_deref());
       if choices.is_empty() {
         column![text(state.t("player-no-audio"))
           .size(12)
@@ -1183,11 +1189,25 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
           } else {
             space::horizontal().width(14).into()
           };
+          let is_original = original_language.is_some_and(|original| {
+            choice
+              .id
+              .and_then(|id| tracks.iter().find(|track| track.id == id))
+              .and_then(|track| track.language.as_deref())
+              .is_some_and(|language| jellypilot_media_server::languages_match(language, original))
+          });
           col = col.push(
-            button(
-              row![text(choice.label).width(Fill).size(13), active_marker,]
-                .align_y(Alignment::Center),
-            )
+            button({
+              let mut row = row![text(choice.label).width(Fill).size(13)];
+              if is_original {
+                row = row.push(space::horizontal().width(TOKENS.spacing.s2)).push(
+                  text(state.t("player-original-track"))
+                    .size(11)
+                    .color(palette.text.metadata),
+                );
+              }
+              row.push(active_marker).align_y(Alignment::Center)
+            })
             .padding(if embedded { [11, 10] } else { [6, 10] })
             .width(Fill)
             .on_press_maybe(
@@ -2151,6 +2171,7 @@ mod tests {
         runtime_seconds: Some(2_400.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
+        original_language: None,
       },
       paused: false,
       position_seconds: 120.0,
@@ -2355,6 +2376,7 @@ mod tests {
               runtime_seconds: Some(2_400.0),
               start_position_seconds: 0.0,
               play_method: "DirectPlay".to_owned(),
+              original_language: None,
             }),
             transport: PlayerState {
               connected: true,
@@ -2399,6 +2421,7 @@ mod tests {
                   runtime_seconds: Some(2_400.0),
                   start_position_seconds: 0.0,
                   play_method: "DirectPlay".to_owned(),
+                  original_language: None,
                 }),
                 transport: PlayerState {
                   connected: true,

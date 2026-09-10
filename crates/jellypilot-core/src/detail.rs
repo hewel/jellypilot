@@ -205,6 +205,7 @@ mod tests {
                 next_episode: None,
                 seasons: Vec::new(),
                 metadata: Default::default(),
+                original_language: None,
             })));
         let stale = VideoUserDataUpdate {
             item_id: "show-2".to_owned(),
@@ -286,6 +287,7 @@ mod tests {
             next_episode,
             seasons: vec![season("season-1", 1), season("season-2", 2)],
             metadata: Default::default(),
+            original_language: None,
         }
     }
 

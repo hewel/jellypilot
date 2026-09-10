@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
+use jellypilot_core::audio_tracks::AudioTrackStore;
 use jellypilot_core::config::Settings;
 use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate, SessionToken};
@@ -889,6 +890,7 @@ pub(crate) fn initialize_playback(
     surface.controller = None;
     return;
   };
+  client.set_tmdb_api_key(kernel.settings.snapshot().tmdb_api_key().map(str::to_owned));
   let config = playback_controller_config(kernel.settings.snapshot());
   match discover_playback_controller(kernel, client, config) {
     Ok(mut controller) => {
@@ -912,12 +914,17 @@ pub(crate) fn initialize_playback(
 fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
   if let Some(options) = crate::embedded::options() {
     return PlaybackControllerConfig::default()
+      .with_subtitle_languages(settings.subtitle_languages().to_vec())
       .with_embedded_ipc(options.ipc.clone())
-      .with_volume_memory_enabled(settings.remember_season_volume());
+      .with_volume_memory_enabled(settings.remember_season_volume())
+      .with_subtitle_languages(settings.subtitle_languages().to_vec())
+      .with_original_audio_enabled(settings.prefer_original_audio());
   }
   let config = PlaybackControllerConfig::default()
     .with_extra_args(configured_mpv_args(settings))
-    .with_volume_memory_enabled(settings.remember_season_volume());
+    .with_volume_memory_enabled(settings.remember_season_volume())
+    .with_subtitle_languages(settings.subtitle_languages().to_vec())
+    .with_original_audio_enabled(settings.prefer_original_audio());
   match settings.mpv_path() {
     Some(path) => config.with_mpv_path(PathBuf::from(path)),
     None => config,
@@ -937,21 +944,33 @@ fn discover_playback_controller(
     connection.user_id,
   ) {
     match ProfileScope::new(connection.provider, server_url, user_id) {
-      Ok(scope) => match SeasonVolumeStore::load(scope) {
-        Ok(store) => controller.set_volume_memory(store),
-        Err(error) => {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Warning,
-            DiagnosticCategory::Config,
-            format!("Could not load season volume memory: {error}"),
-          );
+      Ok(scope) => {
+        match AudioTrackStore::load(scope.clone()) {
+          Ok(store) => controller.set_audio_track_memory(store),
+          Err(error) => {
+            kernel.diagnostics.record(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Config,
+              format!("Could not load audio track memory: {error}"),
+            );
+          }
         }
-      },
+        match SeasonVolumeStore::load(scope) {
+          Ok(store) => controller.set_volume_memory(store),
+          Err(error) => {
+            kernel.diagnostics.record(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Config,
+              format!("Could not load season volume memory: {error}"),
+            );
+          }
+        }
+      }
       Err(error) => {
         kernel.diagnostics.record(
           DiagnosticLevel::Warning,
           DiagnosticCategory::Config,
-          format!("Could not identify season volume memory account: {error}"),
+          format!("Could not identify playback memory account: {error}"),
         );
       }
     }
@@ -2187,6 +2206,7 @@ mod tests {
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),
+        original_language: None,
       }),
       transport: jellypilot_mpv::PlayerState {
         connected: true,
@@ -3212,6 +3232,7 @@ mod tests {
       backdrop_image_id: None,
       series_poster_image_id: Some(image_id.to_owned()),
       metadata: Default::default(),
+      original_language: None,
     }
   }
 
@@ -3315,6 +3336,7 @@ mod tests {
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
+        original_language: None,
       },
       paused: false,
       position_seconds: 0.0,

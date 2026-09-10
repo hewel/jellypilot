@@ -560,6 +560,7 @@ mod tests {
         next_episode: None,
         seasons: Vec::new(),
         metadata: Default::default(),
+        original_language: None,
       },
     )));
     state

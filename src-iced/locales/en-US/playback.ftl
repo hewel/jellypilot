@@ -16,6 +16,7 @@ player-remaining-minutes = { $minutes ->
    *[other] { $minutes } minutes left
 }
 player-no-audio = No audio tracks
+player-original-track = Original
 player-loading-audio = Loading audio tracks…
 player-unavailable-audio = Audio tracks unavailable
 player-loading-subtitles = Loading subtitle tracks…

@@ -7,6 +7,7 @@ mod error;
 pub mod home;
 mod image_ref;
 mod intro_skipper;
+mod tmdb;
 mod types;
 
 pub use artwork_cache::{

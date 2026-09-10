@@ -554,6 +554,7 @@ pub struct SettingsState {
   pub mpv_path_input: String,
   pub mpv_args_input: String,
   pub playback_target_name_input: String,
+  pub tmdb_api_key_input: String,
   pub intro_menu_open: bool,
   pub subtitle_menu_open: bool,
   pub diagnostic_level_menu_open: bool,
@@ -576,6 +577,7 @@ impl SettingsState {
         .playback_target_name()
         .unwrap_or_default()
         .to_owned(),
+      tmdb_api_key_input: settings.tmdb_api_key().unwrap_or_default().to_owned(),
       intro_menu_open: false,
       subtitle_menu_open: false,
       diagnostic_level_menu_open: false,

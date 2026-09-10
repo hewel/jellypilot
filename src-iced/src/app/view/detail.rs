@@ -2028,6 +2028,12 @@ fn item_metadata(locale: Localizer, item: &jellypilot_media_server::VideoItemDet
   if let Some(rating) = item.metadata.official_rating.as_deref() {
     values.push(rating.to_owned());
   }
+  if let Some(language) = item.original_language.as_deref() {
+    values.push(locale.format(
+      "detail-original-language",
+      &[("language", original_language_label(locale, language).into())],
+    ));
+  }
   if item.can_resume {
     if let Some(progress) = item
       .played_percentage
@@ -2054,11 +2060,39 @@ fn show_metadata(locale: Localizer, show: &VideoShowDetail) -> String {
   if let Some(rating) = show.metadata.official_rating.as_deref() {
     values.push(rating.to_owned());
   }
+  if let Some(language) = show.original_language.as_deref() {
+    values.push(locale.format(
+      "detail-original-language",
+      &[("language", original_language_label(locale, language).into())],
+    ));
+  }
   values.join(" · ")
 }
 
 fn runtime_label(locale: Localizer, seconds: f64) -> Option<String> {
   (seconds.is_finite() && seconds > 0.0).then(|| locale.duration(seconds))
+}
+
+/// Localized display name for an original-language code; falls back to the raw
+/// server value for languages without a name entry.
+fn original_language_label(locale: Localizer, code: &str) -> String {
+  let normalized = jellypilot_media_server::normalize_language(code);
+  let id = match normalized.as_deref() {
+    Some("ar") => "settings-subtitle-arabic",
+    Some("zh") => "settings-subtitle-chinese",
+    Some("en") => "settings-subtitle-english",
+    Some("fr") => "settings-subtitle-french",
+    Some("de") => "settings-subtitle-german",
+    Some("hi") => "settings-subtitle-hindi",
+    Some("it") => "settings-subtitle-italian",
+    Some("ja") => "settings-subtitle-japanese",
+    Some("ko") => "settings-subtitle-korean",
+    Some("pt") => "settings-subtitle-portuguese",
+    Some("ru") => "settings-subtitle-russian",
+    Some("es") => "settings-subtitle-spanish",
+    _ => return code.to_owned(),
+  };
+  locale.text(id)
 }
 
 fn has_resume(item: &VideoLibraryItem) -> bool {

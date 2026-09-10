@@ -302,6 +302,10 @@ pub struct Settings {
     #[serde(default, deserialize_with = "deserialize_reduced_motion")]
     reduced_motion: bool,
     #[serde(default)]
+    prefer_original_audio: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    tmdb_api_key: Option<String>,
+    #[serde(default)]
     library_filters: BrowseFilterSettings,
 }
 
@@ -330,7 +334,9 @@ impl Default for Settings {
             remember_season_volume: default_remember_season_volume(),
             start_minimized: false,
             reduced_motion: false,
+            prefer_original_audio: false,
             library_filters: BrowseFilterSettings::default(),
+            tmdb_api_key: None,
         }
     }
 }
@@ -380,6 +386,10 @@ impl Settings {
         self.playback_target_name.as_deref()
     }
 
+    pub fn tmdb_api_key(&self) -> Option<&str> {
+        self.tmdb_api_key.as_deref()
+    }
+
     pub fn subtitle_languages(&self) -> &[String] {
         &self.subtitle_languages
     }
@@ -410,6 +420,10 @@ impl Settings {
 
     pub const fn reduced_motion(&self) -> bool {
         self.reduced_motion
+    }
+
+    pub const fn prefer_original_audio(&self) -> bool {
+        self.prefer_original_audio
     }
 
     pub const fn browse_filters(&self) -> BrowseFilterSettings {
@@ -616,6 +630,13 @@ impl SettingsStore {
         })
     }
 
+    pub fn set_tmdb_api_key(&mut self, key: String) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.tmdb_api_key = non_empty_setting(key);
+            Ok(())
+        })
+    }
+
     pub fn add_subtitle_language(
         &mut self,
         language: String,
@@ -739,6 +760,16 @@ impl SettingsStore {
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.start_minimized = start_minimized;
+            Ok(())
+        })
+    }
+
+    pub fn set_prefer_original_audio(
+        &mut self,
+        enabled: bool,
+    ) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.prefer_original_audio = enabled;
             Ok(())
         })
     }
@@ -1172,6 +1203,7 @@ mod tests {
             theme_mode: ThemeMode::Dark,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
+            tmdb_api_key: Some("tmdb-key".to_owned()),
             playback_backend: PlaybackBackend::External,
             settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
@@ -1185,6 +1217,7 @@ mod tests {
             remember_season_volume: false,
             start_minimized: true,
             reduced_motion: false,
+            prefer_original_audio: true,
             library_filters: BrowseFilterSettings::default()
                 .with_sort(VideoLibrarySort::ReleaseDate)
                 .with_played_filter(VideoLibraryPlayedFilter::Unplayed)
@@ -1487,6 +1520,32 @@ mod tests {
         assert!(!Settings::default().reduced_motion());
         assert!(store.set_reduced_motion(true).unwrap());
         assert!(load_from(&path).unwrap().reduced_motion());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn tmdb_api_key_is_persisted_and_blank_becomes_none() {
+        let path = test_path("tmdb-key");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert_eq!(Settings::default().tmdb_api_key(), None);
+        assert!(store.set_tmdb_api_key("  tmdb-key-1  ".to_owned()).unwrap());
+        assert_eq!(load_from(&path).unwrap().tmdb_api_key(), Some("tmdb-key-1"));
+        assert!(store.set_tmdb_api_key("   ".to_owned()).unwrap());
+        assert_eq!(load_from(&path).unwrap().tmdb_api_key(), None);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn prefer_original_audio_is_persisted_and_defaults_false() {
+        let path = test_path("original-audio");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert!(!Settings::default().prefer_original_audio());
+        assert!(store.set_prefer_original_audio(true).unwrap());
+        assert!(load_from(&path).unwrap().prefer_original_audio());
         fs::remove_file(path).unwrap();
     }
 

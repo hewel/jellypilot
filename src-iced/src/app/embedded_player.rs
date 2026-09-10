@@ -664,6 +664,7 @@ mod tests {
         runtime_seconds: Some(60.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".into(),
+        original_language: None,
       },
       paused: false,
       position_seconds: 10.0,

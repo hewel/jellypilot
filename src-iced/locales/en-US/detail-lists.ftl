@@ -46,6 +46,7 @@ detail-retry = Retry
 detail-load-heading = Could not load details
 detail-episode = Episode
 detail-watched-percent = { $percent }% watched
+detail-original-language = Original language: { $language }
 detail-more-people = { $people } +{ $count } more
 detail-channels = { $count ->
     [one] { $count } channel

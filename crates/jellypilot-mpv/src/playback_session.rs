@@ -1276,6 +1276,7 @@ mod tests {
         runtime_seconds: Some(1_500.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
+        original_language: None,
       }),
       transport: PlayerState {
         connected: true,

@@ -89,6 +89,21 @@ fn update_settings(
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
+    SettingsMessage::TmdbApiKeyChanged(value) => {
+      surface.view.tmdb_api_key_input = value;
+      clear_settings_feedback(surface);
+      Task::none()
+    }
+    SettingsMessage::SaveTmdbApiKey => {
+      let value = surface.view.tmdb_api_key_input.clone();
+      let result = kernel.settings.set_tmdb_api_key(value);
+      if finish_settings_mutation(surface, kernel, result) {
+        if let Some(client) = kernel.client.as_ref() {
+          client.set_tmdb_api_key(kernel.settings.snapshot().tmdb_api_key().map(str::to_owned));
+        }
+      }
+      Task::none()
+    }
     SettingsMessage::IntroMenuToggled => {
       surface.view.intro_menu_open = !surface.view.intro_menu_open;
       Task::none()
@@ -105,6 +120,11 @@ fn update_settings(
     }
     SettingsMessage::RememberSeasonVolumeChanged(enabled) => {
       let result = kernel.settings.set_remember_season_volume(enabled);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
+    SettingsMessage::PreferOriginalAudioChanged(enabled) => {
+      let result = kernel.settings.set_prefer_original_audio(enabled);
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }

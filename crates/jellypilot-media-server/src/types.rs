@@ -368,6 +368,9 @@ pub struct VideoItemDetail {
   pub name: String,
   pub item_type: String,
   pub overview: Option<String>,
+  /// ISO language code of the item's original audio, when the server exposes one
+  /// (Jellyfin only; episodes inherit the series value via a lookup in the client).
+  pub original_language: Option<String>,
   pub production_year: Option<i32>,
   pub runtime_seconds: Option<f64>,
   pub series_id: Option<String>,
@@ -421,6 +424,9 @@ pub struct VideoShowDetail {
   pub production_year: Option<i32>,
   pub genres: Vec<String>,
   pub played: bool,
+  /// ISO language code of the show's original audio, when the server exposes one
+  /// (Jellyfin only).
+  pub original_language: Option<String>,
   pub favorite: bool,
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
@@ -677,6 +683,9 @@ pub struct MediaSource {
   pub media_streams: Vec<MediaStream>,
   #[serde(default)]
   pub default_subtitle_stream_index: Option<i32>,
+  /// Server-computed default audio stream (user-preference aware), playback-info only.
+  #[serde(default)]
+  pub default_audio_stream_index: Option<i32>,
   #[serde(default)]
   pub supports_direct_play: bool,
   #[serde(default)]
@@ -999,6 +1008,340 @@ pub fn select_subtitle_stream_index(
   find_stream_by_language_priority(streams, "Subtitle", preferred_languages)
 }
 
+/// Original-language code and selectable audio streams used to choose an audio
+/// track automatically before playback starts.
+#[derive(Debug, Clone, Default)]
+pub struct PlaybackAudioContext {
+  pub original_language: Option<String>,
+  pub audio_streams: Vec<VideoPlaybackStreamOption>,
+}
+
+/// Borrowed audio-stream facts needed to choose a track automatically.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioStreamChoice<'a> {
+  pub index: i32,
+  pub language: Option<&'a str>,
+  pub display_title: Option<&'a str>,
+  pub is_default: bool,
+}
+
+impl<'a> From<&'a MediaStream> for AudioStreamChoice<'a> {
+  fn from(stream: &'a MediaStream) -> Self {
+    Self {
+      index: stream.index,
+      language: stream.language.as_deref(),
+      display_title: stream.display_title.as_deref(),
+      is_default: stream.is_default,
+    }
+  }
+}
+
+impl<'a> From<&'a VideoPlaybackStreamOption> for AudioStreamChoice<'a> {
+  /// The option label stands in for the display title; on the rare generated
+  /// fallback label a stored title match simply misses and language matching applies.
+  fn from(stream: &'a VideoPlaybackStreamOption) -> Self {
+    Self {
+      index: stream.index,
+      language: stream.language.as_deref(),
+      display_title: Some(stream.label.as_str()),
+      is_default: stream.is_default,
+    }
+  }
+}
+
+/// Normalize a language tag for comparison: lowercase, region subtag stripped, and
+/// ISO 639-2 (bibliographic and terminology) reduced to ISO 639-1 when a two-letter
+/// code exists. Unrecognized values survive lowercased so identical raw tags still
+/// match each other; empty input yields no language.
+#[must_use]
+pub fn normalize_language(code: &str) -> Option<String> {
+  let base = code
+    .trim()
+    .split(['-', '_'])
+    .next()
+    .unwrap_or("")
+    .trim()
+    .to_lowercase();
+  if base.is_empty() {
+    return None;
+  }
+  Some(match iso_639_2_to_1(&base) {
+    Some(mapped) => mapped.to_owned(),
+    None => base,
+  })
+}
+
+/// Compare two server-supplied language tags (e.g. "ja" vs "jpn", "zh-CN" vs "zho").
+#[must_use]
+pub fn languages_match(a: &str, b: &str) -> bool {
+  match (normalize_language(a), normalize_language(b)) {
+    (Some(a), Some(b)) => a == b,
+    _ => false,
+  }
+}
+
+fn iso_639_2_to_1(code: &str) -> Option<&'static str> {
+  Some(match code {
+    "aar" => "aa",
+    "abk" => "ab",
+    "afr" => "af",
+    "aka" => "ak",
+    "amh" => "am",
+    "ara" => "ar",
+    "arg" => "an",
+    "asm" => "as",
+    "ava" => "av",
+    "ave" => "ae",
+    "aym" => "ay",
+    "aze" => "az",
+    "bak" => "ba",
+    "bam" => "bm",
+    "bel" => "be",
+    "ben" => "bn",
+    "bis" => "bi",
+    "bod" | "tib" => "bo",
+    "bos" => "bs",
+    "bre" => "br",
+    "bul" => "bg",
+    "cat" => "ca",
+    "ces" | "cze" => "cs",
+    "cha" => "ch",
+    "che" => "ce",
+    "chv" => "cv",
+    "cor" => "kw",
+    "cos" => "co",
+    "cre" => "cr",
+    "cym" | "wel" => "cy",
+    "dan" => "da",
+    "deu" | "ger" => "de",
+    "div" => "dv",
+    "dzo" => "dz",
+    "ell" | "gre" => "el",
+    "eng" => "en",
+    "epo" => "eo",
+    "est" => "et",
+    "eus" | "baq" => "eu",
+    "ewe" => "ee",
+    "fao" => "fo",
+    "fas" | "per" => "fa",
+    "fij" => "fj",
+    "fin" => "fi",
+    "fra" | "fre" => "fr",
+    "fry" => "fy",
+    "ful" => "ff",
+    "gla" => "gd",
+    "gle" => "ga",
+    "glg" => "gl",
+    "glv" => "gv",
+    "grn" => "gn",
+    "guj" => "gu",
+    "hat" => "ht",
+    "hau" => "ha",
+    "heb" => "he",
+    "her" => "hz",
+    "hin" => "hi",
+    "hmo" => "ho",
+    "hrv" => "hr",
+    "hun" => "hu",
+    "hye" | "arm" => "hy",
+    "ibo" => "ig",
+    "ido" => "io",
+    "iku" => "iu",
+    "ile" => "ie",
+    "ina" => "ia",
+    "ind" => "id",
+    "ipk" => "ik",
+    "isl" | "ice" => "is",
+    "ita" => "it",
+    "jav" => "jv",
+    "jpn" => "ja",
+    "kal" => "kl",
+    "kan" => "kn",
+    "kas" => "ks",
+    "kat" | "geo" => "ka",
+    "kaz" => "kk",
+    "khm" => "km",
+    "kik" => "ki",
+    "kin" => "rw",
+    "kir" => "ky",
+    "kom" => "kv",
+    "kon" => "kg",
+    "kor" => "ko",
+    "kua" => "kj",
+    "kur" => "ku",
+    "lao" => "lo",
+    "lat" => "la",
+    "lav" => "lv",
+    "lim" => "li",
+    "lin" => "ln",
+    "lit" => "lt",
+    "ltz" => "lb",
+    "lub" => "lu",
+    "mah" => "mh",
+    "mal" => "ml",
+    "mar" => "mr",
+    "mkd" | "mac" => "mk",
+    "mlg" => "mg",
+    "mlt" => "mt",
+    "mon" => "mn",
+    "mri" | "mao" => "mi",
+    "msa" | "may" => "ms",
+    "mya" | "bur" => "my",
+    "nau" => "na",
+    "nav" => "nv",
+    "nbl" => "nr",
+    "nde" => "nd",
+    "ndo" => "ng",
+    "nep" => "ne",
+    "nld" | "dut" => "nl",
+    "nno" => "nn",
+    "nob" => "nb",
+    "nor" => "no",
+    "nya" => "ny",
+    "oci" => "oc",
+    "oji" => "oj",
+    "ori" => "or",
+    "orm" => "om",
+    "oss" => "os",
+    "pan" => "pa",
+    "pli" => "pi",
+    "pol" => "pl",
+    "por" => "pt",
+    "pus" => "ps",
+    "que" => "qu",
+    "roh" => "rm",
+    "ron" | "rum" => "ro",
+    "run" => "rn",
+    "rus" => "ru",
+    "sag" => "sg",
+    "san" => "sa",
+    "sin" => "si",
+    "slk" | "slo" => "sk",
+    "slv" => "sl",
+    "sme" => "se",
+    "smo" => "sm",
+    "sna" => "sn",
+    "snd" => "sd",
+    "som" => "so",
+    "sot" => "st",
+    "spa" => "es",
+    "sqi" | "alb" => "sq",
+    "srp" => "sr",
+    "ssw" => "ss",
+    "sun" => "su",
+    "swa" => "sw",
+    "swe" => "sv",
+    "tah" => "ty",
+    "tam" => "ta",
+    "tat" => "tt",
+    "tel" => "te",
+    "tgk" => "tg",
+    "tgl" => "tl",
+    "tha" => "th",
+    "tir" => "ti",
+    "ton" => "to",
+    "tsn" => "tn",
+    "tso" => "ts",
+    "tuk" => "tk",
+    "tur" => "tr",
+    "twi" => "tw",
+    "uig" => "ug",
+    "ukr" => "uk",
+    "urd" => "ur",
+    "uzb" => "uz",
+    "ven" => "ve",
+    "vie" => "vi",
+    "vol" => "vo",
+    "wln" => "wa",
+    "wol" => "wo",
+    "xho" => "xh",
+    "yid" => "yi",
+    "yor" => "yo",
+    "zha" => "za",
+    "zho" | "chi" => "zh",
+    "zul" => "zu",
+    _ => return None,
+  })
+}
+
+/// Commentary and similar non-primary tracks are never the original-language choice.
+#[must_use]
+pub fn is_commentary_title(title: &str) -> bool {
+  let title = title.to_lowercase();
+  ["commentary", "评论", "解说", "コメンタリー", "評論"]
+    .iter()
+    .any(|keyword| title.contains(keyword))
+}
+
+/// Select the audio stream for the item's original language. The server's own
+/// default audio stream (user-preference aware, when known) wins when it matches,
+/// then the container-default stream, then the first non-commentary stream in that
+/// language. No match yields `None` so playback keeps its default.
+#[must_use]
+pub fn select_native_audio_stream(
+  streams: &[AudioStreamChoice<'_>],
+  original_language: &str,
+  server_default_index: Option<i32>,
+) -> Option<i32> {
+  if let Some(stream) =
+    server_default_index.and_then(|index| streams.iter().find(|stream| stream.index == index))
+  {
+    if stream
+      .language
+      .is_some_and(|l| languages_match(l, original_language))
+      && !stream.display_title.is_some_and(is_commentary_title)
+    {
+      return Some(stream.index);
+    }
+  }
+  let mut first: Option<&AudioStreamChoice<'_>> = None;
+  for stream in streams {
+    let Some(language) = stream.language else {
+      continue;
+    };
+    if !languages_match(language, original_language) {
+      continue;
+    }
+    if stream.display_title.is_some_and(is_commentary_title) {
+      continue;
+    }
+    if stream.is_default {
+      return Some(stream.index);
+    }
+    first = first.or(Some(stream));
+  }
+  first.map(|stream| stream.index)
+}
+
+/// Match a remembered audio choice: exact language and display title first (handles
+/// same-language variants), then language only. Returns `None` when nothing matches,
+/// e.g. the track vanished from a new encode.
+#[must_use]
+pub fn select_audio_stream_by_memory(
+  streams: &[AudioStreamChoice<'_>],
+  language: &str,
+  title: Option<&str>,
+) -> Option<i32> {
+  if let Some(title) = title {
+    if let Some(stream) = streams.iter().find(|stream| {
+      stream
+        .language
+        .is_some_and(|l| languages_match(l, language))
+        && stream.display_title == Some(title)
+    }) {
+      return Some(stream.index);
+    }
+  }
+  streams
+    .iter()
+    .find(|stream| {
+      stream
+        .language
+        .is_some_and(|l| languages_match(l, language))
+    })
+    .map(|stream| stream.index)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1294,6 +1637,148 @@ mod tests {
     let index = select_subtitle_stream_index(None, Some(&preference), &streams, &languages);
 
     assert_eq!(index, Some(2));
+  }
+
+  fn choice<'a>(
+    index: i32,
+    language: Option<&'a str>,
+    display_title: Option<&'a str>,
+    is_default: bool,
+  ) -> AudioStreamChoice<'a> {
+    AudioStreamChoice {
+      index,
+      language,
+      display_title,
+      is_default,
+    }
+  }
+
+  #[test]
+  fn normalize_language_reduces_codes_to_a_comparable_base() {
+    let cases = [
+      ("ja", Some("ja")),
+      ("jpn", Some("ja")),
+      ("JPN", Some("ja")),
+      ("eng", Some("en")),
+      ("EN", Some("en")),
+      ("zh-CN", Some("zh")),
+      ("zh_Hans", Some("zh")),
+      ("zho", Some("zh")),
+      ("chi", Some("zh")),
+      ("fre", Some("fr")),
+      ("fra", Some("fr")),
+      ("ger", Some("de")),
+      ("deu", Some("de")),
+      ("pt-BR", Some("pt")),
+      ("por", Some("pt")),
+      ("und", Some("und")),
+      ("nob", Some("nb")),
+      ("nno", Some("nn")),
+      ("nb", Some("nb")),
+      ("", None),
+      ("  ", None),
+    ];
+    for (input, expected) in cases {
+      assert_eq!(
+        normalize_language(input).as_deref(),
+        expected,
+        "input {input:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn languages_match_handles_code_families_and_regions() {
+    assert!(languages_match("ja", "jpn"));
+    assert!(languages_match("eng", "en"));
+    assert!(languages_match("zh-Hans", "chi"));
+    assert!(!languages_match("jpn", "eng"));
+    assert!(!languages_match("", "jpn"));
+    assert!(!languages_match("jpn", ""));
+  }
+
+  #[test]
+  fn commentary_titles_are_detected_across_languages() {
+    assert!(is_commentary_title("Director's Commentary"));
+    assert!(is_commentary_title("Japanese commentary track"));
+    assert!(is_commentary_title("评论音轨"));
+    assert!(is_commentary_title("导演解说"));
+    assert!(is_commentary_title("コメンタリー版"));
+    assert!(!is_commentary_title("Japanese - AAC 5.1"));
+  }
+
+  #[test]
+  fn native_selection_prefers_the_server_default_matching_stream() {
+    // The matching default sorts last: it must still win over the earlier match.
+    let streams = [
+      choice(1, Some("jpn"), Some("Japanese - AAC 2.0"), false),
+      choice(2, Some("eng"), Some("English - AAC 5.1"), true),
+      choice(3, Some("jpn"), Some("Japanese - DTS 5.1"), true),
+    ];
+    assert_eq!(select_native_audio_stream(&streams, "ja", None), Some(3));
+    assert_eq!(select_native_audio_stream(&streams, "jpn", None), Some(3));
+  }
+
+  #[test]
+  fn native_selection_prefers_the_server_default_audio_index() {
+    // The server's user-preference-aware default (index 2) wins over the
+    // container-default flag (index 3) when both match the original language.
+    let streams = [
+      choice(1, Some("eng"), Some("English - AAC 5.1"), false),
+      choice(2, Some("jpn"), Some("Japanese - AAC 2.0"), false),
+      choice(3, Some("jpn"), Some("Japanese - DTS 5.1"), true),
+    ];
+    assert_eq!(select_native_audio_stream(&streams, "ja", Some(2)), Some(2));
+    // A server default in another language is ignored: the original language rules.
+    assert_eq!(select_native_audio_stream(&streams, "ja", Some(1)), Some(3));
+    // A commentary server default never wins, even in the original language.
+    let commentary_default = [choice(4, Some("jpn"), Some("Japanese Commentary"), false)];
+    assert_eq!(
+      select_native_audio_stream(&commentary_default, "ja", Some(4)),
+      None
+    );
+  }
+
+  #[test]
+  fn native_selection_falls_back_to_first_non_commentary_match() {
+    let streams = [
+      choice(1, Some("eng"), Some("English - AAC 5.1"), true),
+      choice(2, Some("jpn"), Some("Japanese Commentary"), false),
+      choice(3, Some("jpn"), Some("Japanese - AAC 2.0"), false),
+      choice(4, None, Some("Unknown"), false),
+    ];
+    assert_eq!(select_native_audio_stream(&streams, "ja", None), Some(3));
+  }
+
+  #[test]
+  fn native_selection_returns_none_without_a_usable_match() {
+    let only_commentary = [choice(2, Some("jpn"), Some("Japanese Commentary"), false)];
+    assert_eq!(
+      select_native_audio_stream(&only_commentary, "ja", None),
+      None
+    );
+    let no_match = [choice(1, Some("eng"), None, true)];
+    assert_eq!(select_native_audio_stream(&no_match, "ja", None), None);
+  }
+
+  #[test]
+  fn memory_selection_matches_title_then_language() {
+    let streams = [
+      choice(1, Some("jpn"), Some("Japanese - AAC 2.0"), false),
+      choice(2, Some("jpn"), Some("Japanese - DTS 5.1"), false),
+      choice(3, Some("eng"), Some("English - AAC 5.1"), true),
+    ];
+    assert_eq!(
+      select_audio_stream_by_memory(&streams, "ja", Some("Japanese - DTS 5.1")),
+      Some(2)
+    );
+    // Title from a previous encode no longer exists: language still applies.
+    assert_eq!(
+      select_audio_stream_by_memory(&streams, "ja", Some("Japanese - FLAC 7.1")),
+      Some(1)
+    );
+    assert_eq!(select_audio_stream_by_memory(&streams, "ja", None), Some(1));
+    assert_eq!(select_audio_stream_by_memory(&streams, "ko", None), None);
   }
 }
 

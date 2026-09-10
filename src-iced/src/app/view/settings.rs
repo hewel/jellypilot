@@ -251,6 +251,15 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
+  let tmdb_key = text_input("", &state.settings.view.tmdb_api_key_input)
+    .on_input(|value| Message::Settings(SettingsMessage::TmdbApiKeyChanged(value)))
+    .on_submit(Message::Settings(SettingsMessage::SaveTmdbApiKey))
+    .size(12.0)
+    .padding([7, 10])
+    .width(Fill)
+    .style(|theme, status| {
+      jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
+    });
   let mode = state.kernel.settings.snapshot().intro_mode();
   let trigger = control_button(
     None,
@@ -296,6 +305,14 @@ fn playback_section(state: &State) -> Element<'_, Message> {
         target.into(),
         SettingsMessage::SavePlaybackTargetName,
       ),
+      labeled_field(
+        palette,
+        state.kernel.locale,
+        state.t("settings-tmdb-api-key"),
+        state.t("settings-tmdb-api-key-help"),
+        tmdb_key.into(),
+        SettingsMessage::SaveTmdbApiKey,
+      ),
       column![
         text(state.t("settings-intro"))
           .size(14)
@@ -322,6 +339,27 @@ fn playback_section(state: &State) -> Element<'_, Message> {
           .on_press(Message::Settings(
             SettingsMessage::RememberSeasonVolumeChanged(
               !state.kernel.settings.snapshot().remember_season_volume(),
+            )
+          )),
+      ]
+      .spacing(TOKENS.spacing.s3)
+      .align_y(Alignment::Center),
+      row![
+        column![
+          text(state.t("settings-original-audio"))
+            .size(14)
+            .color(palette.text.secondary),
+          text(state.t("settings-original-audio-help"))
+            .size(12)
+            .color(palette.text.body),
+        ]
+        .spacing(TOKENS.spacing.s1)
+        .width(Fill),
+        switch(state.kernel.settings.snapshot().prefer_original_audio())
+          .id("settings-original-audio")
+          .on_press(Message::Settings(
+            SettingsMessage::PreferOriginalAudioChanged(
+              !state.kernel.settings.snapshot().prefer_original_audio(),
             )
           )),
       ]

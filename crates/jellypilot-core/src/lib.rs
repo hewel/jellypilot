@@ -4,6 +4,8 @@
 //! Intro Skipper policy, diagnostic buffering, artwork correlation, and display-free page helpers.
 
 #[cfg(feature = "native")]
+pub mod audio_tracks;
+#[cfg(feature = "native")]
 pub mod browse;
 #[cfg(feature = "native")]
 pub mod browse_model;

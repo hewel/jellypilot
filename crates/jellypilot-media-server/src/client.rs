@@ -14,6 +14,7 @@ use super::image_ref::{
   sized_origin_url_for_width, validate_remote_url_for_server, ImageRefKind,
 };
 use super::intro_skipper::{parse_intro_skipper_ranges, IntroSkipRange};
+use super::tmdb::{self, TmdbMediaKind, TMDB_API_BASE};
 use super::types::*;
 
 /// Device info for Jellyfin client identification.
@@ -119,6 +120,10 @@ struct ClientState {
   user_name: Option<String>,
   server_name: Option<String>,
   device_id: String,
+  tmdb_api_key: Option<String>,
+  tmdb_base_url: String,
+  tmdb_language_memory: std::collections::HashMap<(TmdbMediaKind, String), Option<String>>,
+  tmdb_language_store: tmdb::TmdbLanguageCache,
   device_name: String,
 }
 
@@ -171,6 +176,10 @@ impl JellyfinClient {
         server_name: None,
         device_id,
         device_name: DEFAULT_DEVICE_NAME.to_string(),
+        tmdb_api_key: None,
+        tmdb_base_url: TMDB_API_BASE.to_string(),
+        tmdb_language_memory: std::collections::HashMap::new(),
+        tmdb_language_store: tmdb::TmdbLanguageCache::default(),
       })),
     }
   }
@@ -187,6 +196,83 @@ impl JellyfinClient {
       }
     }
     client
+  }
+
+  /// Set the TMDb API key used to look up original languages when the server does
+  /// not expose them. Blank keys disable the lookups. Changing the key drops cached
+  /// results so a previously rejected key does not mask later successes.
+  pub fn set_tmdb_api_key(&self, api_key: Option<String>) {
+    let api_key = api_key
+      .map(|key| key.trim().to_owned())
+      .filter(|key| !key.is_empty());
+    let mut state = self.state.write();
+    if state.tmdb_api_key != api_key {
+      // Session memory is key-scoped behavior (rejected keys); the persisted
+      // answers are key-independent TMDb facts and stay.
+      state.tmdb_language_memory.clear();
+    }
+    state.tmdb_api_key = api_key;
+  }
+
+  /// Redirect the persistent TMDb cache at an isolated file (tests only).
+  #[cfg(test)]
+  pub(crate) fn set_tmdb_store_path(&self, path: std::path::PathBuf) {
+    self.state.write().tmdb_language_store = tmdb::TmdbLanguageCache::with_path(path);
+  }
+
+  /// Redirect TMDb lookups at another origin (tests point this at a local server).
+  #[cfg(test)]
+  pub(crate) fn set_tmdb_base_url(&self, base_url: String) {
+    self.state.write().tmdb_base_url = base_url;
+  }
+
+  /// Original language from TMDb. Confirmed answers persist in the global on-disk
+  /// cache shared across servers and profiles; failures stay in session memory so
+  /// a rejected key is not retried on every play.
+  async fn tmdb_original_language(&self, kind: TmdbMediaKind, tmdb_id: &str) -> Option<String> {
+    let tmdb_id = tmdb_id.trim();
+    if tmdb_id.is_empty() {
+      return None;
+    }
+    let cache_key = (kind, tmdb_id.to_owned());
+    let (api_key, base_url) = {
+      let mut state = self.state.write();
+      if let Some(cached) = state.tmdb_language_memory.get(&cache_key) {
+        return cached.clone();
+      }
+      if let Some(persisted) = state.tmdb_language_store.get(kind, tmdb_id) {
+        state
+          .tmdb_language_memory
+          .insert(cache_key.clone(), Some(persisted.clone()));
+        return Some(persisted);
+      }
+      (state.tmdb_api_key.clone(), state.tmdb_base_url.clone())
+    };
+    let api_key = api_key?;
+    let language =
+      match tmdb::original_language(&self.authenticated_http, &base_url, &api_key, kind, tmdb_id)
+        .await
+      {
+        Ok(language) => language,
+        Err(error) => {
+          log::warn!("{error}");
+          None
+        }
+      };
+    let mut state = self.state.write();
+    if let Some(language) = &language {
+      // Confirmed answers are key-independent TMDb facts; persist them even when
+      // the key changed mid-flight.
+      state.tmdb_language_store.insert(kind, tmdb_id, language);
+    }
+    // A lookup started under an old key must not repopulate session memory after
+    // a key change cleared it.
+    if state.tmdb_api_key.as_deref() == Some(api_key.as_str()) {
+      state
+        .tmdb_language_memory
+        .insert(cache_key, language.clone());
+    }
+    language
   }
 
   /// Login/session lifecycle operations.
@@ -2991,18 +3077,82 @@ impl<'a> JellyfinLibrary<'a> {
 
     let server_url = self.client.server_url()?;
     let user_id = self.client.user_id()?;
-    let item = self
+    let item: jellyfin_api::models::BaseItemDto = self
       .client
       .get(&format!(
         "/Items/{item_id}?userId={user_id}&fields=Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams&enableImages=true&imageTypeLimit=1&enableImageTypes=Primary,Logo,Backdrop"
       ))
       .await?;
+    let item_tmdb_id = tmdb_id_of(&item);
+    let original_language = self
+      .resolve_original_language(
+        item.original_language.clone().flatten(),
+        item.r#type,
+        item_tmdb_id,
+        item.series_id.flatten().map(jellyfin_id),
+      )
+      .await;
 
-    map_video_item_detail(&server_url, item).ok_or_else(|| {
+    let mut detail = map_video_item_detail(&server_url, item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Movie and Episode details are supported by the Library Browser".to_string(),
       )
-    })
+    })?;
+    detail.original_language = original_language;
+    Ok(detail)
+  }
+
+  /// Fetch a series DTO for fields episodes do not carry (original language,
+  /// provider ids).
+  async fn series_item(
+    &self,
+    series_id: &str,
+  ) -> Result<jellyfin_api::models::BaseItemDto, JellyfinError> {
+    let user_id = self.client.user_id()?;
+    self
+      .client
+      .get(&format!("/Items/{series_id}?userId={user_id}"))
+      .await
+  }
+
+  /// Resolve an item's original language: server DTO value first, then the parent
+  /// series for episodes, then a TMDb lookup via provider ids (released Jellyfin
+  /// servers leave the DTO field empty).
+  async fn resolve_original_language(
+    &self,
+    server_language: Option<String>,
+    item_kind: Option<jellyfin_api::models::BaseItemKind>,
+    item_tmdb_id: Option<String>,
+    series_id: Option<String>,
+  ) -> Option<String> {
+    if server_language.is_some() {
+      return server_language;
+    }
+    let kind = tmdb_kind_for(item_kind);
+    // An episode's own TMDb id addresses the episode, not the series whose
+    // original language applies; only the parent series id is usable.
+    let mut tmdb_id = if matches!(item_kind, Some(jellyfin_api::models::BaseItemKind::Episode)) {
+      None
+    } else {
+      item_tmdb_id
+    };
+    if let Some(series_id) = series_id {
+      match self.series_item(&series_id).await {
+        Ok(series) => {
+          if let Some(language) = series.original_language.clone().flatten() {
+            return Some(language);
+          }
+          if matches!(item_kind, Some(jellyfin_api::models::BaseItemKind::Episode)) {
+            tmdb_id = tmdb_id_of(&series);
+          }
+        }
+        Err(error) => log::warn!("series original language lookup failed: {error}"),
+      }
+    }
+    match (kind, tmdb_id) {
+      (Some(kind), Some(tmdb_id)) => self.client.tmdb_original_language(kind, &tmdb_id).await,
+      _ => None,
+    }
   }
 
   pub async fn item_streams(&self, item_id: String) -> Result<VideoItemStreams, JellyfinError> {
@@ -3031,6 +3181,109 @@ impl<'a> JellyfinLibrary<'a> {
       audio_streams,
       subtitle_streams,
     })
+  }
+
+  pub async fn playback_audio_context(
+    &self,
+    item_id: &str,
+  ) -> Result<PlaybackAudioContext, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_playback_audio_context(item_id).await;
+    }
+    if item_id.trim().is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for playback audio context".to_string(),
+      ));
+    }
+    let user_id = self.client.user_id()?;
+    let item: jellyfin_api::models::BaseItemDto = self
+      .client
+      .get(&format!(
+        "/Items/{item_id}?userId={user_id}&fields=MediaStreams"
+      ))
+      .await?;
+    let item_tmdb_id = tmdb_id_of(&item);
+    let original_language = self
+      .resolve_original_language(
+        item.original_language.flatten(),
+        item.r#type,
+        item_tmdb_id,
+        item.series_id.flatten().map(jellyfin_id),
+      )
+      .await;
+    let (audio_streams, _) =
+      map_video_playback_streams(item.media_streams.flatten().unwrap_or_default());
+    Ok(PlaybackAudioContext {
+      original_language,
+      audio_streams,
+    })
+  }
+
+  /// Emby playback audio context: Emby exposes no original-language field, so the
+  /// value comes from TMDb via provider ids; streams come from the item itself.
+  async fn emby_playback_audio_context(
+    &self,
+    item_id: &str,
+  ) -> Result<PlaybackAudioContext, JellyfinError> {
+    if item_id.trim().is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for playback audio context".to_string(),
+      ));
+    }
+    let user_id = self.client.user_id()?;
+    let item = self
+      .client
+      .get_with_query::<emby_api::models::BaseItemDto>(
+        &format!("/Users/{user_id}/Items/{item_id}"),
+        &emby_streams_query(),
+      )
+      .await?;
+    let original_language = self.emby_resolve_original_language(&item).await;
+    let (audio_streams, _) =
+      map_emby_video_playback_streams(item.media_streams.unwrap_or_default());
+    Ok(PlaybackAudioContext {
+      original_language,
+      audio_streams,
+    })
+  }
+
+  /// Resolve an Emby item's original language via TMDb provider ids; episodes use
+  /// the parent series id because original language is series-level.
+  async fn emby_resolve_original_language(
+    &self,
+    item: &emby_api::models::BaseItemDto,
+  ) -> Option<String> {
+    let item_type = item.r#type.as_deref()?;
+    let kind = match item_type {
+      "Movie" => TmdbMediaKind::Movie,
+      "Episode" | "Series" => TmdbMediaKind::Series,
+      _ => return None,
+    };
+    let mut tmdb_id = if item_type == "Episode" {
+      None
+    } else {
+      item.provider_ids.as_ref()?.get("Tmdb").cloned()
+    };
+    if item_type == "Episode" {
+      if let Some(series_id) = item.series_id.as_deref() {
+        let user_id = self.client.user_id().ok()?;
+        match self
+          .client
+          .get_with_query::<emby_api::models::BaseItemDto>(
+            &format!("/Users/{user_id}/Items/{series_id}"),
+            &emby_streams_query(),
+          )
+          .await
+        {
+          Ok(series) => {
+            tmdb_id = series.provider_ids.as_ref()?.get("Tmdb").cloned();
+          }
+          Err(error) => log::warn!("Emby series original language lookup failed: {error}"),
+        }
+      }
+    }
+    let tmdb_id = tmdb_id?;
+    self.client.tmdb_original_language(kind, &tmdb_id).await
   }
 
   pub async fn show_detail(&self, series_id: String) -> Result<VideoShowDetail, JellyfinError> {
@@ -3100,11 +3353,17 @@ impl<'a> JellyfinLibrary<'a> {
       tokio::join!(show_item_fut, seasons_fut, next_up_fut);
 
     let show_item = show_item_result?;
+    let show_tmdb_id = tmdb_id_of(&show_item);
+    let show_kind = show_item.r#type;
+    let show_language = show_item.original_language.clone().flatten();
     let mut detail = map_video_show_detail(&server_url, show_item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Series details are supported by the Show Library Browser".to_string(),
       )
     })?;
+    detail.original_language = self
+      .resolve_original_language(show_language, show_kind, show_tmdb_id, None)
+      .await;
 
     detail.seasons = seasons_result
       .map_err(|err| JellyfinClient::openapi_error("Video show seasons", err))?
@@ -3785,11 +4044,14 @@ impl<'a> JellyfinLibrary<'a> {
       )
       .await?;
 
-    map_emby_video_item_detail(&server_url, item).ok_or_else(|| {
+    let original_language = self.emby_resolve_original_language(&item).await;
+    let mut detail = map_emby_video_item_detail(&server_url, item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Movie and Episode details are supported by the Library Browser".to_string(),
       )
-    })
+    })?;
+    detail.original_language = original_language;
+    Ok(detail)
   }
 
   async fn emby_item_streams(&self, item_id: String) -> Result<VideoItemStreams, JellyfinError> {
@@ -3844,12 +4106,14 @@ impl<'a> JellyfinLibrary<'a> {
       tokio::join!(show_item_fut, seasons_fut, next_up_fut);
 
     let show_item = show_item_result?;
+    let original_language = self.emby_resolve_original_language(&show_item).await;
     let mut detail = map_emby_video_show_detail(&server_url, show_item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Series details are supported by the Show Library Browser".to_string(),
       )
     })?;
 
+    detail.original_language = original_language;
     detail.seasons = seasons_result?
       .items
       .unwrap_or_default()
@@ -4387,6 +4651,22 @@ fn jellyfin_id(id: Uuid) -> String {
   id.simple().to_string()
 }
 
+/// TMDb id from a Jellyfin DTO's provider map, when the item was matched there.
+fn tmdb_id_of(item: &jellyfin_api::models::BaseItemDto) -> Option<String> {
+  item.provider_ids.as_ref()?.as_ref()?.get("Tmdb").cloned()
+}
+
+/// TMDb endpoint family for a Jellyfin item kind; other kinds cannot be looked up.
+fn tmdb_kind_for(item_kind: Option<jellyfin_api::models::BaseItemKind>) -> Option<TmdbMediaKind> {
+  match item_kind {
+    Some(jellyfin_api::models::BaseItemKind::Movie) => Some(TmdbMediaKind::Movie),
+    Some(
+      jellyfin_api::models::BaseItemKind::Series | jellyfin_api::models::BaseItemKind::Episode,
+    ) => Some(TmdbMediaKind::Series),
+    _ => None,
+  }
+}
+
 fn map_video_home_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
@@ -4803,6 +5083,7 @@ fn map_video_show_detail(
 
   Some(VideoShowDetail {
     id: id.clone(),
+    original_language: item.original_language.flatten(),
     name: item
       .name
       .flatten()
@@ -5072,6 +5353,7 @@ fn map_video_item_detail(
       .unwrap_or_else(|| "Untitled".to_string()),
     item_type: item_kind.to_string(),
     overview: item.overview.flatten(),
+    original_language: item.original_language.flatten(),
     production_year: item.production_year.flatten(),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     series_id,
@@ -6273,6 +6555,7 @@ fn map_emby_video_show_detail(
 
   Some(VideoShowDetail {
     id,
+    original_language: None,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     overview: item.overview,
     production_year: item.production_year.flatten(),
@@ -6478,6 +6761,7 @@ fn map_emby_video_item_detail(
 
   Some(VideoItemDetail {
     id,
+    original_language: None,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
     overview: item.overview,
@@ -10032,11 +10316,15 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000000000000000000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"CommunityRating":8.7,"OfficialRating":"PG-13","People":[{"Name":"  Director A  ","Type":"Director"},{"Name":"Director A","Type":"Creator"},{"Name":"Actor One","Type":"Actor"},{"Name":"Actor Two","Type":"Actor"},{"Name":"Actor One","Type":"Actor"},{"Name":" ","Type":"Actor"},{"Name":"Writer W","Type":"Writer"}],"ImageTags":{"Primary":"poster-detail"},"UserData":{"Key":"fixture-item","PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000000000000000000000000050","Name":"Detail Movie","Type":"Movie","OriginalLanguage":"en","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"CommunityRating":8.7,"OfficialRating":"PG-13","People":[{"Name":"  Director A  ","Type":"Director"},{"Name":"Director A","Type":"Creator"},{"Name":"Actor One","Type":"Actor"},{"Name":"Actor Two","Type":"Actor"},{"Name":"Actor One","Type":"Actor"},{"Name":" ","Type":"Actor"},{"Name":"Writer W","Type":"Writer"}],"ImageTags":{"Primary":"poster-detail"},"UserData":{"Key":"fixture-item","PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
         "200 OK",
         r#"{"Id":"00000000000000000000000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000000000000000000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"CommunityRating":9.1,"OfficialRating":"TV-14","People":[{"Name":"Episode Director","Type":"Director"},{"Name":"Guest Actor","Type":"Actor"},{"Name":"Narrator","Type":"Narrator"}],"UserData":{"Key":"fixture-item","PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000052","Name":"Example Show","Type":"Series","OriginalLanguage":"ja"}"#,
       ),
       (
         "200 OK",
@@ -10074,6 +10362,7 @@ mod tests {
     assert!(movie.favorite);
     assert_eq!(movie.metadata.community_rating, Some(8.7));
     assert_eq!(movie.metadata.official_rating.as_deref(), Some("PG-13"));
+    assert_eq!(movie.original_language.as_deref(), Some("en"));
     assert_eq!(movie.metadata.creators, vec!["Director A"]);
     assert_eq!(
       movie.metadata.cast,
@@ -10109,6 +10398,8 @@ mod tests {
     assert_eq!(episode.series_name.as_deref(), Some("Example Show"));
     assert_eq!(episode.season_number, Some(2));
     assert_eq!(episode.episode_number, Some(3));
+    // Episodes carry no original language; the client inherits the series value.
+    assert_eq!(episode.original_language.as_deref(), Some("ja"));
     assert!(episode.played);
     assert!(!episode.can_resume);
     assert_eq!(episode.artwork_image_id, None);
@@ -10135,8 +10426,288 @@ mod tests {
     assert!(captured[1]
       .contains("fields=Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams"));
     assert!(captured[1].contains("enableImageTypes=Primary,Logo,Backdrop"));
-    assert!(captured[2].starts_with("GET /Items/00000000000000000000000000000050?"));
-    assert!(captured[2].contains("fields=MediaStreams"));
+    assert!(captured[2].starts_with("GET /Items/00000000000000000000000000000052?"));
+    assert!(captured[3].starts_with("GET /Items/00000000000000000000000000000050?"));
+    assert!(captured[3].contains("fields=MediaStreams"));
+  }
+
+  fn tmdb_test_store_path(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-tmdb-cache-{}-{name}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
+  }
+
+  #[tokio::test]
+  async fn playback_audio_context_fills_original_language_from_tmdb() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":2,"Type":"Audio","Language":"rus","IsDefault":true},{"Index":6,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":1339713,"original_language":"en"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("movie"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language.as_deref(), Some("en"));
+    assert_eq!(context.audio_streams.len(), 2);
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 2);
+    assert!(captured[1].starts_with("GET /3/movie/1339713"));
+    assert!(captured[1].contains("api_key=tmdb-key-1"));
+  }
+
+  #[tokio::test]
+  async fn tmdb_languages_persist_across_clients() {
+    let store_path = tmdb_test_store_path("persist");
+    let (server_url, _) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":1339713,"original_language":"en"}"#,
+      ),
+    ])
+    .await;
+    let first = JellyfinClient::new();
+    connect_test_client(&first, server_url.clone());
+    first.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    first.set_tmdb_base_url(server_url.clone());
+    first.set_tmdb_store_path(store_path.clone());
+    let context = first
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+    assert_eq!(context.original_language.as_deref(), Some("en"));
+
+    // A fresh client (new app session) reuses the persisted answer without any
+    // API key and without contacting TMDb at all.
+    let (second_url, second_requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+    )])
+    .await;
+    let second = JellyfinClient::new();
+    connect_test_client(&second, second_url.clone());
+    second.set_tmdb_base_url(second_url);
+    second.set_tmdb_store_path(store_path);
+    let context = second
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+    assert_eq!(context.original_language.as_deref(), Some("en"));
+    let captured = second_requests.lock();
+    assert_eq!(captured.len(), 1);
+    assert!(!captured.iter().any(|request| request.contains("/3/")));
+  }
+
+  #[tokio::test]
+  async fn emby_playback_audio_context_fills_original_language_from_tmdb() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":1339713,"original_language":"en"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("emby-movie"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language.as_deref(), Some("en"));
+    assert_eq!(context.audio_streams.len(), 1);
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 2);
+    assert!(captured[0].starts_with("GET /Users/"));
+    assert!(captured[1].starts_with("GET /3/movie/1339713"));
+  }
+
+  #[tokio::test]
+  async fn emby_episode_uses_series_tmdb_id() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000051","Type":"Episode","SeriesId":"00000000000000000000000000000052","ProviderIds":{"Tmdb":"999"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","IsDefault":true},{"Index":4,"Type":"Audio","Language":"kor"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000052","Type":"Series","ProviderIds":{"Tmdb":"279323"}}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":279323,"original_language":"ko"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("emby-episode"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000051")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language.as_deref(), Some("ko"));
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 3);
+    assert!(captured[2].starts_with("GET /3/tv/279323"));
+    assert!(!captured.iter().any(|request| request.contains("/3/tv/999")));
+  }
+
+  #[tokio::test]
+  async fn playback_audio_context_episode_uses_series_tmdb_id() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000051","Type":"Episode","SeriesId":"00000000000000000000000000000052","ProviderIds":{"Tmdb":"999"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","IsDefault":true},{"Index":4,"Type":"Audio","Language":"kor"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000052","Type":"Series","ProviderIds":{"Tmdb":"279323"}}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":279323,"original_language":"ko"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("episode"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000051")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language.as_deref(), Some("ko"));
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 3);
+    assert!(captured[2].starts_with("GET /3/tv/279323"));
+    assert!(!captured.iter().any(|request| request.contains("/3/tv/999")));
+  }
+
+  #[tokio::test]
+  async fn server_supplied_original_language_skips_tmdb_lookup() {
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Id":"00000000000000000000000000000050","Type":"Movie","OriginalLanguage":"ja","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"jpn"}]}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("tmdb-key-1".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("server-value"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language.as_deref(), Some("ja"));
+    assert_eq!(requests.lock().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn missing_tmdb_key_leaves_original_language_absent() {
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("missing-key"));
+
+    let context = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+
+    assert_eq!(context.original_language, None);
+    assert_eq!(requests.lock().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn tmdb_failures_are_cached_for_the_session() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      ("401 Unauthorized", r#"{"status_code":7,"status_message":"Invalid API key."}"#),
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("bad-key".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("failures"));
+
+    for _ in 0..2 {
+      let context = client
+        .library()
+        .playback_audio_context("00000000000000000000000000000050")
+        .await
+        .expect("audio context should load");
+      assert_eq!(context.original_language, None);
+    }
+
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 3);
+    assert_eq!(
+      captured
+        .iter()
+        .filter(|request| request.starts_with("GET /3/movie/"))
+        .count(),
+      1
+    );
   }
 
   #[tokio::test]
@@ -10159,6 +10730,47 @@ mod tests {
       err.to_string(),
       "HTTP error: Only Movie and Episode details are supported by the Library Browser"
     );
+  }
+
+  #[tokio::test]
+  async fn tmdb_key_change_clears_cached_failures() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      ("401 Unauthorized", r#"{"status_code":7,"status_message":"Invalid API key."}"#),
+      (
+        "200 OK",
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","ProviderIds":{"Tmdb":"1339713"},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng"}]}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"id":1339713,"original_language":"en"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+    client.set_tmdb_api_key(Some("bad-key".to_owned()));
+    client.set_tmdb_base_url(server_url);
+    client.set_tmdb_store_path(tmdb_test_store_path("key-change"));
+
+    let first = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+    assert_eq!(first.original_language, None);
+
+    client.set_tmdb_api_key(Some("good-key".to_owned()));
+    let second = client
+      .library()
+      .playback_audio_context("00000000000000000000000000000050")
+      .await
+      .expect("audio context should load");
+    assert_eq!(second.original_language.as_deref(), Some("en"));
+    assert_eq!(requests.lock().len(), 4);
   }
 
   #[tokio::test]
@@ -11207,6 +11819,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: true,
       supports_direct_stream: true,
       supports_transcoding: true,
@@ -11261,6 +11874,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: false,
       supports_direct_stream: true,
       supports_transcoding: false,
@@ -11291,6 +11905,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: false,
       supports_direct_stream: true,
       supports_transcoding: false,
@@ -11319,6 +11934,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: false,
       supports_direct_stream: true,
       supports_transcoding: false,
@@ -11354,6 +11970,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: false,
       supports_direct_stream: true,
       supports_transcoding: false,
@@ -11410,6 +12027,7 @@ mod tests {
       run_time_ticks: None,
       media_streams: Vec::new(),
       default_subtitle_stream_index: None,
+      default_audio_stream_index: None,
       supports_direct_play: true,
       supports_direct_stream: false,
       supports_transcoding: false,

@@ -11,10 +11,15 @@ use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
   PropertyValue,
 };
+use jellypilot_core::audio_tracks::{
+  AudioTrackKey, AudioTrackPreference, AudioTrackStore, SubtitleTrackPreference,
+};
 use jellypilot_core::volume_memory::{SeasonVolumeKey, SeasonVolumeStore};
 use jellypilot_media_server::{
-  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
-  PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
+  select_audio_stream_by_memory, select_native_audio_stream, select_subtitle_stream_index,
+  ticks_to_seconds, AudioStreamChoice, JellyfinClient, MediaItem, MediaServerProvider, MediaSource,
+  MediaStream, PlaybackAudioContext, PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo,
+  TrackPreference, VideoItemDetail, VideoLibraryItem,
 };
 
 const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
@@ -40,6 +45,8 @@ pub struct PlaybackControllerConfig {
   demuxer_cache_dir: Option<PathBuf>,
   volume_memory_disabled: bool,
   embedded_ipc: Option<PathBuf>,
+  original_audio_enabled: bool,
+  subtitle_languages: Vec<String>,
 }
 
 impl PlaybackControllerConfig {
@@ -54,6 +61,20 @@ impl PlaybackControllerConfig {
   #[must_use]
   pub fn with_volume_memory_enabled(mut self, enabled: bool) -> Self {
     self.volume_memory_disabled = !enabled;
+    self
+  }
+
+  /// Automatically select the original-language audio track when playback starts.
+  #[must_use]
+  pub fn with_original_audio_enabled(mut self, enabled: bool) -> Self {
+    self.original_audio_enabled = enabled;
+    self
+  }
+
+  /// Preferred subtitle languages tried in order when no per-series choice exists.
+  #[must_use]
+  pub fn with_subtitle_languages(mut self, languages: Vec<String>) -> Self {
+    self.subtitle_languages = languages;
     self
   }
 
@@ -235,6 +256,8 @@ pub struct NowPlayingItem {
   pub runtime_seconds: Option<f64>,
   pub start_position_seconds: f64,
   pub play_method: String,
+  /// Original audio language of the playing item when known (Jellyfin only).
+  pub original_language: Option<String>,
 }
 
 /// Current item metadata plus the authoritative MPV transport state.
@@ -490,6 +513,16 @@ pub trait PlaybackServer: Send + Sync {
     &self,
     report: PlaybackStopReport,
   ) -> PlaybackServerFuture<'_, Result<(), ()>>;
+
+  /// Original-language and audio-stream facts for automatic audio selection.
+  /// Servers that cannot provide them (Emby, lookup failures) yield `None`.
+  fn playback_audio_context(
+    &self,
+    item_id: &str,
+  ) -> PlaybackServerFuture<'_, Option<PlaybackAudioContext>> {
+    let _ = item_id;
+    Box::pin(async { None })
+  }
 }
 
 /// Production playback-server adapter backed by an authenticated Jellyfin client.
@@ -550,6 +583,22 @@ impl PlaybackServer for JellyfinPlaybackServer {
         stream_url,
         external_subtitles,
       })
+    })
+  }
+
+  fn playback_audio_context(
+    &self,
+    item_id: &str,
+  ) -> PlaybackServerFuture<'_, Option<PlaybackAudioContext>> {
+    let item_id = item_id.to_owned();
+    Box::pin(async move {
+      match self.0.library().playback_audio_context(&item_id).await {
+        Ok(context) => Some(context),
+        Err(error) => {
+          log::warn!("playback audio context request failed: {error}");
+          None
+        }
+      }
     })
   }
 
@@ -689,11 +738,14 @@ pub struct PlaybackController {
   /// no carry-over: an explicit stop resets the window state.
   pending_fullscreen: Option<bool>,
   volume_memory: Option<SeasonVolumeStore>,
+  audio_tracks: Option<AudioTrackStore>,
+  original_audio_enabled: bool,
   volume_memory_enabled: bool,
   active_volume_key: Option<SeasonVolumeKey>,
   active_volume_generation: Option<u64>,
   next_volume_generation: u64,
   startup_volume: Option<f64>,
+  subtitle_languages: Vec<String>,
   observed_volume: Option<f64>,
   pending_mute: Option<bool>,
   volume_observer: Option<i64>,
@@ -732,7 +784,9 @@ impl PlaybackController {
     }
 
     let mut controller = Self::from_mpv(server, mpv, config.extra_args);
+    controller.subtitle_languages = config.subtitle_languages;
     controller.volume_memory_enabled = !config.volume_memory_disabled;
+    controller.original_audio_enabled = config.original_audio_enabled;
     Ok(controller)
   }
 
@@ -770,12 +824,15 @@ impl PlaybackController {
       pending_client_messages: Vec::new(),
       pending_fullscreen: None,
       volume_memory: None,
+      audio_tracks: None,
+      original_audio_enabled: false,
       volume_memory_enabled: true,
       active_volume_key: None,
       active_volume_generation: None,
       next_volume_generation: 0,
       startup_volume: None,
       observed_volume: None,
+      subtitle_languages: Vec::new(),
       pending_mute: None,
       volume_observer: None,
       next_volume_observer: 1,
@@ -792,6 +849,11 @@ impl PlaybackController {
   pub fn set_volume_memory(&mut self, store: SeasonVolumeStore) {
     self.volume_memory = Some(store);
     self.observed_volume = None;
+  }
+
+  /// Attach account-scoped persistent audio track memory.
+  pub fn set_audio_track_memory(&mut self, store: AudioTrackStore) {
+    self.audio_tracks = Some(store);
   }
 
   pub fn set_volume_memory_preference(&mut self, preference: VolumeMemoryPreference) {
@@ -862,6 +924,8 @@ impl PlaybackController {
         .set_volume_memory_enabled(!config.volume_memory_disabled)
         .await;
     }
+    self.original_audio_enabled = config.original_audio_enabled;
+    self.subtitle_languages = config.subtitle_languages;
     if config.embedded_ipc.is_none() {
       let mpv_path = match config.mpv_path {
         Some(path) => path,
@@ -940,10 +1004,77 @@ impl PlaybackController {
       .set_audio_track(id)
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
+    let tracks = self.tracks().await?;
+    self.remember_audio_track(&tracks);
     Ok(TrackSelectionOutcome {
-      tracks: self.tracks().await?,
+      tracks,
       warnings: Vec::new(),
     })
+  }
+
+  /// Persist the just-selected audio track for the active series or item. Tracks
+  /// without a provider stream or language are not memorable and are skipped.
+  fn remember_audio_track(&mut self, tracks: &[TrackInfo]) {
+    let (Some(store), Some(active)) = (&mut self.audio_tracks, &self.active) else {
+      return;
+    };
+    let Some(key) = active.audio_track_key.clone() else {
+      return;
+    };
+    let Some(stream) = tracks
+      .iter()
+      .find(|track| track.track_type == "audio" && track.selected)
+      .and_then(|track| track.provider_index)
+      .and_then(|index| {
+        active
+          .media_streams
+          .iter()
+          .find(|stream| stream.stream_type == "Audio" && stream.index == index)
+      })
+    else {
+      return;
+    };
+    let Some(preference) = AudioTrackPreference::new(
+      stream.language.as_deref().unwrap_or(""),
+      stream.display_title.as_deref(),
+    ) else {
+      return;
+    };
+    if let Err(error) = store.remember(&key, preference) {
+      log::warn!("could not persist audio track memory: {error}");
+    }
+  }
+
+  /// Persist the just-selected subtitle track (or deliberate disable) for the
+  /// active series or item. Tracks without a provider stream or language are not
+  /// memorable and are skipped.
+  fn remember_subtitle_track(&mut self, provider_index: i32) {
+    let (Some(store), Some(active)) = (&mut self.audio_tracks, &self.active) else {
+      return;
+    };
+    let Some(key) = active.audio_track_key.clone() else {
+      return;
+    };
+    let preference = if provider_index < 0 {
+      SubtitleTrackPreference::disabled()
+    } else {
+      let Some(stream) = active
+        .media_streams
+        .iter()
+        .find(|stream| stream.stream_type == "Subtitle" && stream.index == provider_index)
+      else {
+        return;
+      };
+      let Some(preference) = stream.language.as_deref().and_then(|language| {
+        SubtitleTrackPreference::enabled(language, stream.display_title.as_deref())
+      }) else {
+        return;
+      };
+      preference
+    };
+    if let Err(error) = store.remember_subtitle(&key, preference) {
+      log::warn!("could not persist subtitle track memory: {error}");
+    }
   }
 
   /// Select or disable a subtitle track and return the refreshed track list.
@@ -976,6 +1107,7 @@ impl PlaybackController {
       .as_mut()
       .ok_or(PlaybackError::NoActivePlayback)?
       .subtitle_stream_index = Some(provider_index);
+    self.remember_subtitle_track(provider_index);
     let tracks = self.tracks().await?;
     Ok(TrackSelectionOutcome {
       tracks,
@@ -1320,6 +1452,14 @@ impl PlaybackController {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvLoadFailed);
     }
+    // The loadfile aid option is not honored on every backend/fork (embedded
+    // replace-load can drop per-file options); re-assert through the same IPC
+    // command manual switching uses.
+    if let Some(aid) = resolved.mpv_audio_index {
+      if self.mpv.set_audio_track(aid).await.is_err() {
+        log::warn!("could not re-apply the selected audio track after load");
+      }
+    }
     let restored_volume = if self.volume_memory_is_enabled() {
       resolved
         .volume_key
@@ -1476,7 +1616,38 @@ impl PlaybackController {
     let start_position_ticks = checked_seconds_to_ticks(start_position_seconds)?;
     let server_start_ticks =
       matches!(self.server.provider(), MediaServerProvider::Emby).then_some(start_position_ticks);
-    let selection = request.selection;
+    let mut selection = request.selection;
+    let audio_track_key =
+      AudioTrackKey::new(request.series_id.as_deref().unwrap_or(&request.item_id));
+    let mut original_language = request.original_language.clone();
+    // Automatic audio selection (memory first, then original language) needs
+    // provider stream facts before the playback info request; explicit selections
+    // and media-source choices always win. The context resolves original languages
+    // via TMDb, so both providers work.
+    let mut auto_audio: Option<(Option<AudioTrackPreference>, Option<String>)> = None;
+    if selection.audio_stream_index.is_none() && selection.media_source_id.is_none() {
+      let remembered = audio_track_key
+        .as_ref()
+        .and_then(|key| self.audio_tracks.as_ref()?.get(key));
+      if remembered.is_some() || self.original_audio_enabled {
+        if let Some(context) = self.server.playback_audio_context(&request.item_id).await {
+          let native = if self.original_audio_enabled {
+            context
+              .original_language
+              .clone()
+              .or_else(|| request.original_language.clone())
+          } else {
+            None
+          };
+          let choices: Vec<AudioStreamChoice<'_>> =
+            context.audio_streams.iter().map(Into::into).collect();
+          selection.audio_stream_index =
+            auto_audio_index(&choices, remembered.as_ref(), native.as_deref(), None);
+          auto_audio = Some((remembered, native));
+          original_language = original_language.or(context.original_language);
+        }
+      }
+    }
     let PlaybackResolution {
       media_source,
       play_session_id,
@@ -1490,6 +1661,24 @@ impl PlaybackController {
         selection: selection.clone(),
       })
       .await?;
+    if let Some((memory, native)) = &auto_audio {
+      // Re-derive against the resolved source: playback info can refresh streams
+      // (e.g. .strm metadata), so a stale pre-request index must not abort
+      // playback, and the server's own default audio index wins over the
+      // container flag.
+      let choices: Vec<AudioStreamChoice<'_>> = media_source
+        .media_streams
+        .iter()
+        .filter(|stream| stream.stream_type == "Audio")
+        .map(Into::into)
+        .collect();
+      selection.audio_stream_index = auto_audio_index(
+        &choices,
+        memory.as_ref(),
+        native.as_deref(),
+        media_source.default_audio_stream_index,
+      );
+    }
     let runtime_seconds = request.runtime_seconds.or_else(|| {
       media_source
         .run_time_ticks
@@ -1502,16 +1691,30 @@ impl PlaybackController {
       .filter(|stream| stream.stream_type == "Subtitle" && stream.is_external)
       .count()
       != external_subtitles.len();
-    let effective_subtitle_index = selection
-      .subtitle_stream_index
-      .or(media_source.default_subtitle_stream_index)
-      .or_else(|| {
-        media_source
-          .media_streams
-          .iter()
-          .find(|stream| stream.stream_type == "Subtitle" && stream.is_default)
-          .map(|stream| stream.index)
+    let series_subtitle_preference = audio_track_key
+      .as_ref()
+      .and_then(|key| self.audio_tracks.as_ref()?.get_subtitle(key))
+      .map(|preference| TrackPreference {
+        subtitle_language: preference.language.clone(),
+        subtitle_title: preference.title.clone(),
+        subtitle_preference_set: true,
+        is_subtitle_enabled: preference.enabled,
+        ..TrackPreference::default()
       });
+    let effective_subtitle_index = select_subtitle_stream_index(
+      selection.subtitle_stream_index,
+      series_subtitle_preference.as_ref(),
+      &media_source.media_streams,
+      &self.subtitle_languages,
+    )
+    .or(media_source.default_subtitle_stream_index)
+    .or_else(|| {
+      media_source
+        .media_streams
+        .iter()
+        .find(|stream| stream.stream_type == "Subtitle" && stream.is_default)
+        .map(|stream| stream.index)
+    });
     let selected_external_subtitle_index = effective_subtitle_index
       .filter(|index| *index >= 0)
       .map(|index| {
@@ -1552,6 +1755,7 @@ impl PlaybackController {
           runtime_seconds,
           start_position_seconds,
           play_method: play_method(&media_source).to_owned(),
+          original_language,
         },
         media_source_id: media_source.id,
         play_session_id,
@@ -1560,6 +1764,7 @@ impl PlaybackController {
         media_streams: media_source.media_streams,
         loaded_external_subtitle_indexes: Vec::new(),
         last_known_position_seconds: start_position_seconds,
+        audio_track_key,
       },
       stream_url,
       external_subtitles,
@@ -1998,6 +2203,7 @@ struct ActivePlayback {
   media_streams: Vec<MediaStream>,
   loaded_external_subtitle_indexes: Vec<i32>,
   last_known_position_seconds: f64,
+  audio_track_key: Option<AudioTrackKey>,
 }
 fn playback_report(active: &ActivePlayback, transport: &PlayerState) -> PlaybackReport {
   PlaybackReport {
@@ -2097,6 +2303,8 @@ struct PlayableRequest {
   resume_position_seconds: Option<f64>,
   position: PlaybackStartPosition,
   selection: PlaybackSelection,
+  series_id: Option<String>,
+  original_language: Option<String>,
 }
 
 impl PlayableRequest {
@@ -2127,6 +2335,8 @@ impl PlayableRequest {
           resume_position_seconds: item.resume_position_seconds,
           position,
           selection,
+          series_id: item.series_id,
+          original_language: None,
         })
       }
       Playable::Detail(item) => {
@@ -2153,6 +2363,8 @@ impl PlayableRequest {
           resume_position_seconds: item.resume_position_seconds,
           position,
           selection,
+          series_id: item.series_id,
+          original_language: item.original_language,
         })
       }
       Playable::Media(item) => {
@@ -2179,6 +2391,8 @@ impl PlayableRequest {
           resume_position_seconds: None,
           position,
           selection,
+          series_id: item.series_id,
+          original_language: None,
         })
       }
     }
@@ -2296,6 +2510,24 @@ fn select_media_source<'a>(
     None => media_sources.first(),
   }
   .ok_or(PlaybackError::MediaSourceUnavailable)
+}
+
+/// Automatic audio choice shared by the pre-request and post-resolve passes:
+/// a remembered per-series or per-item track first, then the original language.
+fn auto_audio_index(
+  choices: &[AudioStreamChoice<'_>],
+  memory: Option<&AudioTrackPreference>,
+  native: Option<&str>,
+  server_default_index: Option<i32>,
+) -> Option<i32> {
+  memory
+    .and_then(|preference| {
+      select_audio_stream_by_memory(choices, &preference.language, preference.title.as_deref())
+    })
+    .or_else(|| {
+      native
+        .and_then(|language| select_native_audio_stream(choices, language, server_default_index))
+    })
 }
 
 fn find_stream<'a>(
@@ -2479,6 +2711,7 @@ mod tests {
   use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, WriteHalf};
 
   use super::*;
+  use jellypilot_media_server::VideoPlaybackStreamOption;
 
   fn run_async<T>(future: impl Future<Output = T>) -> T {
     tokio::runtime::Builder::new_current_thread()
@@ -2506,6 +2739,8 @@ mod tests {
     fail_stop: AtomicBool,
     stop_report_gate: Option<StopReportGate>,
     resolution_gate: Mutex<Option<SubAddResponseGate>>,
+    audio_context: Option<PlaybackAudioContext>,
+    audio_context_requests: Mutex<Vec<String>>,
   }
 
   impl MockPlaybackServer {
@@ -2521,6 +2756,7 @@ mod tests {
             run_time_ticks: Some(15_000_000_000),
             media_streams: Vec::new(),
             default_subtitle_stream_index: None,
+            default_audio_stream_index: None,
             supports_direct_play: true,
             supports_direct_stream: true,
             supports_transcoding: true,
@@ -2541,11 +2777,18 @@ mod tests {
         fail_stop: AtomicBool::new(false),
         stop_report_gate: None,
         resolution_gate: Mutex::new(None),
+        audio_context: None,
+        audio_context_requests: Mutex::new(Vec::new()),
       }
     }
 
     fn with_provider(mut self, provider: MediaServerProvider) -> Self {
       self.provider = provider;
+      self
+    }
+
+    fn with_audio_context(mut self, context: PlaybackAudioContext) -> Self {
+      self.audio_context = Some(context);
       self
     }
 
@@ -2645,6 +2888,19 @@ mod tests {
         }
         Ok(resolution)
       })
+    }
+
+    fn playback_audio_context(
+      &self,
+      item_id: &str,
+    ) -> PlaybackServerFuture<'_, Option<PlaybackAudioContext>> {
+      self
+        .audio_context_requests
+        .lock()
+        .expect("audio context requests should not be poisoned")
+        .push(item_id.to_owned());
+      let context = self.audio_context.clone();
+      Box::pin(async move { context })
     }
 
     fn report_playback_start(
@@ -3471,6 +3727,79 @@ mod tests {
     }
   }
 
+  struct AudioTrackFixture(PathBuf);
+
+  impl AudioTrackFixture {
+    fn new() -> Self {
+      static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+      Self(std::env::temp_dir().join(format!(
+        "jellypilot-mpv-audio-track-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+      )))
+    }
+
+    fn store(&self) -> AudioTrackStore {
+      AudioTrackStore::load_from(
+        self.0.join("audio.json"),
+        jellypilot_core::watchlist::ProfileScope::new(
+          MediaServerProvider::Jellyfin,
+          "https://server.example",
+          "user",
+        )
+        .expect("valid scope"),
+      )
+      .expect("audio track store")
+    }
+  }
+
+  impl Drop for AudioTrackFixture {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  fn audio_option(
+    index: i32,
+    language: Option<&str>,
+    label: &str,
+    is_default: bool,
+  ) -> VideoPlaybackStreamOption {
+    VideoPlaybackStreamOption {
+      index,
+      label: label.to_owned(),
+      language: language.map(str::to_owned),
+      codec: None,
+      is_default,
+      is_external: false,
+    }
+  }
+
+  fn audio_stream(index: i32, language: &str, display_title: Option<&str>) -> MediaStream {
+    let mut stream = stream(index, "Audio");
+    stream.language = Some(language.to_owned());
+    stream.display_title = display_title.map(str::to_owned);
+    stream
+  }
+
+  fn resolution_audio_indices(server: &MockPlaybackServer) -> Vec<Option<i32>> {
+    server
+      .reports
+      .lock()
+      .expect("mock reports should not be poisoned")
+      .resolutions
+      .iter()
+      .map(|request| request.selection.audio_stream_index)
+      .collect()
+  }
+
+  fn audio_context_request_count(server: &MockPlaybackServer) -> usize {
+    server
+      .audio_context_requests
+      .lock()
+      .expect("audio context requests should not be poisoned")
+      .len()
+  }
   #[test]
   fn season_volume_restores_before_audio_and_does_not_leak_to_other_items() {
     run_async(async {
@@ -3913,6 +4242,7 @@ mod tests {
       name: "Pilot".to_owned(),
       item_type: "Episode".to_owned(),
       overview: None,
+      original_language: None,
       production_year: None,
       runtime_seconds: Some(1_500.0),
       series_id: Some("series-1".to_owned()),
@@ -4098,6 +4428,7 @@ mod tests {
         runtime_seconds: Some(1_500.0),
         start_position_seconds: 42.5,
         play_method: "DirectPlay".to_owned(),
+        original_language: None,
       },
       media_source_id: "source-1".to_owned(),
       play_session_id: Some("play-1".to_owned()),
@@ -4106,6 +4437,7 @@ mod tests {
       media_streams: Vec::new(),
       loaded_external_subtitle_indexes: Vec::new(),
       last_known_position_seconds: position_seconds,
+      audio_track_key: None,
     }
   }
 
@@ -4292,6 +4624,7 @@ mod tests {
         run_time_ticks: Some(15_000_000_000),
         media_streams: Vec::new(),
         default_subtitle_stream_index: None,
+        default_audio_stream_index: None,
         supports_direct_play: true,
         supports_direct_stream: true,
         supports_transcoding: true,
@@ -4951,6 +5284,435 @@ mod tests {
         ),
         (Some(true), Some(true), Vec::new(), Vec::new())
       );
+    });
+  }
+
+  #[test]
+  fn original_language_audio_is_selected_and_reported_when_enabled() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![
+        audio_stream(1, "eng", Some("English - AAC 5.1")),
+        audio_stream(2, "jpn", Some("Japanese - AAC 2.0")),
+      ];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![
+          audio_option(1, Some("eng"), "English - AAC 5.1", true),
+          audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false),
+        ],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_original_audio_enabled(true),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      // The provider index reaches both the playback-info request (so server-side
+      // transcodes use it) and the playback start report.
+      assert_eq!(resolution_audio_indices(&server), vec![Some(2)]);
+      assert_eq!(server.start_track_indices(), vec![(Some(2), None)]);
+      assert_eq!(audio_context_request_count(&server), 1);
+    });
+  }
+
+  #[test]
+  fn remembered_audio_track_overrides_the_native_language_rule() {
+    run_async(async {
+      let files = AudioTrackFixture::new();
+      let mut store = files.store();
+      store
+        .remember(
+          &AudioTrackKey::new("series-1").expect("key"),
+          AudioTrackPreference::new("jpn", Some("Japanese - DTS 5.1")).expect("preference"),
+        )
+        .expect("remember");
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![
+        audio_stream(1, "eng", Some("English - AAC 5.1")),
+        audio_stream(2, "jpn", Some("Japanese - AAC 2.0")),
+        audio_stream(3, "jpn", Some("Japanese - DTS 5.1")),
+      ];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![
+          audio_option(1, Some("eng"), "English - AAC 5.1", true),
+          audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false),
+          audio_option(3, Some("jpn"), "Japanese - DTS 5.1", false),
+        ],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller.set_audio_track_memory(store);
+      // The memory alone triggers the lookup; the global toggle stays disabled.
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      assert_eq!(resolution_audio_indices(&server), vec![Some(3)]);
+      assert_eq!(audio_context_request_count(&server), 1);
+    });
+  }
+
+  #[test]
+  fn explicit_audio_selection_skips_the_context_lookup() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams =
+        vec![audio_stream(1, "eng", Some("English - AAC 5.1"))];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false)],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_original_audio_enabled(true),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play_selected(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+          PlaybackSelection {
+            media_source_id: None,
+            audio_stream_index: Some(1),
+            subtitle_stream_index: None,
+          },
+        )
+        .await
+        .expect("play");
+
+      assert_eq!(resolution_audio_indices(&server), vec![Some(1)]);
+      assert_eq!(audio_context_request_count(&server), 0);
+    });
+  }
+
+  #[test]
+  fn disabled_original_audio_without_memory_skips_the_context_lookup() {
+    run_async(async {
+      let server = Arc::new(
+        MockPlaybackServer::new().with_audio_context(PlaybackAudioContext {
+          original_language: Some("ja".to_owned()),
+          audio_streams: vec![audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false)],
+        }),
+      );
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      assert_eq!(resolution_audio_indices(&server), vec![None]);
+      assert_eq!(audio_context_request_count(&server), 0);
+    });
+  }
+
+  #[test]
+  fn emby_servers_use_the_context_for_original_language_selection() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      server.provider = MediaServerProvider::Emby;
+      server.resolution.media_source.media_streams =
+        vec![audio_stream(2, "jpn", Some("Japanese - AAC 2.0"))];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false)],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_original_audio_enabled(true),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      // Emby exposes no original-language field of its own, but the TMDb-backed
+      // context drives the same selection as on Jellyfin.
+      assert_eq!(resolution_audio_indices(&server), vec![Some(2)]);
+      assert_eq!(audio_context_request_count(&server), 1);
+    });
+  }
+
+  #[test]
+  fn manual_audio_selection_is_remembered_for_the_series() {
+    run_async(async {
+      let files = AudioTrackFixture::new();
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![
+        audio_stream(1, "eng", Some("English - AAC 5.1")),
+        audio_stream(2, "jpn", Some("Japanese - AAC 2.0")),
+      ];
+      let (mut controller, _mpv) = controller_harness(Arc::new(server)).await;
+      controller.set_audio_track_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      let _ = controller
+        .select_audio_track(2)
+        .await
+        .expect("audio track should be selected");
+
+      let key = AudioTrackKey::new("series-1").expect("key");
+      assert_eq!(
+        files.store().get(&key),
+        Some(AudioTrackPreference::new("jpn", Some("Japanese - AAC 2.0")).expect("preference"))
+      );
+    });
+  }
+
+  fn subtitle_stream(index: i32, language: &str, display_title: Option<&str>) -> MediaStream {
+    let mut stream = stream(index, "Subtitle");
+    stream.language = Some(language.to_owned());
+    stream.display_title = display_title.map(str::to_owned);
+    stream
+  }
+
+  #[test]
+  fn remembered_subtitle_track_applies_on_play() {
+    run_async(async {
+      let files = AudioTrackFixture::new();
+      let mut store = files.store();
+      store
+        .remember_subtitle(
+          &AudioTrackKey::new("series-1").expect("key"),
+          SubtitleTrackPreference::enabled("jpn", Some("Japanese - SRT")).expect("preference"),
+        )
+        .expect("remember");
+      let mut server = MockPlaybackServer::new();
+      let mut default_sub = subtitle_stream(5, "eng", Some("English - SRT"));
+      default_sub.is_default = true;
+      server.resolution.media_source.media_streams = vec![
+        default_sub,
+        subtitle_stream(6, "jpn", Some("Japanese - SRT")),
+      ];
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller.set_audio_track_memory(store);
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      // The series memory beats the container-default subtitle.
+      assert_eq!(server.start_track_indices(), vec![(None, Some(6))]);
+    });
+  }
+
+  #[test]
+  fn remembered_disabled_subtitle_stays_off() {
+    run_async(async {
+      let files = AudioTrackFixture::new();
+      let mut store = files.store();
+      store
+        .remember_subtitle(
+          &AudioTrackKey::new("series-1").expect("key"),
+          SubtitleTrackPreference::disabled(),
+        )
+        .expect("remember");
+      let mut server = MockPlaybackServer::new();
+      let mut default_sub = subtitle_stream(5, "eng", Some("English - SRT"));
+      default_sub.is_default = true;
+      server.resolution.media_source.media_streams = vec![default_sub];
+      server.resolution.media_source.default_subtitle_stream_index = Some(5);
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller.set_audio_track_memory(store);
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      assert_eq!(server.start_track_indices(), vec![(None, Some(-1))]);
+    });
+  }
+
+  #[test]
+  fn global_subtitle_languages_apply_without_memory() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      let mut default_sub = subtitle_stream(5, "eng", Some("English - SRT"));
+      default_sub.is_default = true;
+      server.resolution.media_source.media_streams = vec![
+        default_sub,
+        subtitle_stream(6, "jpn", Some("Japanese - SRT")),
+      ];
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_subtitle_languages(vec!["jpn".to_owned()]),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      assert_eq!(server.start_track_indices(), vec![(None, Some(6))]);
+    });
+  }
+
+  #[test]
+  fn manual_subtitle_selection_is_remembered_for_the_series() {
+    run_async(async {
+      let files = AudioTrackFixture::new();
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![
+        audio_stream(1, "eng", Some("English - AAC 5.1")),
+        subtitle_stream(5, "jpn", Some("Japanese - SRT")),
+      ];
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller.set_audio_track_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      let _ = controller
+        .select_subtitle_track(Some(3))
+        .await
+        .expect("subtitle track should be selected");
+      let key = AudioTrackKey::new("series-1").expect("key");
+      assert_eq!(
+        files.store().get_subtitle(&key),
+        Some(SubtitleTrackPreference::enabled("jpn", Some("Japanese - SRT")).expect("preference"))
+      );
+
+      let _ = controller
+        .select_subtitle_track(None)
+        .await
+        .expect("subtitle disable should work");
+      assert_eq!(
+        files.store().get_subtitle(&key),
+        Some(SubtitleTrackPreference::disabled())
+      );
+    });
+  }
+
+  #[test]
+  fn stale_automatic_selection_falls_back_instead_of_aborting_playback() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      // Playback info returns a refreshed source (e.g. .strm) whose only audio
+      // track differs from the pre-request context; the automatic pick must be
+      // dropped, not reported as an unavailable explicit track.
+      server.resolution.media_source.media_streams =
+        vec![audio_stream(1, "eng", Some("English - AAC 5.1"))];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![audio_option(2, Some("jpn"), "Japanese - AAC 2.0", false)],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_original_audio_enabled(true),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play should survive a stale automatic selection");
+
+      assert_eq!(server.start_track_indices(), vec![(None, None)]);
+    });
+  }
+
+  #[test]
+  fn server_default_audio_index_wins_over_container_default_post_resolve() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.default_audio_stream_index = Some(2);
+      let mut container_default = audio_stream(1, "jpn", Some("Japanese - AAC 2.0"));
+      container_default.is_default = true;
+      server.resolution.media_source.media_streams = vec![
+        container_default,
+        audio_stream(2, "jpn", Some("Japanese - DTS 5.1")),
+      ];
+      let server = Arc::new(server.with_audio_context(PlaybackAudioContext {
+        original_language: Some("ja".to_owned()),
+        audio_streams: vec![
+          audio_option(1, Some("jpn"), "Japanese - AAC 2.0", true),
+          audio_option(2, Some("jpn"), "Japanese - DTS 5.1", false),
+        ],
+      }));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("mpv"))
+            .with_original_audio_enabled(true),
+        )
+        .await
+        .expect("configure");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+
+      // Pre-request the container default (1) is the best known choice; after the
+      // resolved source reports the server's own default, it wins (2).
+      assert_eq!(resolution_audio_indices(&server), vec![Some(1)]);
+      assert_eq!(server.start_track_indices(), vec![(Some(2), None)]);
     });
   }
 

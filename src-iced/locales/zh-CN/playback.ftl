@@ -13,6 +13,7 @@ player-subtitles = 字幕
 player-queue = 播放队列
 player-remaining-minutes = 剩余 { $minutes } 分钟
 player-no-audio = 暂无音轨
+player-original-track = 原生
 player-loading-audio = 正在加载音轨…
 player-unavailable-audio = 音轨不可用
 player-loading-subtitles = 正在加载字幕轨…

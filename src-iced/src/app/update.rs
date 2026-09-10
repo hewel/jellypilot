@@ -37,6 +37,7 @@ struct SettingsPlaybackSnapshot {
   subtitle_languages: Vec<String>,
   intro_mode: IntroMode,
   remember_season_volume: bool,
+  prefer_original_audio: bool,
   playback_target_name: Option<String>,
   app_mode: AppMode,
 }
@@ -49,6 +50,7 @@ impl SettingsPlaybackSnapshot {
       subtitle_languages: settings.subtitle_languages().to_vec(),
       intro_mode: settings.intro_mode(),
       remember_season_volume: settings.remember_season_volume(),
+      prefer_original_audio: settings.prefer_original_audio(),
       playback_target_name: settings.playback_target_name().map(str::to_owned),
       app_mode: settings.app_mode(),
     }
@@ -547,6 +549,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         || settings_after.mpv_args != settings_before.mpv_args
         || settings_after.subtitle_languages != settings_before.subtitle_languages
         || settings_after.remember_season_volume != settings_before.remember_season_volume
+        || settings_after.prefer_original_audio != settings_before.prefer_original_audio
       {
         tasks.push(playback::apply_playback_configuration(
           &mut state.playback,
@@ -916,6 +919,79 @@ mod tests {
     assert!(!state.kernel.settings.snapshot().remember_season_volume());
   }
 
+  #[tokio::test]
+  async fn original_audio_switch_is_keyboard_operable_and_persists() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{keyboard, mouse, Event, Font, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let (settings, _file) = isolated_settings("original-audio-keyboard");
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.shell.settings_open = true;
+    state.settings.view.active_section = crate::app::state::SettingsSection::Playback;
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, iced::window::Id::unique()),
+      Size::new(1200.0, 900.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let key = |named| {
+      Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(named),
+        modified_key: keyboard::Key::Named(named),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })
+    };
+    let mut messages = Vec::new();
+    update_ui(
+      &mut ui,
+      &mut renderer,
+      &[key(keyboard::key::Named::Tab)],
+      mouse::Cursor::Unavailable,
+      &mut messages,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::focusable::focus::<()>(widget::Id::new("settings-original-audio")),
+    );
+    update_ui(
+      &mut ui,
+      &mut renderer,
+      &[key(keyboard::key::Named::Enter)],
+      mouse::Cursor::Unavailable,
+      &mut messages,
+    );
+    drop(ui);
+    let message = messages
+      .into_iter()
+      .find(|message| {
+        matches!(
+          message,
+          Message::Settings(SettingsMessage::PreferOriginalAudioChanged(_))
+        )
+      })
+      .expect("keyboard activation should toggle original audio preference");
+    drop(update(&mut state, message));
+    assert!(state.kernel.settings.snapshot().prefer_original_audio());
+  }
+
   fn image_reference(state: &mut State, name: &str) -> String {
     use jellypilot_media_server::{
       image_id_for_url, ImageRefKind, MediaServerProvider, SavedSession,
@@ -1195,6 +1271,7 @@ mod tests {
         runtime_seconds: Some(1800.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
+        original_language: None,
       },
       paused: false,
       position_seconds: 0.0,
@@ -1524,6 +1601,7 @@ mod tests {
             runtime_seconds: Some(2400.0),
             start_position_seconds: 0.0,
             play_method: "DirectPlay".to_owned(),
+            original_language: None,
           },
           paused: false,
           position_seconds: 120.0,
@@ -2037,6 +2115,7 @@ mod tests {
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),
+        original_language: None,
       }),
       transport: jellypilot_mpv::PlayerState {
         connected: true,
