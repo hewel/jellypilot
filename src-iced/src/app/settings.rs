@@ -211,6 +211,22 @@ fn update_settings(
       surface.view.diagnostic_category_menu_open = false;
       Task::none()
     }
+    SettingsMessage::PlayerLogCaptureChanged(enabled) => {
+      let player_logs = jellypilot_core::player_logs::global();
+      if player_logs.enabled() != enabled {
+        player_logs.set_enabled(enabled);
+        kernel.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Player,
+          if enabled {
+            "Player log capture enabled."
+          } else {
+            "Player log capture disabled."
+          },
+        );
+      }
+      Task::none()
+    }
     SettingsMessage::ExportLogs => {
       clear_settings_feedback(surface);
       let exported_at = jellypilot_core::logs::now_seconds();
@@ -219,6 +235,7 @@ fn update_settings(
         exported_at,
         kernel.diagnostics.rows(),
         &jellypilot_core::logs::global().snapshot(),
+        &jellypilot_core::player_logs::global().snapshot(),
       );
       Task::perform(
         async move {

@@ -650,6 +650,7 @@ fn cache_section(state: &State) -> Element<'_, Message> {
 
 fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
+  let player_log_capture = jellypilot_core::player_logs::global().enabled();
   let level_trigger = control_button(
     Some(Icon::Filter),
     Some(state.format(
@@ -724,6 +725,10 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     diagnostic_category_option(
       state.t("settings-playback"),
       Some(DiagnosticCategory::Playback)
+    ),
+    diagnostic_category_option(
+      state.t("settings-category-player"),
+      Some(DiagnosticCategory::Player)
     ),
     diagnostic_category_option(
       state.t("settings-category-remote-control"),
@@ -825,6 +830,14 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     Icon::Activity,
     state.t("settings-diagnostics"),
     column![
+      toggle_row(
+        palette,
+        state.kernel.locale,
+        state.t("settings-player-log-capture"),
+        state.t("settings-player-log-capture-help"),
+        player_log_capture,
+        SettingsMessage::PlayerLogCaptureChanged(!player_log_capture),
+      ),
       row![
         level_filter,
         category_filter,
@@ -1078,6 +1091,7 @@ fn diagnostic_category_label(locale: Localizer, category: Option<DiagnosticCateg
     Some(DiagnosticCategory::Connection) => "settings-category-connection",
     Some(DiagnosticCategory::Auth) => "settings-category-auth",
     Some(DiagnosticCategory::Playback) => "settings-playback",
+    Some(DiagnosticCategory::Player) => "settings-category-player",
     Some(DiagnosticCategory::RemoteControl) => "settings-category-remote-control",
     Some(DiagnosticCategory::Artwork) => "settings-category-artwork",
     Some(DiagnosticCategory::Config) => "settings-category-config",

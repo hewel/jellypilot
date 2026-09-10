@@ -256,6 +256,7 @@ pub enum SettingsMessage {
   DiagnosticCategoryMenuToggled,
   DiagnosticCategoryMenuDismissed,
   DiagnosticCategorySelected(Option<DiagnosticCategory>),
+  PlayerLogCaptureChanged(bool),
   ExportLogs,
   LogsExported(Result<String, String>),
   PlaybackConfigApplied(Result<(), PlaybackError>),

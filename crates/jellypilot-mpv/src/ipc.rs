@@ -3,7 +3,7 @@
 //! Handles platform-specific socket/pipe connections.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +13,10 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+use jellypilot_core::player_logs::PlayerLogs;
+
+static CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 use super::protocol::{MpvCommand, MpvEvent, MpvMessage, MpvResponse};
 
@@ -92,6 +96,9 @@ pub struct MpvIpc {
   closed: Arc<AtomicBool>,
   reader_handle: JoinHandle<()>,
   writer_handle: JoinHandle<()>,
+  log_handle: Option<JoinHandle<()>>,
+  logs: Arc<PlayerLogs>,
+  connection_id: u64,
 }
 
 impl MpvIpc {
@@ -145,6 +152,24 @@ impl MpvIpc {
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
   {
+    Self::setup_with_logs(
+      reader,
+      writer,
+      jellypilot_core::player_logs::global().clone(),
+    )
+    .await
+  }
+
+  async fn setup_with_logs<R, W>(
+    reader: R,
+    writer: W,
+    logs: Arc<PlayerLogs>,
+  ) -> Result<Self, IpcError>
+  where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+  {
+    let connection_id = CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
     let state = Arc::new(Mutex::new(IpcState {
       pending: HashMap::new(),
     }));
@@ -157,8 +182,17 @@ impl MpvIpc {
     // Spawn reader task
     let reader_state = state.clone();
     let reader_closed = closed.clone();
+    let reader_logs = logs.clone();
     let reader_handle = tokio::spawn(async move {
-      Self::reader_loop(reader, reader_state, event_tx, reader_closed).await;
+      Self::reader_loop(
+        reader,
+        reader_state,
+        event_tx,
+        reader_closed,
+        reader_logs,
+        connection_id,
+      )
+      .await;
     });
 
     // Spawn writer task - pass state and closed for error handling
@@ -168,14 +202,48 @@ impl MpvIpc {
       Self::writer_loop(writer, write_rx, writer_state, writer_closed).await;
     });
 
-    Ok(Self {
+    // Own the spawned tasks before awaiting the optional handshake, so a
+    // cancelled connection attempt still closes the socket and aborts them.
+    let mut ipc = Self {
       state,
       write_tx,
       event_rx,
       closed,
       reader_handle,
       writer_handle,
-    })
+      log_handle: None,
+      logs,
+      connection_id,
+    };
+    let initially_enabled = ipc.logs.enabled();
+    if initially_enabled {
+      // Subscribe before the caller can load media when capture was pre-enabled.
+      Self::update_log_subscription(
+        &ipc.state,
+        &ipc.write_tx,
+        &ipc.closed,
+        &ipc.logs,
+        connection_id,
+        true,
+      )
+      .await;
+    }
+    let log_state = ipc.state.clone();
+    let log_write = ipc.write_tx.clone();
+    let log_closed = ipc.closed.clone();
+    let log_capture = ipc.logs.clone();
+    ipc.log_handle = Some(tokio::spawn(async move {
+      Self::log_subscription_loop(
+        log_state,
+        log_write,
+        log_closed,
+        log_capture,
+        connection_id,
+        initially_enabled,
+      )
+      .await;
+    }));
+    Ok(ipc)
   }
 
   #[cfg(any(test, feature = "test-utils"))]
@@ -192,6 +260,8 @@ impl MpvIpc {
     state: Arc<Mutex<IpcState>>,
     event_tx: Sender<MpvEvent>,
     closed: Arc<AtomicBool>,
+    logs: Arc<PlayerLogs>,
+    connection_id: u64,
   ) {
     log::info!("MPV IPC reader loop started");
     let mut buf_reader = BufReader::new(reader);
@@ -227,7 +297,36 @@ impl MpvIpc {
                 let _ = tx.send(Ok(response));
               }
             }
+            Ok(MpvMessage::Log(message)) => {
+              logs.record(
+                connection_id,
+                &message.prefix,
+                &message.level,
+                &message.text,
+              );
+            }
             Ok(MpvMessage::Event(event)) => {
+              if matches!(
+                event.event.as_str(),
+                "file-loaded"
+                  | "seek"
+                  | "playback-restart"
+                  | "audio-reconfig"
+                  | "video-reconfig"
+                  | "tracks-changed"
+                  | "track-switched"
+                  | "end-file"
+                  | "shutdown"
+              ) {
+                logs.record(connection_id, "ipc", "info", &event.event);
+              } else if event.event == "queue-overflow" {
+                logs.record(
+                  connection_id,
+                  "ipc",
+                  "warn",
+                  "MPV event queue overflow; player log may be incomplete",
+                );
+              }
               log::debug!("MPV event: {} (reason={:?})", event.event, event.reason);
               // Use try_send to avoid blocking if channel is full
               if event_tx.try_send(event).is_err() {
@@ -308,8 +407,52 @@ impl MpvIpc {
 
   /// Send a command to MPV and wait for response.
   pub(crate) async fn send_command(&self, cmd: MpvCommand) -> Result<MpvResponse, IpcError> {
+    let capture_command = self.logs.enabled()
+      && (matches!(cmd.command_name(), "loadfile" | "stop" | "seek" | "quit")
+        || (cmd.command_name() == "set_property"
+          && cmd
+            .command
+            .get(1)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|p| matches!(p, "aid" | "sid" | "pause"))));
+    let request_id = cmd.request_id;
+    if capture_command {
+      let mut summary = command_trace_summary(&cmd);
+      for arg in cmd.command.iter().skip(1) {
+        if arg.is_number()
+          || arg.is_boolean()
+          || arg
+            .as_str()
+            .is_some_and(|p| matches!(p, "aid" | "sid" | "pause"))
+        {
+          summary.push_str(&format!(" {arg}"));
+        }
+      }
+      self
+        .logs
+        .record(self.connection_id, "command", "info", &summary);
+    }
+    let result = Self::send(&self.state, &self.write_tx, &self.closed, cmd).await;
+    if capture_command {
+      let success = result.as_ref().is_ok_and(MpvResponse::is_success);
+      self.logs.record(
+        self.connection_id,
+        "command",
+        if success { "info" } else { "error" },
+        &format!("request_id={request_id}, success={success}"),
+      );
+    }
+    result
+  }
+
+  async fn send(
+    state: &Mutex<IpcState>,
+    write_tx: &Sender<WriteMessage>,
+    closed: &AtomicBool,
+    cmd: MpvCommand,
+  ) -> Result<MpvResponse, IpcError> {
     // Early check for closed connection
-    if self.is_closed() {
+    if closed.load(Ordering::Acquire) {
       return Err(IpcError::Disconnected);
     }
 
@@ -320,7 +463,7 @@ impl MpvIpc {
 
     // Register pending request
     {
-      let mut state = self.state.lock();
+      let mut state = state.lock();
       state.pending.insert(request_id, tx);
     }
 
@@ -328,8 +471,8 @@ impl MpvIpc {
     // If closed was set between our first check and insert, drain_pending() already ran
     // and won't drain our newly inserted pending - we'd timeout after 5s instead of
     // getting immediate Disconnected
-    if self.is_closed() {
-      if let Some(tx) = self.state.lock().pending.remove(&request_id) {
+    if closed.load(Ordering::Acquire) {
+      if let Some(tx) = state.lock().pending.remove(&request_id) {
         let _ = tx.send(Err(IpcError::Disconnected));
       }
       return Err(IpcError::Disconnected);
@@ -339,7 +482,7 @@ impl MpvIpc {
     let json = match serde_json::to_string(&cmd) {
       Ok(j) => j,
       Err(e) => {
-        self.state.lock().pending.remove(&request_id);
+        state.lock().pending.remove(&request_id);
         return Err(IpcError::WriteFailed(std::io::Error::new(
           std::io::ErrorKind::InvalidData,
           e,
@@ -350,13 +493,12 @@ impl MpvIpc {
     log::trace!("Sending MPV command: {}", command_trace_summary(&cmd));
 
     // Send to writer task - if this fails, remove pending and return error
-    if self
-      .write_tx
+    if write_tx
       .send(WriteMessage::Command(json.into_bytes()))
       .await
       .is_err()
     {
-      if let Some(tx) = self.state.lock().pending.remove(&request_id) {
+      if let Some(tx) = state.lock().pending.remove(&request_id) {
         let _ = tx.send(Err(IpcError::Disconnected));
       }
       return Err(IpcError::Disconnected);
@@ -381,9 +523,71 @@ impl MpvIpc {
           "MPV command timeout after 5 seconds, request_id={}",
           request_id
         );
-        self.state.lock().pending.remove(&request_id);
+        state.lock().pending.remove(&request_id);
         Err(IpcError::Timeout)
       }
+    }
+  }
+
+  async fn log_subscription_loop(
+    state: Arc<Mutex<IpcState>>,
+    write_tx: Sender<WriteMessage>,
+    closed: Arc<AtomicBool>,
+    logs: Arc<PlayerLogs>,
+    connection_id: u64,
+    mut applied: bool,
+  ) {
+    // UI changes are observed outside the GPU path. There are no media-property
+    // polls here, and subscription commands use the ordinary async IPC writer.
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+      tick.tick().await;
+      if closed.load(Ordering::Acquire) {
+        break;
+      }
+      let enabled = logs.enabled();
+      if enabled == applied {
+        continue;
+      }
+      applied = enabled;
+      Self::update_log_subscription(&state, &write_tx, &closed, &logs, connection_id, enabled)
+        .await;
+    }
+  }
+
+  async fn update_log_subscription(
+    state: &Mutex<IpcState>,
+    write_tx: &Sender<WriteMessage>,
+    closed: &AtomicBool,
+    logs: &PlayerLogs,
+    connection_id: u64,
+    enabled: bool,
+  ) {
+    match Self::send(
+      state,
+      write_tx,
+      closed,
+      MpvCommand::request_log_messages(enabled),
+    )
+    .await
+    {
+      Ok(response) if response.is_success() => {
+        if enabled {
+          logs.record(
+            connection_id,
+            "ipc",
+            "info",
+            "Player log subscription active (mpv level=v)",
+          );
+        }
+      }
+      _ => logs.record(
+        connection_id,
+        "ipc",
+        "error",
+        "Player log subscription failed; toggle capture to retry",
+      ),
     }
   }
 
@@ -425,6 +629,9 @@ impl Drop for MpvIpc {
     // Abort tasks to release socket handles
     self.reader_handle.abort();
     self.writer_handle.abort();
+    if let Some(handle) = &self.log_handle {
+      handle.abort();
+    }
 
     // Drain any remaining pending requests
     self.state.lock().drain_pending();
@@ -434,6 +641,108 @@ impl Drop for MpvIpc {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn player_logs_toggle_over_ipc_without_consuming_playback_events() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let logs = Arc::new(PlayerLogs::new(64 * 1024));
+    logs.set_enabled(true);
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (reader, writer) = tokio::io::split(client);
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (disabled_tx, disabled_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+      let (reader, mut writer) = tokio::io::split(server);
+      let mut reader = BufReader::new(reader).lines();
+      let command: serde_json::Value =
+        serde_json::from_str(&reader.next_line().await.unwrap().unwrap()).unwrap();
+      assert_eq!(
+        command["command"],
+        serde_json::json!(["request_log_messages", "v"])
+      );
+      writer
+        .write_all(
+          format!(
+            "{{\"request_id\":{},\"error\":\"success\"}}\n",
+            command["request_id"]
+          )
+          .as_bytes(),
+        )
+        .await
+        .unwrap();
+      // More log records than the normal event queue capacity. Payload text
+      // deliberately resembles a response to check envelope-based dispatch.
+      for _ in 0..150 {
+        writer.write_all(b"{\"event\":\"log-message\",\"prefix\":\"cplayer\",\"level\":\"v\",\"text\":\"delaying audio start 23 vs. 1, diff=22 request_id\"}\n").await.unwrap();
+      }
+      writer.write_all(b"{\"event\":\"log-message\",\"prefix\":\"ffmpeg\",\"level\":\"v\",\"text\":\"http-header-fields: X-Emby-Token: secret-player-credential\"}\n{\"event\":\"file-loaded\"}\n").await.unwrap();
+      ready_tx.send(()).unwrap();
+      let command: serde_json::Value =
+        serde_json::from_str(&reader.next_line().await.unwrap().unwrap()).unwrap();
+      assert_eq!(
+        command["command"],
+        serde_json::json!(["get_property", "aid"])
+      );
+      writer
+        .write_all(
+          format!(
+            "{{\"request_id\":{},\"error\":\"success\",\"data\":6}}\n",
+            command["request_id"]
+          )
+          .as_bytes(),
+        )
+        .await
+        .unwrap();
+      let command: serde_json::Value =
+        serde_json::from_str(&reader.next_line().await.unwrap().unwrap()).unwrap();
+      assert_eq!(
+        command["command"],
+        serde_json::json!(["request_log_messages", "no"])
+      );
+      writer
+        .write_all(
+          format!(
+            "{{\"request_id\":{},\"error\":\"success\"}}\n",
+            command["request_id"]
+          )
+          .as_bytes(),
+        )
+        .await
+        .unwrap();
+      disabled_tx.send(()).unwrap();
+      assert!(reader.next_line().await.unwrap().is_none());
+    });
+    let ipc = MpvIpc::setup_with_logs(reader, writer, logs.clone())
+      .await
+      .unwrap();
+    assert!(logs.snapshot().contains("Player log subscription active"));
+    tokio::time::timeout(Duration::from_secs(2), ready_rx)
+      .await
+      .unwrap()
+      .unwrap();
+    let response = ipc
+      .send_command(MpvCommand::get_property("aid"))
+      .await
+      .unwrap();
+    assert_eq!(response.data, Some(serde_json::json!(6)));
+    let events = ipc.events();
+    assert_eq!(events.try_recv().unwrap().event, "file-loaded");
+    assert!(events.try_recv().is_err());
+    let captured = logs.snapshot();
+    assert_eq!(captured.matches("delaying audio start").count(), 150);
+    assert!(!captured.contains("secret-player-credential"));
+    logs.set_enabled(false);
+    tokio::time::timeout(Duration::from_secs(2), disabled_rx)
+      .await
+      .unwrap()
+      .unwrap();
+    assert!(logs.snapshot().contains("delaying audio start"));
+    drop(ipc);
+    tokio::time::timeout(Duration::from_secs(2), server)
+      .await
+      .unwrap()
+      .unwrap();
+  }
 
   #[test]
   fn command_trace_summary_omits_token_bearing_arguments() {

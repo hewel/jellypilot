@@ -41,6 +41,13 @@ impl MpvCommand {
     }
   }
 
+  pub fn request_log_messages(enabled: bool) -> Self {
+    Self::new(vec![
+      "request_log_messages".into(),
+      if enabled { "v" } else { "no" }.into(),
+    ])
+  }
+
   pub fn stop_playback() -> Self {
     Self::new(vec!["stop".into()])
   }
@@ -234,27 +241,33 @@ impl From<serde_json::Value> for PropertyValue {
   }
 }
 
-/// Message received from MPV IPC (either response or event).
+/// Native player text is consumed by the log capture, never the playback event queue.
+#[derive(Clone, Deserialize)]
+pub(crate) struct MpvLogMessage {
+  pub prefix: String,
+  pub level: String,
+  pub text: String,
+}
+
+/// Message received from MPV IPC (response, playback event, or player log).
 #[derive(Clone)]
 pub(crate) enum MpvMessage {
   Response(MpvResponse),
   Event(MpvEvent),
+  Log(MpvLogMessage),
 }
 
 impl MpvMessage {
   /// Parse a JSON line from MPV.
   pub fn parse(line: &str) -> Result<Self, serde_json::Error> {
-    // Try parsing as response first (has request_id)
-    if line.contains("request_id") {
-      let response: MpvResponse = serde_json::from_str(line)?;
-      Ok(MpvMessage::Response(response))
-    } else if line.contains("\"event\"") {
-      let event: MpvEvent = serde_json::from_str(line)?;
-      Ok(MpvMessage::Event(event))
+    // Inspect envelope fields, not substrings in log text or property values.
+    let value: serde_json::Value = serde_json::from_str(line)?;
+    if value.get("request_id").is_some() {
+      serde_json::from_value(value).map(Self::Response)
+    } else if value.get("event").and_then(serde_json::Value::as_str) == Some("log-message") {
+      serde_json::from_value(value).map(Self::Log)
     } else {
-      // Fallback to event
-      let event: MpvEvent = serde_json::from_str(line)?;
-      Ok(MpvMessage::Event(event))
+      serde_json::from_value(value).map(Self::Event)
     }
   }
 }

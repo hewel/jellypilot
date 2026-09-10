@@ -27,6 +27,7 @@ mod load_state;
 pub mod locale;
 #[cfg(feature = "native")]
 pub mod logs;
+pub mod player_logs;
 pub mod request_gate;
 #[cfg(feature = "native")]
 pub mod settings;

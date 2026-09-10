@@ -4,7 +4,7 @@
 //! diagnostic events into a timestamped file under the config directory.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -76,13 +76,14 @@ pub fn now_seconds() -> u64 {
 }
 
 /// Builds the support document: app/runtime header, the sanitized diagnostic
-/// events, then the buffered log output (lossily decoded).
+/// events, buffered app log output (lossily decoded), and sanitized player log.
 #[must_use]
 pub fn build_support_document<'a>(
     app_version: &str,
     exported_at_seconds: u64,
     diagnostics: impl Iterator<Item = DiagnosticRow<'a>>,
     log_bytes: &[u8],
+    player_log: &str,
 ) -> String {
     let mut document = format!(
         "JellyPilot {app_version} ({} {}) log export at {}\n\n== Diagnostics ==\n",
@@ -106,6 +107,8 @@ pub fn build_support_document<'a>(
     }
     document.push_str("\n== Log output ==\n");
     document.push_str(&String::from_utf8_lossy(log_bytes));
+    document.push_str("\n== Player log ==\n");
+    document.push_str(player_log);
     document
 }
 
@@ -124,12 +127,31 @@ fn export_directory() -> PathBuf {
 
 fn write_to(directory: &Path, document: &str, exported_at_seconds: u64) -> io::Result<PathBuf> {
     fs::create_dir_all(directory)?;
-    let path = directory.join(format!(
-        "jellypilot-logs-{}.log",
-        format_file_timestamp(exported_at_seconds)
-    ));
-    fs::write(&path, document)?;
-    Ok(path)
+    let timestamp = format_file_timestamp(exported_at_seconds);
+    for suffix in 0_u64.. {
+        let name = if suffix == 0 {
+            format!("jellypilot-logs-{timestamp}.log")
+        } else {
+            format!("jellypilot-logs-{timestamp}-{suffix}.log")
+        };
+        let path = directory.join(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(document.as_bytes())?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "log export names exhausted",
+    ))
 }
 
 #[cfg(test)]
@@ -178,6 +200,7 @@ mod tests {
             86_401,
             diagnostics.rows(),
             b"raw log line\npartial \xFF tail",
+            "+12ms connection=1 [demux] [v] refresh seek to 1870.0\n",
         );
 
         assert!(document.contains("JellyPilot 2.0.0"));
@@ -185,6 +208,7 @@ mod tests {
         assert!(document.contains("WARN [Artwork] something failed"));
         assert!(document.contains("raw log line"));
         assert!(document.contains("partial \u{FFFD} tail"));
+        assert!(document.contains("== Player log ==\n+12ms connection=1 [demux] [v] refresh seek"));
     }
 
     #[test]
@@ -194,6 +218,7 @@ mod tests {
             0,
             crate::diagnostics::Diagnostics::default().rows(),
             b"",
+            "capture disabled\n",
         );
         assert!(document.contains("(no diagnostic events)"));
     }
@@ -218,5 +243,29 @@ mod tests {
         );
 
         fs::remove_dir_all(&directory).expect("cleanup");
+    }
+
+    #[test]
+    fn same_second_exports_preserve_both_documents() {
+        let directory = std::env::temp_dir().join(format!(
+            "jellypilot-logs-collision-test-{}-{}",
+            std::process::id(),
+            now_seconds()
+        ));
+        let first =
+            write_to(&directory, "before audio track switch", 86_401).expect("first export");
+        let second =
+            write_to(&directory, "after audio track switch", 86_401).expect("second export");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            fs::read_to_string(first).expect("first retained"),
+            "before audio track switch"
+        );
+        assert_eq!(
+            fs::read_to_string(second).expect("second retained"),
+            "after audio track switch"
+        );
+        fs::remove_dir_all(directory).expect("cleanup");
     }
 }
