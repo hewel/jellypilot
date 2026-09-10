@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-auth"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
@@ -2789,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-core"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "dirs",
  "icu_locale_core",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-iced"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-launcher"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "iced_wgpu",
  "jellypilot-iced",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-media-server"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "base64",
  "bytes",
@@ -2867,7 +2867,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "async-channel",
  "dirs",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv-host"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "ash",
  "iced_wgpu",
@@ -2897,7 +2897,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-session"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "futures-util",
  "jellypilot-media-server",
@@ -2911,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-ui"
-version = "2.1.2"
+version = "2.2.0"
 dependencies = [
  "iced",
  "iced_runtime",
