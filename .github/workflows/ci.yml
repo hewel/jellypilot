@@ -24,6 +24,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
+      - name: Discard cached iced vendor
+        shell: bash
+        run: rm -rf target/vendor/iced target/vendor/iced-*
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

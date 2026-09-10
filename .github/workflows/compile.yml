@@ -45,5 +45,8 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
+      - name: Discard cached iced vendor
+        shell: bash
+        run: rm -rf target/vendor/iced target/vendor/iced-*
       - name: Compile workspace
         run: bun run task rust check
