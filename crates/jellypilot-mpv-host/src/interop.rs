@@ -296,6 +296,11 @@ impl Host {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         options.validate()?;
+        std::fs::create_dir_all(&options.demuxer_cache_dir).map_err(|error| {
+            Error::from(format!(
+                "cannot create embedded MPV cache directory: {error}"
+            ))
+        })?;
         validate_size(&context.device, options.width, options.height)?;
         unsafe {
             let native = context
@@ -429,6 +434,15 @@ impl Host {
             ] {
                 option(name, value)?;
             }
+            // config=no disables mpv's default cache path as well as user config.
+            // Without an explicit directory, packets stay in RAM even with cache-on-disk.
+            option(
+                "demuxer-cache-dir",
+                options
+                    .demuxer_cache_dir
+                    .to_str()
+                    .ok_or("cache directory is not UTF-8")?,
+            )?;
             option(
                 "input-ipc-server",
                 options.ipc.to_str().ok_or("IPC path is not UTF-8")?,

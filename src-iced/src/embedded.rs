@@ -36,6 +36,8 @@ pub(crate) struct Options {
   pub libmpv: PathBuf,
   #[cfg(target_os = "linux")]
   pub baseline: PathBuf,
+  #[cfg(target_os = "linux")]
+  pub demuxer_cache_dir: PathBuf,
   pub ipc: PathBuf,
   #[cfg(target_os = "linux")]
   pub engine_factory: crate::EmbeddedEngineFactory,
@@ -153,6 +155,10 @@ pub(crate) fn initialize(
       root,
       "share/jellypilot/mpv-baseline.conf",
     )?;
+    let demuxer_cache_dir = dirs::cache_dir()
+      .ok_or("Application cache directory unavailable for embedded MPV")?
+      .join("jellypilot")
+      .join("mpv");
     // A process-private directory prevents another local user replacing the IPC socket.
     let directory =
       std::env::temp_dir().join(format!("jellypilot-embedded-{}", std::process::id()));
@@ -169,6 +175,7 @@ pub(crate) fn initialize(
       .set(Options {
         libmpv,
         baseline,
+        demuxer_cache_dir,
         ipc: directory.join("mpv.sock"),
         engine_factory: _engine_factory,
       })

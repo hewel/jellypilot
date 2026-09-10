@@ -97,6 +97,7 @@ impl graphics::Compositor for Compositor {
         libmpv: options.libmpv.clone(),
         baseline: options.baseline.clone(),
         ipc: options.ipc.clone(),
+        demuxer_cache_dir: options.demuxer_cache_dir.clone(),
         width: 1,
         height: 1,
         extra_args: crate::regression::host_extra_args(),

@@ -73,6 +73,8 @@ pub struct HostOptions {
     pub libmpv: std::path::PathBuf,
     pub baseline: std::path::PathBuf,
     pub ipc: std::path::PathBuf,
+    /// Application directory for temporary demuxer cache files, created at host startup.
+    pub demuxer_cache_dir: std::path::PathBuf,
     pub width: u32,
     pub height: u32,
     /// Strict `--name=value` playback options. Device, VO, config, scripts,
@@ -83,7 +85,12 @@ pub struct HostOptions {
 impl HostOptions {
     /// Checks paths and option policy without loading a library or allocating GPU resources.
     pub fn validate(&self) -> Result<(), Error> {
-        for path in [&self.libmpv, &self.baseline, &self.ipc] {
+        for path in [
+            &self.libmpv,
+            &self.baseline,
+            &self.ipc,
+            &self.demuxer_cache_dir,
+        ] {
             if !path.is_absolute() || path.to_str().is_none_or(|value| value.contains('\0')) {
                 return Err("embedded mpv paths must be absolute, UTF-8 and NUL-free".into());
             }

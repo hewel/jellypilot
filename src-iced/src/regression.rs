@@ -442,7 +442,13 @@ mod gpu_probe {
       let media = with_run(|run| run.media.clone())
         .flatten()
         .ok_or("Missing regression media")?;
-      probe.command(json!(["loadfile", media, "replace"]))?;
+      probe.command(json!([
+        "loadfile",
+        media,
+        "replace",
+        -1,
+        "cache=yes,cache-on-disk=yes,demuxer-seekable-cache=yes"
+      ]))?;
       Ok(probe)
     }
     fn command(&mut self, command: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -508,6 +514,7 @@ mod gpu_probe {
         "osd-level",
         "decoder-frame-drop-count",
         "frame-drop-count",
+        "demuxer-cache-state",
       ] {
         sample[property] = match self.command(json!(["get_property", property])) {
           Ok(value) => json!({ "status": "available", "value": value }),
@@ -589,6 +596,11 @@ mod gpu_probe {
             return Ok(());
           }
           self.clock = self.clock()?;
+          let cache = self.command(json!(["get_property", "demuxer-cache-state"]))?;
+          if cache["file-cache-bytes"].as_u64().unwrap_or(0) == 0 {
+            return Err("Embedded MPV did not create a populated disk cache".into());
+          }
+          check("embedded MPV buffered media in its application disk cache");
           check("media loaded, decoded, copied and rendered through the video shader");
           self.sample_decoder("loaded-paused")?;
           self.advance(1);
