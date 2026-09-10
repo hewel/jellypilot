@@ -32,6 +32,7 @@ export type TaskCommand =
   | {
       readonly _tag: 'icedRegress';
       readonly scenario: 'tray' | 'external' | 'gpu' | 'all';
+      readonly hwdec: 'no' | 'vaapi' | 'vaapi-copy' | null;
       readonly file: string | null;
       readonly output: string;
     }
@@ -167,15 +168,16 @@ function parseRegression(args: readonly string[]): TaskCommand {
   const [scenario, ...rest] = args;
   if (scenario !== 'tray' && scenario !== 'external' && scenario !== 'gpu' && scenario !== 'all') {
     throw new Error(
-      'Expected iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>].',
+      'Expected iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>].',
     );
   }
   let file: string | null = null;
   let output = 'target/native-regression';
+  let hwdec: 'no' | 'vaapi' | 'vaapi-copy' | null = null;
   const seen = new Set<string>();
   for (let index = 0; index < rest.length; index += 2) {
     const option = rest[index];
-    if (option !== '--file' && option !== '--out') {
+    if (option !== '--file' && option !== '--out' && option !== '--hwdec') {
       throw new Error(`Unknown iced regress option: ${option}`);
     }
     const value = rest[index + 1];
@@ -184,7 +186,12 @@ function parseRegression(args: readonly string[]): TaskCommand {
     }
     seen.add(option);
     if (option === '--file') file = value;
-    else output = value;
+    else if (option === '--hwdec') {
+      if (value !== 'no' && value !== 'vaapi' && value !== 'vaapi-copy') {
+        throw new Error('--hwdec requires no, vaapi or vaapi-copy.');
+      }
+      hwdec = value;
+    } else output = value;
   }
   if ((scenario === 'gpu' || scenario === 'all') && file === null) {
     throw new Error(
@@ -194,7 +201,10 @@ function parseRegression(args: readonly string[]): TaskCommand {
   if (file !== null && scenario !== 'gpu' && scenario !== 'all') {
     throw new Error('--file applies only to iced regress gpu/all.');
   }
-  return { _tag: 'icedRegress', scenario, file, output };
+  if (hwdec !== null && scenario !== 'gpu' && scenario !== 'all') {
+    throw new Error('--hwdec applies only to iced regress gpu/all.');
+  }
+  return { _tag: 'icedRegress', scenario, file, output, hwdec };
 }
 
 export function parseCli(argv: readonly string[]): TaskCommand {

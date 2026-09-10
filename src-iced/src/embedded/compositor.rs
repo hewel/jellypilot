@@ -99,7 +99,7 @@ impl graphics::Compositor for Compositor {
         ipc: options.ipc.clone(),
         width: 1,
         height: 1,
-        extra_args: Vec::new(),
+        extra_args: crate::regression::host_extra_args(),
       },
       move || wake.request_redraw(),
     )

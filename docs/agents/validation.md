@@ -29,7 +29,7 @@ checks; do not add an approval pause solely because the applicable tier is broad
 ## Opt-in native regressions
 
 The sole maintained joint entry is
-`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>]`.
+`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>]`.
 It is not part of normal startup or a replacement for the applicable project gates.
 See [fork maintenance](../../README.md#fork-maintenance-and-joint-acceptance) for sync and
 rollback, and [manual color comparison](../../README.md#manual-three-way-color-comparison)
@@ -47,6 +47,15 @@ app/IPC state while retaining the display connection. Probes manipulate only the
 no desktop input injection, other-window control, visual screenshot inspection or display-setting
 changes. If the current display/adapter cannot support the probe, record `unavailable`.
 
+The runner also preserves audio-session socket lookup separately from its private runtime:
+`PIPEWIRE_RUNTIME_DIR` and `PULSE_RUNTIME_PATH` default to the original session locations,
+while explicit audio routing variables (including `PIPEWIRE_REMOTE` and `PULSE_SERVER`)
+are retained. Real audio acceptance must use a trusted baseline with a single explicit
+backend, such as `ao=pipewire` without a trailing fallback comma. A mismatched or unavailable
+`current-ao` then fails the GPU probe; use an audio-bearing fixture for this strict audio
+acceptance mode. This does not verify physical speaker count or listening
+quality; keep those as separate human acceptance.
+
 - `tray`: creates the real GTK tray under a non-C locale before embedded-host initialization
   and renders through the actual compositor. Tray-free smoke cannot establish this result.
 - `external`: confirms an explicit missing-embedded-asset rejection, then starts and exits
@@ -57,6 +66,11 @@ changes. If the current display/adapter cannot support the probe, record `unavai
   closes the last window, reopens through the shell/tray show route, checks the retained
   playback session/new renderer binding, acknowledges stop, then exits. This is nonvisual
   lifecycle evidence, not a color comparison or proof of a particular hardware decoder.
+  `decoderSamples` separately records actual embedded `hwdec-current`, requested `hwdec`,
+  input/output formats and dropped-frame counters. GPU-only `--hwdec` overrides exercise
+  HostOptions after the baseline; unavailable properties remain explicit in the report.
+  Samples also include requested/actual AO and `audio-params`/`audio-out-params`; a lifecycle
+  pass with automatic backend selection is not evidence of a particular audio backend.
 
 Default reports are `target/native-regression/report.json` and the selected scenario JSON files.
 They include a fresh run identity; aggregate `pass` requires all requested scenarios to pass
@@ -81,9 +95,23 @@ When the smoke gate or MPV playback fails, follow this route instead of ad-hoc s
 - **Failure segment**: a failing smoke gate ends with an `=== iced smoke [FAILED] ===` segment
   (command, exit code, hint). Absence of that segment means the failure happened before the app
   started — inspect the cargo/tooling output above it.
-- **Playback**: MPV runs as an external process over JSON IPC. A missing binary surfaces as the
-  named error `MPV executable not found`; MPV's own diagnostics go to its stderr. App-side IPC
-  errors are visible at `JELLYPILOT_LOG=debug`.
+- **Player logs**: in Settings → Diagnostics, enable **Capture player logs**, reproduce, then
+  export logs. This session-only opt-in subscribes to the active embedded or external MPV's
+  native `log-message` events at `v` level over JSON IPC. Pre-enabled capture waits for
+  the subscription response before returning a new IPC connection; later toggle changes
+  are checked every 250 ms. Check the `Player log subscription active` marker in the export. It captures track refresh/seek and audio-start messages plus selected playback
+  commands, outside the GPU queue lock, without periodic media-property queries. Capture
+  starts at subscription, so earlier initialization messages are unavailable. Closing capture
+  unsubscribes and retains its sanitized 8 MiB tail; restarting clears it. The independent
+  `Player log` export section includes relative millisecond timestamps, connection IDs and
+  explicit loss markers; detailed messages do not consume the 200-row Diagnostics list.
+  URL/credential-bearing messages are omitted before capture. This is separate from
+  `JELLYPILOT_LOG`, which controls application tracing. Exports use fresh files even within
+  the same second, preserving previous evidence.
+- **Playback errors**: a missing external binary surfaces as `MPV executable not found`;
+  External MPV also retains its stderr output. App-side IPC errors are visible at
+  `JELLYPILOT_LOG=debug`. Player log subscription failure is recorded in the export; an
+  enabled toggle alone does not prove that the native subscription succeeded.
 
 ## Rules
 

@@ -53,9 +53,18 @@ describe('parseCli', () => {
       ['gpu', '--file', '--out'],
       ['gpu', '--file', 'clip.mp4', '--file', 'other.mp4'],
       ['tray', '--file', 'clip.mp4'],
+      ['tray', '--hwdec', 'vaapi'],
+      ['gpu', '--file', 'clip.mp4', '--hwdec', 'auto'],
+      ['gpu', '--file', 'clip.mp4', '--hwdec', 'vaapi', '--hwdec', 'no'],
     ]) {
       expect(() => parseCli(['iced', 'regress', ...args])).toThrow();
     }
+  });
+
+  test('preserves an explicit decoder override for the GPU extra-args probe', () => {
+    expect(
+      parseCli(['iced', 'regress', 'gpu', '--file', 'clip.mp4', '--hwdec', 'vaapi-copy']),
+    ).toMatchObject({ _tag: 'icedRegress', file: 'clip.mp4', hwdec: 'vaapi-copy' });
   });
 
   test('does not accept embedded selection on unrelated iced commands or as a valued option', () => {

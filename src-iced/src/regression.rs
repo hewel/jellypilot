@@ -17,7 +17,9 @@ struct Run {
   video_size: iced::Size,
   report: PathBuf,
   media: Option<PathBuf>,
+  hwdec: Option<String>,
   checks: Vec<String>,
+  decoder_samples: Vec<serde_json::Value>,
   error: Option<String>,
   adapter: Option<String>,
   action: Action,
@@ -58,6 +60,10 @@ impl Run {
     if let Some(adapter) = &self.adapter {
       report["adapter"] = json!(adapter);
     }
+    if self.scenario == "gpu" {
+      report["decoderSamples"] = json!(self.decoder_samples);
+      report["hwdecOverride"] = json!(self.hwdec);
+    }
     if let Some((width, height)) = self.physical_size {
       report["physicalSize"] = json!({"width": width, "height": height});
     }
@@ -94,8 +100,9 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
   let report = value("--regression-report")?;
   let media = value("--regression-media")?;
   let run_id = value("--regression-run-id")?;
+  let hwdec = value("--regression-hwdec")?;
   let Some(scenario) = scenario else {
-    if report.is_some() || media.is_some() || run_id.is_some() {
+    if report.is_some() || media.is_some() || run_id.is_some() || hwdec.is_some() {
       return Err("Regression arguments require --native-regression".into());
     }
     return Ok(());
@@ -124,7 +131,9 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
     video_size: iced::Size::new(480.0, 320.0),
     report,
     media: media.map(PathBuf::from),
+    hwdec,
     checks: Vec::new(),
+    decoder_samples: Vec::new(),
     error: Some("Native regression has not completed".into()),
     adapter: None,
     action: Action::None,
@@ -157,6 +166,13 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
       return Err("Native regressions require Linux Vulkan".into());
     }
     if run.scenario == "gpu" {
+      if run
+        .hwdec
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "no" | "vaapi" | "vaapi-copy"))
+      {
+        return Err("--regression-hwdec must be no, vaapi or vaapi-copy".into());
+      }
       let media = run
         .media
         .as_ref()
@@ -165,8 +181,8 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
         run.unavailable = true;
         return Err("Regression media must be an absolute UTF-8 regular file".into());
       }
-    } else if run.media.is_some() {
-      return Err("--regression-media is only valid for gpu".into());
+    } else if run.media.is_some() || run.hwdec.is_some() {
+      return Err("--regression-media and --regression-hwdec are only valid for gpu".into());
     }
     run.error = None;
     Ok(())
@@ -192,6 +208,17 @@ pub(crate) fn active() -> bool {
 }
 pub(crate) fn gpu() -> bool {
   with_run(|run| run.scenario == "gpu").unwrap_or(false)
+}
+pub(crate) fn host_extra_args() -> Vec<String> {
+  with_run(|run| {
+    run
+      .hwdec
+      .as_ref()
+      .filter(|_| run.scenario == "gpu")
+      .map(|value| vec![format!("--hwdec={value}")])
+      .unwrap_or_default()
+  })
+  .unwrap_or_default()
 }
 pub(crate) fn gpu_size() -> Option<iced::Size> {
   with_run(|run| (run.scenario == "gpu").then_some(run.video_size)).flatten()
@@ -381,6 +408,7 @@ mod gpu_probe {
     pixels: Vec<u8>,
     generation: u64,
     copied: bool,
+    copy_count: u64,
     upload: Option<std::sync::mpsc::Receiver<bool>>,
     image: Option<iced::advanced::image::Handle>,
   }
@@ -406,6 +434,7 @@ mod gpu_probe {
         pixels: Vec::new(),
         generation: 0,
         copied: false,
+        copy_count: 0,
         upload: None,
         image: None,
       };
@@ -458,6 +487,48 @@ mod gpu_probe {
         .filter(|value| value.is_finite())
         .ok_or("Media clock unavailable".into())
     }
+    fn sample_decoder(&mut self, stage: &str) -> Result<(), String> {
+      let mut sample = json!({ "stage": stage, "copyCount": self.copy_count,
+        "copiedSincePhaseStart": self.copied });
+      // Query the embedded client's actual decoder at settled lifecycle boundaries;
+      // the requested hwdec option alone cannot distinguish direct decoding from copy.
+      for property in [
+        "hwdec",
+        "hwdec-current",
+        "video-params",
+        "video-out-params",
+        "options/ao",
+        "current-ao",
+        "audio-params",
+        "audio-out-params",
+        "time-pos",
+        "pause",
+        "seeking",
+        "video-pts",
+        "osd-level",
+        "decoder-frame-drop-count",
+        "frame-drop-count",
+      ] {
+        sample[property] = match self.command(json!(["get_property", property])) {
+          Ok(value) => json!({ "status": "available", "value": value }),
+          Err(error) => json!({ "status": "unavailable", "error": error }),
+        };
+      }
+      // A strict baseline AO selection must not pass after mpv disables audio
+      // or chooses another backend. A trailing empty entry permits fallback.
+      let requested = &sample["options/ao"]["value"];
+      let actual = &sample["current-ao"]["value"];
+      let mismatch = requested.as_array().and_then(|outputs| {
+        if outputs.len() == 1 {
+          outputs[0]["name"].as_str().filter(|name| !name.is_empty() && *name != "null")
+        } else {
+          None
+        }
+      }).filter(|expected| actual.as_str() != Some(*expected))
+        .map(|expected| format!("Requested audio backend {expected} is not active at {stage}; check session socket access"));
+      with_run(|run| run.decoder_samples.push(sample));
+      mismatch.map_or(Ok(()), Err)
+    }
     fn advance(&mut self, phase: u8) {
       self.phase = phase;
       self.since = Instant::now();
@@ -479,6 +550,7 @@ mod gpu_probe {
         return Err(format!("GPU phase {} exceeded its 20-second deadline; use moving, nonblack media longer than four seconds", self.phase));
       }
       self.copied |= copied;
+      self.copy_count += u64::from(copied);
       let size = viewport.physical_size();
       with_run(|run| run.physical_size = Some((size.width, size.height)));
       if size.width > 1024 || size.height > 768 {
@@ -518,6 +590,7 @@ mod gpu_probe {
           }
           self.clock = self.clock()?;
           check("media loaded, decoded, copied and rendered through the video shader");
+          self.sample_decoder("loaded-paused")?;
           self.advance(1);
         }
         1 if self.since.elapsed() >= Duration::from_millis(500) => {
@@ -526,7 +599,38 @@ mod gpu_probe {
           }
           let pixels = renderer.screenshot(viewport, background);
           if pixels != self.pixels {
-            return Err(format!("Paused copied frame changed without seek: readback bytes {} -> {}, destination generation {} -> {}", self.pixels.len(), pixels.len(), self.generation, generation));
+            let changed = pixels
+              .iter()
+              .zip(&self.pixels)
+              .filter(|(a, b)| a != b)
+              .count();
+            let max_delta = pixels
+              .iter()
+              .zip(&self.pixels)
+              .map(|(a, b)| a.abs_diff(*b))
+              .max();
+            let mut bounds = [size.width, size.height, 0, 0];
+            let mut changed_pixels = 0;
+            for (index, (new, old)) in pixels
+              .as_chunks::<4>()
+              .0
+              .iter()
+              .zip(self.pixels.as_chunks::<4>().0)
+              .enumerate()
+            {
+              if new != old {
+                let index = u32::try_from(index).map_err(|_| "Readback pixel index overflow")?;
+                let x = index % size.width;
+                let y = index / size.width;
+                bounds[0] = bounds[0].min(x);
+                bounds[1] = bounds[1].min(y);
+                bounds[2] = bounds[2].max(x);
+                bounds[3] = bounds[3].max(y);
+                changed_pixels += 1;
+              }
+            }
+            self.sample_decoder("paused-mismatch")?;
+            return Err(format!("Paused copied frame changed without seek: readback bytes {} -> {}, destination generation {} -> {}, changed bytes {changed}, changed pixels {changed_pixels}, max byte delta {max_delta:?}, diff bounds {bounds:?}, copied this present {copied}, total copies {}", self.pixels.len(), pixels.len(), self.generation, generation, self.copy_count));
           }
           check("paused clock and rendered frame remained stable for 500ms");
           self.command(json!(["seek", self.seek, "absolute+exact"]))?;
@@ -538,6 +642,7 @@ mod gpu_probe {
             return Ok(());
           }
           check("acknowledged paused seek changed actual shader readback");
+          self.sample_decoder("paused-seek")?;
           self.clock = self.clock()?;
           self.generation = generation;
           with_run(|run| run.action = Action::Resize);
@@ -552,6 +657,7 @@ mod gpu_probe {
             return Ok(());
           }
           check("paused video-region resize replaced and refreshed the copied destination");
+          self.sample_decoder("paused-resize")?;
           self.command(json!(["set_property", "pause", false]))?;
           let image = iced::advanced::image::Handle::from_rgba(64, 64, vec![127; 64 * 64 * 4]);
           let (sender, receiver) = std::sync::mpsc::channel();
@@ -580,6 +686,7 @@ mod gpu_probe {
             None => return Ok(()),
           }
           check("resumed mpv clock, frame copies and shader pixels advanced while renderer image upload callback completed");
+          self.sample_decoder("resumed")?;
           self.generation = generation;
           with_run(|run| run.action = Action::Close);
           self.advance(5);
@@ -606,6 +713,7 @@ mod gpu_probe {
             return Ok(());
           }
           check("last-window reopen retained the IPC session and host; new renderer displayed advancing video");
+          self.sample_decoder("reopened")?;
           self.command(json!(["stop"]))?;
           self.advance(7);
         }

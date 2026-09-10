@@ -257,6 +257,28 @@ and lockfile are the source of truth; this document intentionally has no second 
 The native manifest records host tools and dependencies, not a bit-reproducible environment.
 An override library is not attested by the staged manifest: retain its actual hash and origin.
 
+For local direct VAAPI candidates, the product enables supported DMA-BUF import extensions
+on the shared Vulkan device. Direct decoding additionally requires the host-enabled mpv
+implementation that resolves a DRM render node from that same physical device; extension
+support alone does not establish hardware decoding. The RGB10A2 three-slot output, private
+texture copy and queue synchronization are unchanged. A dirty fork candidate must be loaded
+with the explicit asset overrides above, retaining its HEAD, dirty patch and actual library
+hash; the published source pin does not describe those uncommitted changes.
+
+GPU regression reports include `decoderSamples` read from the actual embedded IPC client:
+`hwdec-current`, requested `hwdec`, input/output formats and dropped-frame counters at each
+settled lifecycle stage. Optional `--hwdec <no|vaapi|vaapi-copy>` on `gpu`/`all` exercises
+the host's explicit playback-option override after the baseline. Check the actual decoder
+and interop logs to distinguish direct VAAPI from CPU copy-back; the lifecycle pass alone
+does not assert a decoder. For diagnostic logging, use a full trusted baseline copy with
+`log-file` and `msg-level` settings, retaining its hash, rather than a nested include wrapper.
+The runner retains audio-session endpoint lookup while keeping app configuration and IPC
+private, respecting existing PipeWire/Pulse routing overrides. For real audio acceptance,
+set one strict backend in the full candidate baseline (for example `ao=pipewire`, without
+a fallback comma). GPU samples record `current-ao`, `audio-params` and `audio-out-params`,
+and reject a mismatch with that explicit backend. Report negotiated channels separately
+from physical speakers and human listening acceptance.
+
 For an upstream synchronization, work on a disposable sync branch in each affected fork.
 Read the [iced maintenance guide](https://github.com/hewel/iced/blob/main/FORK_MAINTENANCE.md)
 and [mpv maintenance guide](https://github.com/hewel/mpv/blob/iced-player/DOCS/fork-maintenance.md).

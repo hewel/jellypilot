@@ -93,10 +93,30 @@ const child = (
     acceptNonZero: true,
   }).pipe(Effect.timeout(timeout));
 
+export function audioSessionEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  // Keep the session's socket lookup separate from the private app/IPC runtime.
+  // Remote names (including absolute paths and PipeWire arrays) are opaque.
+  const pipewireRuntime = environment.PIPEWIRE_RUNTIME_DIR ?? environment.XDG_RUNTIME_DIR;
+  const pulseRuntime =
+    environment.PULSE_RUNTIME_PATH ??
+    (environment.XDG_RUNTIME_DIR ? path.join(environment.XDG_RUNTIME_DIR, 'pulse') : undefined);
+  return {
+    ...(pipewireRuntime === undefined ? {} : { PIPEWIRE_RUNTIME_DIR: pipewireRuntime }),
+    ...(pulseRuntime === undefined ? {} : { PULSE_RUNTIME_PATH: pulseRuntime }),
+    ...(environment.PIPEWIRE_REMOTE === undefined
+      ? {}
+      : { PIPEWIRE_REMOTE: environment.PIPEWIRE_REMOTE }),
+    ...(environment.PULSE_SERVER === undefined ? {} : { PULSE_SERVER: environment.PULSE_SERVER }),
+  };
+}
+
 const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
   scenario: Scenario,
   runId: string,
   media: string | null,
+  hwdec: Request['hwdec'],
   report: string,
   environment: Readonly<Record<string, string | undefined>>,
 ) {
@@ -209,8 +229,15 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             '--regression-run-id',
             runId,
             ...(media === null || scenario !== 'gpu' ? [] : ['--regression-media', media]),
+            ...(hwdec === null || scenario !== 'gpu' ? [] : ['--regression-hwdec', hwdec]),
           ],
-          { ...isolated, ...assets, ...display, LC_ALL: numericLocale },
+          {
+            ...isolated,
+            ...assets,
+            ...display,
+            ...audioSessionEnvironment(environment),
+            LC_ALL: numericLocale,
+          },
           '180 seconds',
         );
         const value = yield* io(() => jsonFile(report));
@@ -415,7 +442,14 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
       const scenario = scenarios[index];
       if (scenario === undefined) continue;
       const report = path.join(output, `${scenario}.json`);
-      const result = yield* runScenario(scenario, runId, media, report, environment).pipe(
+      const result = yield* runScenario(
+        scenario,
+        runId,
+        media,
+        request.hwdec,
+        report,
+        environment,
+      ).pipe(
         Effect.catchTag('TaskMpvArtifactError', (error) =>
           Effect.succeed({
             schemaVersion: 1,
