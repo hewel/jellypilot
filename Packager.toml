@@ -1,6 +1,6 @@
 name = "jellypilot"
 product-name = "JellyPilot"
-version = "2.1.2"
+version = "2.2.0"
 identifier = "top.pigfun.jellypilot"
 publisher = "hewel"
 authors = ["hewel"]

@@ -4,6 +4,21 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-10
+
+### Added
+- Added opt-in original-language audio selection: JellyPilot resolves each title's original language from Jellyfin metadata or TMDb (on-disk cached, with a settings API-key field), selects the matching audio track at playback start, and marks the native track in the player audio menu. Detail pages show the original language. Works on Jellyfin and Emby.
+- Added per-series and per-item audio/subtitle choice memory stored per server and account, including subtitle-off, with the global subtitle language preference as fallback.
+- Added native player log capture under Settings → Diagnostics: subscribe to embedded or external MPV log events, retain a sanitized tail, and export it with the support bundle.
+- Added direct VAAPI hardware decoding via DMA-BUF imports on the shared Vulkan device with the published host-enabled mpv pin, plus opt-in decoder regression probes that record actual `hwdec` and audio properties.
+
+### Fixed
+- Restored disk caching for embedded playback.
+- Updated the pinned mpv fork to fix audio track switching with Dolby Vision content.
+
+### Removed
+- Removed the retired isolated GStreamer playback experiment; Embedded and External MPV playback are unaffected.
+
 ## [2.1.2] - 2026-09-10
 
 ### Added
@@ -151,7 +166,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/hewel/jellypilot/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/hewel/jellypilot/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/hewel/jellypilot/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/hewel/jellypilot/compare/v2.0.0...v2.1.0
