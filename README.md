@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/promo/brand-light.webp" alt="JellyPilot — a native Jellyfin and Emby companion with an embedded MPV player, or your own MPV." width="100%" />
+<img src="assets/promo/brand-light.webp" alt="JellyPilot — a native Jellyfin & Emby desktop client with embedded MPV playback." width="100%" />
 
 # JellyPilot
 
@@ -11,21 +11,30 @@
 
 **English** · [简体中文](README_zh.md)
 
-**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — Linux plays through the pinned Embedded MPV fork.**
+**A native desktop client for Jellyfin & Emby — real MPV playback with no Electron, no WebView, and no forced transcoding.**
 
-Custom-drawn in safe Rust with [iced](https://iced.rs/). Cross-platform, lightweight, and responsive. No webview, Electron, or forced transcoding. External MPV remains available, and is the default on Windows and macOS.
+Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-platform, and responsive. Linux plays through the pinned embedded MPV fork; Windows and macOS drive your own MPV. Direct Play from your server, every time.
 
 </div>
 
 ---
 
+## 🎥 Demo
+
+<a href="assets/promo/demo.webm">
+  <img src="assets/promo/demo-poster.webp" alt="JellyPilot demo — a 65-second tour of library browsing, series details, and embedded MPV playback with floating controls on Linux." width="100%" />
+</a>
+
+<p align="center"><sub>▶ Watch the 65-second demo: launch → browse → series detail → embedded MPV playback with floating controls.</sub></p>
+
 ## 📖 Overview
 
-**JellyPilot** is a native desktop companion for [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/) media servers. Designed for performance and fidelity, it lets you browse your libraries, curate personal lists, and enjoy direct-play media without browser overhead or server-side transcoding.
+**JellyPilot** is a native desktop client for [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/): a complete library browser, player, and cast receiver — not a wrapper around the web interface. Native UI and real MPV playback, with no browser in between.
 
-- **🎬 Embedded MPV Playback (Linux default)**: Integrates the pinned, host-enabled mpv fork directly inside the player surface. Video is rendered onto a 10-bit Vulkan surface (`Rgb10a2Unorm`) with direct VAAPI hardware decoding via DMA-BUF, native SDR tone-mapping for Dolby Vision Profile 5, and responsive floating on-screen controls. It runs with an application-owned baseline configuration, completely isolated from system MPV configs.
-- **🚀 External MPV Playback (Windows & macOS default, optional on Linux)**: Connects to a standalone MPV process over JSON IPC. Your personal `mpv.conf`, custom GLSL shaders, input scripts, and profiles remain fully in charge.
-- **📺 Cast Receiver & Remote Control**: Discovered automatically on your local network as a native cast target by Jellyfin clients. Remote sessions bidirectionally synchronize transport commands, playback progress, and track changes across the main window, player bar, and system tray.
+- **🖥️ A full desktop client, not a web wrapper**: Browse movies and series, curate Favorites, Watchlist, and Watch History, and switch between multiple servers and accounts — all in a fast, custom-drawn native interface.
+- **🎬 Embedded MPV playback (Linux default)**: The pinned, host-enabled mpv fork renders right inside the player window — 10-bit Vulkan surface, direct VAAPI hardware decoding, and Dolby Vision Profile 5 SDR tone-mapping — with floating controls and zero interference from your system MPV configuration.
+- **🚀 External MPV playback (Windows & macOS default, optional on Linux)**: Drives a standalone MPV process over JSON IPC. Your personal `mpv.conf`, custom GLSL shaders, input scripts, and profiles remain fully in charge.
+- **📺 Cast receiver & remote control**: Automatically discovered on your local network as a native cast target by Jellyfin clients. Transport commands, playback progress, and track changes sync bidirectionally across the main window, player bar, and system tray.
 
 ## 🖼️ Screenshots
 
@@ -468,7 +477,7 @@ flowchart LR
 - **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
 - **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
 - **Domain language**: [CONTEXT.md](CONTEXT.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
-- **Design and promo artwork**: logo sources, screenshots, fonts, and the renderer live in the separate `jellypilot-design` project. From that checkout, run `bun run promo`, then preview publication with `bun run sync:app -- /absolute/path/to/jellypilot`; add `--write` to copy the selected exports. This repository keeps the published files in `assets/promo/` and `assets/screenshots/`, plus the logo used by those assets.
+- **Design and promo artwork**: logo sources, screenshots, fonts, and the renderer live in the separate `jellypilot-design` project. From that checkout, run `bun run promo`, then preview publication with `bun run sync:app -- /absolute/path/to/jellypilot`; add `--write` to copy the selected exports. This repository keeps the published files in `assets/promo/` and `assets/screenshots/`, plus the logo used by those assets. `assets/promo/demo.webm` and `demo-poster.webp` are a recorded demo, not design-project exports.
 
 ## 📜 Project History
 
@@ -478,4 +487,4 @@ Releases ≤ 1.4.x shipped a Tauri/Solid.js frontend with an embedded web player
 
 - [MPV](https://mpv.io/) — the best media player in existence.
 - [iced](https://iced.rs/) — the cross-platform GUI library this app is drawn with.
-- [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/) — the media servers JellyPilot companions.
+- [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/) — the media servers JellyPilot is built for.

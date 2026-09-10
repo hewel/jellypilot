@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/promo/campaign-zh.webp" alt="JellyPilot — 专为 Jellyfin 与 Emby 打造的原生桌面伴侣" width="100%" />
+<img src="assets/promo/campaign-zh.webp" alt="JellyPilot — Jellyfin 与 Emby 的原生桌面客户端，内嵌 MPV 播放" width="100%" />
 
 # JellyPilot
 
@@ -11,21 +11,30 @@
 
 [English](README.md) · **简体中文**
 
-**专为 Jellyfin 与 Emby 打造的原生桌面伴侣：媒体库浏览、投屏接收与播放控制 — Linux 默认通过内嵌 MPV Fork 渲染。**
+**Jellyfin 与 Emby 的原生桌面客户端 — 真正的 MPV 播放，无 Electron、无 WebView、无强制转码。**
 
-采用 Rust 与 [iced](https://iced.rs/) 纯原生绘制。跨平台、轻量流畅。无 WebView、无 Electron、无强制转码。Windows 与 macOS 默认使用外部 MPV，Linux 亦可随时切换。
+采用安全 Rust 与 [iced](https://iced.rs/) 纯原生绘制：轻量、跨平台、响应迅速。Linux 默认通过内嵌 MPV Fork 渲染；Windows 与 macOS 驱动你自己的 MPV。始终原画直连，Direct Play。
 
 </div>
 
 ---
 
+## 🎥 演示
+
+<a href="assets/promo/demo.webm">
+  <img src="assets/promo/demo-poster.webp" alt="JellyPilot 演示 —— 65 秒速览：媒体库浏览、剧集详情与带悬浮控制的内嵌 MPV 播放。" width="100%" />
+</a>
+
+<p align="center"><sub>▶ 观看 65 秒演示：启动 → 浏览 → 剧集详情 → 内嵌 MPV 播放与悬浮控制。</sub></p>
+
 ## 📖 概览
 
-**JellyPilot** 是专为 [Jellyfin](https://jellyfin.org/) 与 [Emby](https://emby.media/) 打造的高性能原生桌面伴侣应用。基于无浏览器开销的设计哲学，它让您顺畅浏览影视库、管理个人列表，享受高品质原画直出播放，彻底告别服务端强制转码与网页前端开销。
+**JellyPilot** 是 [Jellyfin](https://jellyfin.org/) 与 [Emby](https://emby.media/) 的原生桌面客户端：完整的媒体库浏览器、播放器与投屏接收端，而非网页界面的套壳。原生界面与真正的 MPV 播放，无浏览器。
 
-- **🎬 内嵌 MPV 播放（Linux 默认）**：集成项目专用的 host 增强版 mpv fork，将视频直接渲染到 10 位 Vulkan 呈现表面（`Rgb10a2Unorm`）。支持基于 DMA-BUF 的原生 VAAPI 硬件加速解码、杜比视界（Dolby Vision Profile 5）SDR 色调映射，以及轻量流畅的响应式悬浮控制栏。播放器运行于应用内置的基线配置，完全与系统 MPV 配置隔离。
-- **🚀 外部 MPV 播放（Windows & macOS 默认，Linux 可选）**：通过 JSON IPC 与系统安装的独立 MPV 进程无缝协同。您的专属 `mpv.conf`、GLSL 着色器、脚本和输入配置均完整生效。
-- **📺 投屏接收与远程控制**：在局域网内可被 Jellyfin 客户端自动发现并作为投屏设备。双向同步播放状态、进度上报与控制指令，贯通主界面、播放条与系统托盘。
+- **🖥️ 完整桌面客户端，而非套壳网页**：浏览电影与剧集、管理收藏 / 待播清单 / 观看历史、多服务器多账号秒切——全部运行在快速的原生绘制界面中。
+- **🎬 内嵌 MPV 播放（Linux 默认）**：项目专用的 host 增强版 mpv fork 直接在播放窗口内渲染——10 位 Vulkan 表面、原生 VAAPI 硬件解码、杜比视界 Profile 5 SDR 色调映射——悬浮控制一应俱全，与系统 MPV 配置完全隔离。
+- **🚀 外部 MPV 播放（Windows 与 macOS 默认，Linux 可选）**：通过 JSON IPC 驱动独立 MPV 进程。您的 `mpv.conf`、GLSL 着色器、输入脚本与配置文件完整生效。
+- **📺 投屏接收与远程控制**：在局域网内被 Jellyfin 客户端自动发现为原生投屏目标；播放指令、进度与轨道切换在主窗口、播放条与系统托盘之间双向同步。
 
 ## 🖼️ 界面预览
 
