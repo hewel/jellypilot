@@ -13,8 +13,6 @@ members = [
 exclude = [
   "crates/media-server-api/emby",
   "crates/media-server-api/jellyfin",
-  "experiments/iced-local-video",
-  "crates/jellypilot-player",
   "target/vendor/iced",
 ]
 resolver = "2"

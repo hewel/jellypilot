@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber, Match } from 'effect';
 import { runCheck } from './task/check';
 import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
-import { buildIced, runHot, runIced, runLocalVideo } from './task/iced';
+import { buildIced, runHot, runIced } from './task/iced';
 import { prepareIced } from './task/iced-source';
 import { runApi } from './task/misc';
 import { runMonitor } from './task/monitor';
@@ -45,7 +45,6 @@ const program = Effect.try({
       Match.when({ _tag: 'icedBuild' }, ({ release }) => buildIced(release)),
       Match.when({ _tag: 'icedPrepare' }, ({ source }) => prepareIced(source)),
       Match.when({ _tag: 'icedRegress' }, (task) => runNativeRegression(task, process.env)),
-      Match.when({ _tag: 'icedLocalVideo' }, (task) => runLocalVideo(task)),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),
       Match.exhaustive,

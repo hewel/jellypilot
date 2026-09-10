@@ -35,14 +35,6 @@ Embedded mpv dependency (Linux Vulkan):
     Stages target/embedded-mpv/{lib/jellypilot/libmpv.so,share/jellypilot/mpv-baseline.conf,manifest.json}.
     Source/options pinned; host dependency versions recorded, not bit-reproducible.
 
-Local video experiment:
-  iced local-video run [--smoke] [--release] [--file <path> | --url-env | --url <http(s)url>]
-    --url-env reads JELLYPILOT_VIDEO_URL; --url exposes it in caller argv/history.
-  iced local-video check
-  iced local-video clippy
-  iced local-video test [filter]
-  iced local-video fmt [--check]
-
 Utilities:
   api
   monitor --pid <pid> --out <target/path> [--samples 301] [--interval-ms 1000] [--label <text>]

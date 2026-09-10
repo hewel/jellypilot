@@ -37,21 +37,6 @@ export type TaskCommand =
       readonly output: string;
     }
   | {
-      readonly _tag: 'icedLocalVideo';
-      readonly action: 'run';
-      readonly smoke: boolean;
-      readonly release: boolean;
-      readonly file: string | null;
-      readonly url: string | null;
-      readonly urlFromEnv: boolean;
-    }
-  | {
-      readonly _tag: 'icedLocalVideo';
-      readonly action: 'check' | 'test' | 'clippy';
-      readonly testFilter: string | null;
-    }
-  | { readonly _tag: 'icedLocalVideo'; readonly action: 'fmt'; readonly check: boolean }
-  | {
       readonly _tag: 'monitor';
       readonly pid: number;
       readonly samples: number;
@@ -85,66 +70,6 @@ function parseRust(args: readonly string[]): TaskCommand {
   }
   throw new Error(
     action === undefined ? 'Missing Rust command.' : `Unknown Rust command: ${action}`,
-  );
-}
-
-function parseLocalVideo(args: readonly string[]): TaskCommand {
-  const [action, ...rest] = args;
-  if (action === 'run') {
-    let smoke = false;
-    let release = false;
-    let file: string | null = null;
-    let url: string | null = null;
-    let urlFromEnv = false;
-    for (let index = 0; index < rest.length; index += 1) {
-      const argument = rest[index];
-      if (argument === '--smoke') smoke = true;
-      else if (argument === '--release') release = true;
-      else if (argument === '--file' || argument === '--url' || argument === '--url-env') {
-        if (file !== null || url !== null || urlFromEnv) {
-          throw new Error('Specify exactly one --file, --url or --url-env source.');
-        }
-        if (argument === '--url-env') {
-          urlFromEnv = true;
-          continue;
-        }
-        const value = rest[index + 1];
-        if (value === undefined || value.trim().length === 0 || value.startsWith('--')) {
-          throw new Error(`iced local-video run ${argument} requires a non-empty value.`);
-        }
-        if (argument === '--file') file = value;
-        else url = value;
-        index += 1;
-      } else if (argument !== undefined) {
-        throw new Error('Unknown iced local-video run option.');
-      }
-    }
-    return { _tag: 'icedLocalVideo', action, smoke, release, file, url, urlFromEnv };
-  }
-  if (action === 'check' || action === 'clippy') {
-    if (rest.length > 0) throw new Error(`Unexpected iced local-video ${action} arguments.`);
-    return { _tag: 'icedLocalVideo', action, testFilter: null };
-  }
-  if (action === 'test') {
-    const [filter, ...extra] = rest;
-    if (filter !== undefined && (filter.length === 0 || filter.startsWith('-'))) {
-      throw new Error('Invalid iced local-video test filter.');
-    }
-    if (extra.length > 0) throw new Error('Unexpected iced local-video test arguments.');
-    return { _tag: 'icedLocalVideo', action, testFilter: filter ?? null };
-  }
-  if (action === 'fmt') {
-    let check = false;
-    for (const argument of rest) {
-      if (argument === '--check') check = true;
-      else throw new Error('Unknown iced local-video fmt option.');
-    }
-    return { _tag: 'icedLocalVideo', action, check };
-  }
-  throw new Error(
-    action === undefined
-      ? 'Missing iced local-video command.'
-      : 'Unknown iced local-video command.',
   );
 }
 
@@ -241,7 +166,6 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === 'monitor') return parseMonitor(args);
   if (command === 'iced') {
     const [action, ...rest] = args;
-    if (action === 'local-video') return parseLocalVideo(rest);
     if (action === 'regress') return parseRegression(rest);
     if (action === 'prepare') {
       return { _tag: 'icedPrepare', source: parseSourceOptions('iced prepare', rest) };
