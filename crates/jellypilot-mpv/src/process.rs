@@ -259,6 +259,10 @@ pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Ch
   }
 
   let mut cmd = Command::new(&mpv_exe);
+  // mpv.exe is a console-subsystem binary; without CREATE_NO_WINDOW Windows
+  // allocates a visible console for it even though stdio is fully detached.
+  #[cfg(windows)]
+  cmd.creation_flags(0x08000000);
   cmd.kill_on_drop(true);
   cmd
     .arg(format!("--input-ipc-server={}", ipc))

@@ -48,6 +48,27 @@ pub struct EmbeddedEngineFactory {
 #[cfg(not(target_os = "linux"))]
 pub type EmbeddedEngineFactory = ();
 
+/// Win32 message pump installed by the trusted launcher. `tray-icon` creates its
+/// hidden window on the tray worker thread, so that thread must pump its own
+/// message queue for clicks and menu commands to dispatch. The workspace forbids
+/// `unsafe_code`, so the FFI pump lives in the launcher and is injected here.
+#[cfg(target_os = "windows")]
+static TRAY_MESSAGE_PUMP: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Installs the launcher's Win32 message pump for the tray worker thread.
+/// Must be called before [`run`]; without it the tray icon cannot show its menu.
+#[cfg(target_os = "windows")]
+pub fn set_tray_message_pump(pump: fn()) {
+  let _ = TRAY_MESSAGE_PUMP.set(pump);
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn pump_tray_messages() {
+  if let Some(pump) = TRAY_MESSAGE_PUMP.get() {
+    pump();
+  }
+}
+
 /// Runs the fixed JellyPilot application and its command-line startup behavior.
 pub fn run(factory: EmbeddedEngineFactory) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   runner::run(factory)

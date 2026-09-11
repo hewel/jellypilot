@@ -23,6 +23,12 @@ mimalloc = { version = "0.1.48", default-features = false }
 jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
 iced_wgpu = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+embed-resource = "3"
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

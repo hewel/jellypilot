@@ -206,7 +206,16 @@ impl Tray {
             let context = gtk::glib::MainContext::default();
             context.iteration(true);
           }
-          #[cfg(not(target_os = "linux"))]
+          #[cfg(target_os = "windows")]
+          {
+            // The tray icon's hidden window lives on this thread; pump its
+            // queue so clicks dispatch and the context menu can open, then
+            // poll briefly since no blocking wait covers both Win32 messages
+            // and the command channel.
+            crate::pump_tray_messages();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+          }
+          #[cfg(not(any(target_os = "linux", target_os = "windows")))]
           {
             match cmd_rx.blocking_recv() {
               Some(TrayCommand::Sync(menu_state)) => {
