@@ -62,10 +62,14 @@ quality; keep those as separate human acceptance.
   External mode successfully with missing libmpv, baseline and Vulkan driver paths.
 - `gpu`: exercises real decoded video, paused clock, seek/frame change, paused video-region
   resize through iced layout and real copy-target replacement (not OS window-resize acceptance),
-  resumed playback, image work and in-memory readback through the actual compositor. It
-  closes the last window, reopens through the shell/tray show route, checks the retained
-  playback session/new renderer binding, acknowledges stop, then exits. This is nonvisual
-  lifecycle evidence, not a color comparison or proof of a particular hardware decoder.
+  resumed playback, image work and in-memory readback through the actual compositor. On
+  Linux it also drives a real PlaybackSession through the production projection path:
+  the session idle inhibitor binds on the live presentation surface when playback
+  resumes, releases on pause, rebinds after last-window close/reopen, and releases on
+  stop. It closes the last window, reopens through the shell/tray show route, checks
+  the retained playback session/new renderer binding, acknowledges stop, then exits.
+  This is nonvisual lifecycle evidence, not a color comparison or proof of a particular
+  hardware decoder.
   `decoderSamples` separately records actual embedded `hwdec-current`, requested `hwdec`,
   input/output formats and dropped-frame counters. GPU-only `--hwdec` overrides exercise
   HostOptions after the baseline; unavailable properties remain explicit in the report.

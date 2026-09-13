@@ -327,6 +327,10 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
   if !matches!(message, Message::Window(WindowMessage::FrameTick(_))) {
     return None;
   }
+  #[cfg(target_os = "linux")]
+  if gpu() {
+    gpu_probe::drive_idle_session(state);
+  }
   Some(
     with_run(|run| match run.action {
       Action::Exit => iced::exit(),
@@ -405,6 +409,58 @@ mod gpu_probe {
   #[cfg(windows)]
   type IpcStream = std::fs::File;
 
+  #[cfg(unix)]
+  fn ipc_connect() -> Result<BufReader<IpcStream>, String> {
+    let options = crate::embedded::options().ok_or("Embedded options unavailable")?;
+    let stream =
+      UnixStream::connect(&options.ipc).map_err(|_| "Cannot connect native regression IPC")?;
+    stream
+      .set_read_timeout(Some(Duration::from_secs(2)))
+      .map_err(|e| e.to_string())?;
+    stream
+      .set_write_timeout(Some(Duration::from_secs(2)))
+      .map_err(|e| e.to_string())?;
+    Ok(BufReader::new(stream))
+  }
+
+  fn ipc_command(
+    ipc: &mut BufReader<IpcStream>,
+    request: &mut u64,
+    command: serde_json::Value,
+  ) -> Result<serde_json::Value, String> {
+    *request += 1;
+    let bytes = serde_json::to_vec(&json!({"command": command, "request_id": *request}))
+      .map_err(|e| e.to_string())?;
+    ipc
+      .get_mut()
+      .write_all(&bytes)
+      .and_then(|()| ipc.get_mut().write_all(b"\n"))
+      .map_err(|_| "Native IPC write failed")?;
+    let end = Instant::now() + Duration::from_secs(2);
+    loop {
+      if Instant::now() >= end {
+        return Err("Native IPC acknowledgement deadline exceeded".into());
+      }
+      let mut line = String::new();
+      if ipc
+        .read_line(&mut line)
+        .map_err(|_| "Native IPC response timed out")?
+        == 0
+      {
+        return Err("Native IPC disconnected".into());
+      }
+      let value: serde_json::Value =
+        serde_json::from_str(&line).map_err(|_| "Invalid native IPC response")?;
+      if value["request_id"].as_u64() != Some(*request) {
+        continue;
+      }
+      if value["error"] != "success" {
+        return Err("Native IPC command was rejected".into());
+      }
+      return Ok(value["data"].clone());
+    }
+  }
+
   pub(crate) struct Probe {
     ipc: BufReader<IpcStream>,
     request: u64,
@@ -422,30 +478,23 @@ mod gpu_probe {
   }
   impl Probe {
     pub(crate) fn new() -> Result<Self, String> {
-      let options = crate::embedded::options().ok_or("Embedded options unavailable")?;
       #[cfg(unix)]
-      let stream = {
-        let stream =
-          UnixStream::connect(&options.ipc).map_err(|_| "Cannot connect native regression IPC")?;
-        stream
-          .set_read_timeout(Some(Duration::from_secs(2)))
-          .map_err(|e| e.to_string())?;
-        stream
-          .set_write_timeout(Some(Duration::from_secs(2)))
-          .map_err(|e| e.to_string())?;
-        stream
-      };
+      let ipc = ipc_connect()?;
       // Windows named pipes are opened as files; blocking I/O has no per-read
       // timeout. The per-phase deadline still applies between commands and the
       // runner's outer process timeout remains the final bound.
       #[cfg(windows)]
-      let stream = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&options.ipc)
-        .map_err(|_| "Cannot connect native regression IPC")?;
+      let ipc = {
+        let options = crate::embedded::options().ok_or("Embedded options unavailable")?;
+        let stream = std::fs::OpenOptions::new()
+          .read(true)
+          .write(true)
+          .open(&options.ipc)
+          .map_err(|_| "Cannot connect native regression IPC")?;
+        BufReader::new(stream)
+      };
       let mut probe = Self {
-        ipc: BufReader::new(stream),
+        ipc,
         request: 0,
         phase: 0,
         deadline: Instant::now() + Duration::from_secs(20),
@@ -473,39 +522,7 @@ mod gpu_probe {
       Ok(probe)
     }
     fn command(&mut self, command: serde_json::Value) -> Result<serde_json::Value, String> {
-      self.request += 1;
-      let bytes = serde_json::to_vec(&json!({"command": command, "request_id": self.request}))
-        .map_err(|e| e.to_string())?;
-      self
-        .ipc
-        .get_mut()
-        .write_all(&bytes)
-        .and_then(|()| self.ipc.get_mut().write_all(b"\n"))
-        .map_err(|_| "Native IPC write failed")?;
-      let end = Instant::now() + Duration::from_secs(2);
-      loop {
-        if Instant::now() >= end {
-          return Err("Native IPC acknowledgement deadline exceeded".into());
-        }
-        let mut line = String::new();
-        if self
-          .ipc
-          .read_line(&mut line)
-          .map_err(|_| "Native IPC response timed out")?
-          == 0
-        {
-          return Err("Native IPC disconnected".into());
-        }
-        let value: serde_json::Value =
-          serde_json::from_str(&line).map_err(|_| "Invalid native IPC response")?;
-        if value["request_id"].as_u64() != Some(self.request) {
-          continue;
-        }
-        if value["error"] != "success" {
-          return Err("Native IPC command was rejected".into());
-        }
-        return Ok(value["data"].clone());
-      }
+      ipc_command(&mut self.ipc, &mut self.request, command)
     }
     fn clock(&mut self) -> Result<f64, String> {
       self
@@ -755,6 +772,10 @@ mod gpu_probe {
             return Ok(());
           }
           check("native stop acknowledged and idle state observed");
+          #[cfg(target_os = "linux")]
+          if !idle_session_done() {
+            return Ok(());
+          }
           with_run(|run| {
             run.complete = true;
             run.action = Action::Exit;
@@ -776,6 +797,391 @@ mod gpu_probe {
       .iter()
       .any(|pixel| pixel[..3] != first[..3])
   }
+
+  /// Drives a real `PlaybackSession` on its own surface through
+  /// `session.handle`, mirrors each projection through the production
+  /// `sync_playback_projection` — the function that calls
+  /// `embedded::idle::set_desired` — and asserts the resulting platform
+  /// inhibitor state. Settlements carry transport state queried live from the
+  /// embedded mpv over a second IPC connection; nothing fabricates playback.
+  #[cfg(target_os = "linux")]
+  mod idle_session {
+    use super::*;
+    use crate::app::kernel::Kernel;
+    use crate::app::playback::{sync_playback_projection, Surface};
+    use crate::app::State;
+    use jellypilot_core::request_gate::RequestGate;
+    use jellypilot_media_server::MediaItem;
+    use jellypilot_mpv::playback::{
+      NowPlayingItem, PlaybackOutcome, PlaybackSnapshot, PlaybackStartPosition, PlaybackStopOutcome,
+    };
+    use jellypilot_mpv::playback_session::{
+      ControllerSettlement, EffectId, IntroAvailability, PlaybackEffect, PlaybackEvent,
+      PlaybackInput, PlaybackIntent,
+    };
+    use jellypilot_mpv::PlayerState;
+
+    static DRIVER: Mutex<Option<Driver>> = Mutex::new(None);
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Whether the session driver finished its stop-release check; the probe's
+    /// final phase waits on this so the run cannot complete early.
+    pub(crate) fn done() -> bool {
+      DONE.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Polls the session driver once per frame tick. Errors fail the run.
+    pub(crate) fn drive(state: &mut State) {
+      let mut guard = DRIVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      let driver = guard.get_or_insert_with(|| Driver::new(&mut state.kernel.request_gate));
+      if let Err(error) = driver.step(&state.kernel) {
+        fail(format!("Idle session driver: {error}"));
+      }
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Step {
+      Begin,
+      AwaitResume,
+      CyclePause,
+      CycleResume,
+      AwaitReopen,
+      Stop,
+      Done,
+    }
+
+    struct Driver {
+      ipc: Option<BufReader<IpcStream>>,
+      request: u64,
+      step: Step,
+      deadline: Instant,
+      item_id: String,
+      title: String,
+      runtime: f64,
+      // The driver owns its own playback surface so the application's
+      // periodic Tick/controller loop can never erase its session state.
+      surface: Surface,
+    }
+
+    impl Driver {
+      fn new(request_gate: &mut RequestGate) -> Self {
+        Self {
+          ipc: None,
+          request: 0,
+          step: Step::Begin,
+          deadline: Instant::now() + Duration::from_secs(20),
+          item_id: String::new(),
+          title: String::new(),
+          runtime: 0.0,
+          surface: Surface::new(request_gate),
+        }
+      }
+
+      fn command(&mut self, command: serde_json::Value) -> Result<serde_json::Value, String> {
+        let ipc = self
+          .ipc
+          .as_mut()
+          .ok_or_else(|| "IPC not connected".to_owned())?;
+        ipc_command(ipc, &mut self.request, command)
+      }
+
+      /// Best-effort property read; `None` means the value is not ready yet.
+      fn property(&mut self, name: &str) -> Option<serde_json::Value> {
+        self.command(json!(["get_property", name])).ok()
+      }
+
+      fn paused(&mut self) -> Option<bool> {
+        self.property("pause")?.as_bool()
+      }
+
+      fn number(&mut self, name: &str) -> Option<f64> {
+        self.property(name)?.as_f64().filter(|v| v.is_finite())
+      }
+
+      /// Transport state queried live from mpv for a settlement snapshot.
+      /// Every required property must read back a valid value; a missing or
+      /// malformed property is an explicit error, never a fabricated field.
+      fn snapshot(&mut self) -> Result<PlaybackSnapshot, String> {
+        let paused = self.paused().ok_or("mpv pause property unavailable")?;
+        let muted = self
+          .property("mute")
+          .and_then(|v| v.as_bool())
+          .ok_or("mpv mute property unavailable")?;
+        let time_pos = self
+          .number("time-pos")
+          .ok_or("mpv time-pos property unavailable")?;
+        let volume = self
+          .number("volume")
+          .ok_or("mpv volume property unavailable")?;
+        Ok(PlaybackSnapshot {
+          now_playing: Some(NowPlayingItem {
+            item_id: self.item_id.clone(),
+            title: self.title.clone(),
+            item_type: "Video".to_owned(),
+            runtime_seconds: Some(self.runtime),
+            start_position_seconds: 0.0,
+            play_method: "DirectPlay".to_owned(),
+            original_language: None,
+          }),
+          transport: PlayerState {
+            connected: true,
+            paused,
+            muted,
+            time_pos,
+            duration: self.runtime,
+            volume,
+          },
+        })
+      }
+
+      /// Feeds one input into the driver's own session and mirrors the
+      /// resulting projection through the production sync path. Returns the
+      /// controller effect id the input dispatched, if any.
+      fn feed(&mut self, kernel: &Kernel, input: PlaybackInput) -> Option<EffectId> {
+        let effects = self.surface.session.handle(input, Instant::now());
+        let mut controller = None;
+        for effect in effects {
+          if let PlaybackEffect::Controller(id, _) = effect {
+            self.surface.in_flight_command = Some(id);
+            controller = Some(id);
+          }
+        }
+        sync_playback_projection(&mut self.surface, kernel, false);
+        controller
+      }
+
+      fn settle(&mut self, kernel: &Kernel, id: EffectId, settlement: ControllerSettlement) {
+        self.feed(
+          kernel,
+          PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+            id,
+            settlement,
+          })),
+        );
+      }
+
+      fn expect_inhibited(&self, expected: bool, what: &str) -> Result<(), String> {
+        if crate::embedded::idle::inhibited() != expected {
+          return Err(format!(
+            "{what}: {}",
+            crate::embedded::idle::last_error().unwrap_or_else(|| "no bind error recorded".into())
+          ));
+        }
+        Ok(())
+      }
+
+      fn step(&mut self, kernel: &Kernel) -> Result<(), String> {
+        if self.step == Step::Done {
+          return Ok(());
+        }
+        if Instant::now() > self.deadline {
+          return Err(format!(
+            "step {:?} exceeded its 20-second deadline",
+            self.step_name()
+          ));
+        }
+        match self.step {
+          Step::Begin => {
+            if self.ipc.is_none() {
+              self.ipc = Some(ipc_connect()?);
+            }
+            let Some(duration) = self.number("duration") else {
+              return Ok(());
+            };
+            if duration <= 0.0 {
+              return Ok(());
+            }
+            self.runtime = duration;
+            self.item_id = "native-regression-media".to_owned();
+            self.title = self
+              .property("filename")
+              .and_then(|v| v.as_str().map(str::to_owned))
+              .unwrap_or_else(|| "regression media".to_owned());
+            self.feed(
+              kernel,
+              PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
+            );
+            let id = self
+              .feed(
+                kernel,
+                PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+                  item: jellypilot_mpv::playback::Playable::Media(MediaItem {
+                    id: self.item_id.clone(),
+                    name: self.title.clone(),
+                    item_type: "Video".to_owned(),
+                    series_id: None,
+                    series_name: None,
+                    season_name: None,
+                    index_number: None,
+                    parent_index_number: None,
+                    run_time_ticks: Some((self.runtime * 10_000_000.0) as i64),
+                    overview: None,
+                    series_primary_image_tag: None,
+                  }),
+                  position: PlaybackStartPosition::Beginning,
+                  intro: IntroAvailability {
+                    mode: jellypilot_core::intro_skipper::IntroSkipMode::Off,
+                    skipper_available: false,
+                  },
+                  selection: Box::default(),
+                })),
+              )
+              .ok_or("Start intent produced no in-flight controller command")?;
+            let snapshot = self.snapshot()?;
+            self.settle(
+              kernel,
+              id,
+              ControllerSettlement::Started(Ok(PlaybackOutcome {
+                snapshot,
+                warnings: Vec::new(),
+              })),
+            );
+            // The probe loaded the media paused: a paused session must not
+            // hold the inhibitor.
+            self.expect_inhibited(false, "paused playback session bound the idle inhibitor")?;
+            check("paused playback session left the idle inhibitor unbound");
+            self.step = Step::AwaitResume;
+          }
+          Step::AwaitResume => {
+            if self.paused() != Some(false) {
+              return Ok(());
+            }
+            let id = self
+              .feed(
+                kernel,
+                PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(false))),
+              )
+              .ok_or("resume intent produced no in-flight command")?;
+            let snapshot = self.snapshot()?;
+            self.settle(
+              kernel,
+              id,
+              ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+                snapshot,
+                warnings: Vec::new(),
+              })),
+            );
+            self.expect_inhibited(
+              true,
+              "resumed playback session did not bind the idle inhibitor",
+            )?;
+            check("resumed playback session bound the idle inhibitor");
+            self.step = Step::CyclePause;
+          }
+          Step::CyclePause => {
+            // Pause through the real transport: the driver issues the same
+            // mpv command the controller would, then settles with the
+            // observed state.
+            self.command(json!(["set_property", "pause", true]))?;
+            if self.paused() != Some(true) {
+              return Ok(());
+            }
+            let id = self
+              .feed(
+                kernel,
+                PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(true))),
+              )
+              .ok_or("pause intent produced no in-flight command")?;
+            let snapshot = self.snapshot()?;
+            self.settle(
+              kernel,
+              id,
+              ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+                snapshot,
+                warnings: Vec::new(),
+              })),
+            );
+            self.expect_inhibited(false, "paused playback session kept the idle inhibitor")?;
+            check("paused playback session released the idle inhibitor");
+            self.step = Step::CycleResume;
+          }
+          Step::CycleResume => {
+            self.command(json!(["set_property", "pause", false]))?;
+            if self.paused() != Some(false) {
+              return Ok(());
+            }
+            let id = self
+              .feed(
+                kernel,
+                PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(false))),
+              )
+              .ok_or("resume intent produced no in-flight command")?;
+            let snapshot = self.snapshot()?;
+            self.settle(
+              kernel,
+              id,
+              ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+                snapshot,
+                warnings: Vec::new(),
+              })),
+            );
+            self.expect_inhibited(
+              true,
+              "resumed playback session did not rebind the idle inhibitor",
+            )?;
+            check("resumed playback session rebound the idle inhibitor");
+            self.step = Step::AwaitReopen;
+          }
+          Step::AwaitReopen => {
+            let reopened = with_run(|run| run.closed && run.surfaces == 1).unwrap_or(false);
+            if !reopened {
+              return Ok(());
+            }
+            self.expect_inhibited(
+              true,
+              "idle inhibitor did not rebind to the reopened window's surface",
+            )?;
+            check("idle inhibitor rebound to the recreated window surface");
+            self.step = Step::Stop;
+          }
+          Step::Stop => {
+            // The probe's own `stop` command drives mpv to idle-active; only
+            // then does the session-level Stop settle, so the release check
+            // follows the real native stop instead of preceding it.
+            if self.property("idle-active").and_then(|v| v.as_bool()) != Some(true) {
+              return Ok(());
+            }
+            let id = self
+              .feed(
+                kernel,
+                PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)),
+              )
+              .ok_or("stop intent produced no in-flight command")?;
+            self.settle(
+              kernel,
+              id,
+              ControllerSettlement::Stopped(Ok(PlaybackStopOutcome {
+                warnings: Vec::new(),
+              })),
+            );
+            self.expect_inhibited(false, "stopped playback session kept the idle inhibitor")?;
+            check("stopped playback session released the idle inhibitor");
+            self.step = Step::Done;
+            DONE.store(true, std::sync::atomic::Ordering::Release);
+          }
+          Step::Done => {}
+        }
+        Ok(())
+      }
+
+      fn step_name(&self) -> &'static str {
+        match self.step {
+          Step::Begin => "begin",
+          Step::AwaitResume => "await-resume",
+          Step::CyclePause => "cycle-pause",
+          Step::CycleResume => "cycle-resume",
+          Step::AwaitReopen => "await-reopen",
+          Step::Stop => "stop",
+          Step::Done => "done",
+        }
+      }
+    }
+  }
+
+  #[cfg(target_os = "linux")]
+  pub(crate) use idle_session::{done as idle_session_done, drive as drive_idle_session};
 }
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) use gpu_probe::Probe;

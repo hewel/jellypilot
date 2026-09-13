@@ -24,10 +24,15 @@ pub(crate) struct Surface {
   native: Option<wgpu::Surface<'static>>,
   synchronization: Arc<jellypilot_mpv_host::QueueLock>,
   regression: bool,
+  /// Registration token for this surface's idle-inhibit binding; lets a stale
+  /// drop (the compositor creates the replacement before dropping the old
+  /// surface) leave the newer registration untouched.
+  idle_token: u64,
 }
 
 impl Drop for Surface {
   fn drop(&mut self) {
+    crate::embedded::idle::surface_dropped(self.idle_token);
     let _guard = QueueGuard::acquire(self.synchronization.as_ref());
     drop(self.native.take());
     if self.regression {
@@ -73,7 +78,7 @@ impl graphics::Compositor for Compositor {
     let options = super::options().ok_or_else(|| unavailable("not selected"))?;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
       backends: wgpu::Backends::VULKAN,
-      ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display))
+      ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()))
     });
     let surface = instance
       .create_surface(wgpu::SurfaceTarget::Window(Box::new(compatible_window)))
@@ -118,6 +123,9 @@ impl graphics::Compositor for Compositor {
       frame.layout = Some(binding_layout.clone());
       frame.shell = Some(shell);
     }
+    // The display owner is transferred once here; surfaces register per window
+    // so a rebound inhibitor always targets a live presentation surface.
+    crate::embedded::idle::display_changed(display);
     Ok(Self {
       host,
       context,
@@ -145,7 +153,7 @@ impl graphics::Compositor for Compositor {
   ) -> Surface {
     let native = match self
       .instance
-      .create_surface(wgpu::SurfaceTarget::Window(Box::new(window)))
+      .create_surface(wgpu::SurfaceTarget::Window(Box::new(window.clone())))
     {
       Ok(surface)
         if surface
@@ -170,6 +178,7 @@ impl graphics::Compositor for Compositor {
       native,
       synchronization: self.context.queue_lock(),
       regression: crate::regression::active(),
+      idle_token: crate::embedded::idle::surface_changed(window),
     };
     if surface.regression {
       crate::regression::surface_created();
@@ -318,6 +327,7 @@ impl graphics::Compositor for Compositor {
 
 impl Drop for Compositor {
   fn drop(&mut self) {
+    crate::embedded::idle::shutdown();
     let mut frame = FRAME
       .lock()
       .unwrap_or_else(std::sync::PoisonError::into_inner);

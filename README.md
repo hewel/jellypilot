@@ -99,7 +99,7 @@ Intro Skipper reads Jellyfin's native media segments, including ranges published
 
 ### Runtime Prerequisites
 
-- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `bun run task mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player.
+- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `bun run task mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player. While a Playback Session is active and unpaused, embedded playback also holds a session idle inhibitor — the Wayland idle-inhibit protocol (`zwp_idle_inhibitor_v1`) on the presentation surface under Wayland, `XScreenSaverSuspend` under X11 — so the desktop does not auto-lock mid-episode. Pausing or stopping playback releases it. On Wayland the inhibitor follows the visible window: closing the last window to the tray releases it until the window is reopened. Compositors without the idle-inhibit protocol cannot be inhibited (playback continues normally).
 - **External Playback (Windows & macOS default, optional on Linux)**: Requires [MPV](https://mpv.io/) with Lua scripting support, discoverable on `PATH` or configured explicitly in **Settings → Playback**. A bundled Lua hook captures volume and temporary mute states before MPV resets options at the end of playback.
 
 ### Installation

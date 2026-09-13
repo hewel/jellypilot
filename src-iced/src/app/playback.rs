@@ -1636,7 +1636,11 @@ pub(crate) fn quit_may_exit(surface: &Surface, quit_requested: bool) -> bool {
   quit_requested && surface.view.quit_may_proceed && !surface.remote_stopping
 }
 
-fn sync_playback_projection(surface: &mut Surface, kernel: &Kernel, quit_requested: bool) {
+pub(crate) fn sync_playback_projection(
+  surface: &mut Surface,
+  kernel: &Kernel,
+  quit_requested: bool,
+) {
   let mut view = surface.session.view();
   if view.busy && surface.in_flight_refresh.is_some() && surface.in_flight_command.is_none() {
     view.busy = false;
@@ -1647,6 +1651,11 @@ fn sync_playback_projection(surface: &mut Surface, kernel: &Kernel, quit_request
     PlaybackNotice::Warnings(_) => UiText::new("player-setup-incomplete"),
     PlaybackNotice::CleanupFailed(_) => UiText::new("player-cleanup-failed"),
   });
+  // Embedded playback owns session idle inhibition; the call is a no-op
+  // unless the desired state changed or a surface is (un)available.
+  crate::embedded::idle::set_desired(crate::embedded::idle::wants_inhibit(
+    surface.view.now_playing.as_ref(),
+  ));
   sync_tray(surface, kernel, quit_requested);
 }
 

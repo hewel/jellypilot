@@ -2,6 +2,7 @@
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) mod compositor;
+pub(crate) mod idle;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) mod retained;
 #[cfg(any(target_os = "linux", target_os = "windows"))]

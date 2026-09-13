@@ -29,10 +29,14 @@
 #![cfg(any(target_os = "linux", target_os = "windows"))]
 
 mod gpu;
+#[cfg(target_os = "linux")]
+mod idle;
 mod interop;
 
 pub use gpu::DeviceContext;
 pub use iced_wgpu::wgpu;
+#[cfg(target_os = "linux")]
+pub use idle::IdleInhibit;
 pub use interop::{Host, QueueGuard, QueueLock};
 
 /// Sanitized initialization or GPU-host error; never includes media input.

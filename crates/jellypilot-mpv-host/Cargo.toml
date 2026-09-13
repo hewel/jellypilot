@@ -16,3 +16,12 @@ ash = "0.38"
 libloading = "0.8"
 parking_lot = "0.12"
 thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Idle inhibition wraps the host's real libwayland objects (winit pins
+# wayland-backend's client_system backend) and uses a private X11 connection
+# for XScreenSaverSuspend; both stay behind the safe IdleInhibit API.
+raw-window-handle = "0.6"
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+x11rb = { version = "0.13", features = ["screensaver"] }

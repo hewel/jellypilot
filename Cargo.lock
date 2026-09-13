@@ -2907,8 +2907,12 @@ dependencies = [
  "iced_wgpu",
  "libloading 0.8.9",
  "parking_lot",
+ "raw-window-handle",
  "thiserror 2.0.18",
+ "wayland-client",
+ "wayland-protocols",
  "wgpu",
+ "x11rb",
 ]
 
 [[package]]
