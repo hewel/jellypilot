@@ -1,0 +1,13 @@
+modelRoles:
+  default: "openai-codex/gpt-6-astra:xhigh"
+  task: "devin/swe-2:max"
+
+async:
+  enabled: true
+
+advisor:
+  enabled: false
+
+task:
+  agentModelOverrides:
+    task: "@task"
