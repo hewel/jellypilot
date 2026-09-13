@@ -31,7 +31,7 @@ pub(crate) fn decode_icon(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 
 /// Engine construction is supplied only by the thin trusted launcher.
 /// The application never exposes the resulting engine or accepts custom widgets.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Clone, Copy, Debug)]
 pub struct EmbeddedEngineFactory {
   pub create_engine: fn(
@@ -45,7 +45,7 @@ pub struct EmbeddedEngineFactory {
     &iced_wgpu::wgpu::SurfaceConfiguration,
   ),
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub type EmbeddedEngineFactory = ();
 
 /// Win32 message pump installed by the trusted launcher. `tray-icon` creates its
@@ -126,7 +126,7 @@ fn run_application(
     daemon = daemon.font(font);
   }
 
-  #[cfg(target_os = "linux")]
+  #[cfg(any(target_os = "linux", target_os = "windows"))]
   if embedded::enabled() {
     use embedded::retained::RetainedCompositor;
     use iced::advanced::graphics::Compositor;

@@ -24,6 +24,8 @@ jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
 iced_wgpu = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
+iced_wgpu = { workspace = true }
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]

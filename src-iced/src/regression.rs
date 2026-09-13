@@ -265,7 +265,9 @@ pub(crate) fn finish(
       run.error =
         Some("Daemon did not create and release exactly one retained embedded host".into());
     }
-    if crate::embedded::options().is_some_and(|options| options.ipc.exists()) && run.error.is_none()
+    if crate::embedded::options()
+      .is_some_and(|options| crate::embedded::ipc_endpoint_alive(&options.ipc))
+      && run.error.is_none()
     {
       run.error = Some("Embedded IPC socket remained after daemon cleanup".into());
     }
@@ -349,30 +351,30 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
   )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn host_created(adapter: String) {
   with_run(|run| {
     run.hosts += 1;
     run.adapter = Some(adapter);
   });
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn compositor_dropped() {
   with_run(|run| run.dropped_hosts += 1);
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn renderer_created() {
   with_run(|run| run.renderers += 1);
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn surface_created() {
   with_run(|run| run.surfaces += 1);
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn surface_dropped() {
   with_run(|run| run.surfaces = run.surfaces.saturating_sub(1));
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn tray_presented() {
   if tray() {
     with_run(|run| {
@@ -388,17 +390,23 @@ pub(crate) fn tray_presented() {
   }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod gpu_probe {
   use super::*;
   use iced::advanced::graphics::Viewport;
   use iced::advanced::Renderer as _;
   use std::io::{BufRead, BufReader, Write};
+  #[cfg(unix)]
   use std::os::unix::net::UnixStream;
   use std::time::Instant;
 
+  #[cfg(unix)]
+  type IpcStream = UnixStream;
+  #[cfg(windows)]
+  type IpcStream = std::fs::File;
+
   pub(crate) struct Probe {
-    ipc: BufReader<UnixStream>,
+    ipc: BufReader<IpcStream>,
     request: u64,
     phase: u8,
     deadline: Instant,
@@ -415,14 +423,27 @@ mod gpu_probe {
   impl Probe {
     pub(crate) fn new() -> Result<Self, String> {
       let options = crate::embedded::options().ok_or("Embedded options unavailable")?;
-      let stream =
-        UnixStream::connect(&options.ipc).map_err(|_| "Cannot connect native regression IPC")?;
-      stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|e| e.to_string())?;
-      stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|e| e.to_string())?;
+      #[cfg(unix)]
+      let stream = {
+        let stream =
+          UnixStream::connect(&options.ipc).map_err(|_| "Cannot connect native regression IPC")?;
+        stream
+          .set_read_timeout(Some(Duration::from_secs(2)))
+          .map_err(|e| e.to_string())?;
+        stream
+          .set_write_timeout(Some(Duration::from_secs(2)))
+          .map_err(|e| e.to_string())?;
+        stream
+      };
+      // Windows named pipes are opened as files; blocking I/O has no per-read
+      // timeout. The per-phase deadline still applies between commands and the
+      // runner's outer process timeout remains the final bound.
+      #[cfg(windows)]
+      let stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&options.ipc)
+        .map_err(|_| "Cannot connect native regression IPC")?;
       let mut probe = Self {
         ipc: BufReader::new(stream),
         request: 0,
@@ -756,5 +777,5 @@ mod gpu_probe {
       .any(|pixel| pixel[..3] != first[..3])
   }
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) use gpu_probe::Probe;

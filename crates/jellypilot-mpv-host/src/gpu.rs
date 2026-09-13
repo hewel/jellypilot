@@ -3,6 +3,21 @@ use ash::vk;
 use iced_wgpu::wgpu;
 use std::sync::Arc;
 
+/// Decoder-import extensions enabled on the shared device when the driver
+/// advertises them. Linux imports DMA-BUF frames; Windows records NT-handle
+/// capability for later D3D11VA direct import (software/copy decode needs none).
+#[cfg(target_os = "linux")]
+const DECODER_IMPORT_EXTENSIONS: &[&std::ffi::CStr] = &[
+    ash::khr::external_memory_fd::NAME,
+    ash::ext::external_memory_dma_buf::NAME,
+    ash::ext::image_drm_format_modifier::NAME,
+];
+#[cfg(target_os = "windows")]
+const DECODER_IMPORT_EXTENSIONS: &[&std::ffi::CStr] = &[
+    ash::khr::external_memory_win32::NAME,
+    ash::khr::external_semaphore_win32::NAME,
+];
+
 /// Keep this context alive until `mpv_terminate_destroy` has returned. The feature
 /// header and every node it points to have fixed heap addresses, even when this
 /// context moves. They describe device creation, never a supported-feature query.
@@ -186,19 +201,17 @@ impl DeviceContext {
             let mut extensions = hal.required_device_extensions(desc.required_features);
             let supported_extensions =
                 raw_instance.enumerate_device_extension_properties(physical_device)?;
-            // DMA-BUF imports must be enabled on the actual shared device, not
-            // merely advertised to mpv. Vulkan 1.2 supplies core dependencies;
-            // missing optional extensions still permit software/copy decoding.
-            for extension in [
-                ash::khr::external_memory_fd::NAME,
-                ash::ext::external_memory_dma_buf::NAME,
-                ash::ext::image_drm_format_modifier::NAME,
-            ] {
+            // Decoder-import extensions must be enabled on the actual shared
+            // device, not merely advertised to mpv. Vulkan 1.2 supplies core
+            // dependencies; missing optional extensions still permit
+            // software/copy decoding. The slice differs per platform: DMA-BUF
+            // import on Linux, NT-handle import on Windows.
+            for extension in DECODER_IMPORT_EXTENSIONS {
                 let supported = supported_extensions.iter().any(|properties| {
-                    std::ffi::CStr::from_ptr(properties.extension_name.as_ptr()) == extension
+                    std::ffi::CStr::from_ptr(properties.extension_name.as_ptr()) == *extension
                 });
-                if supported && !extensions.contains(&extension) {
-                    extensions.push(extension);
+                if supported && !extensions.contains(extension) {
+                    extensions.push(*extension);
                 }
             }
             let extension_names: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();

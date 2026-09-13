@@ -357,6 +357,18 @@ impl Host {
             // Do not retain a wgpu internal guard across libmpv initialization
             // or fallible teardown paths that poll the same device.
             drop(native);
+            // The default Windows search order never looks in the loaded DLL's
+            // own directory. LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR resolves
+            // libmpv-2.dll's dependencies beside it and avoids picking up a
+            // same-named system library.
+            #[cfg(windows)]
+            let library =
+                libloading::Library::from(libloading::os::windows::Library::load_with_flags(
+                    &options.libmpv,
+                    libloading::os::windows::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                        | libloading::os::windows::LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+                )?);
+            #[cfg(not(windows))]
             let library = libloading::Library::new(&options.libmpv)
                 .map_err(|_| Error::from("cannot load the configured embedded libmpv"))?;
             let create = *library.get::<unsafe extern "C" fn() -> *mut c_void>(b"mpv_create\0")?;

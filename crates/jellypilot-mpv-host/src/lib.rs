@@ -1,8 +1,12 @@
-//! Linux Vulkan / gpu-next host ABI boundary for embedded JellyPilot playback.
+//! Cross-platform Vulkan / gpu-next host ABI boundary for embedded JellyPilot playback.
 //!
 //! Unsafe Vulkan and libmpv FFI is confined here. The private launcher performs
 //! only the two documented unsafe handoffs into the closed application compositor.
 //! Every unsafe operation remains explicit under `deny(unsafe_op_in_unsafe_fn)`.
+//!
+//! Platform differences are confined to decoder-import device extensions
+//! (Linux DMA-BUF, Windows NT handles) and the IPC endpoint shape (Linux
+//! filesystem socket, Windows named pipe).
 //!
 //! The enabled device feature chain is the exact retained creation chain, not
 //! a supported-feature query. Hosts and pending GPU callbacks retain its context.
@@ -22,7 +26,7 @@
 //! mpv blocks for producer completion; this does not claim full-chain zero-copy,
 //! hardware decoding, HDR output, or downstream compositor presentation feedback.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "windows"))]
 
 mod gpu;
 mod interop;
@@ -85,16 +89,12 @@ pub struct HostOptions {
 impl HostOptions {
     /// Checks paths and option policy without loading a library or allocating GPU resources.
     pub fn validate(&self) -> Result<(), Error> {
-        for path in [
-            &self.libmpv,
-            &self.baseline,
-            &self.ipc,
-            &self.demuxer_cache_dir,
-        ] {
+        for path in [&self.libmpv, &self.baseline, &self.demuxer_cache_dir] {
             if !path.is_absolute() || path.to_str().is_none_or(|value| value.contains('\0')) {
                 return Err("embedded mpv paths must be absolute, UTF-8 and NUL-free".into());
             }
         }
+        ipc_endpoint_valid(&self.ipc)?;
         if !self.libmpv.is_file() || !self.baseline.is_file() {
             return Err("embedded mpv library or baseline asset is missing".into());
         }
@@ -110,4 +110,36 @@ impl HostOptions {
         }
         Ok(())
     }
+}
+
+/// The IPC endpoint is a filesystem socket path on Linux and a named-pipe
+/// path on Windows; both must be UTF-8 and NUL-free.
+#[cfg(target_os = "linux")]
+fn ipc_endpoint_valid(path: &std::path::Path) -> Result<(), Error> {
+    if !path.is_absolute() || path.to_str().is_none_or(|value| value.contains('\0')) {
+        return Err(
+            "embedded mpv IPC endpoint must be an absolute, UTF-8, NUL-free socket path".into(),
+        );
+    }
+    Ok(())
+}
+
+/// mpv's `--input-ipc-server` on Windows takes a `\\.\pipe\` name, not a file.
+#[cfg(target_os = "windows")]
+fn ipc_endpoint_valid(path: &std::path::Path) -> Result<(), Error> {
+    const PIPE_PREFIX: &str = r"\\.\pipe\";
+    let Some(value) = path.to_str() else {
+        return Err("embedded mpv IPC endpoint must be a UTF-8 named-pipe path".into());
+    };
+    let valid = value
+        .get(..PIPE_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PIPE_PREFIX))
+        && value.len() > PIPE_PREFIX.len()
+        && !value.contains('\0');
+    if !valid {
+        return Err(
+            "embedded mpv IPC endpoint must be a non-empty, NUL-free \\\\.\\pipe\\ name".into(),
+        );
+    }
+    Ok(())
 }

@@ -11,8 +11,12 @@ import { TaskMpvArtifactError, TaskMpvBuildError } from './errors';
 import { runCommand } from './process';
 
 export const MPV_ARTIFACT_ROOT = path.join(REPO_ROOT, 'target/embedded-mpv');
-const LIBRARY = 'lib/jellypilot/libmpv.so';
+const LIBRARY =
+  process.platform === 'win32' ? 'lib/jellypilot/libmpv-2.dll' : 'lib/jellypilot/libmpv.so';
 const BASELINE = 'share/jellypilot/mpv-baseline.conf';
+// Windows ships a repo-maintained baseline (software decoding); Linux extracts
+// the pinned fork's TOOLS/gpu-next-host-baseline.conf at the pinned revision.
+const WINDOWS_BASELINE = path.join(REPO_ROOT, 'tools/embedded-mpv/baseline-windows.conf');
 
 const buildIo = <A>(step: string, operation: () => Promise<A>) =>
   Effect.tryPromise({
@@ -67,11 +71,11 @@ const verifySource = Effect.fn('task.mpv.verifySource')(function* (source: strin
 });
 
 export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | null) {
-  if (process.platform !== 'linux') {
+  if (process.platform !== 'linux' && process.platform !== 'win32') {
     return yield* Effect.fail(
       new TaskMpvBuildError({
         step: 'platform',
-        message: 'Embedded mpv currently requires Linux and Vulkan.',
+        message: 'Embedded mpv currently requires Linux or Windows with Vulkan.',
       }),
     );
   }
@@ -104,7 +108,16 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
   yield* verifySource(checkout);
 
   const tools: Record<string, string> = {};
-  for (const executable of ['git', 'meson', 'ninja', 'pkg-config', 'cc', 'c++', 'python3']) {
+  const toolchain = [
+    'git',
+    'meson',
+    'ninja',
+    'pkg-config',
+    'cc',
+    'c++',
+    process.platform === 'win32' ? 'python' : 'python3',
+  ];
+  for (const executable of toolchain) {
     const result = yield* buildCommand(
       'build prerequisite',
       executable,
@@ -137,17 +150,25 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
   yield* runCommand(command('meson', ['compile', '-C', build, 'mpv']));
   // Recheck after compilation to avoid certifying a checkout edited during the build.
   yield* verifySource(checkout);
-  const baseline = yield* runCommand({
-    ...command('git', ['-C', checkout, 'show', `${sourcePin.revision}:${sourcePin.baseline}`]),
-    buffered: true,
-  });
+  const baseline =
+    process.platform === 'win32'
+      ? yield* buildIo('windows baseline', () => readFile(WINDOWS_BASELINE, 'utf8'))
+      : (yield* runCommand({
+          ...command('git', [
+            '-C',
+            checkout,
+            'show',
+            `${sourcePin.revision}:${sourcePin.baseline}`,
+          ]),
+          buffered: true,
+        })).stdout;
   const libraryPath = path.join(MPV_ARTIFACT_ROOT, LIBRARY);
   const baselinePath = path.join(MPV_ARTIFACT_ROOT, BASELINE);
   yield* buildIo('stage artifacts', async () => {
     await mkdir(path.dirname(libraryPath), { recursive: true });
     await mkdir(path.dirname(baselinePath), { recursive: true });
-    await copyFile(path.join(build, 'libmpv.so'), libraryPath);
-    await writeFile(baselinePath, baseline.stdout);
+    await copyFile(path.join(build, path.basename(LIBRARY)), libraryPath);
+    await writeFile(baselinePath, baseline);
     const introspection: Record<string, unknown> = {};
     for (const name of ['dependencies', 'compilers', 'buildoptions', 'machines']) {
       const text = await readFile(path.join(build, `meson-info/intro-${name}.json`), 'utf8');

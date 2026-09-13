@@ -27,7 +27,7 @@ fn pump_thread_messages() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn application_engine(
     context: &jellypilot_mpv_host::DeviceContext,
     antialiasing: Option<iced_wgpu::graphics::Antialiasing>,
@@ -47,7 +47,7 @@ fn application_engine(
     unsafe { context.engine(antialiasing, shell) }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn configure_surface(
     context: &jellypilot_mpv_host::DeviceContext,
     surface: &iced_wgpu::wgpu::Surface<'_>,
@@ -61,12 +61,12 @@ fn configure_surface(
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(target_os = "windows")]
     jellypilot_iced::set_tray_message_pump(pump_thread_messages);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     let factory = jellypilot_iced::EmbeddedEngineFactory {
         create_engine: application_engine,
         configure_surface,
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let factory = ();
     jellypilot_iced::run(factory)
 }
