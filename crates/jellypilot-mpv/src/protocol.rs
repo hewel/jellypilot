@@ -89,6 +89,11 @@ impl MpvCommand {
     Self::new(vec!["show-text".into(), text.into(), duration_ms.into()])
   }
 
+  /// Invoke a named script binding (e.g. `stats/display-stats-toggle`).
+  pub fn script_binding(name: &str) -> Self {
+    Self::new(vec!["script-binding".into(), name.into()])
+  }
+
   /// Set pause state.
   pub fn set_pause(paused: bool) -> Self {
     Self::new(vec!["set_property".into(), "pause".into(), paused.into()])

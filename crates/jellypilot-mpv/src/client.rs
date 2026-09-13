@@ -474,6 +474,12 @@ impl MpvClient {
     Ok(())
   }
 
+  /// Invoke a named script binding (e.g. `stats/display-stats-toggle`).
+  pub async fn script_binding(&self, name: &str) -> Result<(), MpvError> {
+    self.send(MpvCommand::script_binding(name)).await?;
+    Ok(())
+  }
+
   /// Set pause state.
   pub async fn set_pause(&self, paused: bool) -> Result<(), MpvError> {
     self.send(MpvCommand::set_pause(paused)).await?;

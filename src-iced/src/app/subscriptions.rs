@@ -226,6 +226,11 @@ fn playback_shortcut(
     && modified_key.as_ref() == keyboard::Key::Named(keyboard::key::Named::Space)
   {
     PlaybackIntent::TogglePaused
+  } else if embedded
+    && (modifiers.is_empty() || modifiers == keyboard::Modifiers::SHIFT)
+    && matches!(modified_key.as_ref(), keyboard::Key::Character("i" | "I"))
+  {
+    PlaybackIntent::ToggleStats
   } else {
     return None;
   };
@@ -478,6 +483,55 @@ mod tests {
       keyboard::Modifiers::CTRL,
     );
     assert!(playback_shortcut(((bindings, true), (modified, event::Status::Ignored))).is_none());
+  }
+
+  #[test]
+  fn embedded_i_toggles_mpv_stats_overlay() {
+    let bindings = playback_shortcuts(&jellypilot_core::config::Settings::default());
+    let press = |key: &str, modifiers| {
+      (
+        (bindings.clone(), true),
+        (
+          key_pressed(keyboard::Key::Character(key.into()), modifiers),
+          event::Status::Ignored,
+        ),
+      )
+    };
+    for event in [
+      press("i", keyboard::Modifiers::NONE),
+      press("I", keyboard::Modifiers::SHIFT),
+    ] {
+      assert!(matches!(
+        playback_shortcut(event),
+        Some(Message::Playback(PlaybackMessage::Intent(intent)))
+          if matches!(*intent, PlaybackIntent::ToggleStats)
+      ));
+    }
+    // The external player owns its own window keys; the app never intercepts.
+    assert!(playback_shortcut((
+      (bindings.clone(), false),
+      (
+        key_pressed(
+          keyboard::Key::Character("i".into()),
+          keyboard::Modifiers::NONE
+        ),
+        event::Status::Ignored,
+      ),
+    ))
+    .is_none());
+    // Captured input (typing) and other modifiers are left alone.
+    assert!(playback_shortcut((
+      (bindings.clone(), true),
+      (
+        key_pressed(
+          keyboard::Key::Character("i".into()),
+          keyboard::Modifiers::NONE
+        ),
+        event::Status::Captured,
+      ),
+    ))
+    .is_none());
+    assert!(playback_shortcut(press("i", keyboard::Modifiers::CTRL)).is_none());
   }
 
   #[test]

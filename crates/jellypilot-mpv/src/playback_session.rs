@@ -38,6 +38,7 @@ pub enum PlaybackIntent {
   },
   TogglePaused,
   ToggleFullscreen,
+  ToggleStats,
   SetPaused(bool),
   Seek(f64),
   SetVolume(f64),
@@ -125,6 +126,7 @@ pub enum ControllerCommand {
     text: String,
     duration_ms: i64,
   },
+  ToggleStats,
   Stop,
   Refresh,
   Shutdown,
@@ -141,7 +143,9 @@ impl ControllerCommand {
       Self::SelectAudioTrack(_) | Self::SelectSubtitleTrack(_) => {
         ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
       }
-      Self::ShowText { .. } => ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
+      Self::ShowText { .. } | Self::ToggleStats => {
+        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback))
+      }
       Self::Shutdown => ControllerSettlement::Shutdown(PlaybackShutdownOutcome {
         warnings: Vec::new(),
         cleanup: Ok(()),
@@ -517,6 +521,12 @@ impl PlaybackSession {
           RequestKind::Fullscreen,
           ControllerCommand::ToggleFullscreen,
         ))
+      }
+      PlaybackIntent::ToggleStats => {
+        if self.snapshot.is_none() {
+          return PlaybackStep::ignored();
+        }
+        self.enqueue(ControllerRequest::stats())
       }
       PlaybackIntent::SetPaused(paused) => {
         if self.snapshot.is_none() {
@@ -1281,6 +1291,7 @@ enum RequestKind {
   AudioTrack,
   SubtitleTrack,
   ShowText,
+  Stats,
   Stop,
   Refresh,
 }
@@ -1353,6 +1364,14 @@ impl ControllerRequest {
     Self {
       kind: RequestKind::ShowText,
       command: ControllerCommand::ShowText { text, duration_ms },
+      operation: ControllerOperation::Osd,
+    }
+  }
+
+  fn stats() -> Self {
+    Self {
+      kind: RequestKind::Stats,
+      command: ControllerCommand::ToggleStats,
       operation: ControllerOperation::Osd,
     }
   }
@@ -1808,6 +1827,43 @@ mod tests {
     );
     assert!(drained.effects.is_empty());
     assert!(session.view().lifecycle.settled);
+  }
+
+  #[test]
+  fn stats_toggle_dispatches_osd_command_only_with_active_playback() {
+    let mut session = PlaybackSession::default();
+    let now = instant();
+    assert!(session
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleStats)),
+        now,
+      )
+      .effects
+      .is_empty());
+
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let (id, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleStats)),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(command, ControllerCommand::ToggleStats));
+    assert!(session.view().busy);
+    let step = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::OsdShown(Err(PlaybackError::MpvControlFailed)),
+      })),
+      now,
+    );
+    assert!(step.effects.is_empty());
+    assert!(matches!(
+      session.view().notice,
+      Some(PlaybackNotice::Failed(PlaybackError::MpvControlFailed))
+    ));
   }
 
   #[test]
@@ -3121,6 +3177,10 @@ mod tests {
       (
         ControllerCommand::SelectAudioTrack(2),
         ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::ToggleStats,
+        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
       ),
       (
         ControllerCommand::SelectSubtitleTrack(None),

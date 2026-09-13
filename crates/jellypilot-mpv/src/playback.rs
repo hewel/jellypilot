@@ -1124,6 +1124,15 @@ impl PlaybackController {
       .map_err(|_| PlaybackError::MpvControlFailed)
   }
 
+  /// Toggle MPV's stats overlay (the builtin `stats` script's `i` binding).
+  pub async fn toggle_stats(&self) -> Result<(), PlaybackError> {
+    self
+      .mpv
+      .script_binding("stats/display-stats-toggle")
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)
+  }
+
   /// Drain script-message names observed since the last shell refresh.
   pub fn take_client_messages(&mut self) -> Vec<String> {
     std::mem::take(&mut self.pending_client_messages)

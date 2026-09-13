@@ -1820,6 +1820,10 @@ fn execute_controller_command(
           ControllerSettlement::OsdShown(controller.show_text(&text, duration_ms).await),
           None,
         ),
+        ControllerCommand::ToggleStats => (
+          ControllerSettlement::OsdShown(controller.toggle_stats().await),
+          None,
+        ),
         ControllerCommand::Stop => (ControllerSettlement::Stopped(controller.stop().await), None),
         ControllerCommand::Refresh => {
           let outcome = controller.refresh().await;
