@@ -14,7 +14,7 @@ export const MPV_ARTIFACT_ROOT = path.join(REPO_ROOT, 'target/embedded-mpv');
 const LIBRARY =
   process.platform === 'win32' ? 'lib/jellypilot/libmpv-2.dll' : 'lib/jellypilot/libmpv.so';
 const BASELINE = 'share/jellypilot/mpv-baseline.conf';
-// Windows ships a repo-maintained baseline (software decoding); Linux extracts
+// Windows ships a repo-maintained D3D11VA-copy baseline; Linux extracts
 // the pinned fork's TOOLS/gpu-next-host-baseline.conf at the pinned revision.
 const WINDOWS_BASELINE = path.join(REPO_ROOT, 'tools/embedded-mpv/baseline-windows.conf');
 
@@ -137,7 +137,11 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
     packages[requirement] = result.stdout.trim();
   }
   const build = path.join(work, 'meson');
-  yield* runCommand(command('meson', ['setup', build, checkout, ...sourcePin.mesonOptions])).pipe(
+  const mesonOptions = [
+    ...sourcePin.mesonOptions,
+    ...(process.platform === 'win32' ? sourcePin.windowsMesonOptions : []),
+  ];
+  yield* runCommand(command('meson', ['setup', build, checkout, ...mesonOptions])).pipe(
     Effect.catchTag('TaskProcessError', (error) =>
       Effect.fail(
         new TaskMpvBuildError({

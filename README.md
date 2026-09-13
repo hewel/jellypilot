@@ -164,6 +164,7 @@ Download `jellypilot-*.dmg` from [GitHub Releases](https://github.com/hewel/jell
 - [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
 - Linux GUI: GTK 3, `libxkbcommon`, and Wayland development packages (`libgtk-3-dev`, `libxkbcommon-dev`, `libwayland-dev`, `wayland-protocols`)
 - Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader, FFmpeg dev libraries, `libplacebo` >= 7.360.1, and `libass`.
+- Windows Embedded MPV: the same native build tools and media libraries in a Windows environment such as MSYS2 UCRT64, plus Lua or LuaJIT development files. The build requires D3D hardware decoding and Lua support; Lua provides the `osc` option even when the host sets `osc=no`.
 
 </details>
 
@@ -172,14 +173,14 @@ git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
 bun install --frozen-lockfile
 
-# Optional (Linux only): build and stage the pinned mpv fork for Embedded Playback
+# Optional (Linux or Windows): build and stage the pinned mpv fork for Embedded Playback
 bun run task mpv build
 
 # Build the release launcher binary
 bun run task iced build --release
 ```
 
-The release binary is `target/release/jellypilot`.
+The release binary is `target/release/jellypilot` (`jellypilot.exe` on Windows).
 
 Maintained Cargo tasks prepare the repository-owned `target/vendor/iced` before building.
 `tools/embedded-mpv/iced-source.json` is the authority for the published fork revision and
@@ -198,7 +199,8 @@ bun run task iced prepare --source /absolute/path/to/iced
 This accepted integration supersedes ADR 0027's external-only playback restriction, not its
 native iced/no-webview decision. Linux defaults to Embedded MPV Playback with the pinned
 fork, including a one-time migration of existing settings that still recorded External.
-Windows and macOS keep External. In **Settings → Playback**, select External if you want
+Windows and macOS keep External as their default. Windows also supports Embedded MPV with
+the pinned DLL and its Windows baseline. In **Settings → Playback**, select External if you want
 your own MPV process, configuration, shaders, and scripts; restart to apply. Switching
 preserves the external executable and arguments. **Show video** opens the player surface
 while browsing. The same player, transport, queue, volume, subtitles, and remote-session
@@ -212,6 +214,7 @@ and fullscreen playback; the video keeps its aspect ratio without cropping.
 | Left / Right | Seek −5 / +5 seconds; held keys repeat |
 | Up / Down | Volume +5 / −5 percentage points, limited to 0–100%; held keys repeat |
 | F | Toggle fullscreen; held-key repeats ignored |
+| I | Toggle mpv's stats overlay; held-key repeats ignored |
 | Esc | Leave fullscreen; an open menu or modal takes priority |
 | Space / click video | Toggle pause; Space repeats ignored |
 | Back button | Stop playback, then restore the source page and leave fullscreen |
@@ -253,6 +256,17 @@ revision is a hard prerequisite failure. No source commit or push is performed.
 
 The build stages `target/embedded-mpv/lib/jellypilot/libmpv.so`,
 `target/embedded-mpv/share/jellypilot/mpv-baseline.conf`, and `manifest.json`.
+On Windows, the library is `lib/jellypilot/libmpv-2.dll` and the baseline comes from
+`tools/embedded-mpv/baseline-windows.conf`. The task adds `windowsMesonOptions` from
+`source.json`, so missing D3D hardware decoding or Lua support fails at configuration time.
+The Windows baseline requests `hwdec=d3d11va-copy`: hardware-decoded frames pass through
+system memory before upload to the existing Vulkan renderer. Unsupported codecs or devices
+can fall back to software decoding. Start it with `bun run task iced run --release --embedded`.
+Stage the DLL's runtime dependencies beside it when distributing the build; the build task
+does not collect those DLLs automatically. Changing the source baseline requires restaging
+it (the MPV build task does this); an already running player keeps its startup configuration.
+Confirm `hwdec-current=d3d11va-copy` during playback before claiming hardware decoding;
+the current `iced regress` runner remains Linux-only.
 The manifest records source, configuration, tool/dependency versions and artifact hashes.
 Source and options are pinned; host libraries/compiler and auto-selected dependencies are
 recorded, **not pinned**, so this is not a bit-reproducible or self-contained distribution.
@@ -277,8 +291,8 @@ The private launcher contains only the two unsafe engine/surface handoffs; Vulka
 FFI lives in `jellypilot-mpv-host`, while `src-iced` retains its unsafe-code prohibition.
 Direct VAAPI hardware decoding is supported via DMA-BUF import extensions on the shared
 Vulkan device when supported by hardware and drivers. This does not claim HDR presentation,
-zero-copy playback, or downstream compositor presentation feedback. Non-Linux embedded startup
-is explicitly unavailable.
+zero-copy playback, or downstream compositor presentation feedback. Windows uses the
+D3D11VA-copy path described above; embedded startup on macOS remains unavailable.
 The daemon factory retains the host/device resources across last-window close; reopening
 creates a new surface and renderer for the same playback session. Daemon exit terminates
 mpv before removing its process-private IPC directory.

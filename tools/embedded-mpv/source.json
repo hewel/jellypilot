@@ -11,6 +11,10 @@
     "-Dvulkan=enabled",
     "-Dbuild-date=false"
   ],
+  "windowsMesonOptions": [
+    "-Dd3d-hwaccel=enabled",
+    "-Dlua=enabled"
+  ],
   "requiredPackages": [
     "vulkan >= 1.3.238",
     "libplacebo >= 7.360.1",

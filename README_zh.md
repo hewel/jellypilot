@@ -155,6 +155,7 @@ chmod +x jellypilot-*-x86_64.AppImage
 - [Bun](https://bun.sh/) 1.3.14 或更高版本（仅用于任务调度器，本项目无 JavaScript 前端）
 - Linux 原生图形依赖：GTK 3、`libxkbcommon` 与 Wayland 开发包（`libgtk-3-dev`、`libxkbcommon-dev`、`libwayland-dev`、`wayland-protocols`）
 - Linux 内嵌 MPV 构建依赖（若仅使用外部 MPV 则可跳过）：Meson >= 1.3、Ninja、C/C++ 编译器、pkg-config、Vulkan 开发头文件与加载器、FFmpeg 开发库、`libplacebo` >= 7.360.1、`libass`。
+- Windows 内嵌 MPV：在 MSYS2 UCRT64 等 Windows 环境中准备上述原生构建工具与媒体库，以及 Lua 或 LuaJIT 开发文件。构建要求 D3D 硬解与 Lua 支持；即使 host 设置 `osc=no`，该选项仍依赖 Lua。
 
 </details>
 
@@ -163,14 +164,14 @@ git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
 bun install --frozen-lockfile
 
-# 可选（仅 Linux）：编译并部署内嵌 MPV Fork
+# 可选（Linux 或 Windows）：编译并部署内嵌 MPV Fork
 bun run task mpv build
 
 # 编译 release 正式版启动器
 bun run task iced build --release
 ```
 
-编译产物位于 `target/release/jellypilot`。
+编译产物位于 `target/release/jellypilot`（Windows 为 `jellypilot.exe`）。
 
 Cargo 任务会自动拉取并配置官方维护的 `target/vendor/iced` 专有 Fork 分支。`tools/embedded-mpv/iced-source.json` 是所引用的 Fork 版本权威来源。若要使用本地已有的 iced 源码：
 
@@ -189,6 +190,7 @@ bun run task iced prepare --source /absolute/path/to/iced
 | 左 / 右箭头 | 快退 / 快进 5 秒（长按连续触发） |
 | 上 / 下箭头 | 音量 +5% / −5%（限制在 0–100%，长按连续触发） |
 | F | 切换全屏（忽略长按重复） |
+| I | 切换 mpv 统计信息浮层（忽略长按重复） |
 | Esc | 退出全屏（若有展开的菜单或弹窗优先退出菜单） |
 | 空格 / 单击画面 | 切换暂停与播放（空格忽略长按重复） |
 | 返回按钮 | 停止播放，退出全屏并返回进入前的页面 |
@@ -204,7 +206,11 @@ bun run task iced run
 
 `tools/embedded-mpv/source.json` 定义了 mpv 的固定修订版本、基线配置与 Meson 构建参数。若未传 `--source` 参数，构建任务会自动拉取锁定的 Fork 提交版本。构建任务将产物部署至 `target/embedded-mpv/lib/jellypilot/libmpv.so` 与 `target/embedded-mpv/share/jellypilot/mpv-baseline.conf`，并生成 `manifest.json` 记录构建环境指纹。
 
-本地开发运行时会优先加载暂存目录下的内嵌组件；亦支持通过 `JELLYPILOT_LIBMPV` 与 `JELLYPILOT_MPV_BASELINE` 环境变量覆盖。打包后的可执行文件会按相对路径自动加载附带的动态库。当硬件与驱动支持时，内嵌播放器通过共享 Vulkan 设备的 DMA-BUF 拓展实现原生 VAAPI 视频硬解。
+Windows 默认仍为外部播放，也可使用固定 DLL 开启内嵌播放。Windows 构建生成 `lib/jellypilot/libmpv-2.dll`，基线来自 `tools/embedded-mpv/baseline-windows.conf`；任务会追加 `source.json` 中的 `windowsMesonOptions`，在配置阶段拒绝缺少 D3D 硬解或 Lua 支持的构建。基线默认请求 `hwdec=d3d11va-copy`：GPU 解码后将帧回读至系统内存，再上传到现有 Vulkan 渲染器；不支持的编码或设备可能回退软解。通过 `bun run task iced run --release --embedded` 启动。
+
+分发 Windows 产物时需将运行依赖 DLL 放在 libmpv 旁边，构建任务不会自动收集这些 DLL。修改源码基线后需要重新部署配置（MPV 构建任务会完成此步骤），已运行的播放器仍使用启动时的配置。验收时应在播放中确认实际 `hwdec-current=d3d11va-copy`；目前 `iced regress` 运行器仍仅支持 Linux。
+
+本地开发运行时会优先加载暂存目录下的内嵌组件；亦支持通过 `JELLYPILOT_LIBMPV` 与 `JELLYPILOT_MPV_BASELINE` 环境变量覆盖。打包后的可执行文件会按相对路径自动加载附带的动态库。当硬件与驱动支持时，Linux 内嵌播放器通过共享 Vulkan 设备的 DMA-BUF 拓展实现原生 VAAPI 视频硬解。macOS 暂不支持内嵌播放。
 
 ### Fork 维护与联合验收
 
