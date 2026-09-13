@@ -4,6 +4,14 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Centralized Playback Session acceptance and lifecycle projections; queued replacements invalidate transient player controls immediately, while background refreshes remain non-busy.
+- Unified remote Playback Target resource cleanup so disconnect, profile switching, failures, and quit join outstanding work instead of racing separate teardown paths.
+
+### Fixed
+- Prevented stale or detached controller results from adopting playback metadata or completing the embedded player's stop-before-return navigation.
+- Preserved the latest Playback Target name during startup and serial re-registration, and rejected obsolete registration results after a reconnect.
+
 ## [2.2.0] - 2026-09-10
 
 ### Added

@@ -940,11 +940,10 @@ mod gpu_probe {
       /// resulting projection through the production sync path. Returns the
       /// controller effect id the input dispatched, if any.
       fn feed(&mut self, kernel: &Kernel, input: PlaybackInput) -> Option<EffectId> {
-        let effects = self.surface.session.handle(input, Instant::now());
+        let step = self.surface.session.handle(input, Instant::now());
         let mut controller = None;
-        for effect in effects {
+        for effect in step.effects {
           if let PlaybackEffect::Controller(id, _) = effect {
-            self.surface.in_flight_command = Some(id);
             controller = Some(id);
           }
         }

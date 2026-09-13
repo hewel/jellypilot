@@ -115,9 +115,6 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
     }
     _ => {}
   }
-  if let accounts::Message::RemoteHandoffSettled { generation } = &message {
-    playback::finish_account_remote_handoff(&mut state.playback, *generation);
-  }
   let previous_error = accounts::view(state).error.cloned();
   let result = accounts::update(
     &mut state.accounts,
@@ -126,8 +123,7 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
     &state.watchlist,
     accounts::RuntimeFacts {
       quit_requested: state.shell.quit_requested,
-      playback_active: state.playback.view.now_playing.is_some()
-        || state.playback.in_flight_command.is_some(),
+      playback_active: state.playback.view.lifecycle.playback_active,
     },
     message,
   );
@@ -146,8 +142,7 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
         state.shell.quit_requested,
         generation,
       );
-      tasks.push(start.playback);
-      tasks.push(start.remote.map(Message::Account));
+      tasks.push(start.task);
       if let Some(result) = start.playback_cleanup {
         tasks.push(Task::done(Message::Account(
           accounts::Message::PlaybackHandoffSettled { generation, result },
@@ -326,12 +321,15 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         ));
       }
       if close_without_tray {
-        tasks.push(playback::apply_playback_input(
-          &mut state.playback,
-          &mut state.kernel,
-          state.shell.quit_requested,
-          PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)),
-        ));
+        tasks.push(
+          playback::apply_playback_input(
+            &mut state.playback,
+            &mut state.kernel,
+            state.shell.quit_requested,
+            PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)),
+          )
+          .task,
+        );
         tasks.push(playback::stop_remote_session_for_quit(
           &mut state.playback,
           &mut state.kernel,
@@ -559,12 +557,15 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       }
       if settings_after.intro_mode != settings_before.intro_mode {
         let mode = state.kernel.intro_availability().mode;
-        tasks.push(playback::apply_playback_input(
-          &mut state.playback,
-          &mut state.kernel,
-          state.shell.quit_requested,
-          PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
-        ));
+        tasks.push(
+          playback::apply_playback_input(
+            &mut state.playback,
+            &mut state.kernel,
+            state.shell.quit_requested,
+            PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
+          )
+          .task,
+        );
       }
       if settings_after.playback_target_name != settings_before.playback_target_name {
         tasks.push(playback::refinalize_playback_target(
@@ -605,13 +606,16 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         return shell::toggle_player_fullscreen(state);
       }
       let had_playback = state.playback.view.now_playing.is_some();
-      let return_to_source = super::embedded_player::before_playback(state, &message);
-      let task = playback::update(
+      super::embedded_player::before_playback(state, &message);
+      let playback_update = playback::update(
         &mut state.playback,
         &mut state.kernel,
         state.shell.quit_requested,
         message,
       );
+      let return_to_source =
+        super::embedded_player::after_playback(state, playback_update.transition.controller);
+      let task = playback_update.task;
       let task = if crate::embedded::enabled()
         && !had_playback
         && state.playback.view.now_playing.is_some()
@@ -663,7 +667,8 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
           &mut state.kernel,
           state.shell.quit_requested,
           PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)),
-        ),
+        )
+        .task,
         playback::stop_remote_session_for_quit(&mut state.playback, &mut state.kernel),
       ])
     }
@@ -771,7 +776,7 @@ mod tests {
   use super::super::artwork::{ArtworkSurface, ImagePriority, ImageSpec, ImageStatus};
   use super::*;
   use crate::app::kernel::Kernel;
-  use crate::app::state::{LoginState, RemoteSessionHandle};
+  use crate::app::state::LoginState;
 
   fn update_ui(
     ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
@@ -2159,7 +2164,7 @@ mod tests {
       })),
       now,
     );
-    let (start_id, _) = controller_effect(effects);
+    let (start_id, _) = controller_effect(effects.effects);
     let auxiliary = state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
@@ -2171,6 +2176,7 @@ mod tests {
       now,
     );
     let intro_id = auxiliary
+      .effects
       .iter()
       .find_map(|effect| match effect {
         PlaybackEffect::FetchIntroRanges(id, _) => Some(*id),
@@ -2192,7 +2198,8 @@ mod tests {
       state
         .playback
         .session
-        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
     );
     let effects = state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
@@ -2208,7 +2215,7 @@ mod tests {
       })),
       now,
     );
-    let (prompt_id, command) = controller_effect(effects);
+    let (prompt_id, command) = controller_effect(effects.effects);
     assert!(matches!(command, ControllerCommand::ShowText { .. }));
     state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
@@ -2369,69 +2376,6 @@ mod tests {
 
     assert!(state.shell.quit_requested);
     assert!(state.playback.view.quit_may_proceed);
-  }
-
-  #[test]
-  fn target_name_mutation_requests_live_remote_refinalization() {
-    let path = std::env::temp_dir().join(format!(
-      "jellypilot-iced-target-name-{}.json",
-      std::process::id()
-    ));
-    let _ = fs::remove_file(&path);
-    let mut state = test_state();
-    state.kernel.settings = SettingsStore::for_test(path.clone());
-    state.settings.view =
-      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
-    state.kernel.connection = ConnectionPhase::Connected;
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    state.playback.remote_session = Some(RemoteSessionHandle {
-      websocket: Arc::new(jellypilot_session::JellyfinWebSocket::new()),
-      lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-    });
-    state.settings.view.playback_target_name_input = "Bedroom".to_owned();
-    state.playback.remote_control_state = jellypilot_session::RemoteControlState::Available;
-
-    let task = update(
-      &mut state,
-      Message::Settings(SettingsMessage::SavePlaybackTargetName),
-    );
-
-    assert_eq!(
-      state.kernel.settings.snapshot().playback_target_name(),
-      Some("Bedroom")
-    );
-    assert!(state.kernel.diagnostics.rows().any(|event| {
-      event.message == "Playback target name changed; remote registration requested."
-    }));
-    assert_eq!(task.units(), 1);
-    fs::remove_file(path).unwrap();
-  }
-
-  #[test]
-  fn connecting_target_name_mutation_schedules_no_duplicate_registration() {
-    let (settings, _file) = isolated_settings("connecting-target-name");
-    let mut state = test_state();
-    state.kernel.settings = settings;
-    state.settings.view =
-      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
-    state.kernel.connection = ConnectionPhase::Connected;
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    state.playback.remote_session = Some(RemoteSessionHandle {
-      websocket: Arc::new(jellypilot_session::JellyfinWebSocket::new()),
-      lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-    });
-    state.playback.remote_control_state = jellypilot_session::RemoteControlState::Connecting;
-    state.settings.view.playback_target_name_input = "Bedroom".to_owned();
-
-    let task = update(
-      &mut state,
-      Message::Settings(SettingsMessage::SavePlaybackTargetName),
-    );
-
-    assert_eq!(task.units(), 0);
-    assert!(!state.kernel.diagnostics.rows().any(|event| {
-      event.message == "Playback target name changed; remote registration requested."
-    }));
   }
 
   #[test]

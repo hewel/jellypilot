@@ -45,6 +45,7 @@ fluent-syntax = "0.12"
 iced_runtime = { workspace = true }
 jellypilot-media-server = { path = "../crates/jellypilot-media-server", features = ["test-utils"] }
 jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
+tokio-tungstenite = "0.29.0"
 
 [lints]
 workspace = true

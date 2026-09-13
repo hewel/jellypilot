@@ -361,6 +361,7 @@ mod tests {
       notice: None,
       engine_available: true,
       busy,
+      lifecycle: Default::default(),
       can_start_login: true,
       quit_may_proceed: false,
     }

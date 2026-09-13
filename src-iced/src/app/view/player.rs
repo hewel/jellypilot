@@ -2361,7 +2361,7 @@ mod tests {
       })),
       now,
     );
-    let [PlaybackEffect::Controller(start_id, _)] = start_effects.as_slice() else {
+    let [PlaybackEffect::Controller(start_id, _)] = start_effects.effects.as_slice() else {
       panic!("expected start controller effect");
     };
     state.playback.session.handle(
@@ -2401,7 +2401,7 @@ mod tests {
       .playback
       .session
       .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
-    let [PlaybackEffect::Controller(refresh_id, _)] = tick_effects.as_slice() else {
+    let [PlaybackEffect::Controller(refresh_id, _)] = tick_effects.effects.as_slice() else {
       panic!("expected refresh controller effect");
     };
 

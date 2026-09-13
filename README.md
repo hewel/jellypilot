@@ -452,8 +452,19 @@ flowchart LR
 - `crates/jellypilot-media-server` — Jellyfin/Emby HTTP adapter over the generated OpenAPI clients in `crates/media-server-api/`.
 - `crates/media-server-api` — generated OpenAPI client bindings for Jellyfin and Emby APIs.
 - `crates/jellypilot-auth` — login workflows, session persistence, and OS keychain token storage.
-- `crates/jellypilot-mpv` — MPV process lifecycle, JSON IPC protocol, and player log capture.
-- `crates/jellypilot-session` — media-server WebSocket remote-control sessions.
+- `crates/jellypilot-mpv` — MPV process lifecycle, JSON IPC, player logs, and the authoritative Playback Session transition/projection contract.
+- `crates/jellypilot-session` — media-server WebSocket transport and Playback Target capability registration.
+
+Playback orchestration consumes the Playback Session's accepted transitions instead of predicting
+controller acceptance. Replacement invalidation happens when a start, stop, or teardown is accepted,
+including queued replacements. Presentation busy state excludes background refreshes; cleanup
+settlement still waits for all controller work, including detached operations.
+
+`src-iced/src/app/playback/remote.rs` owns remote resources across profile initialization.
+It serializes capability registration, coalesces target-name changes, and keeps reconnecting targets
+unavailable to commands until current registration completes. Disconnect, profile switch, failure,
+and quit share one cleanup path; late waiters join the same resource cleanup rather than starting
+another close.
 
 ## 💻 Development
 

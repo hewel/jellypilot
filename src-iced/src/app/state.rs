@@ -1,8 +1,7 @@
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 
 use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
@@ -15,7 +14,7 @@ use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::home_hero::{self, HeroCandidate, HeroSource};
 use jellypilot_core::intro_skipper::IntroSkipMode;
-use jellypilot_core::request_gate::{RemoteToken, RequestGate};
+use jellypilot_core::request_gate::RequestGate;
 use jellypilot_core::LoadState;
 use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkLimits};
 use jellypilot_media_server::{
@@ -23,7 +22,6 @@ use jellypilot_media_server::{
   VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::PlaybackController;
-use jellypilot_session::{JellyfinWebSocket, JellyfinWebSocketEvent};
 use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 use jellypilot_ui::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
 use zeroize::Zeroizing;
@@ -484,23 +482,6 @@ impl ProfileAvatarHandles {
   }
 }
 pub type PlaybackControllerHandle = Arc<Mutex<PlaybackController>>;
-#[derive(Clone)]
-pub struct RemoteSessionHandle {
-  pub websocket: Arc<JellyfinWebSocket>,
-  pub lifecycle: Arc<Mutex<()>>,
-}
-
-#[derive(Clone)]
-pub struct RemoteEventChannel {
-  pub remote: RemoteToken,
-  pub receiver: Arc<Mutex<mpsc::UnboundedReceiver<JellyfinWebSocketEvent>>>,
-}
-
-impl Hash for RemoteEventChannel {
-  fn hash<H: Hasher>(&self, state: &mut H) {
-    Arc::as_ptr(&self.receiver).hash(state);
-  }
-}
 
 pub fn intro_skip_mode(mode: IntroMode) -> IntroSkipMode {
   match mode {

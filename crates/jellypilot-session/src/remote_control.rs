@@ -1,8 +1,6 @@
 use jellypilot_media_server::JellyfinClient;
 use serde_json::Value;
 
-use crate::JellyfinWebSocketEvent;
-
 /// Consumer-visible lifecycle state for the remote-control command stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteControlState {
@@ -10,21 +8,6 @@ pub enum RemoteControlState {
     Connecting,
     Available,
     Lost,
-}
-
-/// Applies a WebSocket event to the consumer-visible remote-control lifecycle.
-#[must_use]
-pub const fn remote_state_after_event(
-    state: RemoteControlState,
-    event: &JellyfinWebSocketEvent,
-) -> RemoteControlState {
-    match event {
-        JellyfinWebSocketEvent::Connected | JellyfinWebSocketEvent::Reconnected => {
-            RemoteControlState::Available
-        }
-        JellyfinWebSocketEvent::ConnectionLost => RemoteControlState::Lost,
-        JellyfinWebSocketEvent::Command(_) => state,
-    }
 }
 
 /// Parses Jellyfin's numeric or string volume payload and clamps it to MPV's range.
@@ -223,24 +206,6 @@ mod tests {
         assert_eq!(
             remote_index_value(Some(&serde_json::json!("invalid"))),
             None
-        );
-    }
-
-    #[test]
-    fn remote_lifecycle_transitions_remain_honest() {
-        assert_eq!(
-            remote_state_after_event(
-                RemoteControlState::Connecting,
-                &JellyfinWebSocketEvent::Connected,
-            ),
-            RemoteControlState::Available
-        );
-        assert_eq!(
-            remote_state_after_event(
-                RemoteControlState::Available,
-                &JellyfinWebSocketEvent::ConnectionLost,
-            ),
-            RemoteControlState::Lost
         );
     }
 }

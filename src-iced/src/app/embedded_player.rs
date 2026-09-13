@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use iced::{event, keyboard, Event, Subscription, Task};
 use jellypilot_core::config::AppMode;
 use jellypilot_mpv::playback_session::{
-  seek_intent, volume_intent, ControllerSettlement, PlaybackIntent,
+  seek_intent, volume_intent, ControllerAcceptance, PlaybackIntent, StopCompletion,
 };
 
 use super::message::{Message as AppMessage, PlaybackMessage, ShellMessage};
@@ -66,7 +66,7 @@ pub(super) fn input_blocked(state: &State) -> bool {
     || state.shell.account_popover_open
     || state.shell.compact_search_open
     || state.settings.view.shortcut_capture.is_some()
-    || state.playback.replacing
+    || state.playback.view.lifecycle.replacing
     || state.shell.embedded_player.returning
     || super::accounts::blocking_modal(&state.accounts)
     || super::accounts::handoff_generation(&state.accounts).is_some()
@@ -125,23 +125,17 @@ fn held(state: &State) -> bool {
 }
 
 pub(super) fn reconcile(state: &mut State) {
-  if state.shell.embedded_player.replacement_generation != state.playback.replacement_generation {
-    let surface = &mut state.shell.embedded_player;
-    surface.replacement_generation = state.playback.replacement_generation;
-    surface.desired_seek = None;
-    surface.desired_volume = None;
-    surface.returning = false;
-    surface.feedback = None;
-  }
+  observe_replacement(
+    &mut state.shell.embedded_player,
+    state.playback.view.lifecycle.replacement_generation,
+  );
   let active = active(state);
   if !active {
     state.playback.seek_dragging = false;
     state.playback.volume_dragging = false;
   }
   let held = held(state);
-  let settled = !state.playback.view.busy
-    && state.playback.in_flight_command.is_none()
-    && state.playback.in_flight_refresh.is_none();
+  let settled = state.playback.view.lifecycle.settled;
   reconcile_surface(
     &mut state.shell.embedded_player,
     active,
@@ -149,6 +143,16 @@ pub(super) fn reconcile(state: &mut State) {
     settled,
     Instant::now(),
   );
+}
+
+fn observe_replacement(surface: &mut Surface, generation: u64) {
+  if surface.replacement_generation != generation {
+    surface.replacement_generation = generation;
+    surface.desired_seek = None;
+    surface.desired_volume = None;
+    surface.returning = false;
+    surface.feedback = None;
+  }
 }
 
 fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, settled: bool, now: Instant) {
@@ -307,12 +311,13 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       if input_blocked(state) || state.shell.embedded_player.returning {
         return Task::none();
       }
-      state.shell.embedded_player.returning = true;
-      state.shell.embedded_player.desired_seek = None;
-      state.shell.embedded_player.desired_volume = None;
-      let task = dispatch(state, PlaybackIntent::Stop);
-      state.shell.embedded_player.replacement_generation = state.playback.replacement_generation;
-      return task;
+      let update = dispatch(state, PlaybackIntent::Stop);
+      observe_replacement(
+        &mut state.shell.embedded_player,
+        state.playback.view.lifecycle.replacement_generation,
+      );
+      state.shell.embedded_player.returning = update.transition.replacement_accepted;
+      return update.task;
     }
     Message::SeekBy(delta) | Message::VolumeBy(delta) => {
       if input_blocked(state) {
@@ -331,7 +336,7 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       ) else {
         return Task::none();
       };
-      return dispatch(state, intent);
+      return dispatch(state, intent).task;
     }
   }
   Task::none()
@@ -360,7 +365,7 @@ fn pointer_moved(
   }
 }
 
-fn dispatch(state: &mut State, intent: PlaybackIntent) -> Task<AppMessage> {
+fn dispatch(state: &mut State, intent: PlaybackIntent) -> super::playback::PlaybackUpdate {
   super::playback::update(
     &mut state.playback,
     &mut state.kernel,
@@ -369,10 +374,10 @@ fn dispatch(state: &mut State, intent: PlaybackIntent) -> Task<AppMessage> {
   )
 }
 
-/// Observe the actual accepted controller settlement before the router consumes it.
-pub(super) fn before_playback(state: &mut State, message: &PlaybackMessage) -> bool {
+/// Capture local adjustment previews before playback consumes the input.
+pub(super) fn before_playback(state: &mut State, message: &PlaybackMessage) {
   if !crate::embedded::enabled() {
-    return false;
+    return;
   }
   let surface = &mut state.shell.embedded_player;
   match message {
@@ -407,25 +412,31 @@ pub(super) fn before_playback(state: &mut State, message: &PlaybackMessage) -> b
         surface.desired_volume = Some(volume);
       }
     }
-    PlaybackMessage::ControllerSettled { id, settlement, .. } => {
-      return stop_return(
-        surface,
-        state.playback.in_flight_command == Some(*id),
-        settlement,
-      );
-    }
     _ => {}
   }
-  false
 }
 
-fn stop_return(surface: &mut Surface, accepted: bool, settlement: &ControllerSettlement) -> bool {
-  if accepted {
-    if let ControllerSettlement::Stopped(result) = settlement {
-      return std::mem::take(&mut surface.returning) && result.is_ok();
-    }
+/// Navigation consumes the session's accepted outcome, never a raw controller message.
+pub(super) fn after_playback(state: &mut State, acceptance: ControllerAcceptance) -> bool {
+  if !crate::embedded::enabled() {
+    return false;
   }
-  false
+  let surface = &mut state.shell.embedded_player;
+  observe_replacement(
+    surface,
+    state.playback.view.lifecycle.replacement_generation,
+  );
+  let stop = match acceptance {
+    ControllerAcceptance::Applied { stop } => stop,
+    _ => None,
+  };
+  stop_return(surface, stop)
+}
+
+fn stop_return(surface: &mut Surface, stop: Option<StopCompletion>) -> bool {
+  stop.is_some_and(|outcome| {
+    std::mem::take(&mut surface.returning) && outcome == StopCompletion::Succeeded
+  })
 }
 
 pub(super) fn return_to_source(state: &mut State) -> Task<AppMessage> {
@@ -716,32 +727,29 @@ mod return_tests {
 
   #[test]
   fn back_waits_for_accepted_stop_success_and_failed_stop_can_be_retried() {
-    let success =
-      ControllerSettlement::Stopped(Ok(jellypilot_mpv::playback::PlaybackStopOutcome {
-        warnings: Vec::new(),
-      }));
-    let failure = ControllerSettlement::Stopped(Err(
-      jellypilot_mpv::playback::PlaybackError::MpvControlFailed,
-    ));
     let mut surface = Surface {
       returning: true,
       ..Surface::default()
     };
-    assert!(
-      !stop_return(&mut surface, false, &success),
-      "stale stop must not navigate"
-    );
+    assert!(!stop_return(&mut surface, None));
     assert!(surface.returning);
-    assert!(
-      !stop_return(&mut surface, true, &failure),
-      "failed stop must retain the player"
-    );
-    assert!(!surface.returning, "failure permits an explicit retry");
+    assert!(!stop_return(&mut surface, Some(StopCompletion::Failed)));
+    assert!(!surface.returning);
     surface.returning = true;
-    assert!(stop_return(&mut surface, true, &success));
-    assert!(
-      !stop_return(&mut surface, true, &success),
-      "duplicate completion must not pop another page"
-    );
+    assert!(stop_return(&mut surface, Some(StopCompletion::Succeeded)));
+    assert!(!stop_return(&mut surface, Some(StopCompletion::Succeeded)));
+  }
+
+  #[test]
+  fn a_later_replacement_cancels_back_but_observing_its_own_stop_does_not() {
+    let mut surface = Surface::default();
+    observe_replacement(&mut surface, 1);
+    surface.returning = true;
+    observe_replacement(&mut surface, 1);
+    assert!(stop_return(&mut surface, Some(StopCompletion::Succeeded)));
+
+    surface.returning = true;
+    observe_replacement(&mut surface, 2);
+    assert!(!stop_return(&mut surface, Some(StopCompletion::Succeeded)));
   }
 }

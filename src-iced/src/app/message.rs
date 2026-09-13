@@ -25,9 +25,7 @@ use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection, Track
 use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerSettlement, EffectId, PlaybackEvent, PlaybackIntent,
 };
-use jellypilot_session::{CapabilityRegistrationError, JellyfinWebSocketEvent};
-
-use super::state::RemoteSessionHandle;
+use jellypilot_session::JellyfinWebSocketEvent;
 
 use zeroize::Zeroize;
 impl std::fmt::Debug for Message {
@@ -309,44 +307,12 @@ pub enum PlaybackMessage {
   },
   ArtworkLoaded(super::artwork::ImageCompletion),
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RemoteStartError {
-  SessionUnavailable,
-  ConnectionFailed,
-  CapabilityRegistrationFailed,
-}
-
-impl RemoteStartError {
-  pub const fn diagnostic(self) -> &'static str {
-    match self {
-      Self::SessionUnavailable => "Remote playback target session is unavailable.",
-      Self::ConnectionFailed => "Remote playback target could not connect.",
-      Self::CapabilityRegistrationFailed => {
-        "Remote playback target capabilities could not be registered."
-      }
-    }
-  }
-}
-
-#[derive(Clone)]
-pub struct RemoteSessionStart {
-  pub session: RemoteSessionHandle,
-  pub validated: bool,
-}
-
 #[derive(Clone)]
 pub enum RemoteMessage {
-  Started {
-    remote: RemoteToken,
-    result: Result<RemoteSessionStart, RemoteStartError>,
-  },
+  Completed(super::playback::remote::Completion),
   Event {
     remote: RemoteToken,
     event: JellyfinWebSocketEvent,
-  },
-  Finalized {
-    remote: RemoteToken,
-    result: Result<bool, CapabilityRegistrationError>,
   },
   PlayResolved {
     remote: RemoteToken,
@@ -355,8 +321,6 @@ pub enum RemoteMessage {
     start_position_ticks: Option<i64>,
     selection: PlaybackSelection,
   },
-  RemoteDisconnected,
-  QuitStopped,
 }
 
 pub type SensitiveSessionPayload = SensitiveSavedSession;

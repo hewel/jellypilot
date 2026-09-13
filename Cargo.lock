@@ -2836,6 +2836,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "tray-icon",

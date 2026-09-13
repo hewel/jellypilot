@@ -8,7 +8,8 @@ use jellypilot_core::config::ThemeMode;
 use jellypilot_mpv::playback_session::{AdjacentDirection, PlaybackIntent};
 
 use super::message::{Message, PlaybackMessage, RemoteMessage, ShellMessage, WindowMessage};
-use super::state::{RemoteEventChannel, State};
+use super::playback::remote::EventChannel;
+use super::state::State;
 
 pub fn subscription(state: &State) -> Subscription<Message> {
   let window_events = event::listen_with(|event, status, window_id| match event {
@@ -84,7 +85,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       }
     }
   }
-  if let Some(channel) = state.playback.remote_events.clone() {
+  if let Some(channel) = state.playback.remote.events() {
     subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
   if let Some(tray) = &state.kernel.tray {
@@ -306,7 +307,7 @@ fn settings_modal_events(
   }
 }
 
-fn remote_event_stream(channel: &RemoteEventChannel) -> impl Stream<Item = Message> {
+fn remote_event_stream(channel: &EventChannel) -> impl Stream<Item = Message> {
   let channel = channel.clone();
   iced::stream::channel(32, async move |mut output| loop {
     let Some(event) = channel.receiver.lock().await.recv().await else {
@@ -814,7 +815,7 @@ mod tests {
       let mut gate = jellypilot_core::request_gate::RequestGate::default();
       let remote = gate.begin_remote();
       let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-      let channel = RemoteEventChannel {
+      let channel = EventChannel {
         remote,
         receiver: std::sync::Arc::new(tokio::sync::Mutex::new(receiver)),
       };

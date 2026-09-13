@@ -356,7 +356,7 @@ pub fn view(state: &State) -> AccountView<'_> {
     confirmation: confirmation_view(surface.confirmation.as_ref()),
     error: surface.error.as_ref(),
     auto_login: state.kernel.settings.snapshot().auto_login(),
-    remote_control: state.playback.remote_control_state,
+    remote_control: state.playback.remote.view().state,
     copy_status: surface.copy_status,
     add_account: surface.add_account.as_ref(),
     handoff_blocking: surface.operation.is_handoff(),

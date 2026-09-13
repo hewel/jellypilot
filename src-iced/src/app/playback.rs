@@ -1,7 +1,7 @@
 //! Playback surface (ADR 0029): the MPV playback session and its projected
 //! player-bar view, seek/volume previews, track popovers, player artwork, and
-//! the folded-in remote Playback Target cluster (WebSocket session, command
-//! translation, and capability registration).
+//! the folded-in remote Playback Target cluster bridged to the resource-owning
+//! [`remote`] runtime (lifecycle, command translation, and registration).
 //!
 //! Two entry points share the private helpers below: [`update`] reduces
 //! [`PlaybackMessage`] and [`update_remote`] reduces [`RemoteMessage`]; each
@@ -33,14 +33,12 @@ use jellypilot_mpv::playback::{
   PlaybackSelection, PlaybackStartPosition, PlaybackWarning, VolumeMemoryPreference,
 };
 use jellypilot_mpv::playback_session::{
-  seek_intent, volume_intent, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
-  PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackNotice, PlaybackSession,
-  SessionView,
+  seek_intent, volume_intent, AdjacentDirection, ControllerAcceptance, ControllerCommand,
+  ControllerSettlement, EffectId, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent,
+  PlaybackNotice, PlaybackSession, PlaybackStep, PlaybackTransition, SessionView,
 };
 use jellypilot_mpv::remote_commands::{remote_command_action, RemoteCommandAction};
-use jellypilot_session::{
-  finalize_remote_target, JellyfinWebSocket, JellyfinWebSocketEvent, RemoteControlState,
-};
+use jellypilot_session::RemoteControlState;
 
 use crate::i18n::UiText;
 use crate::tray::TrayAction;
@@ -49,12 +47,10 @@ use jellypilot_mpv::playback::PlaybackError;
 use super::accounts;
 use super::artwork::{ImageCollection, ImagePriority, ImageSpec};
 use super::kernel::Kernel;
-use super::message::{
-  Message, PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError, SettingsMessage,
-};
-use super::state::{
-  NoticeLevel, PlaybackControllerHandle, RemoteEventChannel, RemoteSessionHandle,
-};
+use super::message::{Message, PlaybackMessage, RemoteMessage, SettingsMessage};
+use super::state::{NoticeLevel, PlaybackControllerHandle};
+
+pub(crate) mod remote;
 
 pub(crate) const PLAYER_IMAGE_KEY: &str = "now-playing";
 pub(crate) const PLAYER_THUMBNAIL_KEY: &str = "now-playing-thumbnail";
@@ -86,9 +82,24 @@ struct AccountPlaybackHandoff {
 }
 
 pub(crate) struct AccountHandoffStart {
-  pub playback: Task<Message>,
-  pub remote: Task<accounts::Message>,
+  pub task: Task<Message>,
   pub playback_cleanup: Option<Result<(), String>>,
+}
+
+/// One playback reduction: the task tree to run plus the session's lifecycle
+/// transition, which the router consumes for embedded Back navigation.
+pub struct PlaybackUpdate {
+  pub task: Task<Message>,
+  pub transition: PlaybackTransition,
+}
+
+impl PlaybackUpdate {
+  fn without_transition(task: Task<Message>) -> Self {
+    Self {
+      task,
+      transition: PlaybackTransition::default(),
+    }
+  }
 }
 
 /// Shared only with tasks for one controller. Configuration snapshots and the
@@ -125,8 +136,8 @@ impl ControllerConfiguration {
 
 /// Playback surface slice: the playback session machine and its projected
 /// view, the resolved current/adjacent playables, the MPV controller handle,
-/// in-flight effect markers, seek/volume previews, track popover flags,
-/// player-bar artwork, and the remote Playback Target session state.
+/// seek/volume previews, track popover flags, player-bar artwork, and the
+/// remote Playback Target runtime.
 pub struct Surface {
   pub notice: Option<UiText>,
   pub artwork: ImageCollection,
@@ -136,10 +147,6 @@ pub struct Surface {
   pub session: PlaybackSession,
   pub view: SessionView,
   pub playable: Option<Playable>,
-  pub in_flight_refresh: Option<EffectId>,
-  pub in_flight_command: Option<EffectId>,
-  pub replacing: bool,
-  pub replacement_generation: u64,
   pub adjacent_playables: [Option<Playable>; 2],
   pub queue: QueueState,
   queue_session: Option<SessionToken>,
@@ -147,15 +154,10 @@ pub struct Surface {
   queue_generation: u64,
   active_queue_load: Option<ActiveQueueLoad>,
   pub queue_menu_open: bool,
-  /// Token identifying the current remote registration epoch; stale remote
-  /// completions carry an older token and are ignored.
-  pub remote: RemoteToken,
-  pub remote_session: Option<RemoteSessionHandle>,
-  pub remote_events: Option<RemoteEventChannel>,
-  pub remote_control_state: RemoteControlState,
-  pub remote_stopping: bool,
+  /// Resource-owning remote target runtime; its view/token gate all remote
+  /// readiness, event, and teardown decisions.
+  pub remote: remote::Runtime,
   account_playback_handoff: Option<AccountPlaybackHandoff>,
-  account_remote_handoff: Option<u64>,
   pub seek_dragging: bool,
   pub volume_dragging: bool,
   pub seek_preview: Option<f64>,
@@ -174,24 +176,15 @@ impl Surface {
       view: session.view(),
       session,
       playable: None,
-      in_flight_refresh: None,
-      in_flight_command: None,
       adjacent_playables: [None, None],
-      replacing: false,
-      replacement_generation: 0,
       queue: QueueState::Unavailable,
       queue_session: None,
       queue_season: None,
       queue_generation: 0,
       active_queue_load: None,
       queue_menu_open: false,
-      remote: request_gate.begin_remote(),
-      remote_session: None,
-      remote_events: None,
-      remote_control_state: RemoteControlState::Unavailable,
-      remote_stopping: false,
+      remote: remote::Runtime::new(request_gate),
       account_playback_handoff: None,
-      account_remote_handoff: None,
       seek_preview: None,
       seek_dragging: false,
       volume_dragging: false,
@@ -205,27 +198,32 @@ impl Surface {
 }
 
 /// Playback surface entry point: reduces a [`PlaybackMessage`] and records
-/// the diagnostics/toast follow-up for a changed playback notice.
+/// the diagnostics/toast follow-up for a changed playback notice. The returned
+/// transition carries the session's controller acceptance for the router.
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
   quit_requested: bool,
   message: PlaybackMessage,
-) -> Task<Message> {
+) -> PlaybackUpdate {
   tracing::debug!(
     message = playback_message_name(&message),
     "playback message"
   );
   let previous_notice = surface.notice.as_ref().map(UiText::id);
   let previous_view_notice = surface.view.notice.clone();
-  let task = update_playback(surface, kernel, quit_requested, message);
+  let PlaybackUpdate { task, transition } =
+    update_playback(surface, kernel, quit_requested, message);
   let toast_task = record_playback_notice(
     surface,
     kernel,
     previous_notice,
     previous_view_notice.as_ref(),
   );
-  Task::batch([task, toast_task])
+  PlaybackUpdate {
+    task: Task::batch([task, toast_task]),
+    transition,
+  }
 }
 
 /// Remote Playback Target entry point: reduces a [`RemoteMessage`] and
@@ -237,7 +235,7 @@ pub fn update_remote(
   quit_requested: bool,
   message: RemoteMessage,
 ) -> Task<Message> {
-  let previous_state = surface.remote_control_state;
+  let previous_state = surface.remote.view().state;
   let previous_notice = kernel.notice.as_ref().map(UiText::id);
   let task = handle_remote(surface, kernel, quit_requested, message);
   let toast_task = record_remote_change(surface, kernel, previous_state, previous_notice);
@@ -311,8 +309,9 @@ fn record_remote_change(
   previous_state: RemoteControlState,
   previous_notice: Option<&str>,
 ) -> Task<Message> {
-  if surface.remote_control_state != previous_state {
-    let (level, message) = match surface.remote_control_state {
+  let state = surface.remote.view().state;
+  if state != previous_state {
+    let (level, message) = match state {
       RemoteControlState::Connecting => {
         (DiagnosticLevel::Info, "Remote playback target connecting.")
       }
@@ -438,11 +437,40 @@ pub(crate) fn apply_playback_configuration(
 }
 
 /// Re-registers the playback target after the configured name changes.
-/// Called by the router after settings mutate (ADR 0029).
+/// Called by the router after settings mutate (ADR 0029). The runtime owns
+/// whether the new desired name re-registers; the client write keeps the
+/// shared auth header's device name current either way.
 pub(crate) fn refinalize_playback_target(
   surface: &mut Surface,
   kernel: &mut Kernel,
 ) -> Task<Message> {
+  let name = kernel
+    .settings
+    .snapshot()
+    .playback_target_name()
+    .unwrap_or("JellyPilot")
+    .to_owned();
+  if let Some(client) = kernel.client.as_ref() {
+    client.set_device_name(name.clone());
+  }
+  let update = surface
+    .remote
+    .update(remote::Input::Rename(name), &mut kernel.request_gate);
+  if kernel.connection == ConnectionPhase::Connected
+    && surface.remote.view().state == RemoteControlState::Available
+  {
+    kernel.diagnostics.record(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::RemoteControl,
+      "Playback target name changed; remote registration requested.",
+    );
+  }
+  apply_remote_update(surface, kernel, false, update)
+}
+
+/// Starts the remote Playback Target runtime for the connected account.
+/// Called by the router when the login surface connects.
+pub(crate) fn start_remote_session(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
@@ -452,95 +480,11 @@ pub(crate) fn refinalize_playback_target(
     .playback_target_name()
     .unwrap_or("JellyPilot")
     .to_owned();
-  client.set_device_name(name);
-  if !should_refinalize_playback_target(surface, kernel) {
-    return Task::none();
-  }
-  kernel.diagnostics.record(
-    DiagnosticLevel::Info,
-    DiagnosticCategory::RemoteControl,
-    "Playback target name changed; remote registration requested.",
+  let update = surface.remote.update(
+    remote::Input::Start { client, name },
+    &mut kernel.request_gate,
   );
-  let remote = surface.remote;
-  Task::perform(
-    async move { finalize_remote_target(&client).await },
-    move |result| Message::Remote(RemoteMessage::Finalized { remote, result }),
-  )
-}
-
-fn should_refinalize_playback_target(surface: &Surface, kernel: &Kernel) -> bool {
-  kernel.connection == ConnectionPhase::Connected
-    && surface.remote_session.is_some()
-    && surface.remote_control_state == RemoteControlState::Available
-}
-
-/// Opens the remote Playback Target WebSocket session and registers
-/// capabilities. Called by the router when the login surface connects.
-pub(crate) fn start_remote_session(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    return Task::none();
-  };
-  if let Some(name) = kernel.settings.snapshot().playback_target_name() {
-    client.set_device_name(name.to_owned());
-  }
-
-  let remote = surface.remote;
-  let websocket = Arc::new(JellyfinWebSocket::new());
-  let Some(mut websocket_events) = websocket.take_event_receiver() else {
-    return Task::done(Message::Remote(RemoteMessage::Started {
-      remote,
-      result: Err(RemoteStartError::SessionUnavailable),
-    }));
-  };
-  let (event_sender, event_receiver) = tokio::sync::mpsc::unbounded_channel();
-  surface.remote_events = Some(RemoteEventChannel {
-    remote,
-    receiver: Arc::new(tokio::sync::Mutex::new(event_receiver)),
-  });
-  let session = RemoteSessionHandle {
-    websocket: Arc::clone(&websocket),
-    lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-  };
-  surface.remote_session = Some(session.clone());
-  surface.remote_control_state = RemoteControlState::Connecting;
-
-  Task::perform(
-    async move {
-      let lifecycle = Arc::clone(&session.lifecycle);
-      let _lifecycle = lifecycle.lock().await;
-      let websocket_url = client
-        .playback()
-        .websocket_url()
-        .map_err(|_| RemoteStartError::SessionUnavailable)?;
-      let user_agent = client.playback().websocket_user_agent();
-      let forwarder = tokio::spawn(async move {
-        while let Some(event) = websocket_events.recv().await {
-          if event_sender.send(event).is_err() {
-            break;
-          }
-        }
-      });
-      if websocket
-        .connect_with_user_agent(&websocket_url, Some(&user_agent))
-        .await
-        .is_err()
-      {
-        websocket.disconnect().await;
-        let _ = forwarder.await;
-        return Err(RemoteStartError::ConnectionFailed);
-      }
-      let validated = match finalize_remote_target(&client).await {
-        Ok(validated) => validated,
-        Err(_) => {
-          websocket.disconnect().await;
-          let _ = forwarder.await;
-          return Err(RemoteStartError::CapabilityRegistrationFailed);
-        }
-      };
-      Ok(RemoteSessionStart { session, validated })
-    },
-    move |result| Message::Remote(RemoteMessage::Started { remote, result }),
-  )
+  apply_remote_update(surface, kernel, false, update)
 }
 
 const REMOTE_CONNECTION_LOST_NOTICE: &str = "player-remote-connection-lost";
@@ -553,108 +497,19 @@ fn handle_remote(
   message: RemoteMessage,
 ) -> Task<Message> {
   match message {
-    RemoteMessage::Started { remote, result } => {
-      if !kernel.request_gate.is_current_remote(remote)
-        || kernel.connection != ConnectionPhase::Connected
-      {
-        return match result {
-          Ok(started) => {
-            let session = started.session;
-            Task::perform(
-              async move { disconnect_remote_session(session).await },
-              |()| Message::Remote(RemoteMessage::RemoteDisconnected),
-            )
-          }
-          Err(_) => Task::none(),
-        };
-      }
-      match result {
-        Ok(started) => {
-          let RemoteSessionStart { session, validated } = started;
-          surface.remote_session = Some(session);
-          surface.remote_control_state = RemoteControlState::Available;
-          if !validated {
-            remote_notice(
-              kernel,
-              "player-remote-validation-pending",
-              "Remote playback target connected, but server session validation is still pending.",
-            );
-          }
-        }
-        Err(error) => {
-          surface.remote = kernel.request_gate.begin_remote();
-          surface.remote_session = None;
-          surface.remote_events = None;
-          surface.remote_control_state = RemoteControlState::Unavailable;
-          remote_notice(
-            kernel,
-            match error {
-              RemoteStartError::SessionUnavailable => "player-remote-session-unavailable",
-              RemoteStartError::ConnectionFailed => "player-remote-connect-failed",
-              RemoteStartError::CapabilityRegistrationFailed => "player-remote-registration-failed",
-            },
-            error.diagnostic(),
-          );
-        }
-      }
-      Task::none()
+    RemoteMessage::Completed(completion) => {
+      let update = surface.remote.update(
+        remote::Input::Completed(completion),
+        &mut kernel.request_gate,
+      );
+      apply_remote_update(surface, kernel, quit_requested, update)
     }
     RemoteMessage::Event { remote, event } => {
-      if !kernel.request_gate.is_current_remote(remote) {
-        return Task::none();
-      }
-      match event {
-        JellyfinWebSocketEvent::Command(command)
-          if surface.remote_control_state == RemoteControlState::Available =>
-        {
-          handle_remote_command(surface, kernel, quit_requested, remote, command)
-        }
-        JellyfinWebSocketEvent::Command(_) => Task::none(),
-        JellyfinWebSocketEvent::Reconnected => {
-          let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-            return Task::none();
-          };
-          surface.remote_control_state = RemoteControlState::Connecting;
-          Task::perform(
-            async move { finalize_remote_target(&client).await },
-            move |result| Message::Remote(RemoteMessage::Finalized { remote, result }),
-          )
-        }
-        JellyfinWebSocketEvent::ConnectionLost => {
-          surface.remote_control_state = RemoteControlState::Lost;
-          remote_notice(
-            kernel,
-            REMOTE_CONNECTION_LOST_NOTICE,
-            "Remote playback connection lost; reconnecting…",
-          );
-          Task::none()
-        }
-        JellyfinWebSocketEvent::Connected => Task::none(),
-      }
-    }
-    RemoteMessage::Finalized { remote, result } => {
-      if !kernel.request_gate.is_current_remote(remote) {
-        return Task::none();
-      }
-      match result {
-        Ok(true) => {
-          surface.remote_control_state = RemoteControlState::Available;
-          if kernel.notice.as_ref().map(UiText::id) == Some(REMOTE_CONNECTION_LOST_NOTICE) {
-            kernel.notice = None;
-          }
-          Task::none()
-        }
-        Ok(false) => {
-          surface.remote_control_state = RemoteControlState::Available;
-          remote_notice(
-            kernel,
-            "player-remote-revalidation-pending",
-            "Remote playback target reconnected, but server session validation is still pending.",
-          );
-          Task::none()
-        }
-        Err(_) => fail_remote_finalization(surface, kernel),
-      }
+      let update = surface.remote.update(
+        remote::Input::Event { remote, event },
+        &mut kernel.request_gate,
+      );
+      apply_remote_update(surface, kernel, quit_requested, update)
     }
     RemoteMessage::PlayResolved {
       remote,
@@ -663,7 +518,8 @@ fn handle_remote(
       start_position_ticks,
       selection,
     } => {
-      if !kernel.request_gate.is_current_remote(remote)
+      if remote != surface.remote.token()
+        || !kernel.request_gate.is_current_remote(remote)
         || !kernel.request_gate.is_current_remote_play(play)
       {
         return Task::none();
@@ -691,16 +547,103 @@ fn handle_remote(
           selection: Box::new(selection),
         })),
       )
+      .task
     }
-    RemoteMessage::RemoteDisconnected => Task::none(),
-    RemoteMessage::QuitStopped => {
-      surface.remote_stopping = false;
-      if quit_may_exit(surface, quit_requested) {
-        iced::exit()
+  }
+}
+
+/// Applies one runtime update: surfaces its notices, translates accepted
+/// commands into playback work, schedules owned futures, and resolves the
+/// waiters whose teardown just settled.
+fn apply_remote_update(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+  update: remote::Update,
+) -> Task<Message> {
+  let remote::Update {
+    work,
+    notices,
+    commands,
+    settled,
+  } = update;
+  for notice in notices {
+    apply_remote_notice(kernel, notice);
+  }
+  let mut tasks: Vec<Task<Message>> = work
+    .into_iter()
+    .map(|work| {
+      Task::perform(work.run(), |completion| {
+        Message::Remote(RemoteMessage::Completed(completion))
+      })
+    })
+    .collect();
+  for (remote, command) in commands {
+    tasks.push(handle_remote_command(
+      surface,
+      kernel,
+      quit_requested,
+      remote,
+      command,
+    ));
+  }
+  for waiter in settled {
+    match waiter {
+      remote::Waiter::Quit => {
+        if quit_may_exit(surface, quit_requested) {
+          tasks.push(iced::exit());
+        }
+      }
+      remote::Waiter::Account(generation) => {
+        tasks.push(Task::done(Message::Account(
+          accounts::Message::RemoteHandoffSettled { generation },
+        )));
+      }
+      remote::Waiter::Disconnect => {}
+    }
+  }
+  Task::batch(tasks)
+}
+
+fn apply_remote_notice(kernel: &mut Kernel, notice: remote::Notice) {
+  match notice {
+    remote::Notice::StartFailed(error) => remote_notice(
+      kernel,
+      match error {
+        remote::StartError::SessionUnavailable => "player-remote-session-unavailable",
+        remote::StartError::ConnectionFailed => "player-remote-connect-failed",
+        remote::StartError::CapabilityRegistrationFailed => "player-remote-registration-failed",
+      },
+      error.diagnostic(),
+    ),
+    remote::Notice::ValidationPending { reconnected } => remote_notice(
+      kernel,
+      if reconnected {
+        "player-remote-revalidation-pending"
       } else {
-        Task::none()
+        "player-remote-validation-pending"
+      },
+      if reconnected {
+        "Remote playback target reconnected, but server session validation is still pending."
+      } else {
+        "Remote playback target connected, but server session validation is still pending."
+      },
+    ),
+    remote::Notice::ConnectionLost => remote_notice(
+      kernel,
+      REMOTE_CONNECTION_LOST_NOTICE,
+      "Remote playback connection lost; reconnecting…",
+    ),
+    remote::Notice::ConnectionRestored => {
+      if kernel.notice.as_ref().map(UiText::id) == Some(REMOTE_CONNECTION_LOST_NOTICE) {
+        kernel.notice = None;
       }
     }
+    remote::Notice::RegistrationFailed => remote_notice(
+      kernel,
+      "player-remote-registration-failed",
+      "Remote playback target capabilities could not be registered.",
+    ),
   }
 }
 
@@ -730,6 +673,7 @@ fn handle_remote_command(
         quit_requested,
         PlaybackInput::Intent(Box::new(intent)),
       )
+      .task
     }
     Some(RemoteCommandAction::Play {
       item_id,
@@ -767,48 +711,18 @@ fn handle_remote_command(
   }
 }
 
-fn fail_remote_finalization(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  surface.remote = kernel.request_gate.begin_remote();
-  surface.remote_events = None;
-  surface.remote_control_state = RemoteControlState::Unavailable;
-  remote_notice(
-    kernel,
-    "player-remote-registration-failed",
-    "Remote playback target capabilities could not be registered.",
-  );
-  let Some(session) = surface.remote_session.take() else {
-    return Task::none();
-  };
-  Task::perform(
-    async move { disconnect_remote_session(session).await },
-    |()| Message::Remote(RemoteMessage::RemoteDisconnected),
-  )
-}
-
-async fn disconnect_remote_session(session: RemoteSessionHandle) {
-  let lifecycle = Arc::clone(&session.lifecycle);
-  let _lifecycle = lifecycle.lock().await;
-  session.websocket.disconnect().await;
-}
-
-/// Tears the remote session down for the shell's quit handshake; the
-/// completion arrives as [`RemoteMessage::QuitStopped`]. Called by the
+/// Retires the remote target for the shell's quit handshake; the runtime
+/// settles [`remote::Waiter::Quit`] once teardown completes. Called by the
 /// router's window/tray quit arms.
 pub(crate) fn stop_remote_session_for_quit(
   surface: &mut Surface,
   kernel: &mut Kernel,
 ) -> Task<Message> {
-  surface.remote = kernel.request_gate.begin_remote();
-  surface.remote_events = None;
-  surface.remote_control_state = RemoteControlState::Unavailable;
-  let Some(session) = surface.remote_session.take() else {
-    return Task::none();
-  };
-  surface.remote_stopping = true;
-  Task::perform(
-    async move { disconnect_remote_session(session).await },
-    |()| Message::Remote(RemoteMessage::QuitStopped),
-  )
+  let update = surface.remote.update(
+    remote::Input::Retire(remote::Waiter::Quit),
+    &mut kernel.request_gate,
+  );
+  apply_remote_update(surface, kernel, true, update)
 }
 
 /// Tray transport actions map onto playback intents. `Show`/`Quit` stay at
@@ -821,24 +735,33 @@ pub(crate) fn update_tray(
   action: TrayAction,
 ) -> Task<Message> {
   match action {
-    TrayAction::PlayPause => apply_playback_input(
-      surface,
-      kernel,
-      quit_requested,
-      PlaybackInput::Intent(Box::new(PlaybackIntent::TogglePaused)),
-    ),
-    TrayAction::Next => apply_local_playback_intent(
-      surface,
-      kernel,
-      quit_requested,
-      PlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
-    ),
-    TrayAction::Previous => apply_local_playback_intent(
-      surface,
-      kernel,
-      quit_requested,
-      PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
-    ),
+    TrayAction::PlayPause => {
+      apply_playback_input(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackInput::Intent(Box::new(PlaybackIntent::TogglePaused)),
+      )
+      .task
+    }
+    TrayAction::Next => {
+      apply_local_playback_intent(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
+      )
+      .task
+    }
+    TrayAction::Previous => {
+      apply_local_playback_intent(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
+      )
+      .task
+    }
     TrayAction::Mute => {
       let Some(muted) = surface
         .view
@@ -854,6 +777,7 @@ pub(crate) fn update_tray(
         quit_requested,
         PlaybackInput::Intent(Box::new(PlaybackIntent::SetMuted(!muted))),
       )
+      .task
     }
     TrayAction::Show | TrayAction::Quit => Task::none(),
   }
@@ -875,9 +799,8 @@ pub(crate) fn initialize_playback(
   surface.artwork.clear();
   surface.seek_preview = None;
   surface.volume_preview = None;
-  surface.remote = kernel.request_gate.begin_remote();
-  surface.in_flight_refresh = None;
-  surface.in_flight_command = None;
+  // The remote runtime survives surface initialization and profile handoff;
+  // it owns its own lifecycle across account transitions.
   // Retire the old controller's settings tasks before creating an account-scoped
   // replacement. Old futures retain only the retired controller and gate.
   surface.controller_configuration.invalidate_pending();
@@ -983,7 +906,7 @@ fn apply_local_playback_intent(
   kernel: &mut Kernel,
   quit_requested: bool,
   intent: PlaybackIntent,
-) -> Task<Message> {
+) -> PlaybackUpdate {
   if matches!(
     &intent,
     PlaybackIntent::Start { .. } | PlaybackIntent::Stop | PlaybackIntent::PlayAdjacent(_)
@@ -1164,7 +1087,7 @@ fn update_playback(
   kernel: &mut Kernel,
   quit_requested: bool,
   message: PlaybackMessage,
-) -> Task<Message> {
+) -> PlaybackUpdate {
   match message {
     PlaybackMessage::Intent(intent) => {
       apply_local_playback_intent(surface, kernel, quit_requested, *intent)
@@ -1178,7 +1101,7 @@ fn update_playback(
     PlaybackMessage::SeekDragStarted => {
       surface.seek_dragging = true;
       surface.seek_preview = None;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::SeekChanged(position) => {
       surface.seek_preview = seek_intent(
@@ -1194,12 +1117,12 @@ fn update_playback(
         PlaybackIntent::Seek(position) => Some(position),
         _ => None,
       });
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::SeekReleased => {
       surface.seek_dragging = false;
       let Some(position) = surface.seek_preview else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       let Some(intent) = seek_intent(
         position,
@@ -1210,7 +1133,7 @@ fn update_playback(
           .and_then(|view| view.duration_seconds),
         surface.view.now_playing.is_some(),
       ) else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       apply_playback_input(
         surface,
@@ -1229,7 +1152,7 @@ fn update_playback(
           .and_then(|view| view.duration_seconds),
         surface.view.now_playing.is_some(),
       ) else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       if let PlaybackIntent::Seek(position) = intent {
         surface.seek_preview = Some(position);
@@ -1244,7 +1167,7 @@ fn update_playback(
     PlaybackMessage::VolumeDragStarted => {
       surface.volume_dragging = true;
       surface.volume_preview = None;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::VolumeChanged(volume) => {
       surface.volume_preview =
@@ -1252,15 +1175,15 @@ fn update_playback(
           PlaybackIntent::SetVolume(volume) => Some(volume),
           _ => None,
         });
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::VolumeReleased => {
       surface.volume_dragging = false;
       let Some(volume) = surface.volume_preview else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       let Some(intent) = volume_intent(volume, surface.view.now_playing.is_some()) else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       apply_playback_input(
         surface,
@@ -1271,7 +1194,7 @@ fn update_playback(
     }
     PlaybackMessage::VolumeAdjusted(volume) => {
       let Some(intent) = volume_intent(volume, surface.view.now_playing.is_some()) else {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       };
       if let PlaybackIntent::SetVolume(volume) = intent {
         surface.volume_preview = Some(volume);
@@ -1287,11 +1210,11 @@ fn update_playback(
       surface.audio_menu_open = !surface.audio_menu_open;
       surface.subtitle_menu_open = false;
       surface.queue_menu_open = false;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::AudioMenuDismissed => {
       surface.audio_menu_open = false;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::AudioTrackSelected(id) => {
       surface.audio_menu_open = false;
@@ -1306,11 +1229,11 @@ fn update_playback(
       surface.subtitle_menu_open = !surface.subtitle_menu_open;
       surface.audio_menu_open = false;
       surface.queue_menu_open = false;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::SubtitleMenuDismissed => {
       surface.subtitle_menu_open = false;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::SubtitleTrackSelected(id) => {
       surface.subtitle_menu_open = false;
@@ -1325,15 +1248,15 @@ fn update_playback(
       surface.queue_menu_open = !surface.queue_menu_open;
       surface.audio_menu_open = false;
       surface.subtitle_menu_open = false;
-      if surface.queue_menu_open {
+      PlaybackUpdate::without_transition(if surface.queue_menu_open {
         super::view::player::reveal_current_queue_item()
       } else {
         Task::none()
-      }
+      })
     }
     PlaybackMessage::QueueMenuDismissed => {
       surface.queue_menu_open = false;
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::QueueItemSelected(item) => {
       surface.queue_menu_open = false;
@@ -1362,11 +1285,13 @@ fn update_playback(
         season_number,
         result,
       );
-      if was_loading && surface.queue_menu_open && matches!(surface.queue, QueueState::Ready(_)) {
-        super::view::player::reveal_current_queue_item()
-      } else {
-        Task::none()
-      }
+      PlaybackUpdate::without_transition(
+        if was_loading && surface.queue_menu_open && matches!(surface.queue, QueueState::Ready(_)) {
+          super::view::player::reveal_current_queue_item()
+        } else {
+          Task::none()
+        },
+      )
     }
     PlaybackMessage::ControllerSettled {
       id,
@@ -1374,17 +1299,10 @@ fn update_playback(
       started,
       tracks,
     } => {
-      if surface.in_flight_refresh == Some(id) {
-        surface.in_flight_refresh = None;
-      }
-      if surface.in_flight_command == Some(id) {
-        surface.in_flight_command = None;
-      }
-      let started = if matches!(settlement.as_ref(), ControllerSettlement::Started(Ok(_))) {
-        started
-      } else {
-        None
-      };
+      // The session decides whether this settlement is a normal acceptance,
+      // detached cleanup, or stale; sidecars and shutdown effects follow its
+      // verdict, never the raw message.
+      let started_ok = matches!(settlement.as_ref(), ControllerSettlement::Started(Ok(_)));
       let shutdown_cleanup = match settlement.as_ref() {
         ControllerSettlement::Shutdown(outcome) => {
           Some(outcome.cleanup.map_err(|error| error.to_string()))
@@ -1401,20 +1319,44 @@ fn update_playback(
         ControllerSettlement::Started(Err(error)) => Some(error.to_string()),
         _ => None,
       };
-      if let Some(playable) = started.as_deref() {
-        surface.playable = Some(playable.clone());
-        surface.adjacent_playables = [None, None];
-      }
-      let mut tasks = vec![apply_playback_input(
-        surface,
-        kernel,
-        quit_requested,
+      let PlaybackStep {
+        effects,
+        transition,
+      } = surface.session.handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id,
           settlement: *settlement,
         })),
+        Instant::now(),
+      );
+      let accepted = matches!(transition.controller, ControllerAcceptance::Applied { .. });
+      let cleanup_accepted = matches!(
+        transition.controller,
+        ControllerAcceptance::Applied { .. } | ControllerAcceptance::DetachedCleanup
+      );
+      if transition.replacement_accepted {
+        // An accepted replacement invalidates transient UI immediately, even
+        // when the new controller effect only just dispatched.
+        if crate::embedded::enabled() {
+          cancel_slider_drags(surface);
+        }
+      }
+      let started = if accepted && started_ok {
+        started
+      } else {
+        None
+      };
+      if let Some(playable) = started.as_deref() {
+        surface.playable = Some(playable.clone());
+        surface.adjacent_playables = [None, None];
+      }
+      let mut tasks = vec![finish_playback_step(
+        surface,
+        kernel,
+        quit_requested,
+        effects,
       )];
-      if !failed_shutdown_warnings.is_empty() {
+      if cleanup_accepted && !failed_shutdown_warnings.is_empty() {
         tasks.push(record_failed_shutdown_warnings(
           kernel,
           &failed_shutdown_warnings,
@@ -1427,18 +1369,23 @@ fn update_playback(
         error = ?settlement_error,
         "controller settled"
       );
-      if let Some(result) = tracks {
-        tasks.push(apply_playback_input(
-          surface,
-          kernel,
-          quit_requested,
-          PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled { id, result })),
-        ));
+      if accepted {
+        if let Some(result) = tracks {
+          tasks.push(
+            apply_playback_input(
+              surface,
+              kernel,
+              quit_requested,
+              PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled { id, result })),
+            )
+            .task,
+          );
+        }
+        if let Some(playable) = started.as_deref() {
+          tasks.push(load_queue_after_start(surface, kernel, playable));
+        }
       }
-      if let Some(playable) = started.as_deref() {
-        tasks.push(load_queue_after_start(surface, kernel, playable));
-      }
-      if matches!(shutdown_cleanup, Some(Ok(()))) {
+      if cleanup_accepted && matches!(shutdown_cleanup, Some(Ok(()))) {
         surface.controller_configuration.invalidate_pending();
         surface.controller = None;
         let _ = surface.session.handle(
@@ -1447,13 +1394,14 @@ fn update_playback(
         );
         sync_playback_projection(surface, kernel, quit_requested);
       }
-      if let (Some(result), Some(handoff)) =
-        (shutdown_cleanup, surface.account_playback_handoff.as_mut())
-      {
-        handoff.settlement = Some(result);
+      if cleanup_accepted {
+        if let (Some(result), Some(handoff)) =
+          (shutdown_cleanup, surface.account_playback_handoff.as_mut())
+        {
+          handoff.settlement = Some(result);
+        }
       }
       if !surface.view.busy {
-        surface.replacing = false;
         if !surface.seek_dragging {
           surface.seek_preview = None;
         }
@@ -1462,7 +1410,13 @@ fn update_playback(
         }
       }
       tasks.push(clear_inactive_playback(surface));
-      Task::batch(tasks)
+      if quit_may_exit(surface, quit_requested) {
+        tasks.push(iced::exit());
+      }
+      PlaybackUpdate {
+        task: Task::batch(tasks),
+        transition,
+      }
     }
     PlaybackMessage::AdjacentSettled {
       remote,
@@ -1472,11 +1426,11 @@ fn update_playback(
       result,
       detail,
     } => {
-      if remote != surface.remote
+      if remote != surface.remote.token()
         || !kernel.request_gate.is_current_remote(remote)
         || !kernel.request_gate.is_current_remote_play(play)
       {
-        return Task::none();
+        return PlaybackUpdate::without_transition(Task::none());
       }
       surface.adjacent_playables[direction.index()] =
         result.as_ref().ok().and_then(Option::as_ref).map(|item| {
@@ -1496,23 +1450,26 @@ fn update_playback(
           tasks.push(prepare_player_artwork(surface, kernel));
         }
       }
-      tasks.push(apply_playback_input(
-        surface,
-        kernel,
-        quit_requested,
-        PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
-          id,
-          direction,
-          result,
-        })),
-      ));
-      Task::batch(tasks)
+      tasks.push(
+        apply_playback_input(
+          surface,
+          kernel,
+          quit_requested,
+          PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+            id,
+            direction,
+            result,
+          })),
+        )
+        .task,
+      );
+      PlaybackUpdate::without_transition(Task::batch(tasks))
     }
     PlaybackMessage::ArtworkLoaded(completion) => {
       surface
         .artwork
         .settle(kernel.request_gate.current_session(), completion);
-      Task::none()
+      PlaybackUpdate::without_transition(Task::none())
     }
   }
 }
@@ -1526,28 +1483,30 @@ pub(crate) fn apply_playback_input(
   kernel: &mut Kernel,
   quit_requested: bool,
   input: PlaybackInput,
-) -> Task<Message> {
-  // A replacement can wait behind a control/refresh. Publish the barrier when
-  // accepted at this shared ingress, not only when its controller effect runs.
-  let replacing = match &input {
-    PlaybackInput::Intent(intent) => match intent.as_ref() {
-      PlaybackIntent::Start { .. } => surface.view.engine_available && !quit_requested,
-      PlaybackIntent::PlayAdjacent(direction) => matches!(
-        match direction {
-          AdjacentDirection::Previous => &surface.view.adjacent.previous,
-          AdjacentDirection::Next => &surface.view.adjacent.next,
-        },
-        jellypilot_mpv::playback_session::AdjacentAvailability::Available { .. }
-      ),
-      PlaybackIntent::Stop | PlaybackIntent::Quit | PlaybackIntent::Disconnect => true,
-      _ => false,
-    },
-    PlaybackInput::Event(_) => false,
-  };
-  if replacing {
-    begin_replacement(surface);
+) -> PlaybackUpdate {
+  let PlaybackStep {
+    effects,
+    transition,
+  } = surface.session.handle(input, Instant::now());
+  if transition.replacement_accepted && crate::embedded::enabled() {
+    // An accepted replacement invalidates transient UI immediately, even when
+    // its controller effect is still queued behind an in-flight command.
+    cancel_slider_drags(surface);
   }
-  let effects = surface.session.handle(input, Instant::now());
+  PlaybackUpdate {
+    task: finish_playback_step(surface, kernel, quit_requested, effects),
+    transition,
+  }
+}
+
+/// Executes the effects of one session step, re-projects the view, and
+/// completes the shell's quit handshake when the session is done.
+fn finish_playback_step(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+  effects: Vec<PlaybackEffect>,
+) -> Task<Message> {
   let task = execute_playback_effects(surface, kernel, effects);
   sync_playback_projection(surface, kernel, quit_requested);
   let artwork_task = ensure_player_artwork(surface, kernel);
@@ -1555,14 +1514,6 @@ pub(crate) fn apply_playback_input(
     Task::batch([task, artwork_task, iced::exit()])
   } else {
     Task::batch([task, artwork_task])
-  }
-}
-
-fn begin_replacement(surface: &mut Surface) {
-  surface.replacing = true;
-  surface.replacement_generation = surface.replacement_generation.wrapping_add(1);
-  if crate::embedded::enabled() {
-    cancel_slider_drags(surface);
   }
 }
 
@@ -1631,9 +1582,9 @@ fn playable_kind(playable: &Playable) -> &'static str {
   }
 }
 /// The shell's quit handshake may exit once the playback session finished
-/// cleaning up and no remote teardown is in flight.
+/// cleaning up and the remote runtime is quiescent.
 pub(crate) fn quit_may_exit(surface: &Surface, quit_requested: bool) -> bool {
-  quit_requested && surface.view.quit_may_proceed && !surface.remote_stopping
+  quit_requested && surface.view.quit_may_proceed && surface.remote.view().quiescent
 }
 
 pub(crate) fn sync_playback_projection(
@@ -1641,11 +1592,7 @@ pub(crate) fn sync_playback_projection(
   kernel: &Kernel,
   quit_requested: bool,
 ) {
-  let mut view = surface.session.view();
-  if view.busy && surface.in_flight_refresh.is_some() && surface.in_flight_command.is_none() {
-    view.busy = false;
-  }
-  surface.view = view;
+  surface.view = surface.session.view();
   surface.notice = surface.view.notice.as_ref().map(|notice| match notice {
     PlaybackNotice::Failed(error) => playback_error_text(*error),
     PlaybackNotice::Warnings(_) => UiText::new("player-setup-incomplete"),
@@ -1680,17 +1627,13 @@ pub(crate) fn resume_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task
 }
 
 fn clear_inactive_playback(surface: &mut Surface) -> Task<Message> {
-  // A start or refresh in flight can transiently project no Now Playing
-  // between files; clearing here would wipe the incoming item's artwork.
-  if surface.view.now_playing.is_some()
-    || surface.in_flight_command.is_some()
-    || surface.in_flight_refresh.is_some()
-  {
+  // Controller occupancy can transiently project no Now Playing between
+  // files; clearing here would wipe the incoming item's artwork.
+  if surface.view.lifecycle.retain_presentation {
     return Task::none();
   }
   tracing::debug!(
-    in_flight_command = surface.in_flight_command.is_some(),
-    in_flight_refresh = surface.in_flight_refresh.is_some(),
+    settled = surface.view.lifecycle.settled,
     playable = ?surface.playable.as_ref().map(playable_kind),
     "clearing inactive playback"
   );
@@ -1728,33 +1671,14 @@ fn execute_playback_effect(
   adjacent_play: Option<RemotePlayToken>,
 ) -> Task<Message> {
   match effect {
-    PlaybackEffect::Controller(id, command) => {
-      if !surface.replacing
-        && matches!(
-          &command,
-          ControllerCommand::Start { .. } | ControllerCommand::Stop | ControllerCommand::Shutdown
-        )
-      {
-        begin_replacement(surface);
-      }
-      match &command {
-        ControllerCommand::Refresh => {
-          surface.in_flight_refresh = Some(id);
-        }
-        ControllerCommand::ShowText { .. } => {}
-        _ => {
-          surface.in_flight_command = Some(id);
-        }
-      }
-      execute_controller_command(surface, id, command)
-    }
+    PlaybackEffect::Controller(id, command) => execute_controller_command(surface, id, command),
     PlaybackEffect::LookupAdjacent(id, direction) => {
       let Some(play) = adjacent_play else {
         return Task::none();
       };
       let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
         return Task::done(Message::Playback(PlaybackMessage::AdjacentSettled {
-          remote: surface.remote,
+          remote: surface.remote.token(),
           play,
           id,
           direction,
@@ -1766,7 +1690,7 @@ fn execute_playback_effect(
         return Task::none();
       };
       let current = media_item_from_playable(playable);
-      let remote = surface.remote;
+      let remote = surface.remote.token();
       Task::perform(
         async move {
           let result = match direction {
@@ -1980,39 +1904,26 @@ fn player_thumbnail_id(playable: &Playable) -> Option<&str> {
 
 /// Starts the teardown barrier used by profile switch, Disconnect, and active
 /// Sign Out. The caller keeps the old [`Kernel`] client alive until both the
-/// returned remote task and playback cleanup settlement have completed.
+/// remote runtime's account waiter and playback cleanup settlement complete.
 pub(crate) fn begin_account_handoff(
   surface: &mut Surface,
   kernel: &mut Kernel,
   quit_requested: bool,
   generation: u64,
 ) -> AccountHandoffStart {
-  let remote_already_stopping = surface.account_remote_handoff == Some(generation);
-  let quit_remote_stopping =
-    quit_requested && surface.remote_stopping && surface.account_remote_handoff.is_none();
-  let remote_session = (!remote_already_stopping && !quit_remote_stopping)
-    .then(|| surface.remote_session.take())
-    .flatten();
-  let playback = disconnect(surface, kernel, quit_requested);
-
-  let remote = if quit_remote_stopping {
-    // The quit-owned RemoteMessage::QuitStopped remains the join point. Do
-    // not synthesize an account settlement that could clear its guard early.
-    Task::none()
-  } else if remote_already_stopping {
-    surface.remote_stopping = true;
-    Task::none()
-  } else if let Some(session) = remote_session {
-    surface.account_remote_handoff = Some(generation);
-    surface.remote_stopping = true;
-    Task::perform(
-      async move { disconnect_remote_session(session).await },
-      move |()| accounts::Message::RemoteHandoffSettled { generation },
-    )
-  } else {
-    surface.account_remote_handoff = None;
-    Task::done(accounts::Message::RemoteHandoffSettled { generation })
-  };
+  surface.controller_configuration.invalidate_pending();
+  let playback = apply_playback_input(
+    surface,
+    kernel,
+    quit_requested,
+    PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+  );
+  clear_queue(surface);
+  let remote_update = surface.remote.update(
+    remote::Input::Retire(remote::Waiter::Account(generation)),
+    &mut kernel.request_gate,
+  );
+  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update);
 
   let playback_cleanup = if surface.view.can_start_login {
     surface.account_playback_handoff = None;
@@ -2026,18 +1937,8 @@ pub(crate) fn begin_account_handoff(
   };
 
   AccountHandoffStart {
-    playback,
-    remote,
+    task: Task::batch([playback.task, remote]),
     playback_cleanup,
-  }
-}
-
-/// Clears the remote half of an account handoff after its async disconnect
-/// message reaches the router.
-pub(crate) fn finish_account_remote_handoff(surface: &mut Surface, generation: u64) {
-  if surface.account_remote_handoff == Some(generation) {
-    surface.account_remote_handoff = None;
-    surface.remote_stopping = false;
   }
 }
 
@@ -2052,30 +1953,27 @@ pub(crate) fn take_account_handoff_settlement(
   Some((generation, settlement))
 }
 
-/// Tears down playback and the remote session on sign-out/disconnect. The
-/// router performs the other surfaces' resets around this call (ADR 0029).
+/// Tears down playback and retires the remote target on sign-out/disconnect.
+/// The router performs the other surfaces' resets around this call (ADR 0029).
 pub(crate) fn disconnect(
   surface: &mut Surface,
   kernel: &mut Kernel,
   quit_requested: bool,
 ) -> Task<Message> {
   surface.controller_configuration.invalidate_pending();
-  let remote_stopping = surface.remote_stopping;
-  let task = apply_playback_input(
+  let playback = apply_playback_input(
     surface,
     kernel,
     quit_requested,
     PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
   );
   clear_queue(surface);
-  surface.remote = kernel.request_gate.begin_remote();
-  surface.remote_session = None;
-  surface.remote_events = None;
-  surface.remote_control_state = RemoteControlState::Unavailable;
-  surface.remote_stopping = quit_requested && remote_stopping;
-  surface.in_flight_refresh = None;
-  surface.in_flight_command = None;
-  task
+  let remote_update = surface.remote.update(
+    remote::Input::Retire(remote::Waiter::Disconnect),
+    &mut kernel.request_gate,
+  );
+  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update);
+  Task::batch([playback.task, remote])
 }
 
 #[cfg(test)]
@@ -2096,7 +1994,7 @@ mod tests {
     PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
   };
   use jellypilot_mpv::playback_session::{IntroAvailability, NowPlayingView, TracksView};
-  use jellypilot_session::{GeneralCommand, JellyfinCommand, PlayRequest};
+  use jellypilot_session::{GeneralCommand, JellyfinCommand, JellyfinWebSocketEvent, PlayRequest};
 
   use super::*;
 
@@ -2243,11 +2141,11 @@ mod tests {
   fn active_playback_fixture_with_auxiliary() -> (Surface, Kernel, Vec<PlaybackEffect>) {
     let (mut surface, kernel) = test_fixture();
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-1", 1)),
         position: PlaybackStartPosition::Beginning,
@@ -2259,17 +2157,20 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
-    let auxiliary = surface.session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(10.0),
-          warnings: Vec::new(),
+    let (id, _) = controller_effect(start.effects);
+    let auxiliary = surface
+      .session
+      .handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+            snapshot: playback_snapshot(10.0),
+            warnings: Vec::new(),
+          })),
         })),
-      })),
-      now,
-    );
+        now,
+      )
+      .effects;
     surface.view = surface.session.view();
     (surface, kernel, auxiliary)
   }
@@ -2292,16 +2193,15 @@ mod tests {
           ));
         }
       }
-      drop(apply_playback_input(
-        &mut surface,
-        &mut kernel,
-        false,
+      let seek = surface.session.handle(
         PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(15.0))),
-      ));
-      let seek_id = surface.in_flight_command.expect("seek is running");
-      let before = surface.replacement_generation;
+        Instant::now(),
+      );
+      let (seek_id, _) = controller_effect(seek.effects);
+      surface.view = surface.session.view();
+      let before = surface.view.lifecycle.replacement_generation;
       if remote_start {
-        let remote = surface.remote;
+        let remote = surface.remote.token();
         let play = kernel.request_gate.begin_remote_play();
         drop(update_remote(
           &mut surface,
@@ -2323,17 +2223,12 @@ mod tests {
           TrayAction::Next,
         ));
       }
-      assert_eq!(
-        surface.in_flight_command,
-        Some(seek_id),
-        "replacement is still queued behind the old seek"
-      );
       assert!(
-        surface.replacing,
+        surface.view.lifecycle.replacing,
         "embedded keyboard must be blocked before the queued Start effect runs"
       );
       assert_ne!(
-        surface.replacement_generation, before,
+        surface.view.lifecycle.replacement_generation, before,
         "old seek targets and Back intent must be invalidated"
       );
       drop(update(
@@ -2351,10 +2246,13 @@ mod tests {
         },
       ));
       assert!(
-        surface.replacing,
+        surface.view.lifecycle.replacing,
         "the barrier remains during replacement startup"
       );
-      assert_ne!(surface.in_flight_command, Some(seek_id));
+      assert!(
+        !surface.view.lifecycle.settled,
+        "the queued replacement start is now in flight"
+      );
     }
   }
 
@@ -2369,25 +2267,31 @@ mod tests {
       let (refresh_id, _) = controller_effect(
         surface
           .session
-          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+          .effects,
       );
       surface.view = surface.session.view();
       drop(update_playback(&mut surface, &mut kernel, false, message));
       assert!(!surface.seek_dragging && !surface.volume_dragging);
-      let (_, command) = controller_effect(surface.session.handle(
-        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-          id: refresh_id,
-          settlement: ControllerSettlement::Refreshed {
-            outcome: PlaybackRefreshOutcome {
-              snapshot: playback_snapshot(10.0),
-              state: PlaybackRefreshState::Active,
-              warnings: Vec::new(),
-            },
-            client_messages: Vec::new(),
-          },
-        })),
-        now,
-      ));
+      let (_, command) = controller_effect(
+        surface
+          .session
+          .handle(
+            PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+              id: refresh_id,
+              settlement: ControllerSettlement::Refreshed {
+                outcome: PlaybackRefreshOutcome {
+                  snapshot: playback_snapshot(10.0),
+                  state: PlaybackRefreshState::Active,
+                  warnings: Vec::new(),
+                },
+                client_messages: Vec::new(),
+              },
+            })),
+            now,
+          )
+          .effects,
+      );
       if seek {
         assert!(matches!(command, ControllerCommand::Seek(120.0)));
       } else {
@@ -2427,7 +2331,7 @@ mod tests {
       PlaybackMessage::VolumeReleased,
     ));
     assert!(!surface.seek_dragging && !surface.volume_dragging);
-    assert!(surface.in_flight_command.is_none());
+    assert!(surface.view.lifecycle.settled);
     assert!(!surface.view.busy);
   }
 
@@ -2460,7 +2364,7 @@ mod tests {
         false,
         PlaybackMessage::VolumeReleased,
       ));
-      assert!(state.playback.in_flight_command.is_none());
+      assert!(state.playback.view.lifecycle.settled);
     }
   }
 
@@ -2506,15 +2410,12 @@ mod tests {
       false,
       PlaybackMessage::VolumeChanged(35.0),
     ));
-    drop(apply_playback_input(
-      &mut surface,
-      &mut kernel,
-      false,
+    let refresh = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
-    ));
-    let id = surface
-      .in_flight_refresh
-      .expect("refresh is running during drag");
+      Instant::now(),
+    );
+    let (id, _) = controller_effect(refresh.effects);
+    surface.view = surface.session.view();
     drop(update(
       &mut surface,
       &mut kernel,
@@ -2547,7 +2448,7 @@ mod tests {
       Some(90.0),
       "release retains the chosen target while its command settles"
     );
-    assert!(surface.in_flight_command.is_some());
+    assert!(!surface.view.lifecycle.settled);
     drop(update(
       &mut surface,
       &mut kernel,
@@ -2614,12 +2515,12 @@ mod tests {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let started = Playable::Library(episode("episode-1", 1));
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: started.clone(),
         position: PlaybackStartPosition::Beginning,
@@ -2631,7 +2532,7 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
+    let (id, _) = controller_effect(start.effects);
 
     drop(update_playback(
       &mut surface,
@@ -2945,7 +2846,8 @@ mod tests {
     let (refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
@@ -2987,7 +2889,8 @@ mod tests {
     let (refresh_id, _) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
     );
     surface.view = surface.session.view();
     surface.volume_preview = Some(42.0);
@@ -3028,11 +2931,12 @@ mod tests {
     let (_refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
-    assert!(surface.view.busy);
+    assert!(!surface.view.busy);
 
     drop(update_playback(
       &mut surface,
@@ -3049,7 +2953,7 @@ mod tests {
       PlaybackMessage::SeekReleased,
     ));
     assert_eq!(surface.seek_preview, Some(5.0));
-    assert!(surface.view.busy);
+    assert!(!surface.view.busy);
   }
 
   #[test]
@@ -3059,11 +2963,12 @@ mod tests {
     let (_refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
-    assert!(surface.view.busy);
+    assert!(!surface.view.busy);
 
     drop(update_playback(
       &mut surface,
@@ -3080,7 +2985,7 @@ mod tests {
       PlaybackMessage::VolumeReleased,
     ));
     assert_eq!(surface.volume_preview, Some(42.0));
-    assert!(surface.view.busy);
+    assert!(!surface.view.busy);
   }
 
   #[test]
@@ -3249,11 +3154,11 @@ mod tests {
   fn clear_inactive_playback_preserves_artwork_while_a_start_is_in_flight() {
     let (mut surface, mut kernel) = test_fixture();
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-2", 3)),
         position: PlaybackStartPosition::Beginning,
@@ -3265,8 +3170,10 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
-    surface.in_flight_command = Some(id);
+    let (_id, _) = controller_effect(start.effects);
+    // The dispatched start keeps controller occupancy unsettled, which is
+    // what retains presentation while Now Playing is transiently absent.
+    surface.view = surface.session.view();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     surface.playable = Some(Playable::Detail(detail_with_series_poster(
       "episode-1",
@@ -3291,11 +3198,11 @@ mod tests {
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     surface.playable = Some(Playable::Library(episode("episode-1", 1)));
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-2")),
         position: PlaybackStartPosition::Beginning,
@@ -3307,7 +3214,7 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
+    let (id, _) = controller_effect(start.effects);
 
     // The settle arrives while the projection still reports the previous item
     // (playback_snapshot pins episode-1), so the old revert-on-mismatch would
@@ -3368,14 +3275,14 @@ mod tests {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     surface.playable = Some(Playable::Media(media_item("episode-2")));
-    let remote = surface.remote;
+    let remote = surface.remote.token();
     let play = kernel.request_gate.begin_remote_play();
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-2", 3)),
         position: PlaybackStartPosition::Beginning,
@@ -3387,7 +3294,7 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
+    let (id, _) = controller_effect(start.effects);
 
     drop(update_playback(
       &mut surface,
@@ -3420,7 +3327,7 @@ mod tests {
   fn remote_track_selection_without_loaded_mapping_is_ignored_with_diagnostic() {
     let (mut surface, mut kernel) = test_fixture();
     surface.view.tracks = TracksView::Unavailable;
-    let remote = surface.remote;
+    let remote = surface.remote.token();
 
     drop(handle_remote_command(
       &mut surface,
@@ -3442,7 +3349,7 @@ mod tests {
   #[test]
   fn local_stop_invalidates_an_in_flight_remote_play_resolution() {
     let (mut surface, mut kernel) = test_fixture();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       Instant::now(),
     );
@@ -3455,7 +3362,7 @@ mod tests {
       PlaybackMessage::Intent(Box::new(PlaybackIntent::Stop)),
     ));
     assert!(!kernel.request_gate.is_current_remote_play(stale_play));
-    let remote = surface.remote;
+    let remote = surface.remote.token();
 
     drop(handle_remote(
       &mut surface,
@@ -3507,11 +3414,11 @@ mod tests {
   fn double_adjacent_press_dispatches_single_start() {
     let (mut surface, kernel) = test_fixture();
     let now = Instant::now();
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
-    let effects = surface.session.handle(
+    let start = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-1", 1)),
         position: PlaybackStartPosition::Beginning,
@@ -3523,17 +3430,20 @@ mod tests {
       })),
       now,
     );
-    let (id, _) = controller_effect(effects);
-    let aux = surface.session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(10.0),
-          warnings: Vec::new(),
+    let (id, _) = controller_effect(start.effects);
+    let aux = surface
+      .session
+      .handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+            snapshot: playback_snapshot(10.0),
+            warnings: Vec::new(),
+          })),
         })),
-      })),
-      now,
-    );
+        now,
+      )
+      .effects;
     surface.view = surface.session.view();
     let next_id = aux
       .iter()
@@ -3544,7 +3454,7 @@ mod tests {
       .expect("expected next lookup effect");
 
     // Settle next adjacent item
-    surface.session.handle(
+    let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
@@ -3555,27 +3465,27 @@ mod tests {
     sync_playback_projection(&mut surface, &kernel, false);
 
     // First adjacent press
-    let first_effects = surface.session.handle(
+    let first = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
         AdjacentDirection::Next,
       ))),
       now,
     );
-    let (start_id, _) = controller_effect(first_effects);
+    let (start_id, _) = controller_effect(first.effects);
     sync_playback_projection(&mut surface, &kernel, false);
     assert!(surface.view.busy);
 
     // Second adjacent press while first is in flight (suppressed)
-    let second_effects = surface.session.handle(
+    let second = surface.session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
         AdjacentDirection::Next,
       ))),
       now,
     );
-    assert!(second_effects.is_empty());
+    assert!(second.effects.is_empty());
 
     // Settle the start
-    let settle_effects = surface.session.handle(
+    let settle = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
@@ -3588,7 +3498,8 @@ mod tests {
     sync_playback_projection(&mut surface, &kernel, false);
 
     // No second start effect dispatched
-    assert!(!settle_effects
+    assert!(!settle
+      .effects
       .iter()
       .any(|e| matches!(e, PlaybackEffect::Controller(_, _))));
     assert!(!surface.view.busy);
@@ -3601,21 +3512,21 @@ mod tests {
     let now = Instant::now();
 
     // First stop
-    let first_effects = surface
+    let first = surface
       .session
       .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
-    let (stop_id, _) = controller_effect(first_effects);
+    let (stop_id, _) = controller_effect(first.effects);
     sync_playback_projection(&mut surface, &kernel, false);
     assert!(surface.view.busy);
 
     // Second stop while first is in flight
-    let second_effects = surface
+    let second = surface
       .session
       .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
-    assert!(second_effects.is_empty());
+    assert!(second.effects.is_empty());
 
     // Settle the stop
-    let settle_effects = surface.session.handle(
+    let settle = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: stop_id,
         settlement: ControllerSettlement::Stopped(Ok(
@@ -3629,7 +3540,7 @@ mod tests {
     sync_playback_projection(&mut surface, &kernel, false);
 
     // Stop settled with no notice
-    assert!(settle_effects.is_empty());
+    assert!(settle.effects.is_empty());
     assert!(!surface.view.busy);
     assert!(surface.view.now_playing.is_none());
     assert!(surface.view.notice.is_none());
@@ -3642,13 +3553,13 @@ mod tests {
     let (mut surface, kernel) = active_playback_fixture();
     let now = Instant::now();
 
-    let refresh_effects = surface
+    let refresh = surface
       .session
       .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
-    let (refresh_id, _) = controller_effect(refresh_effects);
+    let (refresh_id, _) = controller_effect(refresh.effects);
 
     // Simulate EOF refresh settlement
-    let settle_effects = surface.session.handle(
+    let settle = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
@@ -3664,7 +3575,7 @@ mod tests {
     );
     sync_playback_projection(&mut surface, &kernel, false);
 
-    assert!(settle_effects.is_empty());
+    assert!(settle.effects.is_empty());
     assert!(surface.view.now_playing.is_none());
     assert!(surface.view.notice.is_none());
     assert!(surface.notice.is_none());
@@ -3674,9 +3585,8 @@ mod tests {
   #[test]
   fn unavailable_remote_target_does_not_dispatch_commands() {
     let (mut surface, mut kernel) = test_fixture();
-    surface.remote_control_state = RemoteControlState::Unavailable;
     let pending = kernel.request_gate.begin_remote_play();
-    let remote = surface.remote;
+    let remote = surface.remote.token();
     drop(handle_remote(
       &mut surface,
       &mut kernel,
@@ -3698,34 +3608,15 @@ mod tests {
   }
 
   #[test]
-  fn successful_reconnect_clears_only_the_connection_lost_notice() {
-    let (mut surface, mut kernel) = test_fixture();
+  fn connection_restored_clears_only_the_connection_lost_notice() {
+    let (_surface, mut kernel) = test_fixture();
     kernel.notice = Some(UiText::new(REMOTE_CONNECTION_LOST_NOTICE));
-    kernel.locale =
-      crate::i18n::Localizer::new(jellypilot_core::locale::UiLanguage::SimplifiedChinese);
-    let remote = surface.remote;
 
-    drop(handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Finalized {
-        remote,
-        result: Ok(true),
-      },
-    ));
-
+    apply_remote_notice(&mut kernel, remote::Notice::ConnectionRestored);
     assert!(kernel.notice.is_none());
+
     kernel.notice = Some(UiText::new(REMOTE_TRACKS_UNAVAILABLE_NOTICE));
-    drop(handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Finalized {
-        remote,
-        result: Ok(true),
-      },
-    ));
+    apply_remote_notice(&mut kernel, remote::Notice::ConnectionRestored);
     assert_eq!(
       kernel.notice.as_ref().map(UiText::id),
       Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE)
@@ -3733,117 +3624,38 @@ mod tests {
   }
 
   #[test]
-  fn reconnect_stays_connecting_until_capability_registration_finishes() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    surface.remote_control_state = RemoteControlState::Lost;
-    let remote = surface.remote;
-
-    let task = handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Event {
-        remote,
-        event: JellyfinWebSocketEvent::Reconnected,
-      },
-    );
-
-    assert_eq!(task.units(), 1);
-    assert_eq!(surface.remote_control_state, RemoteControlState::Connecting);
-    drop(handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Finalized {
-        remote,
-        result: Ok(false),
-      },
-    ));
-    assert_eq!(surface.remote_control_state, RemoteControlState::Available);
-  }
-
-  #[test]
-  fn initial_setup_failure_invalidates_a_later_finalization_success() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.connection = ConnectionPhase::Connected;
-    let stale_remote = surface.remote;
-
-    drop(handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Started {
-        remote: stale_remote,
-        result: Err(RemoteStartError::CapabilityRegistrationFailed),
-      },
-    ));
-    drop(handle_remote(
-      &mut surface,
-      &mut kernel,
-      false,
-      RemoteMessage::Finalized {
-        remote: stale_remote,
-        result: Ok(true),
-      },
-    ));
-
-    assert_eq!(
-      surface.remote_control_state,
-      RemoteControlState::Unavailable
-    );
-    assert!(!kernel.request_gate.is_current_remote(stale_remote));
-  }
-
-  #[tokio::test]
-  async fn websocket_teardown_waits_for_inflight_setup_to_release_lifecycle() {
-    let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
-    let setup = lifecycle.lock().await;
-    let session = RemoteSessionHandle {
-      websocket: Arc::new(JellyfinWebSocket::new()),
-      lifecycle: Arc::clone(&lifecycle),
-    };
-    let teardown = tokio::spawn(disconnect_remote_session(session));
-    tokio::task::yield_now().await;
-
-    assert!(!teardown.is_finished());
-    drop(setup);
-    tokio::time::timeout(std::time::Duration::from_secs(1), teardown)
-      .await
-      .expect("teardown should finish after setup releases the lifecycle")
-      .expect("teardown task should finish");
-  }
-
-  #[test]
   fn quit_exit_stays_blocked_until_the_session_cleanup_handshake_settles() {
-    let (mut surface, _kernel) = test_fixture();
+    let (mut surface, mut kernel) = test_fixture();
 
     assert!(!quit_may_exit(&surface, true));
     surface.view.quit_may_proceed = true;
-    assert!(quit_may_exit(&surface, true));
-    surface.remote_stopping = true;
+    assert!(
+      quit_may_exit(&surface, true),
+      "a quiescent remote runtime does not block quit"
+    );
+
+    // A live remote target keeps the runtime non-quiescent until its retire
+    // cleanup settles, so the quit handshake stays blocked.
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    drop(start_remote_session(&mut surface, &mut kernel));
+    assert!(!surface.remote.view().quiescent);
     assert!(!quit_may_exit(&surface, true));
   }
 
   #[test]
   fn account_handoff_does_not_clear_a_quit_owned_remote_teardown() {
     let (mut surface, mut kernel) = test_fixture();
-    surface.remote_stopping = true;
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    drop(start_remote_session(&mut surface, &mut kernel));
+    drop(stop_remote_session_for_quit(&mut surface, &mut kernel));
 
-    let _start = begin_account_handoff(&mut surface, &mut kernel, true, 12);
+    let start = begin_account_handoff(&mut surface, &mut kernel, true, 12);
 
-    assert!(surface.remote_stopping);
-    assert!(surface.account_remote_handoff.is_none());
-    finish_account_remote_handoff(&mut surface, 12);
-    assert!(surface.remote_stopping);
-
-    drop(update_remote(
-      &mut surface,
-      &mut kernel,
-      true,
-      RemoteMessage::QuitStopped,
-    ));
-    assert!(!surface.remote_stopping);
+    // The account waiter joins the quit-owned teardown inside the runtime;
+    // it must not mark the runtime quiescent or release the quit gate early.
+    assert!(!surface.remote.view().quiescent);
+    assert!(!quit_may_exit(&surface, true));
+    assert!(matches!(start.playback_cleanup, Some(Ok(()))));
   }
 
   #[test]
@@ -3852,21 +3664,18 @@ mod tests {
     assert!(!surface.view.busy);
 
     // Tick intent executes Refresh but must NOT project busy to UI
-    drop(update_playback(
-      &mut surface,
-      &mut kernel,
-      false,
-      PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)),
-    ));
-    assert!(surface.in_flight_refresh.is_some());
-    assert_eq!(surface.in_flight_command, None);
+    let tick = surface.session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
+      Instant::now(),
+    );
+    let (refresh_id, _) = controller_effect(tick.effects);
+    sync_playback_projection(&mut surface, &kernel, false);
     assert!(
       !surface.view.busy,
       "periodic refresh tick must not mark playback_view busy (prevents button flickering)"
     );
 
-    // Refresh settlement clears in-flight refresh and keeps busy false
-    let refresh_id = surface.in_flight_refresh.unwrap();
+    // Refresh settlement keeps busy false
     drop(update_playback(
       &mut surface,
       &mut kernel,
@@ -3885,7 +3694,6 @@ mod tests {
         tracks: None,
       },
     ));
-    assert_eq!(surface.in_flight_refresh, None);
     assert!(
       !surface.view.busy,
       "refresh settlement must keep playback_view busy as false"
@@ -3894,81 +3702,66 @@ mod tests {
 
   #[test]
   fn playback_refresh_transition_to_queued_command_preserves_busy_state() {
-    let (mut surface, mut kernel) = active_playback_fixture();
+    let (mut surface, kernel) = active_playback_fixture();
+    let now = Instant::now();
     assert!(!surface.view.busy);
 
     // 1. Tick intent starts a Refresh
-    drop(update_playback(
-      &mut surface,
-      &mut kernel,
-      false,
-      PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)),
-    ));
-    let refresh_id = surface
-      .in_flight_refresh
-      .expect("tick must initiate an in-flight refresh");
-    assert_eq!(surface.in_flight_command, None);
+    let tick = surface
+      .session
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
+    let (refresh_id, _) = controller_effect(tick.effects);
+    sync_playback_projection(&mut surface, &kernel, false);
     assert!(
       !surface.view.busy,
       "periodic refresh tick alone must not mark playback_view busy"
     );
 
-    // 2. Queue a seek command while refresh is in flight
-    drop(update_playback(
-      &mut surface,
-      &mut kernel,
-      false,
-      PlaybackMessage::Intent(Box::new(PlaybackIntent::Seek(50.0))),
-    ));
+    // 2. Queue a seek command while refresh is in flight; it is not busy yet
+    let _ = surface.session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(50.0))),
+      now,
+    );
+    sync_playback_projection(&mut surface, &kernel, false);
+    assert!(
+      !surface.view.busy,
+      "a control queued behind refresh must not mark playback_view busy"
+    );
 
-    // 3. Settle the in-flight refresh
-    drop(update_playback(
-      &mut surface,
-      &mut kernel,
-      false,
-      PlaybackMessage::ControllerSettled {
+    // 3. Settle the in-flight refresh; the queued seek dispatches
+    let settled = surface.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
-        settlement: Box::new(ControllerSettlement::Refreshed {
+        settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
             snapshot: playback_snapshot(11.0),
             state: PlaybackRefreshState::Active,
             warnings: Vec::new(),
           },
           client_messages: Vec::new(),
-        }),
-        started: None,
-        tracks: None,
-      },
-    ));
-
-    // Refresh marker is cleared, command marker is set to the newly dispatched seek command,
-    // and playback_view.busy is true
-    assert_eq!(surface.in_flight_refresh, None);
-    let command_id = surface
-      .in_flight_command
-      .expect("settling refresh must dispatch the queued command and set in_flight_command");
+        },
+      })),
+      now,
+    );
+    let (command_id, _) = controller_effect(settled.effects);
+    sync_playback_projection(&mut surface, &kernel, false);
     assert!(
       surface.view.busy,
       "playback_view.busy must remain true while queued command is in flight"
     );
 
     // 4. Settle the command
-    drop(update_playback(
-      &mut surface,
-      &mut kernel,
-      false,
-      PlaybackMessage::ControllerSettled {
+    let _ = surface.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: command_id,
-        settlement: Box::new(ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+        settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
           snapshot: playback_snapshot(50.0),
           warnings: Vec::new(),
-        }))),
-        started: None,
-        tracks: None,
-      },
-    ));
-    // Command marker is cleared and busy is false
-    assert_eq!(surface.in_flight_command, None);
+        })),
+      })),
+      now,
+    );
+    sync_playback_projection(&mut surface, &kernel, false);
     assert!(
       !surface.view.busy,
       "playback_view.busy must be false after command settles"
