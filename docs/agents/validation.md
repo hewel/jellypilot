@@ -119,6 +119,10 @@ When the smoke gate or MPV playback fails, follow this route instead of ad-hoc s
 
 ## Rules
 
+- Test observable behavior, meaningful boundaries, and realistic regressions. Do not add
+  case-by-case tests for simple command forwarding, constants, defaults, or field copying.
+- Assert error semantics (rejection, error type/code, or relevant structured context), not
+  incidental error-message wording. Assert wording only when it is an explicit required contract.
 - Do not re-run suites the change cannot affect: no workspace clippy for a `scripts/**`-only edit,
   no smoke gate for display-free logic in `jellypilot-core`.
 - Prefer cached incremental reruns. A focused `bun run task rust test <crate>` after a warm build is
