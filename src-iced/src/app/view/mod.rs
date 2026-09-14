@@ -1,4 +1,5 @@
 mod account;
+mod activation_guard;
 pub(crate) mod browse;
 mod detail;
 pub(crate) mod home;
@@ -64,7 +65,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .align_x(Alignment::End),
     );
   }
-  layers.into()
+  player::guard_activation(layers, state)
 }
 
 fn toast_view<'a>(

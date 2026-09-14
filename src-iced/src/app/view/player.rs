@@ -422,6 +422,26 @@ pub fn full(state: &State) -> Element<'_, Message> {
   .into()
 }
 
+pub(super) fn guard_activation<'a>(
+  content: impl Into<Element<'a, Message>>,
+  state: &'a State,
+) -> Element<'a, Message> {
+  // The picture toggles on press; explicit buttons commit on release.
+  // All other messages, including slider previews, retain their receipts.
+  super::activation_guard::activation_guard(content, move |message, position| match message {
+    Message::Playback(PlaybackMessage::Intent(intent))
+      if matches!(*intent, PlaybackIntent::TogglePaused) =>
+    {
+      Message::EmbeddedPlayer(embedded_player::Message::PointerMoved {
+        position,
+        bounds: state.shell.window_size,
+        controls_height: controls_reveal_height(state.shell.window_size.width),
+      })
+    }
+    message => message,
+  })
+}
+
 /// Shared embedded composition for normal, fullscreen, and Control-Only playback.
 pub fn embedded(state: &State) -> Element<'_, Message> {
   responsive(move |bounds| -> Element<'_, Message> {
@@ -1828,6 +1848,566 @@ mod tests {
     }
   }
 
+  fn dispatch_embedded(
+    ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+    renderer: &mut iced::Renderer,
+    events: &[iced::Event],
+    cursor: iced::Point,
+  ) -> Vec<Message> {
+    let mut bus = iced::advanced::shell::Bus::new();
+    let _ = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      events,
+      iced::mouse::Cursor::Available(cursor),
+      renderer,
+      &mut bus,
+    );
+    bus.drain().map(|(message, _)| message).collect()
+  }
+
+  fn pause_toggles(messages: &[Message]) -> usize {
+    messages
+      .iter()
+      .filter(|message| {
+        matches!(
+          message,
+          Message::Playback(PlaybackMessage::Intent(intent))
+            if matches!(**intent, PlaybackIntent::TogglePaused)
+        )
+      })
+      .count()
+  }
+
+  #[tokio::test]
+  async fn inactive_window_retains_activation_guard_when_player_mounts() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut state = State::boot(false);
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let size = Size::new(1100.0, 700.0);
+    let picture = Point::new(550.0, 200.0);
+    let mut ui = UserInterface::build(
+      super::super::view(&state),
+      size,
+      Cache::new(),
+      &mut renderer,
+    );
+    dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Window(window::Event::Unfocused)],
+      picture,
+    );
+    let cache = ui.into_cache();
+    state.playback.view.now_playing = Some(test_now_playing());
+    state.shell.player_fullscreen = true;
+    let mut ui = UserInterface::build(super::super::view(&state), size, cache, &mut renderer);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+      ))],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn captured_overlay_selection_consumes_activation_before_picture_click() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let state = State::boot(false);
+    let composition = |open| {
+      guard_activation(
+        stack![
+          video_surface(),
+          popover(
+            space().width(100).height(40),
+            button("Audio")
+              .width(100)
+              .height(40)
+              .on_press(Message::Playback(PlaybackMessage::AudioTrackSelected(1))),
+            open,
+            PopoverOptions {
+              placement: Placement::Below,
+              width: Some(140.0),
+              ..PopoverOptions::default()
+            },
+            Message::Playback(PlaybackMessage::AudioMenuDismissed),
+          ),
+        ]
+        .width(Fill)
+        .height(Fill),
+        &state,
+      )
+    };
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let size = Size::new(600.0, 400.0);
+    let mut ui = UserInterface::build(composition(true), size, Cache::new(), &mut renderer);
+    let point = Point::new(50.0, 70.0);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      point,
+    );
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::Playback(PlaybackMessage::AudioTrackSelected(1))
+    )));
+    let cache = ui.into_cache();
+    let mut ui = UserInterface::build(composition(false), size, cache, &mut renderer);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+      ))],
+      point,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn activation_click_into_picture_does_not_toggle_playback() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let picture = Point::new(550.0, 200.0);
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+
+    // Focus-before-press ordering (Wayland/X11): the activating click is
+    // swallowed and republished through the pointer-reveal route.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::EmbeddedPlayer(embedded_player::Message::PointerMoved { .. })
+    )));
+
+    // Releasing the swallowed press must not toggle afterwards.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonReleased(
+        mouse::Button::Left,
+      ))],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // Focus state survives a view rebuild while unfocused: losing it would
+    // reset to the focused default and let this activation click toggle.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Window(window::Event::Unfocused)],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+    let cache = ui.into_cache();
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      cache,
+      &mut renderer,
+    );
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // A deliberate click on the focused picture toggles exactly once, and a
+    // repeated loss/regain cycle suppresses exactly one press again.
+    for expected in [1, 0, 1] {
+      let events = if expected == 0 {
+        vec![
+          Event::Window(window::Event::Unfocused),
+          Event::Window(window::Event::Focused),
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]
+      } else {
+        vec![
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ]
+      };
+      let messages = dispatch_embedded(&mut ui, &mut renderer, &events, picture);
+      assert_eq!(pause_toggles(&messages), expected);
+    }
+  }
+
+  #[tokio::test]
+  async fn activation_click_press_before_focus_does_not_rearm() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let picture = Point::new(550.0, 200.0);
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+
+    // Press-before-focus ordering (Windows): the press arrives while the
+    // window is still unfocused and is swallowed.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // The following Focused must not arm suppression: the activation press
+    // already happened, so the next deliberate click toggles once.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn deliberate_input_after_focus_restores_first_click() {
+    use iced::advanced::renderer::Headless;
+    use iced::{keyboard, mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let picture = Point::new(550.0, 200.0);
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+
+    // A synthetic move reporting the current position is focus bookkeeping,
+    // not a gesture: the activation click is still suppressed.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::CursorMoved { position: picture }),
+        press.clone(),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // Focus bookkeeping that is not a deliberate gesture must not disarm.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Keyboard(keyboard::Event::ModifiersChanged(keyboard::Modifiers::ALT)),
+        press.clone(),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // Real pointer movement between Focused and the click proves a new
+    // gesture, so the click toggles.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::CursorMoved {
+          position: Point::new(540.0, 200.0),
+        }),
+        press.clone(),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+
+    // A key release (e.g. Alt released after Alt-Tab) is deliberate input and
+    // restores normal first-click behavior.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Keyboard(keyboard::Event::KeyReleased {
+          key: keyboard::Key::Named(keyboard::key::Named::Alt),
+          modified_key: keyboard::Key::Named(keyboard::key::Named::Alt),
+          physical_key: keyboard::key::Physical::Code(keyboard::key::Code::AltLeft),
+          location: keyboard::Location::Standard,
+          modifiers: keyboard::Modifiers::NONE,
+        }),
+        press.clone(),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn activation_click_on_play_control_still_toggles() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+
+    // Explicit controls retain their activation press and release, and consume
+    // the activation guard so the following picture click works normally.
+    let play_button = Point::new(550.0, 620.0);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      play_button,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+      ))],
+      Point::new(550.0, 200.0),
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn activation_click_on_cold_timeline_commits_seek_without_toggling() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      Point::new(550.0, 573.0),
+    );
+    assert_eq!(pause_toggles(&messages), 0);
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::Playback(PlaybackMessage::SeekChanged(position)) if *position > 120.0
+    )));
+    assert_eq!(
+      messages
+        .iter()
+        .filter(|message| matches!(message, Message::Playback(PlaybackMessage::SeekReleased)))
+        .count(),
+      1,
+    );
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+      ))],
+      Point::new(550.0, 200.0),
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
+  #[tokio::test]
+  async fn activation_click_dismisses_queue_menu_without_toggling() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    state.playback.queue = QueueState::Ready(Vec::new());
+    state.playback.queue_menu_open = true;
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let picture = Point::new(550.0, 200.0);
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      Cache::new(),
+      &mut renderer,
+    );
+
+    // The activating click still reaches the popover overlay and dismisses
+    // the menu, but must not toggle playback through the inert surface.
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[
+        Event::Window(window::Event::Unfocused),
+        Event::Window(window::Event::Focused),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      picture,
+    );
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::Playback(PlaybackMessage::QueueMenuDismissed)
+    )));
+    assert_eq!(pause_toggles(&messages), 0);
+
+    // Once the menu is closed, a deliberate picture click toggles again.
+    let cache = ui.into_cache();
+    state.playback.queue_menu_open = false;
+    let mut ui = UserInterface::build(
+      guard_activation(embedded(&state), &state),
+      Size::new(1100.0, 700.0),
+      cache,
+      &mut renderer,
+    );
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+      ))],
+      picture,
+    );
+    assert_eq!(pause_toggles(&messages), 1);
+  }
+
   #[tokio::test]
   async fn picture_click_dismisses_queue_without_toggling_playback() {
     use iced::advanced::renderer::Headless;
@@ -1848,7 +2428,7 @@ mod tests {
     for menu_open in [true, false] {
       state.playback.queue_menu_open = menu_open;
       let mut ui = UserInterface::build(
-        embedded(&state),
+        guard_activation(embedded(&state), &state),
         Size::new(1100.0, 700.0),
         cache,
         &mut renderer,
