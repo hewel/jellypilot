@@ -4,7 +4,12 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-09-14
+
 ### Added
+- Added opt-in Embedded MPV Playback on Windows, with the pinned libmpv runtime and its dependencies included in the NSIS installer and D3D11VA-copy hardware decoding when supported.
+- Added an 8-bit SDR presentation fallback on Windows devices without a compatible 10-bit Vulkan window surface, while retaining 10-bit internal video textures.
+- Inhibit idle auto-lock during active, unpaused embedded playback on supported Linux Wayland and X11 desktops.
 - Added a native embedded-player information popover with demand-only MPV file, cache, output, video, and audio statistics, explicit unavailable values, and credential-safe filenames; the existing MPV stats shortcut remains independent.
 
 ### Changed
@@ -21,6 +26,10 @@ All notable changes to JellyPilot are documented in this file.
 - Preserved the latest Playback Target name during startup and serial re-registration, and rejected obsolete registration results after a reconnect.
 - Removed the embedded player's upward queue chevron for movies while retaining it for episode queues.
 - Kept Settings content within the available right-pane width instead of clipping trailing controls behind horizontal scrolling.
+- Added the Windows executable icon, suppressed auxiliary console windows, and restored tray menu message handling.
+
+### Known limitations
+- Windows embedded runtime DLLs are currently unsigned and may be blocked by Smart App Control. Windows still defaults to External MPV Playback; this release does not resolve the signing limitation.
 
 ## [2.2.0] - 2026-09-10
 
