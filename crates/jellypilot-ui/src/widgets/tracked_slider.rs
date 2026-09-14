@@ -1,6 +1,10 @@
 //! Slider events that distinguish pointer previews from discrete adjustments.
 
-use iced::advanced::{layout, mouse, renderer, shell::Bus, widget, Layout, Shell, Widget};
+use iced::advanced::{
+    layout, mouse, renderer,
+    shell::{Bus, Tracking},
+    widget, Layout, Shell, Widget,
+};
 use iced::{keyboard, touch, Element, Length, Rectangle, Size, Theme};
 
 /// The interaction lifecycle of a tracked slider.
@@ -18,8 +22,9 @@ pub enum Event {
 
 /// Wraps a slider built with `Event::Changed` and `.on_release(Event::DragEnded)`.
 ///
-/// Feed the application's drag flag back through `dragging`. Rebuilding with
-/// `false` cancels any unfinished pointer interaction without committing it.
+/// Feed the application's drag flag back through `dragging`. After the application
+/// processes `Event::DragStarted`, rebuilding with `false` cancels the unfinished
+/// pointer interaction without committing it; earlier relayouts preserve it.
 pub fn tracked_slider<'a, Message: 'a>(
     slider: iced::widget::Slider<'a, f64, Event>,
     dragging: bool,
@@ -43,6 +48,10 @@ struct State {
     dragging: bool,
     modifiers: keyboard::Modifiers,
     restore_modifiers: bool,
+    /// Receipt of the published `DragStarted`; pending until the application
+    /// processes it, so a rebuild can tell a real cancellation apart from a
+    /// stale `dragging = false` snapshot.
+    drag_start: Option<Tracking>,
     messages: Bus<Event>,
 }
 
@@ -61,10 +70,22 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
         tree.diff_children(&mut [self.slider.as_widget_mut()]);
         let state = tree.state.downcast_mut::<State>();
         if state.dragging && !self.dragging {
+            // A relayout can rebuild this widget before the application
+            // processes DragStarted (e.g. a zero-delay tooltip opening inside
+            // `responsive`). The stale `dragging = false` is not a
+            // cancellation until that message has been consumed.
+            if state
+                .drag_start
+                .as_ref()
+                .is_some_and(|tracking| !tracking.is_processed())
+            {
+                return;
+            }
             // The pinned slider's interaction state is private. Reinitialize it rather
             // than synthesizing a release, which would commit the cancelled preview.
             tree.children[0].state = self.slider.as_widget().state();
             state.dragging = false;
+            state.drag_start = None;
             state.restore_modifiers = true;
         }
     }
@@ -120,7 +141,8 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
             // Match the pinned slider's command-click branch: reset, never drag.
             let start = !state.modifiers.command();
             if start && !state.dragging {
-                shell.publish((self.on_event)(Event::DragStarted));
+                state.drag_start =
+                    Some(shell.publish_and_track((self.on_event)(Event::DragStarted)));
             }
             state.dragging = start;
         }
@@ -292,6 +314,78 @@ mod tests {
         }
     }
 
+    struct Runtime {
+        ui: Option<iced_runtime::UserInterface<'static, Event, Theme, iced::Renderer>>,
+        renderer: iced::Renderer,
+        messages: Bus<Event>,
+    }
+
+    impl Runtime {
+        const BOUNDS: Size = Size::new(100.0, 16.0);
+
+        fn view(value: f64, dragging: bool) -> Element<'static, Event> {
+            iced::widget::responsive(move |_| {
+                iced::widget::tooltip(
+                    tracked_slider(
+                        iced::widget::slider(0.0..=100.0, value, Event::Changed)
+                            .width(100)
+                            .on_release(Event::DragEnded),
+                        dragging,
+                        |event| event,
+                    ),
+                    iced::widget::text("0:00"),
+                    iced::widget::tooltip::Position::FollowCursor,
+                )
+                .delay(std::time::Duration::ZERO)
+            })
+            .into()
+        }
+
+        fn new() -> Self {
+            let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+                renderer::Settings::default(),
+                Some("tiny-skia"),
+            ))
+            .expect("software renderer");
+            let ui = iced_runtime::UserInterface::build(
+                Self::view(50.0, false),
+                Self::BOUNDS,
+                iced_runtime::user_interface::Cache::new(),
+                &mut renderer,
+            );
+            Self {
+                ui: Some(ui),
+                renderer,
+                messages: Bus::new(),
+            }
+        }
+
+        fn rebuild(&mut self, value: f64, dragging: bool) {
+            let cache = self.ui.take().unwrap().into_cache();
+            self.ui = Some(iced_runtime::UserInterface::build(
+                Self::view(value, dragging),
+                Self::BOUNDS,
+                cache,
+                &mut self.renderer,
+            ));
+        }
+
+        fn update(&mut self, event: iced::Event, x: f32) {
+            let _ = self.ui.as_mut().unwrap().update(
+                &iced::window::Headless,
+                &Waker::noop(),
+                &[event],
+                mouse::Cursor::Available(Point::new(x, 8.0)),
+                &mut self.renderer,
+                &mut self.messages,
+            );
+        }
+
+        fn take(&mut self) -> Vec<Event> {
+            self.messages.drain().map(|(event, _)| event).collect()
+        }
+    }
+
     fn press() -> iced::Event {
         iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
     }
@@ -451,5 +545,32 @@ mod tests {
                 vec![Event::DragStarted, Event::Changed(70.0), Event::DragEnded]
             );
         }
+    }
+
+    #[test]
+    fn cold_click_through_responsive_tooltip_commits_release() {
+        let mut runtime = Runtime::new();
+        // The zero-delay tooltip opens on press and invalidates layout; the
+        // responsive closure rebuilds the slider while DragStarted is still
+        // pending, so the relayout must not cancel the drag.
+        runtime.update(press(), 75.0);
+        runtime.update(release(), 75.0);
+        assert_eq!(
+            runtime.take(),
+            vec![Event::DragStarted, Event::Changed(75.0), Event::DragEnded]
+        );
+    }
+
+    #[test]
+    fn cancellation_before_acknowledgement_is_rendered_discards_preview() {
+        let mut runtime = Runtime::new();
+        runtime.update(press(), 75.0);
+        // The application processes DragStarted and cancels in the same batch;
+        // a view with dragging = true is never built.
+        runtime.take();
+        runtime.rebuild(50.0, false);
+        runtime.update(move_to(90.0), 90.0);
+        runtime.update(release(), 90.0);
+        assert_eq!(runtime.take(), Vec::<Event>::new());
     }
 }

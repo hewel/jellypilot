@@ -10,6 +10,8 @@ All notable changes to JellyPilot are documented in this file.
 - Reworked all eight Settings sections to the accepted Paper layout, with the same sidebar-and-content layout at every window size and in both App Modes, a reachable Close action, and consistent switches across the app while retaining existing settings and save behavior.
 
 ### Fixed
+- Fixed embedded timeline clicks losing their seek submission when the hover tooltip triggers an immediate relayout.
+- Prevented click-to-activate video-background presses from toggling playback while preserving first-click player controls and captured menu interactions.
 - Prevented stale or detached controller results from adopting playback metadata or completing the embedded player's stop-before-return navigation.
 - Preserved the latest Playback Target name during startup and serial re-registration, and rejected obsolete registration results after a reconnect.
 - Removed the embedded player's upward queue chevron for movies while retaining it for episode queues.
