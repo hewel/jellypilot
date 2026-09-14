@@ -23,6 +23,7 @@ const DECODER_IMPORT_EXTENSIONS: &[&std::ffi::CStr] = &[
 /// context moves. They describe device creation, never a supported-feature query.
 pub struct DeviceContext {
     pub(crate) adapter: wgpu::Adapter,
+    surface_format: wgpu::TextureFormat,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     queue_lock: Arc<QueueLock>,
@@ -42,6 +43,12 @@ impl DeviceContext {
         &self.adapter
     }
 
+    /// Presentation format shared by iced's pipelines and every window surface.
+    /// MPV's producer images and private sampled texture remain RGB10A2.
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
     /// Builds iced's engine with this device's mandatory queue synchronization.
     ///
     /// # Safety
@@ -59,7 +66,7 @@ impl DeviceContext {
             &self.adapter,
             self.device.clone(),
             self.queue.clone(),
-            wgpu::TextureFormat::Rgb10a2Unorm,
+            self.surface_format,
             antialiasing,
             shell,
             self.queue_lock.clone(),
@@ -105,12 +112,15 @@ impl DeviceContext {
         let adapter =
             wgpu::util::initialize_adapter_from_env_or_default(instance, Some(surface)).await?;
         let capabilities = surface.get_capabilities(&adapter);
-        if !capabilities
-            .formats
-            .contains(&wgpu::TextureFormat::Rgb10a2Unorm)
-        {
-            return Err("the Vulkan surface does not support native Rgb10a2Unorm output".into());
-        }
+        let surface_format =
+            select_surface_format(&capabilities.formats, cfg!(target_os = "windows")).ok_or_else(
+                || {
+                    Error::from(format!(
+                        "the Vulkan surface has no supported SDR output format; available: {:?}",
+                        capabilities.formats
+                    ))
+                },
+            )?;
         let format = adapter.get_texture_format_features(wgpu::TextureFormat::Rgb10a2Unorm);
         if !format.allowed_usages.contains(
             wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -284,6 +294,7 @@ impl DeviceContext {
         let (device, queue) = unsafe { adapter.create_device_from_hal(open_device, &desc)? };
         Ok(Self {
             adapter,
+            surface_format,
             device,
             queue,
             queue_lock: Arc::new(QueueLock::new()),
@@ -295,5 +306,48 @@ impl DeviceContext {
 
     pub(crate) fn features(&self) -> *const vk::PhysicalDeviceFeatures2<'static> {
         &*self.enabled_features
+    }
+}
+
+fn select_surface_format(
+    formats: &[wgpu::TextureFormat],
+    allow_8bit: bool,
+) -> Option<wgpu::TextureFormat> {
+    // mpv supplies gamma-encoded SDR values. An sRGB attachment would encode
+    // them again; use only UNORM targets, preserving the existing color path.
+    let preferred = [
+        wgpu::TextureFormat::Rgb10a2Unorm,
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ];
+    preferred
+        .into_iter()
+        .take(if allow_8bit { 3 } else { 1 })
+        .find(|format| formats.contains(format))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_surface_format;
+    use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgb10a2Unorm};
+
+    #[test]
+    fn windows_surface_without_ten_bit_output_can_start_without_double_encoding() {
+        // Drivers commonly advertise the sRGB view first. It must not win over
+        // the UNORM view when presenting mpv's already gamma-encoded pixels.
+        let formats = [Bgra8UnormSrgb, Bgra8Unorm];
+        assert_eq!(select_surface_format(&formats, true), Some(Bgra8Unorm));
+        assert_eq!(select_surface_format(&formats, false), None);
+    }
+
+    #[test]
+    fn driver_order_does_not_downgrade_supported_ten_bit_output() {
+        let formats = [Bgra8Unorm, Rgb10a2Unorm];
+        assert_eq!(select_surface_format(&formats, true), Some(Rgb10a2Unorm));
+    }
+
+    #[test]
+    fn srgb_only_surface_is_rejected_instead_of_changing_video_gamma() {
+        assert_eq!(select_surface_format(&[Bgra8UnormSrgb], true), None);
     }
 }

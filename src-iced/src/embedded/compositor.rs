@@ -88,6 +88,15 @@ impl graphics::Compositor for Compositor {
         .await
         .map_err(unavailable)?,
     );
+    let surface_format = context.surface_format();
+    tracing::info!(?surface_format, "Embedded MPV presentation format selected");
+    if surface_format != wgpu::TextureFormat::Rgb10a2Unorm {
+      tracing::warn!(
+        ?surface_format,
+        available_formats = ?surface.get_capabilities(context.adapter()).formats,
+        "Embedded MPV uses 8-bit SDR presentation; internal video textures remain 10-bit"
+      );
+    }
     let engine = (options.engine_factory.create_engine)(
       &context,
       settings
@@ -159,13 +168,15 @@ impl graphics::Compositor for Compositor {
         if surface
           .get_capabilities(self.context.adapter())
           .formats
-          .contains(&wgpu::TextureFormat::Rgb10a2Unorm) =>
+          .contains(&self.context.surface_format()) =>
       {
         Some(surface)
       }
-      Ok(_) => {
+      Ok(surface) => {
         tracing::error!(
-          "Embedded MPV window does not support Rgb10a2Unorm; refusing 8-bit fallback"
+          required_format = ?self.context.surface_format(),
+          available_formats = ?surface.get_capabilities(self.context.adapter()).formats,
+          "Embedded MPV window does not support the renderer's selected presentation format"
         );
         None
       }
@@ -201,7 +212,7 @@ impl graphics::Compositor for Compositor {
       native,
       &wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: wgpu::TextureFormat::Rgb10a2Unorm,
+        format: self.context.surface_format(),
         width,
         height,
         present_mode: wgpu::PresentMode::AutoVsync,
@@ -215,7 +226,10 @@ impl graphics::Compositor for Compositor {
   fn information(&self) -> compositor::Information {
     compositor::Information {
       adapter: self.context.adapter().get_info().name,
-      backend: "Vulkan · embedded MPV · RGB10A2 SDR".into(),
+      backend: format!(
+        "Vulkan · embedded MPV · {:?} SDR",
+        self.context.surface_format()
+      ),
     }
   }
 
@@ -280,7 +294,7 @@ impl graphics::Compositor for Compositor {
       // Renderer owns the submit guard; an outer guard here would deadlock.
       renderer.present(
         Some(background),
-        wgpu::TextureFormat::Rgb10a2Unorm,
+        self.context.surface_format(),
         &view,
         viewport,
       );
