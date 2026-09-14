@@ -262,6 +262,12 @@ On Windows, the library is `lib/jellypilot/libmpv-2.dll` and the baseline comes 
 The Windows baseline requests `hwdec=d3d11va-copy`: hardware-decoded frames pass through
 system memory before upload to the existing Vulkan renderer. Unsupported codecs or devices
 can fall back to software decoding. Start it with `bun run task iced run --release --embedded`.
+Windows presentation prefers `Rgb10a2Unorm`, then falls back to `Bgra8Unorm` or
+`Rgba8Unorm` if the window surface cannot present 10-bit output. The mpv producer and
+private video texture remain 10-bit; final UI composition and presentation use 8-bit targets.
+The selected format is recorded in startup logs, with a warning on 8-bit fallback.
+sRGB attachments are excluded to avoid encoding mpv's gamma-encoded SDR pixels twice.
+Linux continues to require `Rgb10a2Unorm` presentation (ADR 0041).
 The MPV build task stages the main DLL; use the Windows packaging task below to collect
 its runtime dependencies for distribution. Changing the source baseline requires restaging
 it (the MPV build task does this); an already running player keeps its startup configuration.
