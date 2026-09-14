@@ -21,6 +21,8 @@ icons = [
 ]
 
 [nsis]
+# Windows releases use `bun run task package windows --runtime-dir <UCRT64/bin>`.
+# It adds verified embedded resources to this shared config before invoking NSIS.
 installMode = "currentUser"
 
 [deb]

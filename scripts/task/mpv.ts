@@ -168,6 +168,16 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
         })).stdout;
   const libraryPath = path.join(MPV_ARTIFACT_ROOT, LIBRARY);
   const baselinePath = path.join(MPV_ARTIFACT_ROOT, BASELINE);
+  const notices: Record<string, string> = {};
+  if (process.platform === 'win32') {
+    for (const name of ['Copyright', 'LICENSE.GPL', 'LICENSE.LGPL']) {
+      const result = yield* runCommand({
+        ...command('git', ['-C', checkout, 'show', `${sourcePin.revision}:${name}`]),
+        buffered: true,
+      });
+      notices[`share/jellypilot/licenses/mpv/${name}`] = result.stdout;
+    }
+  }
   yield* buildIo('stage artifacts', async () => {
     await mkdir(path.dirname(libraryPath), { recursive: true });
     await mkdir(path.dirname(baselinePath), { recursive: true });
@@ -185,6 +195,16 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
     const baselineHash = createHash('sha256')
       .update(await readFile(baselinePath))
       .digest('hex');
+    const artifacts: Record<string, { sha256: string }> = {
+      [LIBRARY]: { sha256: libraryHash },
+      [BASELINE]: { sha256: baselineHash },
+    };
+    for (const [relative, content] of Object.entries(notices)) {
+      const destination = path.join(MPV_ARTIFACT_ROOT, relative);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, content);
+      artifacts[relative] = { sha256: createHash('sha256').update(content).digest('hex') };
+    }
     await writeFile(
       path.join(MPV_ARTIFACT_ROOT, 'manifest.json'),
       `${JSON.stringify(
@@ -196,10 +216,7 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
           tools,
           packages,
           meson: introspection,
-          artifacts: {
-            [LIBRARY]: { sha256: libraryHash },
-            [BASELINE]: { sha256: baselineHash },
-          },
+          artifacts,
         },
         null,
         2,

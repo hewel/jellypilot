@@ -102,8 +102,54 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-packager@0.11.8
+      - name: Set up Windows MPV build dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-libplacebo
+            mingw-w64-ucrt-x86_64-libass
+            mingw-w64-ucrt-x86_64-luajit
+            mingw-w64-ucrt-x86_64-vulkan-headers
+            mingw-w64-ucrt-x86_64-vulkan-loader
+      - name: Build pinned Windows MPV
+        if: runner.os == 'Windows'
+        id: windows-mpv
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          bun run task mpv build
+          echo "runtime-dir=$(cygpath -w "$MINGW_PREFIX/bin")" >> "$GITHUB_OUTPUT"
+      - name: Package Windows with embedded runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: bun run task package windows --runtime-dir '${{ steps.windows-mpv.outputs.runtime-dir }}'
       - name: Build ${{ matrix.format }} package
+        if: runner.os != 'Windows'
         run: cargo packager --config Packager.toml --formats ${{ matrix.format }}
+      - name: Verify installed Windows embedded payload
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem target/release/bundle/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer' }
+          $destination = Join-Path $env:RUNNER_TEMP 'jellypilot-install-check'
+          $installer = Start-Process $installers[0].FullName -ArgumentList "/S /NS /D=$destination" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "Installer failed: $($installer.ExitCode)" }
+          ./packaging/windows/verify-package.ps1 -Root $destination -ExpectedExecutable target/release/jellypilot.exe |
+            Tee-Object -FilePath target/windows-package-verification.json
       - name: Upload ${{ matrix.format }} package
         uses: actions/upload-artifact@v4
         with:

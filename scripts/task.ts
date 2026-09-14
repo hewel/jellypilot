@@ -12,6 +12,7 @@ import { runNativeRegression } from './task/native-regression';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
 import { runRust } from './task/rust';
+import { packageWindows } from './task/windows-package';
 
 const program = Effect.try({
   try: () => parseCli(process.argv.slice(2)),
@@ -41,6 +42,9 @@ const program = Effect.try({
         runIced(smoke, release, embedded, process.env),
       ),
       Match.when({ _tag: 'mpvBuild' }, ({ source }) => buildMpv(source)),
+      Match.when({ _tag: 'packageWindows' }, ({ runtimeDirectory }) =>
+        packageWindows(runtimeDirectory, process.env),
+      ),
       Match.when({ _tag: 'icedHot' }, () => runHot(process.env)),
       Match.when({ _tag: 'icedBuild' }, ({ release }) => buildIced(release)),
       Match.when({ _tag: 'icedPrepare' }, ({ source }) => prepareIced(source)),

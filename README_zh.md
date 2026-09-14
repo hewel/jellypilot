@@ -208,7 +208,19 @@ bun run task iced run
 
 Windows 默认仍为外部播放，也可使用固定 DLL 开启内嵌播放。Windows 构建生成 `lib/jellypilot/libmpv-2.dll`，基线来自 `tools/embedded-mpv/baseline-windows.conf`；任务会追加 `source.json` 中的 `windowsMesonOptions`，在配置阶段拒绝缺少 D3D 硬解或 Lua 支持的构建。基线默认请求 `hwdec=d3d11va-copy`：GPU 解码后将帧回读至系统内存，再上传到现有 Vulkan 渲染器；不支持的编码或设备可能回退软解。通过 `bun run task iced run --release --embedded` 启动。
 
-分发 Windows 产物时需将运行依赖 DLL 放在 libmpv 旁边，构建任务不会自动收集这些 DLL。修改源码基线后需要重新部署配置（MPV 构建任务会完成此步骤），已运行的播放器仍使用启动时的配置。验收时应在播放中确认实际 `hwdec-current=d3d11va-copy`；目前 `iced regress` 运行器仍仅支持 Linux。
+MPV 构建任务只部署主 DLL；分发 Windows 安装包时使用下面的打包任务收集运行依赖。修改源码基线后需要重新部署配置（MPV 构建任务会完成此步骤），已运行的播放器仍使用启动时的配置。验收时应在播放中确认实际 `hwdec-current=d3d11va-copy`；目前 `iced regress` 运行器仍仅支持 Linux。
+
+先在 MSYS2 UCRT64 环境构建 MPV，再在具备 Rust/MSVC 和 Bun 的 Windows 原生终端运行：
+
+```powershell
+bun run task package windows --runtime-dir C:\msys64\ucrt64\bin
+```
+
+如果没有可用的 `cargo-packager` 0.11.8，任务会将该固定版本安装到 `target/tools`，不替换全局已有版本。
+
+目录必须来自编译 MPV 的同一套 UCRT64 环境。任务会校验暂存 MPV 的固定修订版本与产物哈希，递归收集 x64 DLL 依赖至全新目录，附带 MPV/MSYS2 许可证与清单，再构建启动器及 `target/release/bundle` 下的 NSIS 安装包。启动器所需 VC 运行库会从已安装的 Visual Studio x64 redistributable 目录收集并放在 EXE 旁边；缺少依赖会阻止打包。版本等元数据仍来自根 `Packager.toml`，Windows 资源由任务追加，不影响 Linux/macOS。直接运行 `cargo packager --config Packager.toml` 不会加入 Windows embedded 资源。
+
+发布流程会在临时 Windows runner 上安装并检查安装包，验证哈希、固定 host 导出符号、基线选项，以及移除构建工具 PATH 后的 libmpv 无界面初始化。这不代表 GPU 播放验收：真人仍需在 Windows 桌面进入“设置 → 播放”，选择内嵌 MPV、重启、播放视频，并确认实际 `hwdec-current=d3d11va-copy`。本地可用 7-Zip 解包 NSIS，再在独立 PowerShell 进程运行 `packaging/windows/verify-package.ps1 -Root <解包目录> -ExpectedExecutable target/release/jellypilot.exe`，避免覆盖已有安装。
 
 本地开发运行时会优先加载暂存目录下的内嵌组件；亦支持通过 `JELLYPILOT_LIBMPV` 与 `JELLYPILOT_MPV_BASELINE` 环境变量覆盖。打包后的可执行文件会按相对路径自动加载附带的动态库。当硬件与驱动支持时，Linux 内嵌播放器通过共享 Vulkan 设备的 DMA-BUF 拓展实现原生 VAAPI 视频硬解。macOS 暂不支持内嵌播放。
 

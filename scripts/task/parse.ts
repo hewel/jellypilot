@@ -26,6 +26,7 @@ export type TaskCommand =
       readonly embedded: boolean;
     }
   | { readonly _tag: 'mpvBuild'; readonly source: string | null }
+  | { readonly _tag: 'packageWindows'; readonly runtimeDirectory: string }
   | { readonly _tag: 'icedHot' }
   | { readonly _tag: 'icedPrepare'; readonly source: string | null }
   | { readonly _tag: 'icedBuild'; readonly release: boolean }
@@ -158,6 +159,20 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     return { _tag: command, fix };
   }
   if (command === 'rust') return parseRust(args);
+  if (command === 'package') {
+    const [platform, option, directory, ...extra] = args;
+    if (
+      platform !== 'windows' ||
+      option !== '--runtime-dir' ||
+      directory === undefined ||
+      directory.trim() === '' ||
+      directory.startsWith('-') ||
+      extra.length > 0
+    ) {
+      throw new Error('Expected package windows --runtime-dir <MSYS2 UCRT64 bin directory>.');
+    }
+    return { _tag: 'packageWindows', runtimeDirectory: directory };
+  }
   if (command === 'mpv') {
     const [action, ...rest] = args;
     if (action !== 'build') throw new Error('Expected mpv build [--source <checkout>].');

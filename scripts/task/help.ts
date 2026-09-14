@@ -35,6 +35,12 @@ Embedded mpv dependency (Linux/Windows Vulkan):
     Stages target/embedded-mpv/{lib/jellypilot/libmpv.so|libmpv-2.dll,share/jellypilot/mpv-baseline.conf,manifest.json}.
     Source/options pinned; host dependency versions recorded, not bit-reproducible.
 
+Windows release package:
+  package windows --runtime-dir <MSYS2 UCRT64 bin directory>
+    Requires a fresh mpv build; installs cargo-packager 0.11.8 in target/tools if unavailable.
+    Collects the DLL dependency closure and licenses, builds the release launcher,
+    and packages NSIS with embedded resources. Output: target/release/bundle/*.exe.
+
 Utilities:
   api
   monitor --pid <pid> --out <target/path> [--samples 301] [--interval-ms 1000] [--label <text>]

@@ -262,11 +262,40 @@ On Windows, the library is `lib/jellypilot/libmpv-2.dll` and the baseline comes 
 The Windows baseline requests `hwdec=d3d11va-copy`: hardware-decoded frames pass through
 system memory before upload to the existing Vulkan renderer. Unsupported codecs or devices
 can fall back to software decoding. Start it with `bun run task iced run --release --embedded`.
-Stage the DLL's runtime dependencies beside it when distributing the build; the build task
-does not collect those DLLs automatically. Changing the source baseline requires restaging
+The MPV build task stages the main DLL; use the Windows packaging task below to collect
+its runtime dependencies for distribution. Changing the source baseline requires restaging
 it (the MPV build task does this); an already running player keeps its startup configuration.
 Confirm `hwdec-current=d3d11va-copy` during playback before claiming hardware decoding;
 the current `iced regress` runner remains Linux-only.
+
+For a Windows installer, build MPV in MSYS2 UCRT64, then run from a native Windows shell
+with Rust/MSVC and Bun available:
+
+```powershell
+bun run task package windows --runtime-dir C:\msys64\ucrt64\bin
+```
+
+If `cargo-packager` 0.11.8 is unavailable, the task installs that exact version under
+`target/tools` without replacing a globally installed version.
+
+Use the UCRT64 directory from the same environment that built MPV. The task verifies the
+staged MPV revision and artifact hashes, collects the recursive x64 DLL dependency closure
+into a fresh directory, includes MPV/MSYS2 license notices and manifests, then builds the
+launcher and NSIS installer under `target/release/bundle`. The launcher's VC runtime DLLs are
+collected from the installed Visual Studio x64 redistributable directory and placed beside
+the EXE. Missing dependencies fail packaging.
+The shared `Packager.toml` remains the metadata authority; the task adds Windows resources
+without affecting Linux/macOS packages. Direct `cargo packager --config Packager.toml` does
+not add Windows embedded resources.
+
+The release workflow installs and checks the NSIS payload on a disposable Windows runner,
+including hashes, pinned host exports, baseline options, and headless libmpv initialization
+without the build toolchain on PATH. This gate does not verify GPU playback. On a real Windows
+desktop, select Embedded MPV in Settings → Playback, restart, play a video, and confirm
+`hwdec-current=d3d11va-copy`. For local package inspection without installing over an existing
+app, extract NSIS with 7-Zip and run `packaging/windows/verify-package.ps1 -Root <extracted-dir>
+-ExpectedExecutable target/release/jellypilot.exe` in a separate PowerShell process.
+
 The manifest records source, configuration, tool/dependency versions and artifact hashes.
 Source and options are pinned; host libraries/compiler and auto-selected dependencies are
 recorded, **not pinned**, so this is not a bit-reproducible or self-contained distribution.

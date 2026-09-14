@@ -42,6 +42,26 @@ describe('parseCli', () => {
     }
   });
 
+  test('requires an explicit Windows runtime directory without accepting extra package options', () => {
+    expect(
+      parseCli(['package', 'windows', '--runtime-dir', String.raw`C:\msys64\ucrt64\bin`]),
+    ).toEqual({
+      _tag: 'packageWindows',
+      runtimeDirectory: 'C:\\msys64\\ucrt64\\bin',
+    });
+    for (const args of [
+      [],
+      ['windows'],
+      ['windows', '--runtime-dir'],
+      ['windows', '--runtime-dir', ' '],
+      ['windows', '--runtime-dir', '--release'],
+      ['windows', '--runtime-dir', 'bin', '--runtime-dir', 'other'],
+      ['linux', '--runtime-dir', 'bin'],
+    ]) {
+      expect(() => parseCli(['package', ...args])).toThrow('Expected package windows');
+    }
+  });
+
   test('rejects GPU regression without media before dispatching preparation or startup', () => {
     for (const args of [
       ['gpu'],
