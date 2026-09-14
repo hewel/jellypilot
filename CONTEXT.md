@@ -135,8 +135,8 @@ The Sidebar's account surface for the active connection and saved logins, includ
 _Avoid_: Server cluster, member directory
 
 **Settings Modal**:
-The closable settings layer presented over the current shell context, centered in wide windows and filling narrow windows. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
-_Avoid_: Settings page, settings destination, dialog popup, drawer, click-outside-to-close
+The closable settings layer centered over the current shell context, using the same navigation-and-content organization in every window size and App Mode. The Settings Modal is dismissed through its Close action, the Esc key after higher-priority interactions, or a press on its exposed backdrop; it is never a navigation destination or stack entry.
+_Avoid_: Settings page, settings destination, dialog popup, drawer
 
 **UI Language**:
 The language used for JellyPilot-owned interface text in both App Modes, including the Settings Modal, account flows, in-app feedback, and tray menus. UI Language is independent of media-server content language and audio or subtitle preferences.

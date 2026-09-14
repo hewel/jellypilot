@@ -17,6 +17,7 @@ pub mod poster_card;
 pub mod rounded_image;
 pub mod scrollable;
 pub mod search_field;
+pub mod settings;
 pub mod sidebar;
 pub mod skeleton;
 pub mod switch;

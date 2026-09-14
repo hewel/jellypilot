@@ -19,7 +19,6 @@ common-next = Next
 common-previous = Previous
 common-remove = Remove
 common-add = Add
-common-on = On
 common-off = Off
 common-yes = Yes
 common-no = No

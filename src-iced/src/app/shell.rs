@@ -756,6 +756,12 @@ pub(crate) fn navigate_back(state: &mut State) -> Task<Message> {
 pub(crate) fn open_settings(state: &mut State) {
   state.shell.account_popover_open = false;
   state.shell.compact_search_open = false;
+  state.settings.view.shortcut_capture = None;
+  state.settings.view.intro_menu_open = false;
+  state.settings.view.subtitle_menu_open = false;
+  state.settings.view.diagnostic_level_menu_open = false;
+  state.settings.view.diagnostic_category_menu_open = false;
+  state.settings.view.language_menu_open = false;
   state.shell.open_settings();
 }
 
@@ -766,6 +772,7 @@ pub(crate) fn close_settings(state: &mut State) {
   state.settings.view.subtitle_menu_open = false;
   state.settings.view.diagnostic_level_menu_open = false;
   state.settings.view.diagnostic_category_menu_open = false;
+  state.settings.view.language_menu_open = false;
 }
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
   let destination = state.shell.destination.clone();

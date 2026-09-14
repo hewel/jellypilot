@@ -793,26 +793,28 @@ fn embedded_identity<'a>(
     None => now_playing.item.title.as_str(),
   };
   let caption = embedded_caption(state, now_playing);
+  let has_queue = !matches!(state.playback.queue, QueueState::Unavailable);
   let title = control_button_content(
     move |_| {
-      row![
-        ellipsis_text(title)
-          .font(iced::Font {
-            weight: iced::font::Weight::Semibold,
-            ..HEADING_FONT
-          })
-          .size(14)
-          .line_height(iced::Pixels(20.0))
-          .color(palette.text.heading),
-        icon_with_color(
+      let mut content = row![ellipsis_text(title)
+        .font(iced::Font {
+          weight: iced::font::Weight::Semibold,
+          ..HEADING_FONT
+        })
+        .size(14)
+        .line_height(iced::Pixels(20.0))
+        .color(palette.text.heading),];
+      if has_queue {
+        content = content.push(icon_with_color(
           Icon::ChevronUp,
           IconSize::Custom(14.0),
-          palette.text.metadata
-        ),
-      ]
-      .spacing(TOKENS.spacing.s1_5)
-      .align_y(Alignment::Center)
-      .into()
+          palette.text.metadata,
+        ));
+      }
+      content
+        .spacing(TOKENS.spacing.s1_5)
+        .align_y(Alignment::Center)
+        .into()
     },
     if state.playback.queue_menu_open {
       ButtonVariant::TonalActive
@@ -825,7 +827,7 @@ fn embedded_identity<'a>(
   .width(Length::Shrink)
   .min_height(28.0)
   .on_press_maybe(
-    (!state.playback.view.busy && !matches!(state.playback.queue, QueueState::Unavailable))
+    (!state.playback.view.busy && has_queue)
       .then_some(Message::Playback(PlaybackMessage::QueueMenuToggled)),
   );
   let identity = column![
@@ -1965,6 +1967,41 @@ mod tests {
       message,
       Message::Playback(PlaybackMessage::AudioMenuToggled)
     )));
+  }
+
+  #[tokio::test]
+  async fn embedded_queue_chevron_is_absent_for_movies_and_retained_for_episodes() {
+    use iced::advanced::{layout, renderer::Headless, widget::Tree, Layout};
+    use iced::Size;
+
+    fn has_chevron(layout: Layout<'_>) -> bool {
+      layout.bounds().size() == Size::new(14.0, 14.0) || layout.children().any(has_chevron)
+    }
+
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut state = State::boot(true);
+    let mut playing = test_now_playing();
+    for (item_type, queue, visible) in [
+      ("Movie", QueueState::Unavailable, false),
+      ("Episode", QueueState::Ready(Vec::new()), true),
+    ] {
+      playing.item.item_type = item_type.to_owned();
+      state.playback.queue = queue;
+      let mut identity = embedded_identity(&state, &playing, false);
+      let mut tree = Tree::new(&identity);
+      tree.diff(&mut identity);
+      let node = identity.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(500.0, 100.0)),
+      );
+      assert_eq!(has_chevron(Layout::new(&node)), visible, "{item_type}");
+    }
   }
 
   #[tokio::test]

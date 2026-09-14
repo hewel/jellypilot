@@ -7,10 +7,13 @@ All notable changes to JellyPilot are documented in this file.
 ### Changed
 - Centralized Playback Session acceptance and lifecycle projections; queued replacements invalidate transient player controls immediately, while background refreshes remain non-busy.
 - Unified remote Playback Target resource cleanup so disconnect, profile switching, failures, and quit join outstanding work instead of racing separate teardown paths.
+- Reworked all eight Settings sections to the accepted Paper layout, with the same sidebar-and-content layout at every window size and in both App Modes, a reachable Close action, and consistent switches across the app while retaining existing settings and save behavior.
 
 ### Fixed
 - Prevented stale or detached controller results from adopting playback metadata or completing the embedded player's stop-before-return navigation.
 - Preserved the latest Playback Target name during startup and serial re-registration, and rejected obsolete registration results after a reconnect.
+- Removed the embedded player's upward queue chevron for movies while retaining it for episode queues.
+- Kept Settings content within the available right-pane width instead of clipping trailing controls behind horizontal scrolling.
 
 ## [2.2.0] - 2026-09-10
 

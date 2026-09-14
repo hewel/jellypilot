@@ -52,7 +52,20 @@ fn update_settings(
       surface.view.subtitle_menu_open = false;
       surface.view.diagnostic_level_menu_open = false;
       surface.view.diagnostic_category_menu_open = false;
+      surface.view.language_menu_open = false;
       Task::none()
+    }
+    SettingsMessage::LanguageMenuToggled => {
+      surface.view.language_menu_open = !surface.view.language_menu_open;
+      Task::none()
+    }
+    SettingsMessage::LanguageMenuDismissed => {
+      surface.view.language_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::UiLanguageSelected(preference) => {
+      surface.view.language_menu_open = false;
+      Task::done(Message::UiLanguageSelected(preference))
     }
     SettingsMessage::MpvPathChanged(value) => {
       surface.view.mpv_path_input = value;

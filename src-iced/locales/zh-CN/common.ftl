@@ -19,7 +19,6 @@ common-next = 下一项
 common-previous = 上一项
 common-remove = 移除
 common-add = 添加
-common-on = 开启
 common-off = 关闭
 common-yes = 是
 common-no = 否

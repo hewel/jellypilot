@@ -12,21 +12,21 @@ use iced::widget::{
 use iced::{Alignment, Background, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
-use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
+use jellypilot_ui::fonts::{BODY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{focus_tooltip, popover, tooltip, PopoverOptions, TooltipOptions};
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{SETTINGS_MODAL_HEIGHT, SETTINGS_MODAL_WIDTH, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::escape_input::clear_on_escape;
 use jellypilot_ui::widgets::inert::inert;
 use jellypilot_ui::widgets::search_field::search_field;
-use jellypilot_ui::widgets::sidebar;
 use jellypilot_ui::widgets::skeleton::skeleton_block;
+use jellypilot_ui::widgets::{settings as settings_style, sidebar};
 pub(crate) const SIDEBAR_WIDTH: f32 = 220.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
 /// Width of the two shell hairlines (sidebar edge and player-bar edge).
@@ -126,13 +126,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
   layers.width(Fill).height(Fill).into()
 }
 
-/// Control-Only shell: no sidebar, no hairlines, no player bar — the compact
-/// full-window Now Playing view, or full-window Settings.
+/// Control-Only shell: full-window Now Playing without browser chrome,
+/// with the same Settings dialog used by the full shell.
 fn control_only_view(state: &State) -> Element<'_, Message> {
-  let content: Element<'_, Message> = if state.shell.settings_open {
-    settings_modal(state)
+  let player = player::full(state);
+  let content = if state.shell.settings_open {
+    stack![inert(player), settings_modal(state)]
   } else {
-    player::full(state)
+    stack![player]
   };
   container(content)
     .width(Fill)
@@ -480,54 +481,19 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
 
 fn settings_modal(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let close_button = control_button(Some(Icon::Close), None, ButtonVariant::Tonal)
-    .padding([6, 10])
-    .on_press(Message::Settings(SettingsMessage::Close));
-
-  let header = row![
-    column![
-      text(state.t("common-settings"))
-        .font(DISPLAY_FONT)
-        .size(28)
-        .color(palette.text.heading),
-      text(state.t("shell-settings-save-hint"))
-        .size(13)
-        .color(palette.text.body),
-    ]
-    .spacing(TOKENS.spacing.s0_5),
-    space::horizontal(),
-    tooltip(
-      close_button,
-      state.t("common-close"),
-      TooltipOptions::default()
-    ),
-  ]
-  .width(Fill)
-  .align_y(Alignment::Center);
-
-  let modal_content = column![header, settings::view(state),]
-    .spacing(TOKENS.spacing.s4)
-    .padding([TOKENS.spacing.s4, TOKENS.spacing.s6])
-    .width(Fill)
-    .height(Fill);
-
-  let narrow = state.app_mode() == AppMode::ControlOnly
-    || SizeClass::from_width(state.shell.window_size.width) == SizeClass::Compact;
-  if narrow {
-    return container(modal_content)
-      .width(Fill)
-      .height(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-      .into();
-  }
+  let modal_content = container(settings::view(state)).width(Fill).height(Fill);
 
   let dialog = container(super::modal_dismiss::dismissible(
-    container(modal_content)
-      .width(Length::Fixed(896.0))
-      .height(Length::Fixed(
-        (state.shell.window_size.height - 48.0).clamp(0.0, 620.0),
+    modal_content
+      .width(Length::Fixed(
+        (state.shell.window_size.width - 48.0).clamp(0.0, SETTINGS_MODAL_WIDTH),
       ))
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Dialog)),
+      .height(Length::Fixed(
+        (state.shell.window_size.height - 48.0).clamp(0.0, SETTINGS_MODAL_HEIGHT),
+      ))
+      .padding(1)
+      .clip(true)
+      .style(settings_style::dialog),
     Message::Settings(SettingsMessage::Close),
   ))
   .width(Fill)

@@ -3182,10 +3182,22 @@ mod tests {
       "add-account",
       "confirmation",
       "compact-settings",
+      "control-only-settings",
     ] {
       let mut state = test_state();
+      let (mut settings, _guard) = isolated_settings("modal-dismissal");
+      if kind == "control-only-settings" {
+        settings
+          .set_app_mode(jellypilot_core::config::AppMode::ControlOnly)
+          .unwrap();
+        state.full = None;
+        state.shell.destination = Destination::NowPlaying;
+      }
+      state.kernel.settings = settings;
       state.kernel.connection = ConnectionPhase::Connected;
-      let bounds = if kind == "compact-settings" {
+      let bounds = if kind == "control-only-settings" {
+        crate::app::shell::CONTROL_ONLY_WINDOW_SIZE
+      } else if kind == "compact-settings" {
         Size::new(600.0, 600.0)
       } else {
         Size::new(1400.0, 900.0)
@@ -3291,7 +3303,7 @@ mod tests {
       );
       assert_eq!(
         messages.iter().filter(|message| dismisses(message)).count(),
-        usize::from(kind != "compact-settings"),
+        1,
         "touch backdrop: {kind}"
       );
       messages.clear();
@@ -3307,7 +3319,7 @@ mod tests {
       );
       drop(ui);
       match kind {
-        "settings" => assert!(matches!(
+        "settings" | "compact-settings" | "control-only-settings" => assert!(matches!(
           messages.as_slice(),
           [Message::Settings(SettingsMessage::Close)]
         )),
@@ -3319,12 +3331,15 @@ mod tests {
           messages.as_slice(),
           [Message::Account(accounts::Message::CancelConfirmation)]
         )),
-        _ => assert!(messages.is_empty(), "fullscreen Settings has no backdrop"),
+        _ => unreachable!("covered modal kind"),
       }
       for message in messages {
         drop(update(&mut state, message));
       }
-      assert_eq!(state.shell.settings_open, kind != "settings");
+      assert_eq!(
+        state.shell.settings_open,
+        matches!(kind, "add-account" | "confirmation")
+      );
       assert!(!accounts::blocking_modal(&state.accounts));
     }
   }

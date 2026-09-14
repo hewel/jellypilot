@@ -487,6 +487,12 @@ pub const SIDEBAR_INSET_RADIUS: f32 = SIDEBAR_CONTROL_RADIUS - 3.0;
 /// Outer radius of the Sidebar account menu in the Paper Home composition.
 pub const ACCOUNT_POPOVER_RADIUS: f32 = 16.0;
 
+/// Settings panel target size; constrained to the available window by the shell.
+pub const SETTINGS_MODAL_WIDTH: f32 = 1080.0;
+pub const SETTINGS_MODAL_HEIGHT: f32 = 700.0;
+/// Paper's Settings container radius, scoped independently of other dialogs.
+pub const SETTINGS_MODAL_RADIUS: f32 = 16.0;
+
 /// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
 /// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
 /// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.

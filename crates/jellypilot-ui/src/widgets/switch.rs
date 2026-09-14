@@ -4,7 +4,7 @@ use iced::widget::{button, container, space};
 use iced::{Alignment, Border, Length, Theme};
 
 use crate::icons::IconControlState;
-use crate::tokens::{palette, TOKENS};
+use crate::tokens::{palette, LIGHT_PALETTE, TOKENS};
 use crate::variants::ButtonVariant;
 
 use super::control_button::{control_button_content, ControlButton};
@@ -19,7 +19,7 @@ pub fn switch<'a, Message: Clone + 'a>(enabled: bool) -> ControlButton<'a, Messa
                 let palette = palette(theme);
                 let color = if disabled {
                     palette.text.muted
-                } else if enabled {
+                } else if enabled || palette.colors.background != LIGHT_PALETTE.colors.background {
                     palette.colors.onPrimary
                 } else {
                     palette.colors.onControl

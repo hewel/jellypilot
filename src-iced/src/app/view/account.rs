@@ -7,19 +7,20 @@ use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_session::RemoteControlState;
-use jellypilot_ui::brands::{brand_svg, Brand};
-use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT, MONO_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{
   focus_tooltip, popover, Alignment as PopoverAlignment, Placement, PopoverAppearance,
   PopoverOptions, TooltipOptions,
 };
-use jellypilot_ui::tokens::{ThemePalette, TOKENS};
+use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::rounded_image::{full_radius, rounded_image};
+use jellypilot_ui::widgets::settings as settings_style;
 use jellypilot_ui::widgets::sidebar;
+use jellypilot_ui::widgets::switch::switch;
 
 use crate::app::accounts::{self, AccountView, ConfirmationKind, CopyStatus};
 use crate::app::login::{CandidateMessage, CandidateSurface};
@@ -31,7 +32,6 @@ use crate::app::state::{LoginMethod, QuickConnectState, State};
 use crate::i18n::Localizer;
 
 const POPOVER_WIDTH: f32 = 320.0;
-const POPOVER_CONTENT_HEIGHT: f32 = 520.0;
 const PROFILE_LIST_HEIGHT: f32 = 192.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,11 @@ impl Presentation {
         container(label).width(Fill).into()
       }
       Self::Settings => {
-        let mut label = text(content).size(size).color(color).width(settings_width);
+        let mut label = text(content)
+          .size(size)
+          .color(color)
+          .width(settings_width)
+          .wrapping(iced::widget::text::Wrapping::WordOrGlyph);
         if let Some(font) = font {
           label = label.font(font);
         }
@@ -419,148 +423,181 @@ fn account_feedback<'a>(
 fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
   let presentation = Presentation::Settings;
   let palette = state.palette();
-  let mut content = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+  let mut content = Column::new().spacing(TOKENS.spacing.s5).width(Fill);
   if let Some(current) = &account.current {
     let server = current.server_name.unwrap_or(current.server_url);
+    let photo = account
+      .active_key
+      .and_then(|key| state.kernel.profile_avatars.get(key))
+      .cloned();
+    let identity = format!("{}@{}", current.user_name, server);
+    let tile = settings_avatar(&identity, photo, 44.0, TOKENS.radii.lg);
+    let name_column = column![
+      row![
+        presentation.text(
+          current.user_name,
+          TOKENS.font_sizes.s16,
+          palette.text.heading,
+          Some(HEADING_FONT),
+          Fill,
+        ),
+        presentation.text(
+          provider_name(current.provider),
+          TOKENS.font_sizes.s12,
+          palette.colors.secondary,
+          None,
+          Length::Fit,
+        ),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center),
+      presentation.text(
+        server,
+        TOKENS.font_sizes.s12,
+        palette.text.metadata,
+        None,
+        Fill,
+      ),
+    ]
+    .spacing(TOKENS.spacing.s0_5)
+    .width(Fill);
+    let badges = row![
+      connection_badge(state),
+      remote_status(state.kernel.locale, account.remote_control),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center);
+    let card = row![tile, name_column, badges]
+      .spacing(TOKENS.spacing.s3)
+      .align_y(Alignment::Center);
+    content = content.push(
+      container(card)
+        .width(Fill)
+        .padding(TOKENS.spacing.s3_5)
+        .style(settings_style::account_identity),
+    );
+
     let copy_label = match account.copy_status {
       CopyStatus::Idle => state.t("account-copy-address"),
       CopyStatus::Copied => state.t("account-copied"),
       CopyStatus::Failed => state.t("account-retry-copy"),
     };
+    let copy_icon = match account.copy_status {
+      CopyStatus::Idle => Icon::Copy,
+      CopyStatus::Copied => Icon::Check,
+      CopyStatus::Failed => Icon::Warning,
+    };
     content = content.push(
-      column![
+      container(
         row![
-          avatar(
-            &format!("{}@{}", current.user_name, server),
-            account
-              .active_key
-              .and_then(|key| state.kernel.profile_avatars.get(key))
-              .cloned(),
-            36.0,
-            TOKENS.radii.md,
-            false,
+          presentation.text(
+            current.server_url,
+            TOKENS.font_sizes.s12,
+            palette.text.body,
+            Some(MONO_FONT),
+            Fill,
           ),
-          column![
-            row![
-              presentation.text(
-                current.user_name,
-                16.0,
-                palette.text.heading,
-                Some(HEADING_FONT),
-                Length::Fit,
-              ),
-              provider_badge(current.provider, IconControlState::Rest, palette),
-            ]
-            .spacing(TOKENS.spacing.s1)
-            .align_y(Alignment::Center),
-            presentation.text(server, 12.0, palette.text.metadata, None, Length::Fit),
-          ]
-          .spacing(TOKENS.spacing.s0_5)
-          .width(Fill),
-          connection_badge(state),
+          account_tooltip(
+            control_button(Some(copy_icon), Some(copy_label), ButtonVariant::Tonal)
+              .style(presentation.action_style())
+              .icon_size(IconSize::Xs)
+              .label_size(TOKENS.font_sizes.s12)
+              .spacing(TOKENS.spacing.s1_5)
+              .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+              .radius(TOKENS.radii.lg)
+              .on_press(Message::Account(accounts::Message::CopyServerAddress)),
+            format!("{} · {server} · {}", current.user_name, current.server_url),
+            presentation,
+          ),
         ]
-        .spacing(TOKENS.spacing.s2)
+        .spacing(TOKENS.spacing.s2_5)
         .align_y(Alignment::Center),
-        container(
-          row![
-            presentation.text(current.server_url, 12.0, palette.text.body, None, Fill),
-            account_tooltip(
-              control_button(Some(Icon::Copy), Some(copy_label), ButtonVariant::Text,)
-                .style(presentation.action_style())
-                .icon_size(IconSize::Xs)
-                .spacing(TOKENS.spacing.s1)
-                .padding([5, 7])
-                .on_press(Message::Account(accounts::Message::CopyServerAddress)),
-              format!("{} · {server} · {}", current.user_name, current.server_url),
-              presentation,
-            ),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center),
-        )
-        .padding([6, 8])
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block)),
-        remote_status(state.kernel.locale, account.remote_control),
-      ]
-      .spacing(TOKENS.spacing.s2),
+      )
+      .width(Fill)
+      .padding([TOKENS.spacing.s2_5, TOKENS.spacing.s3])
+      .style(settings_style::account_address),
     );
   }
 
   content = content.extend(account_feedback(state, account, presentation));
 
-  content = content.push(profile_header(state.kernel.locale, account, presentation));
-  content = content.push(saved_profiles(state, account, presentation));
-  content = content.push(auto_login(state.kernel.locale, account.auto_login));
+  content = content.push(
+    column![
+      profile_header(state, account),
+      saved_profiles(state, account, presentation),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .width(Fill),
+  );
+  content = content.push(auto_login(state, account.auto_login));
 
   let add_label = if account.handoff_blocking {
     state.t("account-switching")
   } else {
     state.t("account-add")
   };
-  content = content.push(
-    control_button(Some(Icon::UserCheck), Some(add_label), ButtonVariant::Tonal)
-      .style(presentation.action_style())
-      .id(ACCOUNT_ADD_TRIGGER_ID)
-      .icon_size(IconSize::Sm)
-      .spacing(TOKENS.spacing.s1_5)
-      .padding([8, 12])
-      .width(Fill)
-      .content_centered(true)
-      .on_press_maybe(
-        (!account.handoff_blocking).then_some(Message::Account(accounts::Message::AddAccount)),
-      ),
+  let add = control_button(Some(Icon::UserCheck), Some(add_label), ButtonVariant::Tonal)
+    .style(presentation.action_style())
+    .id(ACCOUNT_ADD_TRIGGER_ID)
+    .icon_size(IconSize::Xs)
+    .label_size(TOKENS.font_sizes.s12)
+    .spacing(TOKENS.spacing.s1_5)
+    .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+    .radius(TOKENS.radii.xl)
+    .on_press_maybe(
+      (!account.handoff_blocking).then_some(Message::Account(accounts::Message::AddAccount)),
+    );
+  let disconnect = control_button(
+    None,
+    Some(state.t("account-disconnect")),
+    ButtonVariant::Text,
+  )
+  .style(presentation.action_style())
+  .id(ACCOUNT_DISCONNECT_TRIGGER_ID)
+  .label_size(TOKENS.font_sizes.s12)
+  .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+  .on_press_maybe(
+    account
+      .current
+      .is_some()
+      .then_some(Message::Account(accounts::Message::Disconnect)),
   );
   let active_sign_out = account
     .active_key
     .map(|key| Message::Account(accounts::Message::AskSignOut(key.clone())));
-  content = content.push(
-    row![
-      control_button(
-        Some(Icon::Close),
-        Some(state.t("account-disconnect")),
-        ButtonVariant::Tonal,
-      )
-      .style(presentation.action_style())
-      .id(ACCOUNT_DISCONNECT_TRIGGER_ID)
-      .icon_size(IconSize::Xs)
-      .label_size(16.0)
-      .spacing(TOKENS.spacing.s1)
-      .padding([7, 8])
-      .width(Fill)
-      .content_centered(true)
-      .on_press_maybe(
-        account
-          .current
-          .is_some()
-          .then_some(Message::Account(accounts::Message::Disconnect)),
-      ),
-      control_button_content(
-        move |status| {
-          let color = control_content_color(status, palette.colors.error, palette.colors.error);
-          row![
-            space::horizontal(),
-            icon_with_color(Icon::Trash, IconSize::Xs, color),
-            text(state.t("account-sign-out")).size(14).color(color),
-            space::horizontal(),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center)
-          .into()
-        },
-        ButtonVariant::Text,
-      )
-      .style(presentation.action_style())
-      .padding([7, 8])
-      .width(Fill)
-      .min_height(36.0)
-      .on_press_maybe(active_sign_out),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
-  );
-  scrollable(content)
-    .height(POPOVER_CONTENT_HEIGHT)
-    .style(jellypilot_ui::theme::scrollable)
+  let sign_out = control_button_content(
+    move |status| {
+      let color = control_content_color(status, palette.colors.error, palette.colors.error);
+      text(state.t("account-sign-out"))
+        .size(TOKENS.font_sizes.s12)
+        .color(color)
+        .into()
+    },
+    ButtonVariant::Text,
+  )
+  .style(presentation.action_style())
+  .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+  .on_press_maybe(active_sign_out);
+  let footer = row![add, space::horizontal(), disconnect, sign_out]
+    .spacing(TOKENS.spacing.s1)
+    .align_y(Alignment::Center);
+  content.push(footer).into()
+}
+
+/// Settings identity tile: the shared avatar plus the Paper `imageOutline`
+/// edge when a real photo is present. Fallback initial tiles stay borderless.
+fn settings_avatar<'a>(
+  identity: &str,
+  photo: Option<image::Handle>,
+  size: f32,
+  radius: f32,
+) -> Element<'a, Message> {
+  if photo.is_none() {
+    return avatar(identity, None, size, radius, false);
+  }
+  container(avatar(identity, photo, size - 2.0, radius - 1.0, false))
+    .padding(1)
+    .style(move |theme| settings_style::avatar_outline(theme, radius))
     .into()
 }
 
@@ -590,39 +627,6 @@ fn remote_status(locale: Localizer, state: RemoteControlState) -> Element<'stati
   jellypilot_ui::theme::status_tag(locale.text(label), variant)
 }
 
-fn provider_badge(
-  provider: MediaServerProvider,
-  status: IconControlState,
-  palette: &'static ThemePalette,
-) -> Element<'static, Message> {
-  let disabled = status == IconControlState::Disabled;
-  let text_color = control_content_color(status, palette.text.metadata, palette.text.secondary);
-  container(
-    row![
-      brand_svg(brand_for(provider), 10.0),
-      text(provider_name(provider)).size(10).color(text_color),
-    ]
-    .spacing(TOKENS.spacing.s0_5)
-    .align_y(Alignment::Center),
-  )
-  .padding([2, 5])
-  .style(move |_| container::Style {
-    background: Some(Background::Color(with_disabled_alpha(
-      palette.colors.surfaceContainerHigh,
-      disabled,
-    ))),
-    text_color: Some(text_color),
-    border: Border {
-      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-      radius: TOKENS.radii.md.into(),
-      color: Color::TRANSPARENT,
-      width: 0.0,
-    },
-    ..container::Style::default()
-  })
-  .into()
-}
-
 fn control_content_color(status: IconControlState, rest: Color, hovered: Color) -> Color {
   match status {
     IconControlState::Rest => rest,
@@ -639,13 +643,6 @@ fn with_disabled_alpha(color: Color, disabled: bool) -> Color {
     }
   } else {
     color
-  }
-}
-
-fn brand_for(provider: MediaServerProvider) -> Brand {
-  match provider {
-    MediaServerProvider::Jellyfin => Brand::Jellyfin,
-    MediaServerProvider::Emby => Brand::Emby,
   }
 }
 
@@ -718,11 +715,9 @@ fn fallback_accent(label: &str) -> u8 {
   (hash % 3) as u8
 }
 
-fn profile_header<'a>(
-  locale: Localizer,
-  account: &AccountView<'a>,
-  presentation: Presentation,
-) -> Element<'a, Message> {
+fn profile_header<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
+  let locale = state.kernel.locale;
+  let palette = state.palette();
   let availability = if account.loading {
     locale.text("common-loading")
   } else {
@@ -731,28 +726,41 @@ fn profile_header<'a>(
       &[("count", account.profiles.len().into())],
     )
   };
+  let manage_label = if account.management_open {
+    locale.text("account-done")
+  } else {
+    locale.text("account-manage")
+  };
   row![
     column![
       text(locale.text("account-switch-server"))
         .font(HEADING_FONT)
-        .size(14),
-      text(availability).size(11),
+        .size(TOKENS.font_sizes.s14)
+        .color(palette.text.secondary),
+      text(availability)
+        .size(TOKENS.font_sizes.s12)
+        .color(palette.text.metadata),
     ]
     .spacing(TOKENS.spacing.s0_5)
     .width(Fill),
-    control_button(
-      Some(Icon::Sliders),
-      Some(if account.management_open {
-        locale.text("account-done")
-      } else {
-        locale.text("account-manage")
-      },),
+    control_button_content(
+      move |status| {
+        let color =
+          control_content_color(status, palette.colors.secondary, palette.colors.secondary);
+        row![
+          icon_with_color(Icon::Sliders, IconSize::Xs, color),
+          text(manage_label.clone())
+            .size(TOKENS.font_sizes.s12)
+            .color(color),
+        ]
+        .spacing(TOKENS.spacing.s1_5)
+        .align_y(Alignment::Center)
+        .into()
+      },
       ButtonVariant::Text,
     )
-    .style(presentation.action_style())
-    .icon_size(IconSize::Xs)
-    .spacing(TOKENS.spacing.s1)
-    .padding([5, 6])
+    .style(Presentation::Settings.action_style())
+    .padding([TOKENS.spacing.s1, TOKENS.spacing.s2])
     .on_press_maybe(
       (!account.handoff_blocking).then_some(Message::Account(accounts::Message::ToggleManagement)),
     ),
@@ -773,35 +781,31 @@ fn saved_profiles<'a>(
   if account.profiles.is_empty() {
     return text(state.t("account-no-saved")).size(12).into();
   }
-  let mut profiles = Column::new().spacing(match presentation {
-    Presentation::Sidebar => TOKENS.spacing.s0_5,
-    Presentation::Settings => TOKENS.spacing.s1,
-  });
+  match presentation {
+    Presentation::Sidebar => sidebar_profile_list(state, account),
+    Presentation::Settings => settings_profile_list(state, account),
+  }
+}
+
+/// Sidebar popover rows: only alternatives to the current account, compact
+/// `user_name` titles, and the shared menu-action treatment.
+fn sidebar_profile_list<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
+  let presentation = Presentation::Sidebar;
   let palette = state.palette();
-  let management_open = presentation == Presentation::Settings && account.management_open;
+  let mut profiles = Column::new().spacing(TOKENS.spacing.s0_5);
   for (index, profile) in account.profiles.iter().enumerate() {
     let active = account.current.is_some() && account.active_key == Some(profile.key());
-    if presentation == Presentation::Sidebar && active {
+    if active {
       continue;
     }
     let busy = account.busy_key == Some(profile.key());
-    let action = if management_open {
-      Message::Account(accounts::Message::AskSignOut(profile.key().clone()))
-    } else {
-      Message::Account(accounts::Message::SwitchProfile(profile.key().clone()))
-    };
-    let profile_title = match presentation {
-      Presentation::Sidebar => profile.user_name().to_owned(),
-      Presentation::Settings => profile.title(),
-    };
-    let profile_server = match presentation {
-      Presentation::Sidebar => profile
-        .server_name
-        .as_deref()
-        .unwrap_or(profile.server_url()),
-      Presentation::Settings => profile.server_url(),
-    }
-    .to_owned();
+    let action = Message::Account(accounts::Message::SwitchProfile(profile.key().clone()));
+    let profile_title = profile.user_name().to_owned();
+    let profile_server = profile
+      .server_name
+      .as_deref()
+      .unwrap_or(profile.server_url())
+      .to_owned();
     let full_identity = format!(
       "{} · {} · {} · {}",
       profile.user_name(),
@@ -809,11 +813,7 @@ fn saved_profiles<'a>(
       profile_server,
       profile.server_url()
     );
-    let profile_subtitle = match presentation {
-      Presentation::Sidebar => format!("{} · {profile_server}", provider_name(profile.provider())),
-      Presentation::Settings => profile_server,
-    };
-    let provider = profile.provider();
+    let profile_subtitle = format!("{} · {profile_server}", provider_name(profile.provider()));
     let photo = state.kernel.profile_avatars.get(profile.key()).cloned();
     let profile_control = control_button_content(
       move |status| {
@@ -823,76 +823,161 @@ fn saved_profiles<'a>(
           control_content_color(status, palette.text.metadata, palette.text.secondary);
         let indicator_color =
           control_content_color(status, palette.text.metadata, palette.text.heading);
-        let indicator: Element<'_, Message> = if management_open {
-          icon_with_color(Icon::Trash, IconSize::Xs, indicator_color).into()
-        } else if active {
-          icon_with_color(Icon::Check, IconSize::Sm, indicator_color).into()
-        } else {
-          icon_with_color(Icon::ChevronRight, IconSize::Xs, indicator_color).into()
-        };
         let title = presentation.text(
           if busy {
             state.t("account-working")
           } else {
             profile_title.clone()
           },
-          if presentation == Presentation::Sidebar {
-            12.0
-          } else {
-            13.0
-          },
+          12.0,
           title_color,
           Some(HEADING_FONT),
           Fill,
         );
-        let title: Element<'_, Message> = match presentation {
-          Presentation::Sidebar => title,
-          Presentation::Settings => row![title, provider_badge(provider, status, palette),]
-            .spacing(TOKENS.spacing.s1)
-            .align_y(Alignment::Center)
-            .into(),
+        row![
+          avatar(
+            &profile.title(),
+            photo.clone(),
+            30.0,
+            TOKENS.radii.lg,
+            disabled
+          ),
+          column![
+            title,
+            presentation.text(profile_subtitle.clone(), 12.0, metadata_color, None, Fill),
+          ]
+          .spacing(TOKENS.spacing.s0_5)
+          .width(Fill),
+          icon_with_color(Icon::ChevronRight, IconSize::Xs, indicator_color),
+        ]
+        .spacing(TOKENS.spacing.s2_5)
+        .align_y(Alignment::Center)
+        .into()
+      },
+      ButtonVariant::Text,
+    )
+    .id(profile_action_id(index, "switch"))
+    .padding([6, 10])
+    .width(Fill)
+    .min_height(47.0)
+    .on_press_maybe((!busy && !account.handoff_blocking).then_some(action))
+    .style(sidebar::menu_action);
+    profiles = profiles.push(account_tooltip(
+      profile_control,
+      full_identity,
+      presentation,
+    ));
+  }
+  let profiles = scrollable(profiles)
+    .height(Length::Fit)
+    .style(jellypilot_ui::theme::scrollable);
+  container(profiles)
+    .height(Length::Fit.max(PROFILE_LIST_HEIGHT))
+    .into()
+}
+
+/// Settings rows: the current account stays listed with the Paper
+/// `primaryContainer`/`secondary` selected treatment; alternatives keep the
+/// quiet row. Manage mode swaps the trailing affordance for the sign-out icon
+/// and retargets the press to the confirmation flow.
+fn settings_profile_list<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
+  let presentation = Presentation::Settings;
+  let palette = state.palette();
+  let management_open = account.management_open;
+  let mut profiles = Column::new().spacing(TOKENS.spacing.s2);
+  for (index, profile) in account.profiles.iter().enumerate() {
+    let active = account.current.is_some() && account.active_key == Some(profile.key());
+    let busy = account.busy_key == Some(profile.key());
+    let selected = active && !management_open;
+    let action = if management_open {
+      Message::Account(accounts::Message::AskSignOut(profile.key().clone()))
+    } else {
+      Message::Account(accounts::Message::SwitchProfile(profile.key().clone()))
+    };
+    let profile_title = profile.title();
+    let profile_server = profile.server_url().to_owned();
+    let provider = profile.provider();
+    let photo = state.kernel.profile_avatars.get(profile.key()).cloned();
+    let profile_control = control_button_content(
+      move |status| {
+        let disabled = status == IconControlState::Disabled && !selected;
+        let title_color = if selected {
+          palette.text.heading
+        } else {
+          control_content_color(status, palette.text.secondary, palette.text.heading)
+        };
+        let metadata_color = if selected {
+          palette.text.metadata
+        } else {
+          control_content_color(status, palette.text.metadata, palette.text.secondary)
+        };
+        let provider_color = if selected {
+          palette.colors.secondary
+        } else {
+          control_content_color(status, palette.text.metadata, palette.text.secondary)
+        };
+        let indicator: Element<'_, Message> = if management_open {
+          icon_with_color(
+            Icon::Trash,
+            IconSize::Xs,
+            control_content_color(status, palette.colors.error, palette.colors.error),
+          )
+          .into()
+        } else if active {
+          icon_with_color(Icon::Check, IconSize::Xs, palette.colors.secondary).into()
+        } else {
+          icon_with_color(
+            Icon::ChevronRight,
+            IconSize::Xs,
+            control_content_color(status, palette.text.muted, palette.text.secondary),
+          )
+          .into()
         };
         row![
           avatar(
             &profile.title(),
             photo.clone(),
-            if presentation == Presentation::Sidebar {
-              30.0
-            } else {
-              28.0
-            },
-            if presentation == Presentation::Sidebar {
-              TOKENS.radii.lg
-            } else {
-              TOKENS.radii.md
-            },
-            disabled,
+            30.0,
+            TOKENS.radii.lg,
+            disabled
           ),
           column![
-            title,
-            match presentation {
-              Presentation::Sidebar => {
-                presentation.text(profile_subtitle.clone(), 12.0, metadata_color, None, Fill)
-              }
-              Presentation::Settings => {
-                presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill)
-              }
-            },
+            presentation.text(
+              if busy {
+                state.t("account-working")
+              } else {
+                profile_title.clone()
+              },
+              TOKENS.font_sizes.s12,
+              title_color,
+              Some(HEADING_FONT),
+              Fill,
+            ),
+            presentation.text(
+              profile_server.clone(),
+              TOKENS.font_sizes.s12,
+              metadata_color,
+              None,
+              Fill,
+            ),
           ]
-          .spacing(TOKENS.spacing.s0_5)
+          .spacing(TOKENS.spacing.px)
           .width(Fill),
+          presentation.text(
+            provider_name(provider),
+            TOKENS.font_sizes.s12,
+            provider_color,
+            None,
+            Length::Fit,
+          ),
           indicator,
         ]
-        .spacing(if presentation == Presentation::Sidebar {
-          TOKENS.spacing.s2_5
-        } else {
-          TOKENS.spacing.s2
-        })
+        .spacing(TOKENS.spacing.s2_5)
         .align_y(Alignment::Center)
         .into()
       },
-      if active && !management_open {
-        ButtonVariant::TonalActive
+      if selected {
+        ButtonVariant::Secondary
       } else {
         ButtonVariant::Text
       },
@@ -901,70 +986,42 @@ fn saved_profiles<'a>(
       index,
       if management_open { "signout" } else { "switch" },
     ))
-    .padding(if presentation == Presentation::Sidebar {
-      [6, 10]
-    } else {
-      [7, 8]
-    })
+    .padding([TOKENS.spacing.s2_5, TOKENS.spacing.s3])
     .width(Fill)
-    .min_height(if presentation == Presentation::Sidebar {
-      47.0
-    } else {
-      44.0
-    })
     .on_press_maybe(
       (!busy && !account.handoff_blocking && !(active && !management_open)).then_some(action),
     );
-    let profile_control = if presentation == Presentation::Sidebar {
-      profile_control.style(sidebar::menu_action)
+    // The selected row is deliberately non-pressable; keep its Paper
+    // primary-container treatment instead of the disabled control fill.
+    let profile_control = if selected {
+      profile_control.style(|theme, variant, _status| {
+        settings_style::navigation_button(theme, variant, iced::widget::button::Status::Active)
+      })
     } else {
-      profile_control
+      profile_control.style(settings_style::navigation_button)
     };
-    profiles = profiles.push(account_tooltip(
-      profile_control,
-      full_identity,
-      presentation,
-    ));
+    profiles = profiles.push(profile_control);
   }
-  let profiles = scrollable(profiles)
-    .height(match presentation {
-      Presentation::Sidebar => Length::Fit,
-      Presentation::Settings => Length::Fixed(PROFILE_LIST_HEIGHT),
-    })
-    .style(jellypilot_ui::theme::scrollable);
-  container(profiles)
-    .height(Length::Fit.max(PROFILE_LIST_HEIGHT))
-    .into()
+  profiles.into()
 }
 
-fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> {
-  let switch = control_button(
-    None,
-    Some(locale.text(if auto_login {
-      "common-on"
-    } else {
-      "common-off"
-    })),
-    if auto_login {
-      ButtonVariant::TonalActive
-    } else {
-      ButtonVariant::Tonal
-    },
-  )
-  .padding([5, 8])
-  .on_press(Message::Settings(SettingsMessage::AutoLoginToggled));
+fn auto_login(state: &State, auto_login: bool) -> Element<'static, Message> {
+  let locale = state.kernel.locale;
+  let palette = state.palette();
   row![
     column![
       text(locale.text("account-auto-login"))
         .font(HEADING_FONT)
-        .size(13),
+        .size(TOKENS.font_sizes.s14)
+        .color(palette.text.secondary),
       text(locale.text("account-auto-login-description"))
-        .size(11)
+        .size(TOKENS.font_sizes.s12)
+        .color(palette.text.body)
         .width(Fill),
     ]
     .spacing(TOKENS.spacing.s0_5)
     .width(Fill),
-    switch,
+    switch(auto_login).on_press(Message::Settings(SettingsMessage::AutoLoginToggled)),
   ]
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
@@ -1047,21 +1104,8 @@ fn confirmation_modal<'a>(
         text(state.t("account-delete-watchlist"))
           .size(13)
           .width(Fill),
-        control_button(
-          None,
-          Some(if confirmation.delete_watchlist {
-            state.t("common-on")
-          } else {
-            state.t("common-off")
-          }),
-          if confirmation.delete_watchlist {
-            ButtonVariant::TonalActive
-          } else {
-            ButtonVariant::Tonal
-          },
-        )
-        .padding([5, 8])
-        .on_press(Message::Account(accounts::Message::ToggleDeleteWatchlist)),
+        switch(confirmation.delete_watchlist)
+          .on_press(Message::Account(accounts::Message::ToggleDeleteWatchlist)),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
