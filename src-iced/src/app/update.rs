@@ -718,6 +718,9 @@ fn observe_image(
   if !state.shell.images_visible || !matches!(state.kernel.connection, ConnectionPhase::Connected) {
     return Task::none();
   }
+  if surface == ArtworkSurface::PlayerQueue {
+    return super::embedded_player::observe_queue_image(state, epoch, spec, priority);
+  }
   let Some(client) = state.kernel.client.clone() else {
     return Task::none();
   };
@@ -747,6 +750,9 @@ fn observe_image(
       ArtworkSurface::Detail => Message::Detail(DetailMessage::ArtworkLoaded(completion)),
       ArtworkSurface::PersonalLists => Message::PersonalLists(
         super::personal_lists::PersonalListsMessage::ArtworkLoaded(completion),
+      ),
+      ArtworkSurface::PlayerQueue => Message::EmbeddedPlayer(
+        super::embedded_player::Message::QueueArtworkLoaded(completion),
       ),
     },
   )

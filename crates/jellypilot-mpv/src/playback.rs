@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::{
-  collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
-  PropertyValue,
+  collect_player_state_sample, find_mpv, has_mpv_option, statistics::StatisticsReader, MpvClient,
+  MpvEvent, PlayerState, PropertyValue,
 };
 use jellypilot_core::audio_tracks::{
   AudioTrackKey, AudioTrackPreference, AudioTrackStore, SubtitleTrackPreference,
@@ -1131,6 +1131,23 @@ impl PlaybackController {
       .script_binding("stats/display-stats-toggle")
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)
+  }
+
+  /// Return a statistics reader for the active MPV playback.
+  ///
+  /// `Some` only while an item is active, its transport still matches MPV, no
+  /// unload is in flight, and the IPC connection is live. The reader clones
+  /// the client handle and samples over IPC on demand; it holds no controller
+  /// state and never polls on its own.
+  pub fn statistics_reader(&self) -> Option<StatisticsReader> {
+    if self.active.is_none()
+      || !self.active_transport_matches_mpv
+      || self.unloading
+      || !self.mpv.is_connected()
+    {
+      return None;
+    }
+    Some(StatisticsReader::new(self.mpv.clone()))
   }
 
   /// Drain script-message names observed since the last shell refresh.

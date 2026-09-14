@@ -24,6 +24,7 @@ pub enum ArtworkSurface {
   Browse,
   Detail,
   PersonalLists,
+  PlayerQueue,
 }
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
