@@ -2893,10 +2893,12 @@ dependencies = [
  "jellypilot-session",
  "log",
  "parking_lot",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "which",
 ]
 

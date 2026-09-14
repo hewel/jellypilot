@@ -34,8 +34,9 @@ pub enum MpvError {
   NotConnected,
   #[error("MPV is already running or starting")]
   AlreadyRunning,
+  #[error("Playing media changed during the read")]
+  MediaChanged,
 }
-
 impl From<ProcessError> for MpvError {
   fn from(error: ProcessError) -> Self {
     match error {

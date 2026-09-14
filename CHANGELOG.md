@@ -4,12 +4,17 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Added a native embedded-player information popover with demand-only MPV file, cache, output, video, and audio statistics, explicit unavailable values, and credential-safe filenames; the existing MPV stats shortcut remains independent.
+
 ### Changed
 - Centralized Playback Session acceptance and lifecycle projections; queued replacements invalidate transient player controls immediately, while background refreshes remain non-busy.
 - Unified remote Playback Target resource cleanup so disconnect, profile switching, failures, and quit join outstanding work instead of racing separate teardown paths.
 - Reworked all eight Settings sections to the accepted Paper layout, with the same sidebar-and-content layout at every window size and in both App Modes, a reachable Close action, and consistent switches across the app while retaining existing settings and save behavior.
+- Synchronized shared embedded playback chrome across normal, fullscreen, and Control-Only views with the accepted Paper design, including floating controls, time-only seek hover, real buffered ranges, and viewport-loaded episode queue thumbnails; the external controller and footer bar are unchanged.
 
 ### Fixed
+- Reduced embedded-player Information popup stalls caused by repeated monospace font fallback searches for filenames, localized statistics, and the play-method badge.
 - Fixed embedded timeline clicks losing their seek submission when the hover tooltip triggers an immediate relayout.
 - Prevented click-to-activate video-background presses from toggling playback while preserving first-click player controls and captured menu interactions.
 - Prevented stale or detached controller results from adopting playback metadata or completing the embedded player's stop-before-return navigation.

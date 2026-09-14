@@ -10,6 +10,7 @@ mod process;
 mod protocol;
 pub mod remote_commands;
 mod state;
+pub mod statistics;
 
 pub use client::{has_mpv_option, MpvClient, MpvError};
 pub use config::configured_mpv_args;

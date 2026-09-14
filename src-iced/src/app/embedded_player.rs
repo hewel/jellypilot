@@ -1,12 +1,16 @@
 //! Embedded-only presentation lifecycle and keyboard intent orchestration.
 
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use iced::futures::SinkExt;
 use iced::{event, keyboard, Event, Subscription, Task};
 use jellypilot_core::config::AppMode;
 use jellypilot_mpv::playback_session::{
   seek_intent, volume_intent, ControllerAcceptance, PlaybackIntent, StopCompletion,
 };
+use jellypilot_mpv::statistics::PlaybackStatistics;
 
 use super::message::{Message as AppMessage, PlaybackMessage, ShellMessage};
 use super::state::{Destination, State};
@@ -14,7 +18,7 @@ use super::state::{Destination, State};
 const IDLE: Duration = Duration::from_secs(3);
 const FEEDBACK: Duration = Duration::from_millis(1200);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Message {
   PointerMoved {
     position: iced::Point,
@@ -26,6 +30,42 @@ pub enum Message {
   VolumeBy(f64),
   SeekHovered(Option<f64>),
   Wake(Instant),
+  InformationToggled,
+  InformationDismissed,
+  InformationSampled {
+    token: Instant,
+    sample: Option<Box<PlaybackStatistics>>,
+  },
+  BufferSampled {
+    token: Instant,
+    ranges: Vec<(f64, f64)>,
+  },
+  QueueArtworkLoaded(super::artwork::ImageCompletion),
+  QueueScrolled {
+    epoch: u64,
+    item_count: usize,
+    top: bool,
+    bottom: bool,
+  },
+}
+
+impl std::fmt::Debug for Message {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str(match self {
+      Self::PointerMoved { .. } => "PointerMoved",
+      Self::Back => "Back",
+      Self::SeekBy(_) => "SeekBy",
+      Self::VolumeBy(_) => "VolumeBy",
+      Self::SeekHovered(_) => "SeekHovered",
+      Self::Wake(_) => "Wake",
+      Self::InformationToggled => "InformationToggled",
+      Self::InformationDismissed => "InformationDismissed",
+      Self::InformationSampled { .. } => "InformationSampled([redacted])",
+      Self::BufferSampled { .. } => "BufferSampled",
+      Self::QueueArtworkLoaded(_) => "QueueArtworkLoaded([redacted])",
+      Self::QueueScrolled { .. } => "QueueScrolled",
+    })
+  }
 }
 
 #[derive(Default)]
@@ -43,6 +83,107 @@ pub struct Surface {
   returning: bool,
   replacement_generation: u64,
   was_active: bool,
+  information_open: bool,
+  information: Option<Box<PlaybackStatistics>>,
+  information_failed: bool,
+  buffered_ranges: Vec<(f64, f64)>,
+  observation: Option<Observation>,
+  queue_artwork: super::artwork::ImageCollection,
+  queue_observed: bool,
+  queue_scroll_edges: (bool, bool),
+  queue_item_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct Observation {
+  token: Instant,
+  generation: u64,
+  information: bool,
+}
+
+#[derive(Clone)]
+struct ObservationSubscription {
+  demand: Observation,
+  controller: super::state::PlaybackControllerHandle,
+}
+
+impl Hash for ObservationSubscription {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.demand.hash(state);
+    Arc::as_ptr(&self.controller).hash(state);
+  }
+}
+
+pub(super) fn queue_artwork(state: &State) -> &super::artwork::ImageCollection {
+  &state.shell.embedded_player.queue_artwork
+}
+
+pub(super) fn queue_scroll_edges(state: &State) -> (bool, bool) {
+  state.shell.embedded_player.queue_scroll_edges
+}
+
+pub(super) fn observe_queue_image(
+  state: &mut State,
+  epoch: u64,
+  spec: super::artwork::ImageSpec,
+  priority: Option<super::artwork::ImagePriority>,
+) -> Task<AppMessage> {
+  if !active(state) || !state.shell.embedded_player.queue_observed {
+    return Task::none();
+  }
+  let collection = &mut state.shell.embedded_player.queue_artwork;
+  if epoch != collection.epoch() {
+    return Task::none();
+  }
+  let Some(client) = state.kernel.client.as_ref() else {
+    return Task::none();
+  };
+  collection.observe(
+    state.kernel.request_gate.current_session(),
+    spec,
+    priority,
+    Arc::clone(client),
+    Arc::clone(&state.kernel.artwork_adapter),
+    |completion| AppMessage::EmbeddedPlayer(Message::QueueArtworkLoaded(completion)),
+  )
+}
+
+fn settle_information(
+  surface: &mut Surface,
+  token: Instant,
+  sample: Option<Box<PlaybackStatistics>>,
+) {
+  if surface.information_open
+    && surface
+      .observation
+      .is_some_and(|demand| demand.token == token && demand.information)
+  {
+    surface.buffered_ranges.clear();
+    surface.information_failed = sample.is_none();
+    surface.information = sample;
+  }
+}
+
+pub(super) fn information_open(state: &State) -> bool {
+  state.shell.embedded_player.information_open
+}
+
+pub(super) fn information(state: &State) -> Option<&PlaybackStatistics> {
+  state.shell.embedded_player.information.as_deref()
+}
+
+pub(super) fn information_failed(state: &State) -> bool {
+  state.shell.embedded_player.information_failed
+}
+
+pub(super) fn buffered_ranges(state: &State) -> &[(f64, f64)] {
+  let surface = &state.shell.embedded_player;
+  surface
+    .information
+    .as_ref()
+    .map_or(surface.buffered_ranges.as_slice(), |information| {
+      information.buffered_ranges.as_slice()
+    })
 }
 
 pub(super) fn active(state: &State) -> bool {
@@ -122,6 +263,7 @@ fn held(state: &State) -> bool {
     || state.playback.view.intro_prompt.is_some()
     || input_blocked(state)
     || state.shell.embedded_player.returning
+    || information_open(state)
 }
 
 pub(super) fn reconcile(state: &mut State) {
@@ -143,6 +285,46 @@ pub(super) fn reconcile(state: &mut State) {
     settled,
     Instant::now(),
   );
+  let blocked = state.shell.settings_open
+    || state.shell.account_popover_open
+    || super::accounts::blocking_modal(&state.accounts)
+    || state.shell.quit_requested;
+  if blocked || menu_open(state) {
+    state.shell.embedded_player.information_open = false;
+    state.shell.embedded_player.information = None;
+  }
+  let visible = active && controls_visible(state) && !blocked;
+  let generation = state.playback.view.lifecycle.replacement_generation;
+  let replacing = state.playback.view.lifecycle.replacing;
+  reconcile_observation(
+    &mut state.shell.embedded_player,
+    visible && !replacing,
+    generation,
+    Instant::now(),
+  );
+  let surface = &mut state.shell.embedded_player;
+  let queue_open = active && state.playback.queue_menu_open;
+  let item_count = match &state.playback.queue {
+    super::playback::QueueState::Ready(items) => items.len(),
+    _ => 0,
+  };
+  reconcile_queue(surface, queue_open, queue_open && !blocked, item_count);
+  state
+    .image_diagnostics
+    .record(surface.queue_artwork.take_summary());
+}
+
+fn reconcile_queue(surface: &mut Surface, open: bool, observed: bool, item_count: usize) {
+  if surface.queue_observed && !observed {
+    surface.queue_artwork.clear();
+  }
+  if !open || surface.queue_item_count != item_count {
+    // Fitting lists emit no on_scroll. Retain geometry across artwork refreshes,
+    // but never carry overflow indicators into a new list or a reopened popup.
+    surface.queue_scroll_edges = (false, false);
+  }
+  surface.queue_observed = observed;
+  surface.queue_item_count = item_count;
 }
 
 fn observe_replacement(surface: &mut Surface, generation: u64) {
@@ -152,13 +334,20 @@ fn observe_replacement(surface: &mut Surface, generation: u64) {
     surface.desired_volume = None;
     surface.returning = false;
     surface.feedback = None;
+    surface.information = None;
+    surface.information_failed = false;
+    surface.buffered_ranges.clear();
+    surface.observation = None;
+    surface.queue_artwork.clear();
   }
 }
 
 fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, settled: bool, now: Instant) {
   if !active {
     // Drop all transient presentation on exit; the view owns the scoped cursor.
-    *surface = Surface::default();
+    if surface.was_active {
+      *surface = Surface::default();
+    }
     return;
   }
   if !surface.was_active {
@@ -201,8 +390,71 @@ pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
     .chain(surface.cursor_deadline)
     .chain(surface.feedback.as_ref().map(|(_, deadline)| *deadline))
     .min();
-  deadline.map_or_else(Subscription::none, |deadline| {
+  let wake = deadline.map_or_else(Subscription::none, |deadline| {
     Subscription::run_with(deadline, wake_stream)
+  });
+  let observation = match (surface.observation, state.playback.controller.as_ref()) {
+    (Some(demand), Some(controller)) => Subscription::run_with(
+      ObservationSubscription {
+        demand,
+        controller: Arc::clone(controller),
+      },
+      observation_stream,
+    ),
+    _ => Subscription::none(),
+  };
+  Subscription::batch([wake, observation])
+}
+
+fn reconcile_observation(surface: &mut Surface, visible: bool, generation: u64, now: Instant) {
+  if !visible {
+    surface.observation = None;
+    surface.buffered_ranges.clear();
+    return;
+  }
+  if !surface.observation.is_some_and(|demand| {
+    demand.generation == generation && demand.information == surface.information_open
+  }) {
+    surface.observation = Some(Observation {
+      token: now,
+      generation,
+      information: surface.information_open,
+    });
+  }
+}
+
+fn observation_stream(
+  subscription: &ObservationSubscription,
+) -> impl iced::futures::Stream<Item = AppMessage> {
+  let subscription = subscription.clone();
+  iced::stream::channel(1, async move |mut output| {
+    loop {
+      // Only copy the read handle under the controller lock. Property sampling
+      // must never hold up a seek, track change, stop, or account handoff.
+      let reader = subscription.controller.lock().await.statistics_reader();
+      let token = subscription.demand.token;
+      let message = if subscription.demand.information {
+        let sample = match reader {
+          Some(reader) => reader.sample().await.ok().map(Box::new),
+          None => None,
+        };
+        Message::InformationSampled { token, sample }
+      } else {
+        let ranges = match reader {
+          Some(reader) => reader.buffered_ranges().await.unwrap_or_default(),
+          None => Vec::new(),
+        };
+        Message::BufferSampled { token, ranges }
+      };
+      if output
+        .send(AppMessage::EmbeddedPlayer(message))
+        .await
+        .is_err()
+      {
+        break;
+      }
+      tokio::time::sleep(Duration::from_secs(1)).await;
+    }
   })
 }
 
@@ -283,6 +535,60 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
   }
   let now = Instant::now();
   match message {
+    Message::QueueScrolled {
+      epoch,
+      item_count,
+      top,
+      bottom,
+    } => {
+      let surface = &mut state.shell.embedded_player;
+      if surface.queue_observed
+        && surface.queue_artwork.epoch() == epoch
+        && surface.queue_item_count == item_count
+      {
+        surface.queue_scroll_edges = (top, bottom);
+      }
+    }
+    Message::QueueArtworkLoaded(completion) => {
+      state
+        .shell
+        .embedded_player
+        .queue_artwork
+        .settle(state.kernel.request_gate.current_session(), completion);
+    }
+    Message::InformationToggled => {
+      if state.playback.view.lifecycle.replacing || state.shell.quit_requested {
+        return Task::none();
+      }
+      let surface = &mut state.shell.embedded_player;
+      surface.information_open = !surface.information_open;
+      surface.information = None;
+      surface.information_failed = false;
+      surface.observation = None;
+      state.playback.audio_menu_open = false;
+      state.playback.subtitle_menu_open = false;
+      state.playback.queue_menu_open = false;
+    }
+    Message::InformationDismissed => {
+      let surface = &mut state.shell.embedded_player;
+      surface.information_open = false;
+      surface.information = None;
+      surface.information_failed = false;
+      surface.observation = None;
+    }
+    Message::InformationSampled { token, sample } => {
+      let surface = &mut state.shell.embedded_player;
+      settle_information(surface, token, sample);
+    }
+    Message::BufferSampled { token, ranges } => {
+      let surface = &mut state.shell.embedded_player;
+      if surface
+        .observation
+        .is_some_and(|demand| demand.token == token && !demand.information)
+      {
+        surface.buffered_ranges = ranges;
+      }
+    }
     Message::PointerMoved {
       position,
       bounds,
@@ -358,8 +664,8 @@ fn pointer_moved(
     surface.visible = true;
     surface.idle_deadline = Some(now + IDLE);
   }
-  // The return target is independent of the bottom transport reveal zone.
-  if position.x <= 112.0 && position.y <= 100.0 {
+  // Back and information share the top chrome, independently of the transport.
+  if position.y <= 100.0 && (position.x <= 112.0 || position.x >= bounds.width - 112.0) {
     surface.back_visible = true;
     surface.back_deadline = Some(now + IDLE);
   }
@@ -550,6 +856,45 @@ mod tests {
   }
 
   #[test]
+  fn queue_fades_follow_list_geometry_not_media_artwork_refreshes() {
+    let mut surface = Surface::default();
+    reconcile_queue(&mut surface, true, true, 8);
+    surface.queue_scroll_edges = (true, true);
+
+    observe_replacement(&mut surface, 1);
+    reconcile_queue(&mut surface, true, true, 8);
+    assert_eq!(
+      surface.queue_scroll_edges,
+      (true, true),
+      "refreshing artwork must preserve an open queue's measured scroll indicators"
+    );
+
+    reconcile_queue(&mut surface, true, false, 8);
+    reconcile_queue(&mut surface, true, true, 8);
+    assert_eq!(
+      surface.queue_scroll_edges,
+      (true, true),
+      "temporarily covering the queue with Settings must preserve its native scroll state"
+    );
+
+    reconcile_queue(&mut surface, true, true, 2);
+    assert_eq!(
+      surface.queue_scroll_edges,
+      (false, false),
+      "a short replacement list will not emit an on_scroll callback"
+    );
+
+    surface.queue_scroll_edges = (true, false);
+    reconcile_queue(&mut surface, false, false, 2);
+    reconcile_queue(&mut surface, true, true, 2);
+    assert_eq!(
+      surface.queue_scroll_edges,
+      (false, false),
+      "a reopened popup starts with fresh native scroll state"
+    );
+  }
+
+  #[test]
   fn pointer_reveals_only_the_nearby_control_region() {
     let now = Instant::now();
     let bounds = iced::Size::new(1100.0, 900.0);
@@ -591,6 +936,17 @@ mod tests {
     assert!(surface.back_visible && !surface.visible);
     expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
     assert!(!surface.back_visible);
+    pointer_moved(
+      &mut surface,
+      iced::Point::new(1040.0, 40.0),
+      bounds,
+      202.0,
+      now + IDLE + IDLE,
+    );
+    assert!(
+      surface.back_visible && !surface.visible,
+      "the information corner reveals the top chrome"
+    );
     // Responsive controls and fullscreen use their actual measured surface, not the saved window.
     pointer_moved(
       &mut surface,
@@ -606,6 +962,9 @@ mod tests {
   fn picture_motion_reveals_cursor_without_revealing_controls() {
     let now = Instant::now();
     let mut surface = Surface::default();
+    reconcile_surface(&mut surface, true, false, true, now);
+    let now = now + IDLE;
+    expire(&mut surface, now, now, false);
     let bounds = iced::Size::new(1920.0, 1080.0);
     let center = iced::Point::new(960.0, 540.0);
     pointer_moved(&mut surface, center, bounds, 202.0, now);
@@ -718,6 +1077,64 @@ mod tests {
       ..playing
     };
     assert!(adjustment(&mut surface, &unknown, true, 5.0, now).is_none());
+  }
+
+  #[test]
+  fn information_demand_rejects_late_samples_after_close_replacement_and_window_exit() {
+    let now = Instant::now();
+    let mut surface = Surface {
+      information_open: true,
+      ..Surface::default()
+    };
+    reconcile_surface(&mut surface, true, true, true, now);
+    reconcile_observation(&mut surface, true, 0, now);
+    let old = surface.observation.unwrap().token;
+    let sample = || {
+      Some(Box::new(PlaybackStatistics {
+        filename: Some("old-file.mkv".into()),
+        ..PlaybackStatistics::default()
+      }))
+    };
+    settle_information(&mut surface, old, sample());
+    assert!(surface.information.is_some());
+
+    surface.information_open = false;
+    surface.information = None;
+    reconcile_observation(&mut surface, true, 0, now + Duration::from_millis(1));
+    settle_information(&mut surface, old, sample());
+    assert!(surface.information.is_none());
+    surface.information_open = true;
+    reconcile_observation(&mut surface, true, 0, now + Duration::from_millis(2));
+    settle_information(&mut surface, old, sample());
+    assert!(
+      surface.information.is_none(),
+      "reopening must not revive an old request"
+    );
+
+    let current = surface.observation.unwrap().token;
+    settle_information(&mut surface, current, sample());
+    observe_replacement(&mut surface, 1);
+    settle_information(&mut surface, current, sample());
+    assert!(
+      surface.information.is_none(),
+      "replacing media clears and rejects old metadata"
+    );
+    reconcile_observation(&mut surface, true, 1, now + Duration::from_millis(3));
+    let current = surface.observation.unwrap().token;
+    settle_information(&mut surface, current, None);
+    assert!(
+      surface.information_failed,
+      "failed reads are not zero-valued successful samples"
+    );
+    settle_information(&mut surface, current, sample());
+    assert!(!surface.information_failed);
+    reconcile_surface(&mut surface, false, false, false, now + IDLE);
+    settle_information(&mut surface, current, sample());
+    assert!(surface.information.is_none());
+    assert!(
+      surface.observation.is_none(),
+      "hidden windows own no statistics stream"
+    );
   }
 }
 

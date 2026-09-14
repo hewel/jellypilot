@@ -15,10 +15,12 @@ jellypilot-core = { path = "../jellypilot-core" }
 jellypilot-media-server = { path = "../jellypilot-media-server" }
 jellypilot-session = { path = "../jellypilot-session" }
 parking_lot = "0.12.5"
+percent-encoding = "2.3.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
+url = "2.5.8"
 which = "8.0.2"
 
 [lints]

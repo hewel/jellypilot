@@ -8,6 +8,7 @@ mod login;
 mod modal_dismiss;
 mod personal_lists;
 pub(crate) mod player;
+mod player_info;
 pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;
