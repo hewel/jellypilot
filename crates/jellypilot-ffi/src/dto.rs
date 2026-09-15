@@ -684,6 +684,8 @@ pub struct VideoStreamInfo {
     pub codec: Option<String>,
     pub language: Option<String>,
     pub channels: Option<u32>,
+    pub channel_layout: Option<String>,
+    pub is_default: bool,
     pub display_title: Option<String>,
 }
 
@@ -693,6 +695,8 @@ impl From<ms::VideoStreamInfo> for VideoStreamInfo {
             codec: stream.codec,
             language: stream.language,
             channels: stream.channels,
+            channel_layout: stream.channel_layout,
+            is_default: stream.is_default,
             display_title: stream.display_title,
         }
     }
@@ -706,8 +710,11 @@ pub struct VideoMediaInfo {
     pub video_codec: Option<String>,
     pub video_width: Option<u32>,
     pub video_height: Option<u32>,
+    pub video_frame_rate: Option<f32>,
     /// e.g. "SDR", "HDR10", "DoVi" from the video stream range metadata.
     pub video_range: Option<String>,
+    pub media_source_count: u32,
+    pub streams_known: bool,
     pub audio_streams: Vec<VideoStreamInfo>,
     pub subtitle_streams: Vec<VideoStreamInfo>,
 }
@@ -721,7 +728,10 @@ impl From<ms::VideoMediaInfo> for VideoMediaInfo {
             video_codec: info.video_codec,
             video_width: info.video_width,
             video_height: info.video_height,
+            video_frame_rate: info.video_frame_rate,
             video_range: info.video_range,
+            media_source_count: info.media_source_count,
+            streams_known: info.streams_known,
             audio_streams: info
                 .audio_streams
                 .into_iter()

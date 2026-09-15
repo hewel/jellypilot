@@ -6,9 +6,12 @@ All notable changes to JellyPilot are documented in this file.
 
 ### Added
 - Added Android risk bring-up modules for Compose account/browse queries, a shared Rust SDK/UniFFI bridge, Keystore-backed credentials, and an independent libmpv/Media3 player. Debug builds and nonvisual emulator checks pass, and physical-device manual verification was reported passed by the user; the complete client and detailed device/HDR evidence remain outstanding.
+- Added desktop movie and episode Media Specifications with first-source resolution, range, codec and frame rate, default-first audio/subtitle summaries, and bounded read-only track popovers. Missing metadata remains distinct from confirmed empty track lists.
+- Added episode-to-parent-series navigation through the series name, preserving browsing history and selecting the originating season when available.
 
 ### Changed
 - Separated display-free and desktop Rust workspaces and added Android preparation, native build, and validation entries to the existing task dispatcher. Desktop business-SDK migration and clean-room Android release acceptance remain later gates.
+- Aligned complete detail-page media information with the main content lane and added narrow-width stacking and long-value wrapping.
 
 ## [2.2.1] - 2026-09-14
 

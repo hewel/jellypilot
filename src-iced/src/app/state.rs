@@ -402,6 +402,14 @@ pub enum UserDataActionKind {
   Played,
 }
 
+/// The read-only track list a Media Specifications chip can open; at most one
+/// is open at a time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrackMenu {
+  Audio,
+  Subtitles,
+}
+
 #[derive(Default)]
 pub struct DetailState {
   pub content: LoadState<DetailContent, UiText>,
@@ -409,6 +417,10 @@ pub struct DetailState {
   pub similar_items: LoadState<Vec<VideoLibraryItem>, UiText>,
   pub season_episodes: LoadState<VideoSeasonEpisodesPage, UiText>,
   pub selected_season_id: Option<String>,
+  /// Season number requested by the navigation that opened this detail (the
+  /// originating season when arriving from an episode's parent-series link).
+  /// Consumed once the loaded show resolves it to a real season identity.
+  pub requested_season_number: Option<i32>,
   pub overview_expanded: bool,
   pub expanded_episode_ids: HashSet<String>,
   pub user_data_busy: Option<UserDataActionKind>,

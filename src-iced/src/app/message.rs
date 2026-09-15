@@ -191,6 +191,11 @@ pub enum DetailMessage {
   SeasonMenuToggled,
   SeasonMenuDismissed,
   SeasonSelected(String),
+  /// Toggles the read-only track list anchored to a Media Specifications chip.
+  TrackMenuToggled(super::state::TrackMenu),
+  TrackMenuDismissed,
+  /// Opens the loaded episode's parent series through normal navigation.
+  OpenSeries,
   FavoriteToggled,
   WatchlistToggled,
   PlayedToggled,

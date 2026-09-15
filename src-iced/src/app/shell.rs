@@ -738,10 +738,68 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn open_detail(state: &mut State, item: VideoLibraryItem) -> Task<Message> {
+  open_detail_with(state, item, None)
+}
+
+/// Opens the parent series of the loaded episode detail, requesting the
+/// episode's season as the initial selection. `season_number` is the real
+/// server season number; the show load resolves it to a season identity and
+/// falls back to the normal default when it cannot.
+pub(crate) fn open_parent_series(
+  state: &mut State,
+  series_id: String,
+  series_name: Option<String>,
+  season_number: Option<i32>,
+) -> Task<Message> {
+  let pending_season = season_number.map(|number| (series_id.clone(), number));
+  open_detail_with(
+    state,
+    VideoLibraryItem {
+      id: series_id,
+      name: series_name.unwrap_or_default(),
+      item_type: "Series".to_owned(),
+      production_year: None,
+      premiere_date: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
+      runtime_seconds: None,
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      logo_image_id: None,
+      series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
+      season_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      index_number_end: None,
+      series_id: None,
+      series_name: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    },
+    pending_season,
+  )
+}
+
+fn open_detail_with(
+  state: &mut State,
+  item: VideoLibraryItem,
+  pending_season: Option<(String, i32)>,
+) -> Task<Message> {
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
   let item_id = item.id.clone();
+  full.detail.pending_season = pending_season;
   full.detail.items.insert(item_id.clone(), item);
   navigate(state, Destination::Detail(item_id))
 }

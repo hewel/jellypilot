@@ -333,6 +333,9 @@ pub struct VideoDetailMetadata {
 }
 
 /// File-level media facts for the detail media-info section.
+///
+/// All facts describe the first media source only; tracks and video facts are
+/// never merged across versions.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoMediaInfo {
@@ -342,8 +345,16 @@ pub struct VideoMediaInfo {
   pub video_codec: Option<String>,
   pub video_width: Option<u32>,
   pub video_height: Option<u32>,
+  /// Positive frame rate from the video stream (average preferred, real
+  /// fallback); absent when the server reports no usable rate.
+  pub video_frame_rate: Option<f32>,
   /// e.g. "SDR", "HDR10", "DoVi" from the video stream range metadata.
   pub video_range: Option<String>,
+  /// Number of media versions the server supplied; facts describe the first.
+  pub media_source_count: u32,
+  /// Whether the chosen source's stream list was explicitly supplied, even
+  /// when empty. `false` means track counts are unknown, not confirmed zero.
+  pub streams_known: bool,
   pub audio_streams: Vec<VideoStreamInfo>,
   pub subtitle_streams: Vec<VideoStreamInfo>,
 }
@@ -356,6 +367,10 @@ pub struct VideoStreamInfo {
   pub language: Option<String>,
   /// Audio channel count; absent for subtitles.
   pub channels: Option<u32>,
+  /// Audio channel layout, e.g. "5.1"; absent for subtitles.
+  pub channel_layout: Option<String>,
+  /// Server file-level default marker, not a user preference.
+  pub is_default: bool,
   /// Server-formatted label, e.g. "English - AAC 2.0".
   pub display_title: Option<String>,
 }

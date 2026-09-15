@@ -18,6 +18,8 @@ pub enum PopoverAppearance {
     EmbeddedPlayer,
     EmbeddedQueue,
     PlaybackInformation,
+    /// Read-only track list anchored to a Media Specifications chip.
+    TrackList,
 }
 
 /// Placement and dismissal behavior for a [`popover`].
@@ -77,6 +79,7 @@ where
                 PopoverAppearance::EmbeddedQueue | PopoverAppearance::PlaybackInformation => {
                     TOKENS.spacing.s2
                 }
+                PopoverAppearance::TrackList => TOKENS.spacing.s2,
             })
             .width(options.width.map_or(Length::Fit, Length::Fixed))
             .style(match options.appearance {
@@ -87,6 +90,7 @@ where
                 PopoverAppearance::PlaybackInformation => {
                     crate::widgets::embedded_player::information_panel
                 }
+                PopoverAppearance::TrackList => style::track_list_surface,
             }),
     );
 

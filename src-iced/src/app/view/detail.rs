@@ -10,7 +10,7 @@ use crate::app::detail::{
   DETAIL_BACKDROP_KEY, DETAIL_LOGO_KEY,
 };
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
-use crate::app::state::{State, UserDataActionKind};
+use crate::app::state::{State, TrackMenu, UserDataActionKind};
 use crate::i18n::media::{
   detail_metadata, episode_premiere_date, item_caption, show_detail_metadata,
 };
@@ -191,6 +191,7 @@ fn item_hero<'a>(
       id: &item.id,
       name: &item.name,
       metadata: item_metadata(state.kernel.locale, item),
+      media_info: item.media_info.as_ref(),
       overview: item.overview.as_deref(),
       playback_label,
       playback: item
@@ -244,6 +245,7 @@ fn show_hero<'a>(
       id: &show.id,
       name: &show.name,
       metadata: show_metadata(state.kernel.locale, show),
+      media_info: None,
       overview: show.overview.as_deref(),
       playback_label,
       playback,
@@ -257,10 +259,26 @@ fn show_hero<'a>(
   )
 }
 
+/// Metadata line segments: the leading facts, the episode's parent series
+/// (a link only with a real server series id), and the trailing facts.
+struct DetailMetadata {
+  head: String,
+  series: Option<MetadataSeries>,
+  tail: Vec<String>,
+}
+
+struct MetadataSeries {
+  name: String,
+  link: bool,
+}
+
 struct HeroContent<'a> {
   id: &'a str,
   name: &'a str,
-  metadata: String,
+  metadata: DetailMetadata,
+  /// First-source media facts for the specifications row; movies and episodes
+  /// only, absent when the server supplied none.
+  media_info: Option<&'a VideoMediaInfo>,
   overview: Option<&'a str>,
   playback_label: String,
   playback: Option<(Playable, PlaybackStartPosition)>,
@@ -285,12 +303,14 @@ fn hero<'a>(
       skeleton_phase,
       reduced_motion,
     );
-    let mut copy = column![text(content.metadata.clone())
-      .size(14)
-      .line_height(Pixels(18.0))
-      .color(state.palette().text.body),]
-    .spacing(14)
-    .width(Fill);
+    let mut copy = column![metadata_row(state, &content.metadata)]
+      .spacing(14)
+      .width(Fill);
+    if let Some(info) = content.media_info {
+      if let Some(specs) = media_specs_row(state, info) {
+        copy = copy.push(specs);
+      }
+    }
     if let Some(overview) = nonempty(content.overview) {
       copy = copy.push(overview_copy(
         state,
@@ -831,21 +851,316 @@ fn summary_column(
   .into()
 }
 
-fn media_info_section(
+/// The metadata line: leading facts, the episode's parent series as a
+/// keyboard-operable link when a real server series id exists, then trailing
+/// facts. Segments wrap as units at narrow widths.
+fn metadata_row<'a>(state: &'a State, metadata: &DetailMetadata) -> Element<'a, Message> {
+  let palette = state.palette();
+  let segment = |value: &str| -> Element<'a, Message> {
+    text(value.to_owned())
+      .size(14)
+      .line_height(Pixels(18.0))
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .color(palette.text.body)
+      .into()
+  };
+  let mut line = Row::new().align_y(Alignment::Center);
+  if !metadata.head.is_empty() {
+    line = line.push(segment(&metadata.head));
+  }
+  if let Some(series) = &metadata.series {
+    line = line.push(segment(" · "));
+    if series.link {
+      let name = series.name.clone();
+      line = line.push(
+        control_button_content(
+          move |status| {
+            let color = match status {
+              IconControlState::Rest => palette.text.body,
+              IconControlState::Hovered => palette.text.heading,
+              IconControlState::Disabled => palette.text.muted,
+            };
+            row![
+              text(name.clone())
+                .size(14)
+                .line_height(Pixels(18.0))
+                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+                .color(color),
+              icon_with_color(Icon::ChevronRight, IconSize::Custom(12.0), color),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+          },
+          ButtonVariant::Text,
+        )
+        .padding([0, 0])
+        .on_press(Message::Detail(DetailMessage::OpenSeries)),
+      );
+    } else {
+      line = line.push(segment(&series.name));
+    }
+  }
+  for fact in &metadata.tail {
+    line = line.push(segment(" · ")).push(segment(fact));
+  }
+  line.wrap().vertical_spacing(0.0).into()
+}
+
+/// The Media Specifications row between metadata and overview: one chip per
+/// known fact of the first media source, wrapping at narrow widths. Unknown
+/// fields are omitted rather than invented.
+fn media_specs_row<'a>(state: &'a State, info: &'a VideoMediaInfo) -> Option<Element<'a, Message>> {
+  let palette = state.palette();
+  let locale = state.kernel.locale;
+  let mut chips = Row::new()
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center);
+  let mut any = false;
+  if let Some(height) = info.video_height.filter(|height| *height > 0) {
+    chips = chips.push(spec_chip(palette, format!("{height}p")));
+    any = true;
+  }
+  if let Some(range) = nonempty(info.video_range.as_deref()) {
+    chips = chips.push(spec_chip(palette, range.to_owned()));
+    any = true;
+  }
+  if let Some(codec) = nonempty(info.video_codec.as_deref()) {
+    chips = chips.push(spec_chip(palette, codec.to_owned()));
+    any = true;
+  }
+  if let Some(rate) = info
+    .video_frame_rate
+    .filter(|rate| rate.is_finite() && *rate > 0.0)
+  {
+    chips = chips.push(spec_chip(palette, frame_rate_label(rate)));
+    any = true;
+  }
+  // Track facts exist only when the chosen source's stream metadata was
+  // supplied; an unknown stream list is never presented as a confirmed zero.
+  if info.streams_known {
+    chips = chips.push(track_chip(
+      state,
+      TrackMenu::Audio,
+      &info.audio_streams,
+      locale.text("detail-no-audio"),
+    ));
+    chips = chips.push(track_chip(
+      state,
+      TrackMenu::Subtitles,
+      &info.subtitle_streams,
+      locale.text("detail-no-subtitles"),
+    ));
+    any = true;
+  }
+  if info.media_source_count > 1 {
+    chips = chips.push(
+      text(locale.format(
+        "detail-media-version",
+        &[("count", info.media_source_count.into())],
+      ))
+      .size(12)
+      .line_height(Pixels(16.0))
+      .color(palette.text.metadata),
+    );
+    any = true;
+  }
+  any.then(|| chips.wrap().vertical_spacing(TOKENS.spacing.s2).into())
+}
+
+/// Frame rate chip text: up to three decimals, trailing zeros trimmed so
+/// integer rates read "24 fps" rather than "24.000 fps".
+fn frame_rate_label(rate: f32) -> String {
+  let rate = format!("{rate:.3}");
+  let rate = rate.trim_end_matches('0').trim_end_matches('.');
+  format!("{rate} fps")
+}
+
+/// A non-interactive specification chip: the Paper 22px row treatment with
+/// 8px horizontal padding and 6px corners.
+fn spec_chip<'a>(palette: &'static ThemePalette, label: String) -> Element<'a, Message> {
+  container(
+    text(label)
+      .size(12)
+      .line_height(Pixels(16.0))
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .color(palette.colors.onControl),
+  )
+  .padding([3, 8])
+  .align_y(Alignment::Center)
+  .style(move |_| container::Style {
+    background: Some(Background::Color(palette.colors.surfaceContainerHigh)),
+    border: iced::Border {
+      radius: TOKENS.radii.md.into(),
+      color: palette.colors.borderSubtle,
+      width: 1.0,
+      ..iced::Border::default()
+    },
+    ..container::Style::default()
+  })
+  .into()
+}
+
+/// The audio or subtitle chip: a read-only track-list trigger summarizing the
+/// default (or first) track plus the count of other tracks of that type.
+fn track_chip<'a>(
+  state: &'a State,
+  menu: TrackMenu,
+  streams: &'a [VideoStreamInfo],
+  empty_label: String,
+) -> Element<'a, Message> {
+  let palette = state.palette();
+  if streams.is_empty() {
+    return spec_chip(palette, empty_label);
+  }
+  let summary = track_summary(state.kernel.locale, streams);
+  let icon = match menu {
+    TrackMenu::Audio => Icon::AudioTrack,
+    TrackMenu::Subtitles => Icon::Subtitles,
+  };
+  let trigger = control_button_content(
+    move |status| {
+      let color = match status {
+        IconControlState::Rest => palette.colors.onControl,
+        IconControlState::Hovered => palette.colors.onControlHover,
+        IconControlState::Disabled => palette.text.muted,
+      };
+      row![
+        icon_with_color(icon, IconSize::Custom(12.0), color),
+        text(summary.clone())
+          .size(12)
+          .line_height(Pixels(16.0))
+          .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+          .color(color),
+      ]
+      .spacing(6)
+      .align_y(Alignment::Center)
+      .into()
+    },
+    ButtonVariant::Pill,
+  )
+  .padding([3, 8])
+  .radius(TOKENS.radii.md)
+  .on_press(Message::Detail(DetailMessage::TrackMenuToggled(menu)));
+  let open = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .detail
+    .track_menu_open
+    == Some(menu);
+  let content: Element<'_, Message> = if open {
+    scrollable(track_list(palette, state.kernel.locale, streams))
+      .height(Length::Fit.max(280.0))
+      .style(jellypilot_ui::theme::scrollable)
+      .into()
+  } else {
+    space::vertical().into()
+  };
+  jellypilot_ui::overlay::popover(
+    trigger,
+    content,
+    open,
+    jellypilot_ui::overlay::PopoverOptions {
+      width: Some(320.0),
+      appearance: jellypilot_ui::overlay::PopoverAppearance::TrackList,
+      ..Default::default()
+    },
+    Message::Detail(DetailMessage::TrackMenuDismissed),
+  )
+}
+
+/// The read-only track rows inside a specification popover: language, format
+/// and the file's default marker, without selection or playback controls.
+fn track_list<'a>(
   palette: &'static ThemePalette,
   locale: Localizer,
-  item: &VideoItemDetail,
-) -> Element<'static, Message> {
+  streams: &'a [VideoStreamInfo],
+) -> Element<'a, Message> {
+  let mut rows = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+  for stream in streams {
+    let mut row = Row::new()
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center)
+      .width(Fill);
+    row = row.push(
+      text(track_label(locale, stream))
+        .size(12)
+        .line_height(Pixels(16.0))
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .color(palette.text.body)
+        .width(Fill),
+    );
+    if stream.is_default {
+      row = row.push(
+        text(locale.text("detail-default-track"))
+          .size(11)
+          .color(palette.text.metadata),
+      );
+    }
+    rows = rows.push(row);
+  }
+  rows.into()
+}
+
+/// One track's label: the server-formatted title when present, otherwise the
+/// composed language/codec/channel facts. Missing language is labeled unknown.
+fn track_label(locale: Localizer, stream: &VideoStreamInfo) -> String {
+  let language = nonempty(stream.language.as_deref())
+    .map(|code| language_label(locale, code))
+    .unwrap_or_else(|| locale.text("common-unknown"));
+  if let Some(title) = nonempty(stream.display_title.as_deref()) {
+    return if nonempty(stream.language.as_deref()).is_some() {
+      title.to_owned()
+    } else {
+      format!("{language} · {title}")
+    };
+  }
+  let mut values = vec![language];
+  if let Some(codec) = nonempty(stream.codec.as_deref()) {
+    values.push(codec.to_owned());
+  }
+  if let Some(layout) = nonempty(stream.channel_layout.as_deref()) {
+    values.push(layout.to_owned());
+  } else if let Some(channels) = stream.channels {
+    values.push(locale.format("detail-channels", &[("count", channels.into())]));
+  }
+  values.join(" ")
+}
+
+/// The chip summary: the explicitly default track when the source marks one,
+/// otherwise the first track in server order, plus the count of other tracks
+/// of the same type in this source.
+fn track_summary(locale: Localizer, streams: &[VideoStreamInfo]) -> String {
+  let summary = streams
+    .iter()
+    .find(|stream| stream.is_default)
+    .or_else(|| streams.first())
+    .map(|stream| track_label(locale, stream))
+    .unwrap_or_default();
+  let others = streams.len().saturating_sub(1);
+  if others > 0 {
+    format!("{summary} +{others}")
+  } else {
+    summary
+  }
+}
+
+fn media_info_section<'a>(
+  palette: &'static ThemePalette,
+  locale: Localizer,
+  item: &'a VideoItemDetail,
+) -> Element<'a, Message> {
   let Some(info) = &item.media_info else {
     return space::vertical().height(0).into();
   };
-  let mut rows = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+  let mut rows: Vec<(String, String)> = Vec::new();
   if let Some(video) = video_info_label(info) {
-    rows = rows.push(media_info_row(palette, locale.text("detail-video"), video));
+    rows.push((locale.text("detail-video"), video));
   }
   for stream in &info.audio_streams {
     if let Some(audio) = audio_info_label(locale, stream) {
-      rows = rows.push(media_info_row(palette, locale.text("detail-audio"), audio));
+      rows.push((locale.text("detail-audio"), audio));
     }
   }
   let subtitles = info
@@ -855,40 +1170,39 @@ fn media_info_section(
     .collect::<Vec<_>>()
     .join(", ");
   if !subtitles.is_empty() {
-    rows = rows.push(media_info_row(
-      palette,
-      locale.text("detail-subtitles"),
-      subtitles,
-    ));
+    rows.push((locale.text("detail-subtitles"), subtitles));
   }
   if let Some(container_name) = nonempty(info.container.as_deref()) {
-    rows = rows.push(media_info_row(
-      palette,
-      locale.text("detail-container"),
-      container_name.to_owned(),
-    ));
+    rows.push((locale.text("detail-container"), container_name.to_owned()));
   }
   if let Some(size_bytes) = info.size_bytes {
-    rows = rows.push(media_info_row(
-      palette,
-      locale.text("detail-size"),
-      humanized_size(size_bytes),
-    ));
+    rows.push((locale.text("detail-size"), humanized_size(size_bytes)));
   }
   if let Some(bitrate_bps) = info.bitrate_bps {
-    rows = rows.push(media_info_row(
-      palette,
+    rows.push((
       locale.text("detail-bitrate"),
       format!("{:.1} Mbps", bitrate_bps as f64 / 1_000_000.0),
     ));
   }
   let title = section_title(palette, locale.text("detail-media-info"));
+  // The body shares the section's content edge; rows align label and value
+  // columns at wide widths and stack them when narrow.
   column![
     title,
-    container(rows)
-      .padding(TOKENS.spacing.s5)
-      .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)),
+    responsive(move |bounds| -> Element<'_, Message> {
+      let narrow = bounds.width < 600.0;
+      let mut aligned = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+      for row in rows.iter() {
+        aligned = aligned.push(media_info_row(
+          palette,
+          row.0.clone(),
+          row.1.clone(),
+          narrow,
+        ));
+      }
+      aligned.into()
+    })
+    .height(Length::Fit),
   ]
   .spacing(TOKENS.spacing.s3)
   .into()
@@ -898,14 +1212,29 @@ fn media_info_row(
   palette: &'static ThemePalette,
   label: String,
   value: String,
+  narrow: bool,
 ) -> Element<'static, Message> {
-  row![
-    text(label).size(12).color(palette.text.metadata).width(120),
-    text(value).size(14).color(palette.text.secondary),
-  ]
-  .spacing(TOKENS.spacing.s4)
-  .width(Fill)
-  .into()
+  let label = text(label)
+    .size(12)
+    .line_height(Pixels(16.0))
+    .color(palette.text.metadata);
+  let value = text(value)
+    .size(14)
+    .line_height(Pixels(20.0))
+    .color(palette.text.secondary)
+    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+    .width(Fill);
+  if narrow {
+    column![label, value]
+      .spacing(TOKENS.spacing.s1)
+      .width(Fill)
+      .into()
+  } else {
+    row![label.width(160), value]
+      .spacing(TOKENS.spacing.s4)
+      .width(Fill)
+      .into()
+  }
 }
 
 fn video_info_label(info: &VideoMediaInfo) -> Option<String> {
@@ -933,7 +1262,9 @@ fn audio_info_label(locale: Localizer, stream: &VideoStreamInfo) -> Option<Strin
   if let Some(language) = nonempty(stream.language.as_deref()) {
     values.push(language.to_owned());
   }
-  if let Some(channels) = stream.channels {
+  if let Some(layout) = nonempty(stream.channel_layout.as_deref()) {
+    values.push(layout.to_owned());
+  } else if let Some(channels) = stream.channels {
     values.push(locale.format("detail-channels", &[("count", channels.into())]));
   }
   (!values.is_empty()).then(|| values.join(" "))
@@ -2001,37 +2332,43 @@ fn playback_progress(item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-fn item_metadata(locale: Localizer, item: &jellypilot_media_server::VideoItemDetail) -> String {
-  let mut values = vec![detail_metadata(locale, item)];
-  if let (Some(series), Some(season), Some(episode)) = (
-    item.series_name.as_deref(),
-    item.season_number,
-    item.episode_number,
-  ) {
-    values.push(format!("{series} · S{season:02}E{episode:02}"));
-  } else if let Some(series) = item.series_name.as_deref() {
-    values.push(series.to_owned());
+fn item_metadata(
+  locale: Localizer,
+  item: &jellypilot_media_server::VideoItemDetail,
+) -> DetailMetadata {
+  let series = nonempty(item.series_name.as_deref()).map(|name| MetadataSeries {
+    name: name.to_owned(),
+    // Only a real server series id makes the name navigable; without it the
+    // name stays plain text rather than a broken link.
+    link: item
+      .series_id
+      .as_deref()
+      .is_some_and(|id| !id.trim().is_empty()),
+  });
+  let mut tail = Vec::new();
+  if let (Some(season), Some(episode)) = (item.season_number, item.episode_number) {
+    tail.push(format!("S{season:02}E{episode:02}"));
   }
   if let Some(runtime) = item
     .runtime_seconds
     .and_then(|seconds| runtime_label(locale, seconds))
   {
-    values.push(runtime);
+    tail.push(runtime);
   }
   if let Some(rating) = item
     .metadata
     .community_rating
     .filter(|rating| rating.is_finite() && (0.0..=10.0).contains(rating))
   {
-    values.push(format!("{rating:.1}/10"));
+    tail.push(format!("{rating:.1}/10"));
   }
   if let Some(rating) = item.metadata.official_rating.as_deref() {
-    values.push(rating.to_owned());
+    tail.push(rating.to_owned());
   }
   if let Some(language) = item.original_language.as_deref() {
-    values.push(locale.format(
+    tail.push(locale.format(
       "detail-original-language",
-      &[("language", original_language_label(locale, language).into())],
+      &[("language", language_label(locale, language).into())],
     ));
   }
   if item.can_resume {
@@ -2039,43 +2376,51 @@ fn item_metadata(locale: Localizer, item: &jellypilot_media_server::VideoItemDet
       .played_percentage
       .filter(|progress| progress.is_finite() && *progress > 0.0 && *progress < 100.0)
     {
-      values.push(locale.format(
+      tail.push(locale.format(
         "detail-watched-percent",
         &[("percent", format!("{progress:.0}").into())],
       ));
     }
   }
-  values.join(" · ")
+  DetailMetadata {
+    head: detail_metadata(locale, item),
+    series,
+    tail,
+  }
 }
 
-fn show_metadata(locale: Localizer, show: &VideoShowDetail) -> String {
-  let mut values = vec![show_detail_metadata(locale, show)];
+fn show_metadata(locale: Localizer, show: &VideoShowDetail) -> DetailMetadata {
+  let mut tail = Vec::new();
   if let Some(rating) = show
     .metadata
     .community_rating
     .filter(|rating| rating.is_finite() && (0.0..=10.0).contains(rating))
   {
-    values.push(format!("{rating:.1}/10"));
+    tail.push(format!("{rating:.1}/10"));
   }
   if let Some(rating) = show.metadata.official_rating.as_deref() {
-    values.push(rating.to_owned());
+    tail.push(rating.to_owned());
   }
   if let Some(language) = show.original_language.as_deref() {
-    values.push(locale.format(
+    tail.push(locale.format(
       "detail-original-language",
-      &[("language", original_language_label(locale, language).into())],
+      &[("language", language_label(locale, language).into())],
     ));
   }
-  values.join(" · ")
+  DetailMetadata {
+    head: show_detail_metadata(locale, show),
+    series: None,
+    tail,
+  }
 }
 
 fn runtime_label(locale: Localizer, seconds: f64) -> Option<String> {
   (seconds.is_finite() && seconds > 0.0).then(|| locale.duration(seconds))
 }
 
-/// Localized display name for an original-language code; falls back to the raw
-/// server value for languages without a name entry.
-fn original_language_label(locale: Localizer, code: &str) -> String {
+/// Localized display name for a language code; falls back to the raw server
+/// value for languages without a name entry.
+fn language_label(locale: Localizer, code: &str) -> String {
   let normalized = jellypilot_media_server::normalize_language(code);
   let id = match normalized.as_deref() {
     Some("ar") => "settings-subtitle-arabic",
@@ -2195,6 +2540,165 @@ mod tests {
     )
   }
 
+  fn media_track(title: &str, is_default: bool) -> VideoStreamInfo {
+    VideoStreamInfo {
+      codec: Some("aac".to_owned()),
+      language: Some("eng".to_owned()),
+      channels: Some(2),
+      channel_layout: Some("stereo".to_owned()),
+      is_default,
+      display_title: Some(title.to_owned()),
+    }
+  }
+
+  #[test]
+  fn track_summary_prefers_file_default_without_merging_same_language_tracks() {
+    let state = hero_state();
+    let tracks = [
+      media_track("Commentary", false),
+      media_track("Original", true),
+      media_track("Description", false),
+    ];
+    assert_eq!(track_summary(state.kernel.locale, &tracks), "Original +2");
+    assert_eq!(
+      track_summary(state.kernel.locale, &[tracks[0].clone(), tracks[2].clone()]),
+      "Commentary +1"
+    );
+  }
+
+  #[test]
+  fn long_specification_labels_fit_their_controls_and_information_rows() {
+    let renderer = headless_renderer();
+    let state = hero_state();
+    let title = "AnUnbrokenServerSuppliedTrackOrSeriesIdentifier".repeat(8);
+    let tracks = [media_track(&title, false)];
+    let width = 180.0;
+    let measure = |text_value: String, size, line_height, width| {
+      layout_element(
+        text(text_value)
+          .size(size)
+          .line_height(Pixels(line_height))
+          .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+          .into(),
+        &renderer,
+        width,
+      )
+      .size()
+      .height
+    };
+    let chip = layout_element(
+      track_chip(&state, TrackMenu::Audio, &tracks, String::new()),
+      &renderer,
+      width,
+    );
+    assert!(
+      chip.size().height >= measure(title.clone(), 12.0, 16.0, width - 34.0) + 6.0,
+      "all wrapped track text must remain inside its interactive chip"
+    );
+    let metadata = DetailMetadata {
+      head: String::new(),
+      series: Some(MetadataSeries {
+        name: title.clone(),
+        link: true,
+      }),
+      tail: Vec::new(),
+    };
+    let link = layout_element(metadata_row(&state, &metadata), &renderer, width);
+    assert!(
+      link.size().height >= measure(title.clone(), 14.0, 18.0, width - 16.0),
+      "the parent-series link must grow with its complete label"
+    );
+    let list = layout_element(
+      track_list(state.palette(), state.kernel.locale, &tracks),
+      &renderer,
+      width,
+    );
+    assert!(
+      list.size().height >= measure(title.clone(), 12.0, 16.0, width),
+      "unbroken track identifiers must wrap inside the vertical list"
+    );
+    let info = layout_element(
+      media_info_row(state.palette(), "Audio".to_owned(), title.clone(), true),
+      &renderer,
+      width,
+    );
+    assert!(
+      info.size().height >= measure(title, 14.0, 20.0, width) + 20.0,
+      "narrow media information must retain the label and entire value"
+    );
+    for node in [chip, link, list, info] {
+      assert!(node.size().width <= width);
+    }
+  }
+
+  #[test]
+  fn track_popover_opens_from_keyboard_and_dismisses_without_selecting_a_track() {
+    use iced::advanced::widget::operation::focusable;
+    use iced::keyboard::{key, Event as KeyEvent, Key, Location, Modifiers};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut renderer = headless_renderer();
+    let mut state = hero_state();
+    let tracks = [
+      media_track("Original", true),
+      media_track("Commentary", false),
+    ];
+    let bounds = iced::Size::new(200.0, 160.0);
+    let mut cache = Cache::new();
+    for (open, key_name, physical) in [
+      (false, key::Named::Enter, key::Code::Enter),
+      (true, key::Named::Escape, key::Code::Escape),
+    ] {
+      state.full.as_mut().unwrap().detail.track_menu_open = open.then_some(TrackMenu::Audio);
+      let mut ui = UserInterface::build(
+        track_chip(&state, TrackMenu::Audio, &tracks, String::new()),
+        bounds,
+        cache,
+        &mut renderer,
+      );
+      let mut focus: Box<dyn iced::advanced::widget::Operation> = Box::new(focusable::focus_next());
+      loop {
+        ui.operate(&renderer, focus.as_mut());
+        match focus.finish() {
+          iced::advanced::widget::operation::Outcome::Chain(next) => focus = next,
+          _ => break,
+        }
+      }
+      let mut bus = iced::advanced::shell::Bus::new();
+      ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[iced::Event::Keyboard(KeyEvent::KeyPressed {
+          key: Key::Named(key_name),
+          modified_key: Key::Named(key_name),
+          physical_key: key::Physical::Code(physical),
+          location: Location::Standard,
+          modifiers: Modifiers::NONE,
+          text: None,
+          repeat: false,
+        })],
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut bus,
+      );
+      let messages: Vec<_> = bus.drain().map(|(message, _)| message).collect();
+      if open {
+        assert!(matches!(
+          messages.as_slice(),
+          [Message::Detail(DetailMessage::TrackMenuDismissed)]
+        ));
+      } else {
+        assert!(matches!(
+          messages.as_slice(),
+          [Message::Detail(DetailMessage::TrackMenuToggled(
+            TrackMenu::Audio
+          ))]
+        ));
+      }
+      cache = ui.into_cache();
+    }
+  }
+
   #[test]
   fn expansion_moves_actions_below_copy_without_resizing_the_hero() {
     let renderer = headless_renderer();
@@ -2212,7 +2716,12 @@ mod tests {
               HeroContent {
                 id: "movie",
                 name: "A long title for the international extended edition",
-                metadata: "2026 · Adventure".to_owned(),
+                metadata: DetailMetadata {
+                  head: "2026 · Adventure".to_owned(),
+                  series: None,
+                  tail: Vec::new(),
+                },
+                media_info: None,
                 overview: Some(&overview),
                 playback_label: state.t("detail-play"),
                 playback: None,

@@ -366,7 +366,7 @@ Human acceptance: check windowed/fullscreen video proportions, 1099/900/768/400p
 
 ## Accepted Paper Detail Composition
 
-**Implemented; human visual acceptance pending.** References: [single episode](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/102-0), [series](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2BU-0), and [movie](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2I6-0). This section supersedes older Detail geometry and scrim descriptions, not the Home or player compositions.
+**Implemented; human visual acceptance pending.** References: [single episode](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/102-0), [series](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2BU-0), and [movie](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2I6-0). This section supersedes older Detail geometry and scrim descriptions, not the Home or player compositions. The 2026-09-15 additions below are implemented alongside the base composition.
 
 - The hero is full-bleed within the content lane, 520 logical pixels high, with centered `Cover` artwork. Unlike actual playback video, decorative Detail Backdrops are deliberately cropped. Logos preserve their intrinsic aspect near the lower-left; unavailable logos fall back to the real title.
 - Two independent canvas-colored scrims provide legibility: bottom fade (top-to-bottom alpha 0.30, 0.28 at 45%, 0.72 at 78%, 1.0 at the bottom) and left darkening (0.55 at the left to transparent at 55% width). Both resolve through the active theme.
@@ -382,3 +382,45 @@ Human acceptance: check windowed/fullscreen video proportions, 1099/900/768/400p
 - Premiere dates preserve the server's calendar date rather than shifting midnight through the desktop time zone. Missing dates, portraits and roles remain absent or use the established empty presentation.
 
 Human acceptance: compare a movie, series and episode against the references in both themes; check hero crop/logo/scrims, below-hero copy, season popover and its dismissal, Next Up only on series, Play/Resume/Replay, long-text disclosure, real cast photos/roles, horizontal shelves, and narrow-width reflow. Headless tests exercise layout and pointer/state behavior; they do not establish visual acceptance.
+
+### 2026-09-15 Media Specifications and Parent Series Navigation
+
+**Implemented; human visual acceptance pending.** The updated single-episode and movie references above add a Media Specifications row between metadata and overview, plus a read-only track popover. These rules apply across the movie, episode and series detail family; they supersede only the affected presentation rules above. Existing Hero composition, real episode identity, section ordering and playback semantics remain unchanged.
+
+#### Scope and Source Ownership
+
+- Movies and individual episodes show Media Specifications. Series details have no series-wide specifications, do not borrow the Next Up episode's specifications, and do not add per-episode specifications to the season list.
+- Continue using the first media source returned by the server. The top summary, track popovers and bottom media information describe the same source; never combine video facts or tracks across versions.
+- When multiple sources are available, explicitly identify the summary as describing the first media version. There is no version selector, and this source is not promised to be the version eventually chosen for playback.
+- Specifications describe source media, not effective playback output or device capabilities. HEVC alone is not evidence of HDR; EAC3 alone is not evidence of Dolby Atmos. Show a specific format only when the server metadata supports it; otherwise use the available ordinary codec/channel facts.
+
+#### Specifications Row and Track Popovers
+
+- Order the summary as resolution, dynamic range, video codec, frame rate, audio and subtitles, between item metadata and overview. Use actual server facts, never the reference's sample values.
+- Audio and subtitle summaries prefer a track explicitly marked default in the source metadata, otherwise the first track in server order. This choice does not resolve user preferences or predict the track the backend will play.
+- `+N` counts the other tracks of that type in the same source, not additional languages or tracks from other versions. Do not merge tracks sharing a language; each remains a separate entry.
+- Clicking the entire audio or subtitle chip opens its read-only track list. Preserve real language, format and default-track information. The Paper selected-row highlight and checkmark are deliberately not adopted: a default marker is metadata, not a selected playback state.
+- The popovers do not select tracks, change preferences, start playback or control an active Playback Session. They have no “disable subtitles” action; Direct Playback remains unchanged.
+- Only one track popover is open at a time. Support keyboard opening and dismissal; Esc, outside click and navigation close it. Bound long lists to the available viewport with scrolling rather than clipping inaccessible rows.
+- Omit unknown specification fields rather than inventing values. Keep known tracks with missing language metadata and label their language as unknown. Distinguish explicitly absent subtitles from unavailable subtitle metadata; unavailable data must not be presented as a confirmed zero-track count.
+- Chips wrap at narrow widths rather than disappearing or overflowing. Adapt their treatment through the existing light/dark theme tokens rather than copying hard-coded dark-only colors from Paper.
+
+#### Complete Media Information Alignment
+
+- Keep the full media-information section after the existing core sections for movies and episodes, including video, audio, subtitles, container, file size and bitrate when available. The top summary does not replace or silently remove this information.
+- Align the section heading and information body to the same content insets as overview, summary, cast and similar sections. Remove the extra inner indentation that currently shifts the information body away from that shared edge.
+- At wide widths, use consistent label and value columns across all information rows; allow long track descriptions and values to wrap. At narrow widths, stack labels above values without losing fields.
+
+#### Episode to Parent Series
+
+- Make the parent series name in the episode metadata area a discoverable, keyboard-operable text link. Keep the episode title separate; do not add a competing action-row button or make the Title Logo the navigation control.
+- Follow the episode's server-provided parent series ID, never a name-based guess. Without a usable parent ID, retain any available series name as plain text rather than offering a broken link.
+- Open the parent series detail at the top and preselect the episode's season using the real server season identity. If that season cannot be identified or is unavailable, use the series page's normal default season.
+- Do not auto-scroll to the originating episode, start playback or change Next Up. Favorites, Watchlist and watched actions on the episode still target the episode.
+- This is parent navigation, not Back: Back continues to follow browsing history, which may lead to Video Home, search or Personal Lists.
+
+#### Delivery and Acceptance
+
+The desktop implementation and shared media-info/FFI contracts are delivered; Paper references remain unchanged. Headless regressions cover provider metadata boundaries, default-first summaries, long-text layout, keyboard popover behavior, and originating-season navigation through retry and history restoration. Workspace checks/tests and the isolated native first-frame smoke gate pass; these checks do not establish visual acceptance. No new ADR is needed for these presentation and information-ownership rules.
+
+Human acceptance: compare all three detail types in both themes and at narrow widths; check truthful resolution/range/codec/frame-rate summaries, default-first track summaries and `+N` counts, same-language tracks, missing/default-less metadata, confirmed no-subtitle versus unavailable data, multi-source disclosure, long read-only popovers and keyboard dismissal, complete bottom-information alignment, and absent series-wide specifications. From a non-first-season episode opened through home, search or Personal Lists, check the series-name link, top-of-series arrival with the originating season selected, missing-parent/season fallbacks, and unchanged Back, Next Up and playback behavior.

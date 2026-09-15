@@ -457,6 +457,30 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Detail(DetailMessage::Back) if state.full.is_some() => shell::navigate_back(state),
     Message::Detail(DetailMessage::Back) => Task::none(),
+    Message::Detail(DetailMessage::OpenSeries) => {
+      // Follow the episode's server-provided parent identity; the season
+      // request rides the navigation and resolves against the loaded show.
+      let parent = state.full.as_ref().and_then(|full| {
+        let jellypilot_core::LoadState::Ready(jellypilot_core::detail::DetailContent::Item(item)) =
+          &full.detail.data.content
+        else {
+          return None;
+        };
+        let series_id = item.series_id.as_deref()?.trim().to_owned();
+        (!series_id.is_empty()).then(|| (series_id, item.series_name.clone(), item.season_number))
+      });
+      match parent {
+        Some((series_id, series_name, season_number))
+          if shell::destination_allowed(
+            state.app_mode(),
+            &Destination::Detail(series_id.clone()),
+          ) =>
+        {
+          shell::open_parent_series(state, series_id, series_name, season_number)
+        }
+        _ => Task::none(),
+      }
+    }
     Message::Detail(DetailMessage::WatchlistToggled) => {
       if accounts::content_mutations_blocked(&state.accounts) {
         return state.kernel.show_toast(
@@ -770,7 +794,9 @@ mod tests {
   use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::intro_skipper::IntroSkipMode;
-  use jellypilot_media_server::{JellyfinClient, MediaServerProvider, VideoLibraryItem};
+  use jellypilot_media_server::{
+    JellyfinClient, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
+  };
   use jellypilot_mpv::playback::{
     Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
   };
@@ -1363,6 +1389,99 @@ mod tests {
     }
   }
 
+  fn episode_detail(id: &str, season_number: i32) -> VideoItemDetail {
+    VideoItemDetail {
+      id: id.to_owned(),
+      name: "Episode".to_owned(),
+      item_type: "Episode".to_owned(),
+      overview: None,
+      original_language: None,
+      production_year: None,
+      runtime_seconds: Some(1_800.0),
+      series_id: Some("show-1".to_owned()),
+      series_name: Some("Show".to_owned()),
+      season_number: Some(season_number),
+      episode_number: Some(1),
+      genres: Vec::new(),
+      played: false,
+      favorite: false,
+      played_percentage: None,
+      resume_position_seconds: None,
+      can_resume: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      logo_image_id: None,
+      series_poster_image_id: None,
+      media_info: None,
+      metadata: Default::default(),
+    }
+  }
+
+  #[test]
+  fn open_series_navigates_to_parent_and_requests_the_originating_season() {
+    let mut state = test_state();
+    let episode_item = episode("episode-1", 2);
+    drop(shell::open_detail(&mut state, episode_item));
+    state.full.as_mut().unwrap().detail.data.content = jellypilot_core::LoadState::Ready(
+      jellypilot_core::detail::DetailContent::Item(Box::new(episode_detail("episode-1", 2))),
+    );
+
+    drop(update(
+      &mut state,
+      Message::Detail(DetailMessage::OpenSeries),
+    ));
+
+    assert_eq!(
+      state.shell.destination,
+      Destination::Detail("show-1".to_owned())
+    );
+    let detail = &state.full.as_ref().unwrap().detail;
+    assert_eq!(detail.data.requested_season_number, Some(2));
+    assert_eq!(detail.pending_season, None);
+    assert!(
+      detail.items["show-1"].item_type == "Series",
+      "the parent stub must load as a series"
+    );
+
+    // Back returns to the episode through browsing history, not to Home.
+    drop(shell::navigate_back(&mut state));
+    assert_eq!(
+      state.shell.destination,
+      Destination::Detail("episode-1".to_owned())
+    );
+  }
+
+  #[test]
+  fn open_series_without_a_parent_id_stays_on_the_episode() {
+    let mut state = test_state();
+    drop(shell::open_detail(&mut state, episode("episode-1", 2)));
+    let mut detail_item = episode_detail("episode-1", 2);
+    detail_item.series_id = None;
+    state.full.as_mut().unwrap().detail.data.content = jellypilot_core::LoadState::Ready(
+      jellypilot_core::detail::DetailContent::Item(Box::new(detail_item)),
+    );
+
+    drop(update(
+      &mut state,
+      Message::Detail(DetailMessage::OpenSeries),
+    ));
+
+    assert_eq!(
+      state.shell.destination,
+      Destination::Detail("episode-1".to_owned())
+    );
+    assert_eq!(
+      state
+        .full
+        .as_ref()
+        .unwrap()
+        .detail
+        .data
+        .requested_season_number,
+      None
+    );
+  }
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
       community_rating: None,

@@ -84,6 +84,16 @@ pub fn initial_season(show: &VideoShowDetail) -> Option<&VideoSeason> {
         .or_else(|| show.seasons.first())
 }
 
+/// Resolves a season of the loaded show by its server season number, e.g. the
+/// season an episode detail was opened from. `None` when the number is absent
+/// or matches no listed season; callers then keep the normal default season.
+#[must_use]
+pub fn season_for_number(show: &VideoShowDetail, season_number: i32) -> Option<&VideoSeason> {
+    show.seasons
+        .iter()
+        .find(|season| season.season_number == Some(season_number))
+}
+
 /// Builds the first-page episodes request for the show's selected season, or
 /// `None` when the selection does not resolve to a season of the loaded show.
 #[must_use]
@@ -304,6 +314,21 @@ mod tests {
             initial_season(&show).map(|season| season.id.as_str()),
             Some("season-1")
         );
+    }
+
+    #[test]
+    fn season_for_number_matches_only_a_listed_season_number() {
+        let show = show_detail(None);
+
+        assert_eq!(
+            season_for_number(&show, 2).map(|season| season.id.as_str()),
+            Some("season-2")
+        );
+        assert!(season_for_number(&show, 9).is_none());
+
+        let mut unnumbered = show_detail(None);
+        unnumbered.seasons[0].season_number = None;
+        assert!(season_for_number(&unnumbered, 1).is_none());
     }
 
     #[test]

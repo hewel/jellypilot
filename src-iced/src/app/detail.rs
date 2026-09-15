@@ -8,8 +8,8 @@ use crate::i18n::UiText;
 use iced::Task;
 use jellypilot_core::detail::{
   apply_user_data_update, detail_episode_key, detail_similar_key, detail_user_data, initial_season,
-  load_detail_content, load_season_neighbors, load_similar_items, selected_season_request,
-  DetailContent,
+  load_detail_content, load_season_neighbors, load_similar_items, season_for_number,
+  selected_season_request, DetailContent,
 };
 use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RequestGate};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
@@ -21,7 +21,7 @@ use jellypilot_media_server::{
 use super::artwork::{ImageCollection, ImageSpec};
 use super::kernel::Kernel;
 use super::message::{DetailMessage, Message};
-use super::state::{DetailState, UserDataActionKind};
+use super::state::{DetailState, TrackMenu, UserDataActionKind};
 
 const DETAIL_FAILURE: &str = "detail-load-error";
 const SEASON_FAILURE: &str = "detail-season-error";
@@ -39,6 +39,12 @@ pub struct Surface {
   pub data: DetailState,
   pub artwork: ImageCollection,
   pub(crate) season_menu_open: bool,
+  /// The Media Specifications track list currently open; at most one at a time.
+  pub(crate) track_menu_open: Option<TrackMenu>,
+  /// Season preselection requested by the navigation that opened the current
+  /// detail item: (detail item id, originating season number). Consumed by the
+  /// next load; a mismatched or stale request is dropped, never applied.
+  pub(crate) pending_season: Option<(String, i32)>,
   pub(crate) collection_change: Option<super::collections::Change>,
   pub(crate) pending_user_data: HashMap<String, jellypilot_core::request_gate::DetailAuxToken>,
   refresh_token: Option<DetailToken>,
@@ -53,7 +59,9 @@ pub fn update(
   match message {
     // Handled entirely by the top-level router: navigation writes the shared
     // destination stack and drives the other surfaces' leave/enter hooks.
-    DetailMessage::Back | DetailMessage::WatchlistToggled => Task::none(),
+    DetailMessage::Back | DetailMessage::WatchlistToggled | DetailMessage::OpenSeries => {
+      Task::none()
+    }
     DetailMessage::Retry => start_load(surface, kernel, detail_item_id),
     DetailMessage::RetryNeighbors => start_followup(surface, kernel, false),
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
@@ -86,6 +94,14 @@ pub fn update(
         return Task::none();
       }
       start_selected_season_load(surface, kernel)
+    }
+    DetailMessage::TrackMenuToggled(menu) => {
+      surface.track_menu_open = (surface.track_menu_open != Some(menu)).then_some(menu);
+      Task::none()
+    }
+    DetailMessage::TrackMenuDismissed => {
+      surface.track_menu_open = None;
+      Task::none()
     }
     DetailMessage::FavoriteToggled => {
       start_user_data_update(surface, kernel, UserDataActionKind::Favorite)
@@ -189,6 +205,7 @@ pub fn start_load(
   item_id: Option<&str>,
 ) -> Task<Message> {
   surface.season_menu_open = false;
+  surface.track_menu_open = None;
   let Some(item_id) = item_id else {
     return Task::none();
   };
@@ -196,7 +213,14 @@ pub fn start_load(
     surface.data.content = jellypilot_core::LoadState::Failed(UiText::new(DETAIL_FAILURE));
     return Task::none();
   };
+  // DetailState belongs to the current history entry. Preserve unresolved
+  // preselection through retries/restoration; leaving the entry clears it.
+  let requested_season_number = match surface.pending_season.take() {
+    Some((id, season_number)) => (id == item_id).then_some(season_number),
+    None => surface.data.requested_season_number,
+  };
   surface.data.clear();
+  surface.data.requested_season_number = requested_season_number;
   surface.artwork.clear();
   kernel
     .request_gate
@@ -301,6 +325,7 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str)
   let Some(client) = kernel.client.clone() else {
     return Task::none();
   };
+  surface.track_menu_open = None;
   let token = kernel.request_gate.begin_detail();
   surface.refresh_token = Some(token);
   Task::perform(
@@ -333,6 +358,14 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool
     None,
   }
 
+  // A season requested by the navigation that opened this detail (e.g. the
+  // originating season of an episode's parent series) is consumed once: it
+  // resolves only against a season the loaded show actually lists.
+  let requested_season = if matches!(surface.data.content, jellypilot_core::LoadState::Ready(_)) {
+    surface.data.requested_season_number.take()
+  } else {
+    None
+  };
   let followup = match &surface.data.content {
     jellypilot_core::LoadState::Ready(DetailContent::Item(item))
       if item.item_type.eq_ignore_ascii_case("episode") =>
@@ -350,12 +383,18 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool
     }
     jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => Followup::Show {
       item_id: show.id.clone(),
-      selected_season_id: surface
-        .data
-        .selected_season_id
-        .as_ref()
-        .filter(|id| show.seasons.iter().any(|season| &season.id == *id))
-        .cloned()
+      selected_season_id: requested_season
+        .and_then(|season_number| {
+          season_for_number(show, season_number).map(|season| season.id.clone())
+        })
+        .or_else(|| {
+          surface
+            .data
+            .selected_season_id
+            .as_ref()
+            .filter(|id| show.seasons.iter().any(|season| &season.id == *id))
+            .cloned()
+        })
         .or_else(|| initial_season(show).map(|season| season.id.clone())),
     },
     jellypilot_core::LoadState::Ready(DetailContent::Item(_))
@@ -779,6 +818,7 @@ pub(crate) fn episode_image_spec(
 /// Leaving Detail revokes only its own images and invalidates metadata work.
 pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
   surface.season_menu_open = false;
+  surface.track_menu_open = None;
   kernel.request_gate.navigate();
   surface.artwork.clear();
   surface.data.clear();
@@ -1194,6 +1234,175 @@ mod tests {
       !surface.season_menu_open,
       "a pending season cannot open another selection"
     );
+  }
+
+  #[test]
+  fn track_menus_are_exclusive_and_dismiss_together() {
+    let (mut surface, mut kernel) = test_fixture();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::TrackMenuToggled(TrackMenu::Audio),
+    ));
+    assert_eq!(surface.track_menu_open, Some(TrackMenu::Audio));
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::TrackMenuToggled(TrackMenu::Subtitles),
+    ));
+    assert_eq!(surface.track_menu_open, Some(TrackMenu::Subtitles));
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::TrackMenuToggled(TrackMenu::Subtitles),
+    ));
+    assert_eq!(surface.track_menu_open, None);
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::TrackMenuToggled(TrackMenu::Audio),
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::TrackMenuDismissed,
+    ));
+    assert_eq!(surface.track_menu_open, None);
+  }
+
+  #[test]
+  fn track_menu_closes_on_reload_and_when_leaving_detail() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface
+      .items
+      .insert("item-1".to_owned(), episode("item-1", 1));
+    surface.track_menu_open = Some(TrackMenu::Audio);
+
+    drop(start_load(&mut surface, &mut kernel, Some("item-1")));
+    assert_eq!(surface.track_menu_open, None);
+
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
+    surface.track_menu_open = Some(TrackMenu::Audio);
+    drop(refresh(&mut surface, &mut kernel, "item-1"));
+    assert_eq!(surface.track_menu_open, None);
+
+    surface.track_menu_open = Some(TrackMenu::Subtitles);
+    leave_view(&mut surface, &mut kernel);
+    assert_eq!(surface.track_menu_open, None);
+  }
+
+  #[test]
+  fn a_requested_season_preselects_the_matching_show_season_once() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface
+      .items
+      .insert("show-1".to_owned(), episode("show-1", 1));
+    surface.pending_season = Some(("show-1".to_owned(), 1));
+
+    drop(start_load(&mut surface, &mut kernel, Some("show-1")));
+    assert_eq!(surface.data.requested_season_number, Some(1));
+    assert_eq!(surface.pending_season, None);
+
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    drop(start_followup(&mut surface, &mut kernel, false));
+
+    // The originating season wins over the next-up episode's season.
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-1"));
+    assert_eq!(surface.data.requested_season_number, None);
+
+    // A later refresh keeps the resolved selection rather than re-requesting.
+    drop(start_followup(&mut surface, &mut kernel, false));
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-1"));
+  }
+
+  #[test]
+  fn an_unresolvable_or_stale_season_request_falls_back_to_the_default() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface
+      .items
+      .insert("show-1".to_owned(), episode("show-1", 1));
+    kernel
+      .request_gate
+      .set_detail_item(Some("show-1".to_owned()));
+
+    // A season number the show does not list falls back to the normal default.
+    surface.data.requested_season_number = Some(9);
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    drop(start_followup(&mut surface, &mut kernel, false));
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
+
+    // A pending request for another item is dropped, not applied to this show.
+    surface.pending_season = Some(("other-show".to_owned(), 1));
+    drop(start_load(&mut surface, &mut kernel, Some("show-1")));
+    assert_eq!(surface.data.requested_season_number, None);
+    assert_eq!(surface.pending_season, None);
+  }
+
+  #[test]
+  fn originating_season_survives_failed_load_retry_and_loading_history_restore() {
+    for restore_history in [false, true] {
+      let (mut surface, mut kernel) = test_fixture();
+      kernel.client = Some(Arc::new(JellyfinClient::new()));
+      surface
+        .items
+        .insert("show-1".to_owned(), episode("show-1", 1));
+      surface.pending_season = Some(("show-1".to_owned(), 1));
+      drop(start_load(&mut surface, &mut kernel, Some("show-1")));
+
+      if restore_history {
+        let saved = std::mem::take(&mut surface.data);
+        leave_view(&mut surface, &mut kernel);
+        drop(restore(&mut surface, &mut kernel, "show-1", saved));
+      } else {
+        let token = kernel.request_gate.begin_detail();
+        drop(update(
+          &mut surface,
+          &mut kernel,
+          Some("show-1"),
+          DetailMessage::Loaded {
+            token,
+            result: Box::new(Err("temporary network failure".to_owned())),
+          },
+        ));
+        drop(update(
+          &mut surface,
+          &mut kernel,
+          Some("show-1"),
+          DetailMessage::Retry,
+        ));
+      }
+
+      let token = kernel.request_gate.begin_detail();
+      drop(update(
+        &mut surface,
+        &mut kernel,
+        Some("show-1"),
+        DetailMessage::Loaded {
+          token,
+          result: Box::new(Ok(DetailContent::Show(Box::new(show_detail())))),
+        },
+      ));
+      assert_eq!(
+        surface.data.selected_season_id.as_deref(),
+        Some("season-1"),
+        "originating season must survive history restore={restore_history}"
+      );
+    }
   }
 
   #[test]

@@ -118,6 +118,10 @@ _Avoid_: Mini player, compact view, floating widget
 The authenticated JellyPilot shell area for browsing video libraries, inspecting item details, launching Playback Sessions, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin or Emby client feature.
 _Avoid_: Full media-server replacement
 
+**Media Specifications**:
+Read-only file-level facts about one media source of a movie or individual episode, including its video format and available audio and subtitle tracks. Media Specifications describe the source, not an entire series, the tracks selected for a Playback Session, or the output capabilities of a Playback Backend or display.
+_Avoid_: Playback statistics, playback preferences, series-wide quality
+
 **Library Image**:
 A still image shown in the Library Browser for media content. Library Images include Artwork and Backdrop and are not limited to portrait posters.
 _Avoid_: Poster as the umbrella term, thumbnail

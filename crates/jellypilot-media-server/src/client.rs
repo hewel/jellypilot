@@ -5257,26 +5257,30 @@ fn map_jellyfin_video_media_info(item: &jellyfin_api::models::BaseItemDto) -> Vi
     .as_ref()
     .and_then(|sources| sources.as_ref());
   let media_source = media_sources.and_then(|sources| sources.first());
-  let streams = media_source
-    .and_then(|source| {
-      source
+  // A present source owns its stream list: when its MediaStreams field is
+  // absent the tracks are unknown, never merged from the item-level list.
+  let source_streams = media_source.map(|source| {
+    source
+      .media_streams
+      .as_ref()
+      .and_then(|streams| streams.as_ref())
+  });
+  let (streams, streams_known) = match source_streams {
+    Some(streams) => (
+      streams.map(Vec::as_slice).unwrap_or_default(),
+      streams.is_some(),
+    ),
+    None => {
+      let item_streams = item
         .media_streams
         .as_ref()
-        .and_then(|streams| streams.as_ref())
-    })
-    .map(Vec::as_slice)
-    .unwrap_or_else(|| {
-      if media_source.is_some() {
-        &[]
-      } else {
-        item
-          .media_streams
-          .as_ref()
-          .and_then(|streams| streams.as_ref())
-          .map(Vec::as_slice)
-          .unwrap_or_default()
-      }
-    });
+        .and_then(|streams| streams.as_ref());
+      (
+        item_streams.map(Vec::as_slice).unwrap_or_default(),
+        item_streams.is_some(),
+      )
+    }
+  };
   let video_stream = streams.iter().find(|stream| {
     matches!(
       stream.r#type,
@@ -5299,12 +5303,18 @@ fn map_jellyfin_video_media_info(item: &jellyfin_api::models::BaseItemDto) -> Vi
     video_height: video_stream
       .and_then(|stream| stream.height.flatten())
       .and_then(nonnegative_u32),
+    video_frame_rate: video_stream.and_then(|stream| {
+      positive_frame_rate(stream.average_frame_rate.flatten())
+        .or_else(|| positive_frame_rate(stream.real_frame_rate.flatten()))
+    }),
     video_range: video_stream.and_then(|stream| {
       stream
         .video_range_type
         .map(|range| range.to_string().replace("DOVI", "DoVi"))
         .or_else(|| stream.video_range.map(|range| range.to_string()))
     }),
+    media_source_count: media_sources.map_or(0, |sources| sources.len() as u32),
+    streams_known,
     audio_streams: streams
       .iter()
       .filter(|stream| {
@@ -5333,6 +5343,8 @@ fn map_jellyfin_video_stream_info(stream: &jellyfin_api::models::MediaStream) ->
     codec: stream.codec.clone().flatten(),
     language: stream.language.clone().flatten(),
     channels: stream.channels.flatten().and_then(nonnegative_u32),
+    channel_layout: stream.channel_layout.clone().flatten(),
+    is_default: stream.is_default.unwrap_or(false),
     display_title: stream.display_title.clone().flatten(),
   }
 }
@@ -5630,6 +5642,12 @@ fn backdrop_url(
 
 fn nonnegative_u32(value: i32) -> Option<u32> {
   u32::try_from(value).ok()
+}
+
+/// Keep only a usable frame rate: positive and finite. Zero, negative and
+/// non-finite probe values are treated as unknown rather than displayed.
+fn positive_frame_rate(rate: Option<f32>) -> Option<f32> {
+  rate.filter(|rate| rate.is_finite() && *rate > 0.0)
 }
 
 fn image_id_for_remote_url(
@@ -6677,19 +6695,18 @@ fn map_emby_video_season(
 }
 
 fn map_emby_video_media_info(item: &emby_api::models::BaseItemDto) -> VideoMediaInfo {
-  let media_source = item
-    .media_sources
-    .as_ref()
-    .and_then(|sources| sources.first());
-  let streams = media_source
-    .and_then(|source| source.media_streams.as_deref())
-    .unwrap_or_else(|| {
-      if media_source.is_some() {
-        &[]
-      } else {
-        item.media_streams.as_deref().unwrap_or_default()
-      }
-    });
+  let media_sources = item.media_sources.as_ref();
+  let media_source = media_sources.and_then(|sources| sources.first());
+  // A present source owns its stream list: when its MediaStreams field is
+  // absent the tracks are unknown, never merged from the item-level list.
+  let source_streams = media_source.map(|source| source.media_streams.as_deref());
+  let (streams, streams_known) = match source_streams {
+    Some(streams) => (streams.unwrap_or_default(), streams.is_some()),
+    None => {
+      let item_streams = item.media_streams.as_deref();
+      (item_streams.unwrap_or_default(), item_streams.is_some())
+    }
+  };
   let video_stream = streams.iter().find(|stream| {
     matches!(
       stream.r#type,
@@ -6712,9 +6729,15 @@ fn map_emby_video_media_info(item: &emby_api::models::BaseItemDto) -> VideoMedia
     video_height: video_stream
       .and_then(|stream| stream.height.flatten())
       .and_then(nonnegative_u32),
+    video_frame_rate: video_stream.and_then(|stream| {
+      positive_frame_rate(stream.average_frame_rate.flatten())
+        .or_else(|| positive_frame_rate(stream.real_frame_rate.flatten()))
+    }),
     video_range: video_stream
       .and_then(|stream| stream.video_range.as_ref())
       .map(|range| range.replace("DOVI", "DoVi")),
+    media_source_count: media_sources.map_or(0, |sources| sources.len() as u32),
+    streams_known,
     audio_streams: streams
       .iter()
       .filter(|stream| {
@@ -6743,6 +6766,8 @@ fn map_emby_video_stream_info(stream: &emby_api::models::MediaStream) -> VideoSt
     codec: stream.codec.clone(),
     language: stream.language.clone(),
     channels: stream.channels.flatten().and_then(nonnegative_u32),
+    channel_layout: stream.channel_layout.clone(),
+    is_default: stream.is_default.unwrap_or(false),
     display_title: stream.display_title.clone(),
   }
 }
@@ -10192,13 +10217,17 @@ mod tests {
               "Codec": "hevc",
               "Width": 3840,
               "Height": 2160,
-              "VideoRangeType": "DOVI"
+              "VideoRangeType": "DOVI",
+              "AverageFrameRate": 23.976,
+              "RealFrameRate": 24.0
             },
             {
               "Type": "Audio",
               "Codec": "aac",
               "Language": "eng",
               "Channels": 2,
+              "ChannelLayout": "stereo",
+              "IsDefault": true,
               "DisplayTitle": "English - AAC 2.0"
             },
             {
@@ -10242,14 +10271,23 @@ mod tests {
     assert_eq!(sourced.video_width, Some(3840));
     assert_eq!(sourced.video_height, Some(2160));
     assert_eq!(sourced.video_range.as_deref(), Some("DoVi"));
+    assert_eq!(sourced.video_frame_rate, Some(23.976));
+    assert_eq!(sourced.media_source_count, 2);
+    assert!(sourced.streams_known);
     assert_eq!(sourced.audio_streams.len(), 1);
     assert_eq!(sourced.audio_streams[0].channels, Some(2));
+    assert_eq!(
+      sourced.audio_streams[0].channel_layout.as_deref(),
+      Some("stereo")
+    );
+    assert!(sourced.audio_streams[0].is_default);
     assert_eq!(
       sourced.audio_streams[0].display_title.as_deref(),
       Some("English - AAC 2.0")
     );
     assert_eq!(sourced.subtitle_streams.len(), 1);
     assert_eq!(sourced.subtitle_streams[0].channels, None);
+    assert!(!sourced.subtitle_streams[0].is_default);
 
     let fallback = map_video_item_detail("http://server", fallback).expect("episode maps");
     let fallback = fallback
@@ -10258,12 +10296,70 @@ mod tests {
     assert_eq!(fallback.container, None);
     assert_eq!(fallback.size_bytes, None);
     assert_eq!(fallback.bitrate_bps, None);
+    assert_eq!(fallback.media_source_count, 0);
+    assert!(fallback.streams_known);
     assert_eq!(fallback.audio_streams[0].codec.as_deref(), Some("opus"));
     assert_eq!(fallback.audio_streams[0].channels, Some(6));
     assert_eq!(
       fallback.subtitle_streams[0].language.as_deref(),
       Some("jpn")
     );
+  }
+
+  #[tokio::test]
+  async fn media_info_distinguishes_unknown_streams_and_falls_back_frame_rate() {
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let item_id = "00000000000000000000000000000050";
+      let sources = [
+        serde_json::json!([{ "Container": "mkv" }]),
+        serde_json::json!([{ "Container": "mkv", "MediaStreams": [] }]),
+        serde_json::json!([{
+          "MediaStreams": [{
+            "Type": "Video",
+            "Codec": "h264",
+            "AverageFrameRate": 0.0,
+            "RealFrameRate": 29.97
+          }]
+        }]),
+      ];
+      let responses = sources
+        .into_iter()
+        .map(|sources| {
+          (
+            "200 OK".to_owned(),
+            serde_json::json!({
+              "Id": item_id,
+              "Name": "Movie",
+              "Type": "Movie",
+              "MediaSources": sources,
+              "MediaStreams": [{ "Type": "Subtitle", "Language": "must-not-leak" }]
+            })
+            .to_string(),
+          )
+        })
+        .collect();
+      let (server_url, _) = serve_owned_responses_with_requests(responses).await;
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => connect_test_client(&client, server_url),
+        MediaServerProvider::Emby => connect_test_client_as_emby(&client, server_url),
+      }
+      for (known, frame_rate) in [(false, None), (true, None), (true, Some(29.97))] {
+        let info = client
+          .library()
+          .item_detail(item_id.to_owned())
+          .await
+          .expect("provider detail should load")
+          .media_info
+          .expect("movie media information");
+        assert_eq!(info.streams_known, known, "{provider:?}");
+        assert!(
+          info.subtitle_streams.is_empty(),
+          "{provider:?}: item-level tracks must not leak into a media source"
+        );
+        assert_eq!(info.video_frame_rate, frame_rate, "{provider:?}");
+      }
+    }
   }
 
   #[test]
@@ -10294,13 +10390,16 @@ mod tests {
               "Codec": "h264",
               "Width": 1920,
               "Height": 1080,
-              "VideoRange": "HDR10"
+              "VideoRange": "HDR10",
+              "RealFrameRate": 25.0
             },
             {
               "Type": "Audio",
               "Codec": "ac3",
               "Language": "eng",
               "Channels": 6,
+              "ChannelLayout": "5.1",
+              "IsDefault": true,
               "DisplayTitle": "English - AC3 5.1"
             },
             {
@@ -10339,8 +10438,17 @@ mod tests {
     assert_eq!(media_info.video_width, Some(1920));
     assert_eq!(media_info.video_height, Some(1080));
     assert_eq!(media_info.video_range.as_deref(), Some("HDR10"));
+    assert_eq!(media_info.video_frame_rate, Some(25.0));
+    assert_eq!(media_info.media_source_count, 1);
+    assert!(media_info.streams_known);
     assert_eq!(media_info.audio_streams[0].channels, Some(6));
+    assert_eq!(
+      media_info.audio_streams[0].channel_layout.as_deref(),
+      Some("5.1")
+    );
+    assert!(media_info.audio_streams[0].is_default);
     assert_eq!(media_info.subtitle_streams[0].channels, None);
+    assert!(!media_info.subtitle_streams[0].is_default);
   }
 
   #[test]

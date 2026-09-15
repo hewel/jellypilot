@@ -20,6 +20,14 @@ pub(super) fn popover_surface(theme: &Theme) -> container::Style {
     }
 }
 
+/// Read-only track list surface: the opaque raised layer at the Paper detail
+/// popover's 16px radius.
+pub(super) fn track_list_surface(theme: &Theme) -> container::Style {
+    let mut style = popover_surface(theme);
+    style.border.radius = 16.0.into();
+    style
+}
+
 pub(super) fn tooltip_surface(theme: &Theme) -> container::Style {
     let palette = palette(theme);
     container::Style {
