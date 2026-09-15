@@ -6,6 +6,8 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 publish = false
+# Desktop workspace member; the root workspace excludes this crate.
+workspace = "../../src-iced"
 
 [[bin]]
 name = "jellypilot"

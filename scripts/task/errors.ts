@@ -29,3 +29,13 @@ export class TaskMpvArtifactError extends Data.TaggedError('TaskMpvArtifactError
   readonly path: string;
   readonly message: string;
 }> {}
+
+export class TaskAndroidToolchainError extends Data.TaggedError('TaskAndroidToolchainError')<{
+  readonly prerequisite: string;
+  readonly message: string;
+}> {}
+
+export class TaskAndroidArtifactError extends Data.TaggedError('TaskAndroidArtifactError')<{
+  readonly path: string;
+  readonly message: string;
+}> {}

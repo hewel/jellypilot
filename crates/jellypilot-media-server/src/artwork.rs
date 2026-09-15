@@ -1,12 +1,20 @@
-use std::collections::HashMap;
 use std::fmt;
+
+#[cfg(feature = "raster")]
+use std::collections::HashMap;
+#[cfg(feature = "raster")]
 use std::io::Cursor;
+#[cfg(feature = "raster")]
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[cfg(feature = "raster")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "raster")]
 use bytes::Bytes;
+#[cfg(feature = "raster")]
 use tokio::sync::{oneshot, watch, Notify};
 
+#[cfg(feature = "raster")]
 use crate::{
   artwork_cache_key, ArtworkCacheStats, ArtworkDiskCache, JellyfinClient, LibraryImageRequest,
 };
@@ -20,8 +28,10 @@ pub const MAX_ACTIVE_LOADS: usize = 24;
 pub const MAX_ACTIVE_BYTES: usize = 384 * 1024 * 1024;
 pub const DECODE_PIXEL_BUFFER_RESERVATIONS: usize = 2;
 
+#[cfg(feature = "raster")]
 const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
 
+#[cfg(feature = "raster")]
 #[derive(Clone, Copy)]
 pub struct ArtworkLimits {
   pub max_response_bytes: usize,
@@ -33,6 +43,7 @@ pub struct ArtworkLimits {
   pub max_active_bytes: usize,
 }
 
+#[cfg(feature = "raster")]
 impl Default for ArtworkLimits {
   fn default() -> Self {
     Self {
@@ -47,6 +58,7 @@ impl Default for ArtworkLimits {
   }
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkLimits {
   /// Bytes one plain load admits against the aggregate budget: the
   /// encoded body, bounded full-size decode buffer, and working raster
@@ -88,9 +100,11 @@ impl ArtworkLimits {
   }
 }
 
+#[cfg(feature = "raster")]
 #[derive(Clone, Copy)]
 pub struct ArtworkLoadTicket(u64);
 
+#[cfg(feature = "raster")]
 impl ArtworkLoadTicket {
   #[must_use]
   pub const fn new(generation: u64) -> Self {
@@ -103,6 +117,7 @@ impl ArtworkLoadTicket {
   }
 }
 
+#[cfg(feature = "raster")]
 /// Admission priority for live Library Image demand awaiting a resource permit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoadLane {
@@ -110,12 +125,14 @@ pub enum LoadLane {
   Offscreen,
 }
 
+#[cfg(feature = "raster")]
 #[derive(Default)]
 struct LoadBudget {
   active_loads: usize,
   active_bytes: usize,
 }
 
+#[cfg(feature = "raster")]
 impl LoadBudget {
   #[cfg(test)]
   const fn active_loads(&self) -> usize {
@@ -188,10 +205,12 @@ impl fmt::Display for ArtworkError {
 
 impl std::error::Error for ArtworkError {}
 
+#[cfg(feature = "raster")]
 /// Send-safe artwork bytes returned by the display-independent decoder.
 #[derive(Clone)]
 pub struct ArtworkBytes(Arc<[u8]>);
 
+#[cfg(feature = "raster")]
 impl ArtworkBytes {
   #[must_use]
   pub fn as_slice(&self) -> &[u8] {
@@ -245,6 +264,7 @@ impl ArtworkSizeClass {
 
   /// Shadow rasters carry a transparent margin of height/4 per side, bounding
   /// them at (width + height/2) x (height * 3/2) pixels.
+  #[cfg(feature = "raster")]
   const fn max_logo_shadow_bytes(self) -> usize {
     let (width, height) = self.target_box();
     (width as usize + height as usize / 2) * (height as usize * 3 / 2) * 4
@@ -275,6 +295,7 @@ impl ArtworkSizeClass {
   /// Wide-reference kinds (Backdrop at 1920) are clamped down to this width
   /// when the load targets a smaller class, so the fetched source cannot
   /// exceed [`Self::max_decode_pixels`].
+  #[cfg(feature = "raster")]
   pub(crate) const fn source_max_width(self) -> u32 {
     match self {
       Self::Card | Self::Hero => 600,
@@ -284,6 +305,7 @@ impl ArtworkSizeClass {
   }
 }
 
+#[cfg(feature = "raster")]
 /// A Library Image Raster: an in-memory, display-sized RGBA decode of a
 /// Library Image, keyed by the image reference and an [`ArtworkSizeClass`].
 /// Never persisted; renderers build their handle from it synchronously.
@@ -295,6 +317,7 @@ pub struct ArtworkRaster {
   logo_shadow: Option<Box<Self>>,
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkRaster {
   #[must_use]
   pub const fn width(&self) -> u32 {
@@ -335,7 +358,7 @@ impl ArtworkRaster {
   }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(all(feature = "raster", any(test, feature = "test-utils")))]
 impl ArtworkRaster {
   #[must_use]
   pub fn from_raw_for_test(width: u32, height: u32, pixels: impl Into<Bytes>) -> Self {
@@ -357,6 +380,7 @@ pub struct DerivedArtwork {
   pub logo_shadow: bool,
 }
 
+#[cfg(feature = "raster")]
 /// Cache and coalescing key for one decoded Library Image Raster.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct RasterKey {
@@ -365,6 +389,7 @@ struct RasterKey {
   derived: DerivedArtwork,
 }
 
+#[cfg(feature = "raster")]
 /// Per-load identity and scheduling context carried through fetch and decode.
 struct LoadContext {
   key: RasterKey,
@@ -377,7 +402,7 @@ struct LoadContext {
 /// Applies EXIF orientation as iced's image loader does, then downsamples to
 /// the size class target box (shrink-only, aspect preserved). Animated
 /// containers are rejected before decode.
-#[cfg(test)]
+#[cfg(all(test, feature = "raster"))]
 fn decode_raster(
   bytes: &ArtworkBytes,
   size_class: ArtworkSizeClass,
@@ -385,6 +410,7 @@ fn decode_raster(
   decode_raster_with_derived(bytes, size_class, DerivedArtwork::default())
 }
 
+#[cfg(feature = "raster")]
 fn decode_raster_with_derived(
   bytes: &ArtworkBytes,
   size_class: ArtworkSizeClass,
@@ -439,6 +465,7 @@ fn decode_raster_with_derived(
   })
 }
 
+#[cfg(feature = "raster")]
 /// Bakes a soft drop shadow from the source alpha in two stacked falloffs — a
 /// tight core that keeps the glyph contour readable and a wide diffuse tail so
 /// no hard boundary shows. The canvas grows a transparent margin of height/4
@@ -470,6 +497,7 @@ fn generate_logo_shadow(source: &image::RgbaImage) -> ArtworkRaster {
   }
 }
 
+#[cfg(feature = "raster")]
 fn shadow_layer(source: &image::RgbaImage, alpha_percent: u16) -> image::RgbaImage {
   let mut layer = source.clone();
   for pixel in layer.pixels_mut() {
@@ -481,14 +509,17 @@ fn shadow_layer(source: &image::RgbaImage, alpha_percent: u16) -> image::RgbaIma
   layer
 }
 
+#[cfg(feature = "raster")]
 fn logo_shadow_tight_radius(source_width: u32) -> u32 {
   (source_width / 240).clamp(2, 3)
 }
 
+#[cfg(feature = "raster")]
 fn logo_shadow_diffuse_radius(source_width: u32) -> u32 {
   (source_width / 53).clamp(8, 14)
 }
 
+#[cfg(feature = "raster")]
 fn box_blur_three_passes(image: &mut image::RgbaImage, radius: u32) {
   if radius == 0 || image.width() == 0 || image.height() == 0 {
     return;
@@ -500,6 +531,7 @@ fn box_blur_three_passes(image: &mut image::RgbaImage, radius: u32) {
   }
 }
 
+#[cfg(feature = "raster")]
 fn box_blur_horizontal(source: &image::RgbaImage, target: &mut image::RgbaImage, radius: u32) {
   let width = source.width();
   let kernel_width = radius.saturating_mul(2).saturating_add(1);
@@ -532,6 +564,7 @@ fn box_blur_horizontal(source: &image::RgbaImage, target: &mut image::RgbaImage,
   }
 }
 
+#[cfg(feature = "raster")]
 fn box_blur_vertical(source: &image::RgbaImage, target: &mut image::RgbaImage, radius: u32) {
   let height = source.height();
   let kernel_height = radius.saturating_mul(2).saturating_add(1);
@@ -564,6 +597,7 @@ fn box_blur_vertical(source: &image::RgbaImage, target: &mut image::RgbaImage, r
   }
 }
 
+#[cfg(feature = "raster")]
 /// Where a Library Image load obtained its result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArtworkSource {
@@ -577,6 +611,7 @@ pub enum ArtworkSource {
   Network,
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkSource {
   #[must_use]
   pub const fn as_str(self) -> &'static str {
@@ -589,6 +624,7 @@ impl ArtworkSource {
   }
 }
 
+#[cfg(feature = "raster")]
 /// Sanitized aggregate of Library Image loads since the last drain.
 ///
 /// Counts, durations, and byte totals only — never URLs or image references —
@@ -604,6 +640,7 @@ pub struct ArtworkLoadSummary {
   pub total_bytes: u64,
 }
 
+#[cfg(feature = "raster")]
 /// How one Library Image load call settled.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArtworkLoadSettlement {
@@ -617,6 +654,7 @@ pub enum ArtworkLoadSettlement {
   Cancelled,
 }
 
+#[cfg(feature = "raster")]
 /// Telemetry for one Library Image load call: how it settled, its duration,
 /// and the byte size of what it served (raster pixels for raster hits,
 /// encoded bytes otherwise). Never carries URLs or image references, so it
@@ -628,6 +666,7 @@ pub struct ArtworkLoadObservation {
   pub bytes: u64,
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkLoadObservation {
   /// Observation for a synchronous Library Image Raster cache hit on a caller
   /// fast path.
@@ -641,6 +680,7 @@ impl ArtworkLoadObservation {
   }
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkLoadSummary {
   /// Folds one load observation into the aggregate. Shared and cancelled
   /// loads are not counted: the coalescing leader reports shared loads, and
@@ -702,8 +742,10 @@ impl ArtworkLoadSummary {
   }
 }
 
+#[cfg(feature = "raster")]
 type AdapterFetchResult = Result<(ArtworkBytes, ArtworkSource), ArtworkError>;
 
+#[cfg(feature = "raster")]
 /// Authenticated, bounded, coalescing artwork pipeline.
 ///
 /// Loads decode to a Library Image Raster sized by an [`ArtworkSizeClass`]:
@@ -717,18 +759,22 @@ pub struct ArtworkAdapter {
   disk_cache: ArtworkDiskCache,
 }
 
+#[cfg(feature = "native")]
 impl Default for ArtworkAdapter {
   fn default() -> Self {
     Self::with_limits(ArtworkLimits::default())
   }
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkAdapter {
+  #[cfg(feature = "native")]
   #[must_use]
   pub fn new() -> Self {
     Self::default()
   }
 
+  #[cfg(feature = "native")]
   #[must_use]
   pub fn with_limits(limits: ArtworkLimits) -> Self {
     Self::with_limits_and_disk_cache(limits, ArtworkDiskCache::default())
@@ -1378,7 +1424,7 @@ impl ArtworkAdapter {
   }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(all(feature = "raster", any(test, feature = "test-utils")))]
 impl ArtworkAdapter {
   pub fn seed_raster_for_test(
     &self,
@@ -1407,6 +1453,7 @@ impl ArtworkAdapter {
   }
 }
 
+#[cfg(feature = "raster")]
 struct AdapterState {
   generation: u64,
   cache_generation: u64,
@@ -1418,6 +1465,7 @@ struct AdapterState {
   scheduler: LoadBudget,
 }
 
+#[cfg(feature = "raster")]
 impl AdapterState {
   fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<ArtworkDemandSettlement>> {
     if clear_cache {
@@ -1436,6 +1484,7 @@ impl AdapterState {
   }
 }
 
+#[cfg(feature = "raster")]
 struct InFlightLoad {
   attempt: u64,
   demands: HashMap<u64, DemandConsumer>,
@@ -1443,6 +1492,7 @@ struct InFlightLoad {
   worker: tokio::task::AbortHandle,
 }
 
+#[cfg(feature = "raster")]
 impl InFlightLoad {
   fn lane(&self) -> LoadLane {
     if self
@@ -1457,15 +1507,18 @@ impl InFlightLoad {
   }
 }
 
+#[cfg(feature = "raster")]
 struct DemandConsumer {
   lane: LoadLane,
   sender: oneshot::Sender<ArtworkDemandSettlement>,
   started: Instant,
 }
 
+#[cfg(feature = "raster")]
 /// A decoded result and its truthful per-consumer load observation.
 pub type ArtworkDemandSettlement = (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation);
 
+#[cfg(feature = "raster")]
 /// Synchronous admission outcome or independently controlled asynchronous demand.
 pub enum ArtworkDemand {
   Ready(ArtworkDemandSettlement),
@@ -1475,6 +1528,7 @@ pub enum ArtworkDemand {
   },
 }
 
+#[cfg(feature = "raster")]
 /// Owns one demand. Dropping the last demand cancels its physical work.
 pub struct ArtworkDemandControl {
   state: Arc<Mutex<AdapterState>>,
@@ -1483,6 +1537,7 @@ pub struct ArtworkDemandControl {
   id: u64,
 }
 
+#[cfg(feature = "raster")]
 impl ArtworkDemandControl {
   /// Updates this consumer's live scheduling priority without restarting work.
   pub fn set_lane(&self, lane: LoadLane) {
@@ -1500,6 +1555,7 @@ impl ArtworkDemandControl {
   }
 }
 
+#[cfg(feature = "raster")]
 impl Drop for ArtworkDemandControl {
   fn drop(&mut self) {
     let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1520,6 +1576,7 @@ impl Drop for ArtworkDemandControl {
   }
 }
 
+#[cfg(feature = "raster")]
 fn cancelled_settlement() -> ArtworkDemandSettlement {
   (
     Err(ArtworkError::Cancelled),
@@ -1531,6 +1588,7 @@ fn cancelled_settlement() -> ArtworkDemandSettlement {
   )
 }
 
+#[cfg(feature = "raster")]
 /// Builds the per-load observation and records the load's tracing span fields.
 fn finish_load(
   span: &tracing::Span,
@@ -1551,17 +1609,20 @@ fn finish_load(
   }
 }
 
+#[cfg(feature = "raster")]
 fn notify_cancelled(waiters: Vec<oneshot::Sender<ArtworkDemandSettlement>>) {
   for waiter in waiters {
     let _ = waiter.send(cancelled_settlement());
   }
 }
 
+#[cfg(feature = "raster")]
 struct LoadPermit {
   state: Arc<Mutex<AdapterState>>,
   reserved_bytes: usize,
 }
 
+#[cfg(feature = "raster")]
 impl Drop for LoadPermit {
   fn drop(&mut self) {
     let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1570,14 +1631,16 @@ impl Drop for LoadPermit {
   }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "raster"))]
 #[path = "artwork_demand_tests.rs"]
 mod demand_tests;
 
+#[cfg(feature = "raster")]
 fn validate_disk_artwork(bytes: &[u8]) -> bool {
   validate_static_image_container(bytes).is_ok()
 }
 
+#[cfg(feature = "raster")]
 fn validate_image_reference(image_id: &str) -> Result<(), ArtworkError> {
   if image_id.is_empty() || image_id.len() > MAX_IMAGE_REFERENCE_BYTES {
     return Err(ArtworkError::RequestRejected);
@@ -1705,23 +1768,27 @@ pub fn append_body_chunk(
   Ok(())
 }
 
+#[cfg(feature = "raster")]
 /// A value stored in a byte-budgeted artwork cache.
 trait CacheValue: Clone + Send + Sync + 'static {
   fn byte_len(&self) -> usize;
 }
 
+#[cfg(feature = "raster")]
 impl CacheValue for ArtworkBytes {
   fn byte_len(&self) -> usize {
     self.0.len()
   }
 }
 
+#[cfg(feature = "raster")]
 impl CacheValue for ArtworkRaster {
   fn byte_len(&self) -> usize {
     self.byte_len()
   }
 }
 
+#[cfg(feature = "raster")]
 /// Clock-LRU cache bounded by total bytes and entry count; shared by the
 /// encoded Library Image memory cache and the Library Image Raster cache.
 struct ArtworkCache<K, T>
@@ -1736,11 +1803,13 @@ where
   max_entries: usize,
 }
 
+#[cfg(feature = "raster")]
 struct CacheEntry<T> {
   artwork: T,
   last_used: u64,
 }
 
+#[cfg(feature = "raster")]
 impl<K, T> ArtworkCache<K, T>
 where
   K: Eq + std::hash::Hash + Ord + Clone,
@@ -1814,7 +1883,7 @@ where
   }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "raster"))]
 mod tests {
   use super::*;
   use crate::{image_id_for_url, ImageRefKind, MediaServerProvider, SavedSession};

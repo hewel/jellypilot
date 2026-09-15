@@ -1,0 +1,27 @@
+[package]
+name = "jellypilot-sdk"
+description = "Shared business-operation SDK for JellyPilot frontends"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+async-trait = "0.1.89"
+futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
+jellypilot-auth = { path = "../jellypilot-auth", default-features = false }
+jellypilot-core = { path = "../jellypilot-core", default-features = false, features = ["portable"] }
+jellypilot-media-server = { path = "../jellypilot-media-server", default-features = false }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7.17", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

@@ -45,10 +45,21 @@ Utilities:
   api
   monitor --pid <pid> --out <target/path> [--samples 301] [--interval-ms 1000] [--label <text>]
 
+Android (no iced/desktop preparation; SDK at ANDROID_HOME or ~/Android/Sdk):
+  android doctor                 (report JDK/SDK/NDK/cmake/rustup/artifact prerequisites)
+  android bindings               (regenerate UniFFI Kotlin bindings into core-bridge/build)
+  android rust [--release]       (cross-build libjellypilot_ffi.so for aarch64-linux-android26)
+  android mpv                    (pinned native libmpv pipeline -> target/android/mpv/arm64-v8a)
+  android build [--release]      (bindings + rust + mpv, then Gradle assemble; never skips natives)
+  android check                  (Gradle lint + unit tests with fresh bindings)
+
 Crate short names:
+  auth           jellypilot-auth
   core           jellypilot-core
   media-server   jellypilot-media-server
   mpv            jellypilot-mpv
   mpv-host       jellypilot-mpv-host
   session        jellypilot-session
+  sdk            jellypilot-sdk
+  ffi            jellypilot-ffi
   iced           jellypilot-ui, jellypilot-mpv-host, jellypilot-iced, jellypilot-launcher`;

@@ -1,3 +1,5 @@
+import { CARGO_MANIFESTS, workspacePackages, type CargoWorkspace } from './crates';
+
 export interface CommandSpec {
   readonly command: string;
   readonly args: readonly string[];
@@ -8,17 +10,7 @@ export const FORMAT_PATHS = ['package.json', 'scripts/**/*.ts', 'lint-staged.con
 
 export const LINT_PATHS = ['scripts'];
 
-export const RUST_FORMAT_PACKAGES = [
-  'jellypilot-auth',
-  'jellypilot-core',
-  'jellypilot-media-server',
-  'jellypilot-mpv',
-  'jellypilot-mpv-host',
-  'jellypilot-session',
-  'jellypilot-ui',
-  'jellypilot-iced',
-  'jellypilot-launcher',
-];
+const CARGO_WORKSPACES: readonly CargoWorkspace[] = ['shared', 'desktop'];
 
 export function command(
   executable: string,
@@ -43,27 +35,29 @@ export function lintCommand(fix: boolean): CommandSpec {
   ]);
 }
 
-export function rustFormatCommand(check: boolean): CommandSpec {
-  return command('cargo', [
-    'fmt',
-    '--manifest-path',
-    'Cargo.toml',
-    ...RUST_FORMAT_PACKAGES.flatMap((packageName) => ['--package', packageName]),
-    ...(check ? ['--', '--check'] : []),
-  ]);
+export function rustFormatCommands(check: boolean): readonly CommandSpec[] {
+  return CARGO_WORKSPACES.map((workspace) =>
+    command('cargo', [
+      'fmt',
+      '--manifest-path',
+      CARGO_MANIFESTS[workspace],
+      ...workspacePackages(workspace).flatMap((packageName) => ['--package', packageName]),
+      ...(check ? ['--', '--check'] : []),
+    ]),
+  );
 }
 
 export function rustClippyWorkspaceCommands(): readonly CommandSpec[] {
   const lintArgs = ['--all-targets', '--all-features', '--no-deps', '--', '-D', 'warnings'];
-  return [
+  return CARGO_WORKSPACES.map((workspace) =>
     command('cargo', [
       'clippy',
       '--manifest-path',
-      'Cargo.toml',
-      ...RUST_FORMAT_PACKAGES.flatMap((packageName) => ['--package', packageName]),
+      CARGO_MANIFESTS[workspace],
+      ...workspacePackages(workspace).flatMap((packageName) => ['--package', packageName]),
       ...lintArgs,
     ]),
-  ];
+  );
 }
 
 export function typecheckCommands(): readonly CommandSpec[] {
@@ -71,5 +65,6 @@ export function typecheckCommands(): readonly CommandSpec[] {
 }
 
 export function scriptTestCommands(): readonly CommandSpec[] {
-  return [command('bun', ['test', 'scripts'])];
+  // A bare filter also traverses generated/native source trees before matching.
+  return [command('bun', ['test', './scripts'])];
 }

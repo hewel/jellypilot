@@ -1,0 +1,5 @@
+# Keep both Cargo workspaces (root shared + src-iced desktop) writing to the
+# repository-root target/ directory. The dispatcher, Packager.toml and the
+# native regression runner all address artifacts under target/{debug,release}.
+[build]
+target-dir = "target"

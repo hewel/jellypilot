@@ -1,9 +1,12 @@
 import { Effect } from 'effect';
 
 import { command, type CommandSpec } from './commands';
+import { CARGO_MANIFESTS } from './crates';
 import type { TaskProcessError } from './errors';
 import { embeddedMpvEnvironment, embeddedMpvPaths } from './mpv';
 import { runCommand } from './process';
+
+const DESKTOP_MANIFEST = CARGO_MANIFESTS.desktop;
 
 export function icedRunCommand(
   smoke: boolean,
@@ -16,7 +19,7 @@ export function icedRunCommand(
     [
       'run',
       '--manifest-path',
-      'Cargo.toml',
+      DESKTOP_MANIFEST,
       '--package',
       'jellypilot-launcher',
       ...(release ? ['--release'] : []),
@@ -34,7 +37,7 @@ export const buildIced = Effect.fn('task.iced.build')((release: boolean) =>
       'build',
       '--locked',
       '--manifest-path',
-      'Cargo.toml',
+      DESKTOP_MANIFEST,
       '--package',
       'jellypilot-launcher',
       ...(release ? ['--release'] : []),
@@ -46,7 +49,7 @@ export function icedHotCommand(): CommandSpec {
   return command('cargo', [
     'hot',
     '--manifest-path',
-    'Cargo.toml',
+    DESKTOP_MANIFEST,
     '--package',
     'jellypilot-launcher',
     '--features',

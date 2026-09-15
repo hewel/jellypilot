@@ -19,6 +19,8 @@
 
 ---
 
+**Android 风险验证版：** `android/` 已包含 Kotlin/Compose、Rust 桥接和 libmpv 模块。下文功能及发布说明仍针对桌面端；用户已确认真机手动验证通过，但 Android 尚非完整客户端，详细设备／HDR 验收矩阵仍待记录。构建命令、已验证范围及后续门禁见[实现与验证记录](docs/android-client-design-spec.md#bring-up-implementation-and-evidence)。
+
 ## 🎥 演示
 
 <a href="assets/promo/demo.webm">

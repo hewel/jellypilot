@@ -31,7 +31,8 @@ impl TmdbMediaKind {
 
 const CACHE_VERSION: u32 = 1;
 const CACHE_FILE: &str = "tmdb-languages.json";
-const CONFIG_DIRECTORY: &str = "jellypilot";
+#[cfg(feature = "native")]
+pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +59,7 @@ pub(crate) struct TmdbLanguageCache {
   loaded: bool,
 }
 
+#[cfg(feature = "native")]
 impl Default for TmdbLanguageCache {
   fn default() -> Self {
     let path = dirs::config_dir()
@@ -69,6 +71,13 @@ impl Default for TmdbLanguageCache {
 }
 
 impl TmdbLanguageCache {
+  /// Cache persisted as `tmdb-languages.json` inside `storage_dir`. Callers
+  /// without platform directory discovery (Android) pass their private
+  /// storage root.
+  pub(crate) fn in_dir(storage_dir: PathBuf) -> Self {
+    Self::with_path(storage_dir.join(CACHE_FILE))
+  }
+
   pub(crate) fn with_path(path: PathBuf) -> Self {
     Self {
       path,

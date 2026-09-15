@@ -5,7 +5,7 @@ import {
   formatCommand,
   lintCommand,
   rustClippyWorkspaceCommands,
-  rustFormatCommand,
+  rustFormatCommands,
   scriptTestCommands,
   typecheckCommands,
 } from './commands';
@@ -68,7 +68,7 @@ export const runCheck = Effect.fn('task.check')(function* () {
     { label: 'lint', commands: [lintCommand(false)] },
     { label: 'typecheck', commands: typecheckCommands() },
     { label: 'script tests', commands: scriptTestCommands() },
-    { label: 'rust fmt --check', commands: [rustFormatCommand(true)] },
+    { label: 'rust fmt --check', commands: rustFormatCommands(true) },
     { label: 'rust clippy', commands: rustClippyWorkspaceCommands() },
   ];
 

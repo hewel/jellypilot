@@ -28,6 +28,7 @@ pub struct ArtworkDiskCache {
   operation_lock: Arc<RwLock<()>>,
 }
 
+#[cfg(feature = "native")]
 impl Default for ArtworkDiskCache {
   fn default() -> Self {
     Self::new(

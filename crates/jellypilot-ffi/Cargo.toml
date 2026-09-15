@@ -1,0 +1,22 @@
+[package]
+name = "jellypilot-ffi"
+description = "UniFFI bindings for the JellyPilot shared SDK"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait = "0.1.89"
+jellypilot-auth = { path = "../jellypilot-auth", default-features = false }
+jellypilot-core = { path = "../jellypilot-core", default-features = false, features = ["portable"] }
+jellypilot-media-server = { path = "../jellypilot-media-server", default-features = false }
+jellypilot-sdk = { path = "../jellypilot-sdk" }
+uniffi = { version = "0.32.0", features = ["cli", "tokio"] }
+
+[lints]
+workspace = true

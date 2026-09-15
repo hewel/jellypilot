@@ -157,12 +157,41 @@ impl std::fmt::Debug for ValidatedProfileCandidate {
 }
 
 /// Loads and validates a saved login without mutating the active connection.
+///
+/// Native-only convenience bound to the platform configuration directory;
+/// portable callers use [`validate_saved_profile_in`].
+#[cfg(feature = "native")]
 pub async fn validate_saved_profile(
     store: AuthStore,
     key: SavedProfileKey,
 ) -> Result<ValidatedProfileCandidate, LoginError> {
     let stored_session = store.load_session(key.clone()).await?;
     let candidate = Arc::new(JellyfinClient::for_saved_profile(&stored_session));
+    validate_candidate_session(candidate, stored_session, key).await
+}
+
+/// [`validate_saved_profile`] bound to an explicit storage directory.
+///
+/// Callers without platform directory discovery (Android) pass their private
+/// storage root so the validation client's caches stay app-scoped.
+pub async fn validate_saved_profile_in(
+    store: AuthStore,
+    key: SavedProfileKey,
+    storage_dir: std::path::PathBuf,
+) -> Result<ValidatedProfileCandidate, LoginError> {
+    let stored_session = store.load_session(key.clone()).await?;
+    let candidate = Arc::new(JellyfinClient::for_saved_profile_in(
+        &stored_session,
+        storage_dir,
+    ));
+    validate_candidate_session(candidate, stored_session, key).await
+}
+
+async fn validate_candidate_session(
+    candidate: Arc<JellyfinClient>,
+    stored_session: SensitiveSavedSession,
+    key: SavedProfileKey,
+) -> Result<ValidatedProfileCandidate, LoginError> {
     candidate
         .login()
         .restore_session(&stored_session)

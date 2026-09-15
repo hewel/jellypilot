@@ -2,6 +2,18 @@
 .DS_Store
 *.local
 *.log*
+.env
+.env.*
+!.env.example
+
+# Android build output and local signing material
+/android/.gradle/
+/android/.kotlin/
+/android/local.properties
+/android/**/build/
+/android/**/.cxx/
+*.jks
+*.keystore
 
 # Dist
 node_modules

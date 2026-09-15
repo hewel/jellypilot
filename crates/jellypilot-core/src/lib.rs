@@ -3,40 +3,40 @@
 //! This crate owns browse and request state machines, settings persistence,
 //! Intro Skipper policy, diagnostic buffering, artwork correlation, and display-free page helpers.
 
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod audio_tracks;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod browse;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod browse_model;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod browse_window;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod cards;
 pub mod collections;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod config;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod detail;
 pub mod diagnostics;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod home_hero;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod image_lifecycle;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod intro_skipper;
 mod load_state;
 pub mod locale;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod logs;
 pub mod player_logs;
 pub mod request_gate;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod settings;
 pub mod skeleton;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod volume_memory;
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 pub mod watchlist;
 
 mod model;

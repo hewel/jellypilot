@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{save_json_to, ConfigError, CONFIG_DIRECTORY};
+#[cfg(feature = "native")]
+use crate::config::CONFIG_DIRECTORY;
+use crate::config::{save_json_to, ConfigError};
 use crate::watchlist::ProfileScope;
 
 const STORAGE_VERSION: u32 = 1;
@@ -60,12 +62,22 @@ pub struct SeasonVolumeStore {
 }
 
 impl SeasonVolumeStore {
+    /// Loads the store bound to the platform configuration directory.
+    #[cfg(feature = "native")]
     pub fn load(scope: ProfileScope) -> Result<Self, ConfigError> {
-        let path = dirs::config_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(CONFIG_DIRECTORY)
-            .join(STORAGE_FILE);
-        Self::load_from(path, scope)
+        Self::load_in_dir(
+            dirs::config_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join(CONFIG_DIRECTORY),
+            scope,
+        )
+    }
+
+    /// Loads the store bound to an explicit storage directory holding
+    /// `season-volumes.json`. Callers without platform directory discovery
+    /// (Android) pass their private storage root.
+    pub fn load_in_dir(storage_dir: PathBuf, scope: ProfileScope) -> Result<Self, ConfigError> {
+        Self::load_from(storage_dir.join(STORAGE_FILE), scope)
     }
 
     /// Loads a specific local file. Only a missing file means empty memory; malformed,

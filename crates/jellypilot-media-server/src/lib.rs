@@ -15,7 +15,8 @@ pub use artwork_cache::{
 };
 
 pub use client::{
-  JellyfinClient, JellyfinLibrary, JellyfinLogin, JellyfinPlayback, LibraryImageRequest,
+  JellyfinClient, JellyfinLibrary, JellyfinLogin, JellyfinPlayback, LibraryImageHeaders,
+  LibraryImageRequest,
 };
 pub use error::JellyfinError;
 pub use image_ref::{

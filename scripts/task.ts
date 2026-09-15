@@ -1,6 +1,8 @@
 import { Cause, Effect, Exit, Fiber, Match } from 'effect';
 
+import { isAndroidTask, runAndroid } from './task/android';
 import { runCheck } from './task/check';
+import { crateWorkspace } from './task/crates';
 import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
 import { buildIced, runHot, runIced } from './task/iced';
@@ -23,10 +25,15 @@ const program = Effect.try({
 }).pipe(
   Effect.tap((task) =>
     task._tag === 'check' ||
-    task._tag === 'rust' ||
     task._tag === 'iced' ||
     task._tag === 'icedHot' ||
-    task._tag === 'icedBuild'
+    task._tag === 'icedBuild' ||
+    // The iced vendor tree is only needed when a Cargo command can touch the
+    // desktop workspace: unqualified gates cover both workspaces, and any
+    // explicitly selected desktop crate resolves the iced path dependency.
+    (task._tag === 'rust' &&
+      (task.crates.length === 0 ||
+        task.crates.some((crate) => crateWorkspace(crate) === 'desktop')))
       ? prepareIced(null)
       : Effect.void,
   ),
@@ -51,6 +58,7 @@ const program = Effect.try({
       Match.when({ _tag: 'icedRegress' }, (task) => runNativeRegression(task, process.env)),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),
+      Match.when(isAndroidTask, (task) => runAndroid(task, process.env)),
       Match.exhaustive,
     ),
   ),

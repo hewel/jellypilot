@@ -8,6 +8,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
+#[cfg(feature = "native")]
 use crate::config::CONFIG_DIRECTORY;
 use crate::diagnostics::{
     current_timestamp_seconds, format_diagnostic_time, format_file_timestamp, DiagnosticRow,
@@ -114,10 +115,23 @@ pub fn build_support_document<'a>(
 
 /// Writes `document` to a fresh timestamped file under
 /// `<config>/jellypilot/logs/` and returns its path.
+#[cfg(feature = "native")]
 pub fn write_support_document(document: &str, exported_at_seconds: u64) -> io::Result<PathBuf> {
     write_to(&export_directory(), document, exported_at_seconds)
 }
 
+/// Writes `document` to a fresh timestamped file inside `storage_dir`'s `logs/`
+/// subdirectory and returns its path. Callers without platform directory
+/// discovery (Android) pass their private storage root.
+pub fn write_support_document_to(
+    storage_dir: &Path,
+    document: &str,
+    exported_at_seconds: u64,
+) -> io::Result<PathBuf> {
+    write_to(&storage_dir.join("logs"), document, exported_at_seconds)
+}
+
+#[cfg(feature = "native")]
 fn export_directory() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(std::env::temp_dir)

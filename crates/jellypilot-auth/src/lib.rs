@@ -8,12 +8,15 @@ use std::sync::{Arc, Mutex};
 
 use jellypilot_core::watchlist::ProfileScope;
 use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider, SavedSession};
+#[cfg(feature = "native")]
 use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(feature = "native")]
 const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot";
+#[cfg(feature = "native")]
 const KEYRING_ACCOUNT: &str = "saved-media-server-profiles-v1";
 const LEGACY_STORAGE_VERSION: u32 = 1;
 const STORAGE_VERSION: u32 = 2;
@@ -58,6 +61,12 @@ impl SensitiveSavedSession {
     /// Wraps a session so its access token is zeroized when dropped.
     fn new(session: SavedSession) -> Self {
         Self(Some(session))
+    }
+
+    /// Wraps an already-owned session for storage or tests.
+    #[doc(hidden)]
+    pub fn from_saved_session(session: SavedSession) -> Self {
+        Self::new(session)
     }
 
     /// Transfers the session into secure storage. This is deliberately
@@ -149,18 +158,30 @@ pub struct AuthStore {
     operation: Arc<Mutex<()>>,
 }
 
+#[cfg(feature = "native")]
 struct SecretServiceCredential {
     access: Mutex<()>,
 }
 
+/// Failure modes a protected credential adapter can report.
+///
+/// `Missing` means no credential blob exists yet; `Unavailable` covers a
+/// locked or absent platform store; `WriteFailed` covers rejected writes and
+/// deletes. Platform adapters (Android Keystore, desktop Secret Service)
+/// implement [`SecureCredential`] against these outcomes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CredentialError {
+pub enum CredentialError {
     Missing,
     Unavailable,
     WriteFailed,
 }
 
-trait SecureCredential: Send + Sync {
+/// Platform-provided protected storage for the serialized profile blob.
+///
+/// Implementations receive and return opaque secret bytes only; encryption,
+/// key custody, and access serialization belong to the adapter. All methods
+/// run on the store's dedicated worker thread, never on an async executor.
+pub trait SecureCredential: Send + Sync {
     fn read(&self) -> Result<Vec<u8>, CredentialError>;
     fn write(&self, secret: &[u8]) -> Result<(), CredentialError>;
     fn delete(&self) -> Result<(), CredentialError>;
@@ -182,6 +203,19 @@ impl SavedProfileKey {
     /// Derives the stable secure-storage key for a display-free profile scope.
     pub fn for_scope(scope: &ProfileScope) -> Self {
         profile_key_for_identity(scope.provider(), scope.server_url(), scope.user_id())
+    }
+
+    /// Rebuilds a key previously returned by [`Self::as_str`].
+    ///
+    /// Keys are opaque outside this crate; this exists so FFI boundaries can
+    /// round-trip them without re-deriving identity semantics.
+    pub fn from_raw(raw: String) -> Self {
+        Self(raw)
+    }
+
+    /// The opaque key string for transport across FFI boundaries.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -308,7 +342,7 @@ pub enum AuthStorageError {
 impl fmt::Display for AuthStorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Self::Unavailable => "Linux Secret Service is unavailable or locked",
+            Self::Unavailable => "protected credential storage is unavailable or locked",
             Self::Corrupt => "saved authentication data is invalid",
             Self::ProfileNotFound => "the saved profile no longer exists",
             Self::WriteFailed => "saved authentication could not be updated",
@@ -319,18 +353,26 @@ impl fmt::Display for AuthStorageError {
 
 impl std::error::Error for AuthStorageError {}
 
+#[cfg(feature = "native")]
 impl Default for AuthStore {
     fn default() -> Self {
-        Self {
-            credential: Arc::new(SecretServiceCredential {
-                access: Mutex::new(()),
-            }),
-            operation: Arc::new(Mutex::new(())),
-        }
+        Self::with_credential(Arc::new(SecretServiceCredential {
+            access: Mutex::new(()),
+        }))
     }
 }
 
 impl AuthStore {
+    /// Creates a store persisting through an injected platform credential
+    /// adapter. Desktop uses [`AuthStore::default`] (OS keyring); Android
+    /// passes its Keystore-protected adapter here.
+    pub fn with_credential(credential: Arc<dyn SecureCredential>) -> Self {
+        Self {
+            credential,
+            operation: Arc::new(Mutex::new(())),
+        }
+    }
+
     pub const fn protect_credentials(credentials: Credentials) -> AuthCredentials {
         AuthCredentials(credentials)
     }
@@ -432,8 +474,12 @@ impl AuthStore {
         let mut state = self.load_state()?;
         let session = session.take_for_storage();
         let key = upsert_session(&mut state.sessions, session);
+        // Summaries are computed before the write: a failure here leaves the
+        // stored blob untouched, so an error never misreports a committed
+        // save as failed.
+        let summaries = profile_summaries(&state.sessions)?;
         self.write_state(&state)?;
-        Ok((key, profile_summaries(&state.sessions)?))
+        Ok((key, summaries))
     }
 
     fn remove_profile_blocking(
@@ -448,12 +494,16 @@ impl AuthStore {
         if state.last_successfully_activated.as_ref() == Some(key) {
             state.last_successfully_activated = None;
         }
+        // Summaries are computed before the irreversible credential
+        // deletion: a failure here aborts the removal, so an error never
+        // misreports a committed deletion as failed.
+        let summaries = profile_summaries(&state.sessions)?;
         if state.sessions.is_empty() {
             self.delete_all()?;
         } else {
             self.write_state(&state)?;
         }
-        profile_summaries(&state.sessions)
+        Ok(summaries)
     }
 
     fn record_successful_activation_blocking(
@@ -542,6 +592,7 @@ impl AuthStore {
     }
 }
 
+#[cfg(feature = "native")]
 impl SecureCredential for SecretServiceCredential {
     fn read(&self) -> Result<Vec<u8>, CredentialError> {
         let _guard = self
@@ -578,6 +629,7 @@ impl SecureCredential for SecretServiceCredential {
     }
 }
 
+#[cfg(feature = "native")]
 fn keyring_entry() -> Result<Entry, CredentialError> {
     Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(|_| CredentialError::Unavailable)
 }

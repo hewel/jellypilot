@@ -28,7 +28,7 @@ pub enum LanguagePreference {
     Fixed(UiLanguage),
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 impl serde::Serialize for LanguagePreference {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -41,7 +41,7 @@ impl serde::Serialize for LanguagePreference {
     }
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "portable")]
 impl<'de> serde::Deserialize<'de> for LanguagePreference {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

@@ -45,6 +45,12 @@ export type TaskCommand =
       readonly output: string;
       readonly label: string | null;
     }
+  | { readonly _tag: 'androidDoctor' }
+  | { readonly _tag: 'androidBindings' }
+  | { readonly _tag: 'androidRust'; readonly release: boolean }
+  | { readonly _tag: 'androidMpv' }
+  | { readonly _tag: 'androidBuild'; readonly release: boolean }
+  | { readonly _tag: 'androidCheck' }
   | { readonly _tag: 'api' };
 
 function unknownOption(command: string, option: string): never {
@@ -88,6 +94,31 @@ function parseSourceOptions(command: string, rest: readonly string[]): string | 
     index += 1;
   }
   return source;
+}
+
+function parseAndroid(args: readonly string[]): TaskCommand {
+  const [action, ...rest] = args;
+  if (action === 'doctor' || action === 'bindings' || action === 'mpv' || action === 'check') {
+    expectNoArguments(`android ${action}`, rest);
+    const commands = {
+      doctor: { _tag: 'androidDoctor' },
+      bindings: { _tag: 'androidBindings' },
+      mpv: { _tag: 'androidMpv' },
+      check: { _tag: 'androidCheck' },
+    } as const;
+    return commands[action];
+  }
+  if (action === 'rust' || action === 'build') {
+    for (const argument of rest) {
+      if (argument !== '--release') unknownOption(`android ${action}`, argument);
+    }
+    return action === 'rust'
+      ? { _tag: 'androidRust', release: rest.includes('--release') }
+      : { _tag: 'androidBuild', release: rest.includes('--release') };
+  }
+  throw new Error(
+    action === undefined ? 'Missing Android command.' : `Unknown Android command: ${action}`,
+  );
 }
 
 function parseRegression(args: readonly string[]): TaskCommand {
@@ -178,6 +209,7 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     if (action !== 'build') throw new Error('Expected mpv build [--source <checkout>].');
     return { _tag: 'mpvBuild', source: parseSourceOptions('mpv build', rest) };
   }
+  if (command === 'android') return parseAndroid(args);
   if (command === 'monitor') return parseMonitor(args);
   if (command === 'iced') {
     const [action, ...rest] = args;

@@ -4,6 +4,7 @@ use chrono::Datelike;
 use parking_lot::RwLock;
 use reqwest::{header, Client, Method};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -109,6 +110,34 @@ impl LibraryImageRequest {
   }
 }
 
+/// Headers a platform image fetcher must send for a [`LibraryImageRequest`].
+///
+/// `authorization` carries the session token; consumers must keep it out of
+/// UI state, logs, and persisted records.
+#[derive(Clone)]
+pub struct LibraryImageHeaders {
+  authorization: String,
+  user_agent: String,
+  accept: String,
+}
+
+impl LibraryImageHeaders {
+  /// `Authorization` header value (secret-bearing).
+  pub fn authorization(&self) -> &str {
+    &self.authorization
+  }
+
+  /// `User-Agent` header value matching the provider's expectations.
+  pub fn user_agent(&self) -> &str {
+    &self.user_agent
+  }
+
+  /// `Accept` header value advertising the decodable image formats.
+  pub fn accept(&self) -> &str {
+    &self.accept
+  }
+}
+
 /// Internal connection state.
 struct ClientState {
   provider: MediaServerProvider,
@@ -150,8 +179,21 @@ struct ValidatedSavedUser {
 }
 
 impl JellyfinClient {
-  /// Create a new Jellyfin client.
+  /// Create a new Jellyfin client bound to the platform configuration
+  /// directory for its persistent caches.
+  #[cfg(feature = "native")]
   pub fn new() -> Self {
+    Self::with_storage_dir(
+      dirs::config_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(tmdb::CONFIG_DIRECTORY),
+    )
+  }
+
+  /// Create a new Jellyfin client whose persistent caches live under
+  /// `storage_dir`. Callers without platform directory discovery (Android)
+  /// pass their private storage root.
+  pub fn with_storage_dir(storage_dir: PathBuf) -> Self {
     let device_id = format!("{}{}", DEVICE_ID_PREFIX, Uuid::new_v4());
 
     Self {
@@ -179,15 +221,28 @@ impl JellyfinClient {
         tmdb_api_key: None,
         tmdb_base_url: TMDB_API_BASE.to_string(),
         tmdb_language_memory: std::collections::HashMap::new(),
-        tmdb_language_store: tmdb::TmdbLanguageCache::default(),
+        tmdb_language_store: tmdb::TmdbLanguageCache::in_dir(storage_dir),
       })),
     }
   }
 
   /// Create a client pre-seeded with a saved profile's identity for
   /// validation or re-authentication that must not touch the live client.
+  #[cfg(feature = "native")]
   pub fn for_saved_profile(session: &SavedSession) -> Self {
-    let client = Self::new();
+    Self::for_saved_profile_in(
+      session,
+      dirs::config_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(tmdb::CONFIG_DIRECTORY),
+    )
+  }
+
+  /// [`Self::for_saved_profile`] bound to an explicit storage directory.
+  /// Callers without platform directory discovery (Android) pass their
+  /// private storage root.
+  pub fn for_saved_profile_in(session: &SavedSession, storage_dir: PathBuf) -> Self {
+    let client = Self::with_storage_dir(storage_dir);
     {
       let mut state = client.state.write();
       state.provider = session.provider;
@@ -3710,6 +3765,25 @@ impl<'a> JellyfinLibrary<'a> {
       .await
   }
 
+  /// Resolve the headers a platform image fetcher must send for `request`.
+  ///
+  /// The active provider, server, base path, and authorization are checked
+  /// again at resolution time, so headers cannot outlive the session that
+  /// authorized them. The authorization value is secret-bearing: it is meant
+  /// only for the platform image module issuing the request, never for UI
+  /// state, logs, or persisted records.
+  pub fn image_request_headers(
+    &self,
+    request: &LibraryImageRequest,
+  ) -> Result<LibraryImageHeaders, JellyfinError> {
+    let (authorization, user_agent) = self.client.library_image_authorization(request)?;
+    Ok(LibraryImageHeaders {
+      authorization,
+      user_agent,
+      accept: IMAGE_ACCEPT.to_string(),
+    })
+  }
+
   async fn emby_video_home(&self) -> Result<VideoHome, JellyfinError> {
     let server_url = self.client.server_url()?;
     let user_id = self.client.user_id()?;
@@ -6911,6 +6985,7 @@ fn emby_artwork_url(
   ))
 }
 
+#[cfg(feature = "native")]
 impl Default for JellyfinClient {
   fn default() -> Self {
     Self::new()

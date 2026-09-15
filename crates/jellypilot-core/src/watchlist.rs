@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use jellypilot_media_server::{normalize_server_url, MediaServerProvider, VideoLibraryItem};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "native")]
 use crate::config::CONFIG_DIRECTORY;
 
 const WATCHLIST_FILE: &str = "watchlist.json";
@@ -199,8 +200,21 @@ pub struct WatchlistStore {
 }
 
 impl WatchlistStore {
+    /// Loads the store bound to the platform configuration directory.
+    #[cfg(feature = "native")]
     pub fn load() -> Result<Self, WatchlistError> {
-        Self::load_at(watchlist_path())
+        Self::load_in_dir(
+            dirs::config_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join(CONFIG_DIRECTORY),
+        )
+    }
+
+    /// Loads the store bound to an explicit storage directory holding
+    /// `watchlist.json`. Callers without platform directory discovery
+    /// (Android) pass their private storage root.
+    pub fn load_in_dir(storage_dir: PathBuf) -> Result<Self, WatchlistError> {
+        Self::load_at(storage_dir.join(WATCHLIST_FILE))
     }
 
     /// Creates an isolated store for cross-crate tests.
@@ -335,13 +349,6 @@ struct StoredWatchlist {
 struct StoredWatchlistRef<'a> {
     version: u32,
     records: &'a [WatchlistRecord],
-}
-
-fn watchlist_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(CONFIG_DIRECTORY)
-        .join(WATCHLIST_FILE)
 }
 
 fn temporary_path(path: &Path) -> PathBuf {

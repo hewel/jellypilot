@@ -1,0 +1,13 @@
+--- a/demux/demux.c
++++ b/demux/demux.c
+@@ -3687,7 +3687,9 @@
+     if (!force_format)
+         force_format = stream->demuxer;
+ 
+-    if (force_format && force_format[0] && !stream->is_directory) {
++    // Embedders that explicitly select a demuxer must not silently acquire
++    // directory playlist expansion and native-owned child lifetimes.
++    if (force_format && force_format[0]) {
+         check_levels = d_request;
+         if (force_format[0] == '+') {
+             force_format += 1;

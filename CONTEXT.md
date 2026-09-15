@@ -17,7 +17,7 @@ The JellyPilot install as it appears to media-server users when they choose wher
 _Avoid_: Generic app instance
 
 **Playback Session**:
-One active presentation of a media item through the selected Playback Backend.
+One active presentation of a media item through a desktop Playback Backend or Android MPV Playback.
 _Avoid_: Player process, transcode job
 
 **External MPV Playback**:
@@ -29,10 +29,22 @@ Playback presented inside JellyPilot's existing player surface on Linux, using t
 _Avoid_: External player window, zero-copy playback, hardware-decoding guarantee, system libmpv
 
 **Playback Backend**:
-The persisted choice between Embedded MPV Playback (the Linux default) and External MPV Playback (the default on other platforms, and an explicit Linux option). A changed choice takes effect on application restart; it is independent of App Mode.
+The persisted desktop choice between Embedded MPV Playback (the Linux default) and External MPV Playback (the default on other desktop platforms, and an explicit Linux option). A changed choice takes effect on application restart; it is independent of App Mode.
+
+**Android MPV Playback**:
+Playback presented inside the Android client while its interface is visible and the device is unlocked. Leaving the playback page ends the Playback Session; temporarily hiding or locking the app pauses it, and returning does not automatically resume playback.
+_Avoid_: Desktop Playback Backend, background playback, picture-in-picture
+
+**Local Playback Recovery Point**:
+A device-local record of the item and last observed position for an interrupted Android Playback Session, belonging to one Profile Scope. It is distinct from server progress and Watch History and is cleared when that playback is explicitly ended, finishes naturally, or is ended by a successful Profile Switch or Sign Out.
+_Avoid_: Offline media, server resume position, permanent viewing history
+
+**Restore Local Playback**:
+The user-invoked action to resume interrupted Android playback from its Local Playback Recovery Point, preparing a new Playback Session when the previous one no longer exists. This action uses the local position; Continue Watching continues to use server progress, without automatically merging the two.
+_Avoid_: Startup Auto Login, automatic playback, Continue Watching
 
 **Provider Transcode**:
-Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through the selected Playback Backend and does not request a Provider Transcode.
+Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source and does not request a Provider Transcode.
 
 **Quick Connect**:
 A Jellyfin authentication method where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default Jellyfin login method and authenticates to a known Server URL; it does not discover or choose servers.
@@ -95,7 +107,7 @@ The user-facing playback status for the current Playback Session, which may show
 _Avoid_: MPV state, Web player state, playback session internals
 
 **App Mode**:
-The persisted top-level operating mode of JellyPilot: Full or Control-Only. App Mode decides which UI surfaces exist and how the window behaves; it switches live from Settings without restarting JellyPilot or interrupting the current Playback Session.
+The persisted top-level desktop operating mode of JellyPilot: Full or Control-Only. App Mode decides which desktop UI surfaces exist and how the window behaves; it switches live from Settings without restarting JellyPilot or interrupting the current Playback Session.
 _Avoid_: View preference, layout setting, window profile
 
 **Control-Only Mode**:
@@ -115,7 +127,7 @@ A best-effort disk copy of a media server's original Library Image response byte
 _Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
 
 **Library Image Raster**:
-An in-memory, display-sized RGBA decode of a Library Image, keyed by the Library Image reference and a size class. Library Image Rasters accelerate first paint and repeat rendering across navigations; they are never persisted and are distinct from the Library Image Cache, which stores only origin-encoded bytes.
+An in-memory, display-sized RGBA decode of a Library Image in the desktop client, keyed by the Library Image reference and a size class. Library Image Rasters accelerate first paint and repeat rendering across navigations; they are never persisted and are distinct from the Library Image Cache, which stores only origin-encoded bytes.
 _Avoid_: Texture, transformed cache variant, decoded cache entry
 
 **Episode Still**:
@@ -127,7 +139,7 @@ A Logo-type Library Image: a transparent title treatment for a movie or series. 
 _Avoid_: Poster substitute, watermark, app icon
 
 **Sidebar**:
-The persistent left navigation area of the authenticated Full-mode shell, providing Video Home, Personal Lists, video libraries, and account and application controls. At narrow window widths the Sidebar shows icons only; Control-Only Mode has no Sidebar.
+The persistent left navigation area of the authenticated desktop Full-mode shell, providing Video Home, Personal Lists, video libraries, and account and application controls. At narrow window widths the Sidebar shows icons only; Control-Only Mode has no Sidebar.
 _Avoid_: Navigation rail, app drawer, floating controls
 
 **Account Popover**:
@@ -135,11 +147,11 @@ The Sidebar's account surface for the active connection and saved logins, includ
 _Avoid_: Server cluster, member directory
 
 **Settings Modal**:
-The closable settings layer centered over the current shell context, using the same navigation-and-content organization in every window size and App Mode. The Settings Modal is dismissed through its Close action, the Esc key after higher-priority interactions, or a press on its exposed backdrop; it is never a navigation destination or stack entry.
+The closable desktop settings layer centered over the current shell context, using the same navigation-and-content organization in every window size and App Mode. The Settings Modal is dismissed through its Close action, the Esc key after higher-priority interactions, or a press on its exposed backdrop; it is never a navigation destination or stack entry.
 _Avoid_: Settings page, settings destination, dialog popup, drawer
 
 **UI Language**:
-The language used for JellyPilot-owned interface text in both App Modes, including the Settings Modal, account flows, in-app feedback, and tray menus. UI Language is independent of media-server content language and audio or subtitle preferences.
+The language used for JellyPilot-owned interface text across desktop and Android, including account flows, settings, and in-app feedback, plus tray menus on desktop. UI Language is independent of media-server content language and audio or subtitle preferences.
 _Avoid_: Subtitle language, metadata language, MPV language
 
 **UI Language Preference**:

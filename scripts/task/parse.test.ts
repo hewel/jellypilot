@@ -27,6 +27,36 @@ describe('parseCli', () => {
     expect(parseCli(['iced', 'hot'])).toEqual({ _tag: 'icedHot' });
   });
 
+  test('parses android commands and release flags', () => {
+    expect(parseCli(['android', 'doctor'])).toEqual({ _tag: 'androidDoctor' });
+    expect(parseCli(['android', 'bindings'])).toEqual({ _tag: 'androidBindings' });
+    expect(parseCli(['android', 'mpv'])).toEqual({ _tag: 'androidMpv' });
+    expect(parseCli(['android', 'check'])).toEqual({ _tag: 'androidCheck' });
+    expect(parseCli(['android', 'rust'])).toEqual({ _tag: 'androidRust', release: false });
+    expect(parseCli(['android', 'rust', '--release'])).toEqual({
+      _tag: 'androidRust',
+      release: true,
+    });
+    expect(parseCli(['android', 'build', '--release'])).toEqual({
+      _tag: 'androidBuild',
+      release: true,
+    });
+  });
+
+  test('rejects unknown android actions and stray options', () => {
+    expect(() => parseCli(['android'])).toThrow('Missing Android command.');
+    expect(() => parseCli(['android', 'emulator'])).toThrow('Unknown Android command: emulator');
+    expect(() => parseCli(['android', 'doctor', '--release'])).toThrow(
+      'Unknown android doctor option: --release',
+    );
+    expect(() => parseCli(['android', 'mpv', 'arm64-v8a'])).toThrow(
+      'Unknown android mpv option: arm64-v8a',
+    );
+    expect(() => parseCli(['android', 'rust', '--target'])).toThrow(
+      'Unknown android rust option: --target',
+    );
+  });
+
   test('rejects missing, duplicate, option-like and extra mpv source arguments', () => {
     for (const args of [
       ['build', '--source'],

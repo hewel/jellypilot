@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Synthetic media only; the test APK is a separate UID/process. -->
+    <provider
+      android:name="io.github.hewel.jellypilot.TestMediaProvider"
+      android:authorities="io.github.hewel.jellypilot.test.media"
+      android:exported="true" />
+  </application>
+</manifest>

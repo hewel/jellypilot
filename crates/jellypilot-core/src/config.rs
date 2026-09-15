@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::browse_model::BrowsePreferences;
 use crate::locale::LanguagePreference;
 
+#[cfg(feature = "native")]
 pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
 const CONFIG_FILE: &str = "config.json";
 /// Revision 1 applies the Linux Embedded MPV default to files that still record External.
@@ -485,6 +486,7 @@ pub struct SettingsStore {
     settings: Settings,
 }
 
+#[cfg(feature = "native")]
 impl Default for SettingsStore {
     fn default() -> Self {
         Self {
@@ -495,8 +497,21 @@ impl Default for SettingsStore {
 }
 
 impl SettingsStore {
+    /// Loads the store bound to the platform configuration directory.
+    #[cfg(feature = "native")]
     pub fn load() -> Result<Self, ConfigError> {
-        let path = config_path();
+        Self::load_in_dir(
+            dirs::config_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join(CONFIG_DIRECTORY),
+        )
+    }
+
+    /// Loads the store bound to an explicit storage directory holding
+    /// `config.json`. Callers without platform directory discovery (Android)
+    /// pass their private storage root.
+    pub fn load_in_dir(storage_dir: PathBuf) -> Result<Self, ConfigError> {
+        let path = storage_dir.join(CONFIG_FILE);
         let settings = load_from(&path)?;
         Ok(Self { path, settings })
     }
@@ -983,6 +998,7 @@ impl From<serde_json::Error> for ConfigError {
     }
 }
 
+#[cfg(feature = "native")]
 fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(std::env::temp_dir)
