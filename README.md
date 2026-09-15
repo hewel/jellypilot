@@ -101,8 +101,15 @@ Intro Skipper reads Jellyfin's native media segments, including ranges published
 
 ### Runtime Prerequisites
 
-- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `bun run task mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player. While a Playback Session is active and unpaused, embedded playback also holds a session idle inhibitor — the Wayland idle-inhibit protocol (`zwp_idle_inhibitor_v1`) on the presentation surface under Wayland, `XScreenSaverSuspend` under X11 — so the desktop does not auto-lock mid-episode. Pausing or stopping playback releases it. On Wayland the inhibitor follows the visible window: closing the last window to the tray releases it until the window is reopened. Compositors without the idle-inhibit protocol cannot be inhibited (playback continues normally).
+- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `bun run task mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player. While a Playback Session is active and unpaused, embedded playback also holds a session idle inhibitor — the Wayland idle-inhibit protocol (`zwp_idle_inhibitor_v1`) on the presentation surface under Wayland, `XScreenSaverSuspend` under X11 — so the desktop does not auto-lock mid-episode. Pausing or stopping playback releases it. On Wayland the inhibitor follows the visible window: closing the window to the tray pauses embedded playback and releases it; it is reacquired only after playback resumes in a visible window. Compositors without the idle-inhibit protocol cannot be inhibited (playback continues normally).
 - **External Playback (Windows & macOS default, optional on Linux)**: Requires [MPV](https://mpv.io/) with Lua scripting support, discoverable on `PATH` or configured explicitly in **Settings → Playback**. A bundled Lua hook captures volume and temporary mute states before MPV resets options at the end of playback.
+
+### Window Close and Playback
+
+- In both **Full** and **Control-Only**, closing the main window with an initialized tray keeps JellyPilot's runtime and remote Playback Target available. Full restores its page, history, filters, scroll position, and unsaved Settings drafts; dialogs and menus are dismissed.
+- **Embedded Playback** pauses before a requested window close completes and retains its Playback Session. If pause fails, the window stays visible and reports the error. Tray **Show** or a second launch restores the window without resuming playback; explicit remote/tray Play or Resume first restores the player.
+- **External Playback** continues in MPV's independent window when JellyPilot's main window closes.
+- Use **Quit** to end playback, the connection, and the application. If the tray could not initialize, closing the window also performs orderly shutdown.
 
 ### Installation
 

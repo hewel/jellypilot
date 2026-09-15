@@ -293,19 +293,54 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       Task::none()
     }
     Message::Window(message) => {
-      // Window lifecycle owns cross-surface demand suspension; a resize also
-      // re-syncs the sparse metadata window before geometry observes its images.
+      // A deferred play's show loses authority when a later close cancels it.
+      let message = if matches!(message, WindowMessage::ShowForPlayback) {
+        if !playback::play_pending(&state.playback) || state.shell.quit_requested {
+          return Task::none();
+        }
+        WindowMessage::ShowRequested(None)
+      } else {
+        message
+      };
       let skeletons_active = state.skeletons_active();
-      let close_without_tray =
-        matches!(message, WindowMessage::CloseRequested(_)) && state.kernel.tray.is_none();
+      let live_before = state.shell.window_id;
+      let pending_before = state.shell.pending_window_id;
+      let close_before = state.shell.pending_close;
+      let visible_before = state.shell.images_visible;
       let window_task = shell::update(
         &mut state.shell,
         &mut state.kernel,
         skeletons_active,
         state.playback.view.now_playing.is_some(),
+        crate::embedded::enabled(),
         message,
       );
       let mut tasks = vec![window_task];
+      let is_open = state.shell.window_id.is_some();
+      let close_without_tray = state.kernel.tray.is_none()
+        && state.shell.quit_requested
+        && matches!(
+          message,
+          WindowMessage::CloseRequested(_) | WindowMessage::Closed(_)
+        );
+      let close_started = state
+        .shell
+        .pending_close
+        .filter(|ticket| Some(*ticket) != close_before);
+      let pause_failure = match &message {
+        WindowMessage::BackgroundPauseSettled {
+          id,
+          generation,
+          result: Err(error),
+        } if close_before == Some((*id, *generation))
+          || (!is_open
+            && state.shell.pending_window_id.is_none()
+            && state.shell.close_generation == *generation) =>
+        {
+          Some(*error)
+        }
+        _ => None,
+      };
       if !state.shell.images_visible {
         playback::suspend_artwork(&mut state.playback);
         if let Some(full) = state.full.as_mut() {
@@ -314,11 +349,104 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
           full.detail.artwork.clear();
           full.personal_lists.artwork.clear();
         }
-      } else if matches!(message, WindowMessage::ShowRequested(_)) {
+      } else if matches!(message, WindowMessage::ShowRequested(_)) || !visible_before {
         tasks.push(playback::resume_artwork(
           &mut state.playback,
           &mut state.kernel,
         ));
+      }
+      // ADR 0043: closing the last window pauses embedded playback at the
+      // engine and holds it; admitting a window lifts the hold and replays
+      // any deferred play command. Showing alone never resumes.
+      let failed_open = match message {
+        WindowMessage::OpenTimedOut(id) | WindowMessage::Closed(id) => Some(id),
+        _ => None,
+      };
+      if let Some(id) = failed_open {
+        // The timeout only fails the deferred play when its window never
+        // arrived; a foreign admission or a user close already resolved it.
+        // Runs before window_closed so the pending command is still there
+        // to report.
+        if pending_before == Some(id)
+          && state.shell.window_id.is_none()
+          && state.shell.pending_window_id.is_none()
+          && playback::play_pending(&state.playback)
+        {
+          tasks.push(playback::open_failed(
+            &mut state.playback,
+            &mut state.kernel,
+          ));
+        }
+      }
+      // The close only counts when this message's id actually removed a
+      // tracked window; a stale timeout for an already-retired id must not
+      // cancel a newer deferred play.
+      let removed = !is_open
+        && match message {
+          WindowMessage::CloseRequested(id)
+          | WindowMessage::Closed(id)
+          | WindowMessage::OpenTimedOut(id) => {
+            live_before == Some(id)
+              || (pending_before == Some(id) && state.shell.pending_window_id.is_none())
+          }
+          _ => false,
+        };
+      if !close_without_tray && (close_started.is_some() || (removed && close_before.is_none())) {
+        // Enqueue the pause now; only its acknowledgement runs asynchronously.
+        let pause = playback::window_closed(
+          &mut state.playback,
+          &mut state.kernel,
+          state.shell.quit_requested,
+        );
+        tasks.push(pause.task);
+        tasks.push(if let Some((id, generation)) = close_started {
+          pause.acknowledgement.map(move |result| {
+            Message::Window(WindowMessage::BackgroundPauseSettled {
+              id,
+              generation,
+              result,
+            })
+          })
+        } else {
+          // A compositor-destroyed window is already gone; report real errors
+          // without trying to resurrect it.
+          pause.acknowledgement.map(|result| {
+            Message::Playback(super::message::PlaybackMessage::PresentationPaused(result))
+          })
+        });
+      }
+      if !close_without_tray && (close_started.is_some() || removed) {
+        if let Some(full) = state.full.as_mut() {
+          full.browse.sort_menu_open = false;
+        }
+        state.settings.view.shortcut_capture = None;
+        accounts::dismiss_transient(&mut state.accounts);
+        state.playback.audio_menu_open = false;
+        state.playback.subtitle_menu_open = false;
+        state.playback.queue_menu_open = false;
+      }
+      let admitted_show = match message {
+        WindowMessage::ShowRequested(None) => is_open,
+        WindowMessage::ShowRequested(Some(id)) => is_open && pending_before == Some(id),
+        _ => false,
+      };
+      if is_open && !state.shell.quit_requested && (admitted_show || pause_failure.is_some()) {
+        if let Some(play) = playback::window_opened(
+          &mut state.playback,
+          &mut state.kernel,
+          state.shell.quit_requested,
+        ) {
+          // Navigation mutates state before the admitted playback task runs.
+          if crate::embedded::enabled() {
+            tasks.push(shell::navigate(state, Destination::NowPlaying));
+          }
+          tasks.push(play);
+        }
+      }
+      if let Some(error) = pause_failure {
+        tasks.push(Task::done(Message::Playback(
+          super::message::PlaybackMessage::PresentationPaused(Err(error)),
+        )));
       }
       if close_without_tray {
         tasks.push(
@@ -667,17 +795,21 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         task
       }
     }
-    Message::Remote(message) => playback::update_remote(
-      &mut state.playback,
-      &mut state.kernel,
-      state.shell.quit_requested,
-      message,
-    ),
+    Message::Remote(message) => {
+      let player_visible = super::embedded_player::active(state);
+      playback::update_remote(
+        &mut state.playback,
+        &mut state.kernel,
+        state.shell.quit_requested,
+        message,
+        player_visible,
+      )
+    }
     // Tray window actions stay at the router (ADR 0029): Show routes through
     // the window surface and Quit owns the shell's quit handshake; transport
     // actions delegate to the playback surface.
     Message::Tray(TrayAction::Show) => {
-      iced::window::oldest().map(|id| Message::Window(WindowMessage::ShowRequested(id)))
+      Task::done(Message::Window(WindowMessage::ShowRequested(None)))
     }
     Message::Tray(TrayAction::Quit) => {
       if state.shell.quit_requested {
@@ -700,11 +832,13 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       if accounts::handoff_generation(&state.accounts).is_some() {
         return Task::none();
       }
+      let player_visible = super::embedded_player::active(state);
       playback::update_tray(
         &mut state.playback,
         &mut state.kernel,
         state.shell.quit_requested,
         action,
+        player_visible,
       )
     }
     Message::DismissNotice(id) => {
@@ -842,6 +976,7 @@ mod tests {
     let login_flow = LoginState::from_settings(settings.snapshot());
     State {
       system_theme: iced::theme::Mode::None,
+      motion: Default::default(),
       image_diagnostics: Default::default(),
       kernel: Kernel {
         settings,
@@ -2490,17 +2625,127 @@ mod tests {
     assert!(state.kernel.client.is_none());
   }
 
+  #[tokio::test]
+  async fn fullscreen_reconciliation_keeps_the_player_visible_while_pause_is_pending() {
+    use iced::futures::StreamExt;
+
+    let mut state = active_intro_prompt_state();
+    let id = iced::window::Id::unique();
+    state.shell.window_id = Some(id);
+    state.shell.player_fullscreen = true;
+    state.shell.images_visible = false;
+    state.shell.pending_close = Some((id, 1));
+
+    let task = update(
+      &mut state,
+      Message::Window(WindowMessage::FrameTick(Instant::now())),
+    );
+    if let Some(mut actions) = iced_runtime::task::into_stream(task) {
+      while let Some(action) = actions.next().await {
+        assert!(!matches!(
+          action,
+          iced_runtime::Action::Window(iced_runtime::window::Action::SetMode(
+            _,
+            iced::window::Mode::Windowed
+          ))
+        ));
+      }
+    }
+    assert!(state.shell.player_fullscreen);
+  }
+
   #[test]
-  fn close_without_an_available_tray_uses_the_quit_cleanup_handshake() {
+  fn an_untracked_close_cannot_start_the_quit_handshake() {
     let mut state = test_state();
+    let live = iced::window::Id::unique();
+    state.shell.window_id = Some(live);
 
     drop(update(
       &mut state,
       Message::Window(WindowMessage::CloseRequested(iced::window::Id::unique())),
     ));
 
+    assert!(!state.shell.quit_requested);
+    assert!(!state.playback.view.quit_may_proceed);
+    assert_eq!(state.shell.window_id, Some(live));
+  }
+
+  #[tokio::test]
+  async fn a_stale_playback_show_cannot_reopen_a_closed_window() {
+    use iced::futures::StreamExt;
+
+    let mut state = test_state();
+    state.kernel.tray = Some(crate::tray::Tray::stub());
+    let id = iced::window::Id::unique();
+    state.shell.window_id = Some(id);
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::CloseRequested(id)),
+    ));
+
+    let task = update(&mut state, Message::Window(WindowMessage::ShowForPlayback));
+    if let Some(mut actions) = iced_runtime::task::into_stream(task) {
+      while let Some(action) = actions.next().await {
+        assert!(!matches!(
+          action,
+          iced_runtime::Action::Window(iced_runtime::window::Action::Open(..))
+        ));
+      }
+    }
+  }
+
+  #[test]
+  fn close_without_an_available_tray_uses_the_quit_cleanup_handshake() {
+    let mut state = test_state();
+    let id = iced::window::Id::unique();
+    state.shell.window_id = Some(id);
+
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::CloseRequested(id)),
+    ));
+
     assert!(state.shell.quit_requested);
     assert!(state.playback.view.quit_may_proceed);
+  }
+
+  #[test]
+  fn close_with_tray_suspends_demand_and_show_restores_it() {
+    let mut state = test_state();
+    state.kernel.tray = Some(crate::tray::Tray::stub());
+    let id = iced::window::Id::unique();
+    state.shell.window_id = Some(id);
+    state.shell.settings_open = true;
+
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::CloseRequested(id)),
+    ));
+
+    assert!(state.shell.window_id.is_none());
+    assert!(!state.shell.images_visible);
+    assert!(!state.shell.settings_open);
+    assert!(!state.shell.quit_requested);
+    assert!(!state.playback.artwork_enabled);
+    assert!(state.full.is_some(), "the Full browser context is retained");
+
+    // A second-instance activation opens a fresh window; admission restores
+    // image demand without touching the retained browsing state.
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::ShowRequested(None)),
+    ));
+    let pending = state
+      .shell
+      .pending_window_id
+      .expect("a new window open is pending");
+    drop(update(
+      &mut state,
+      Message::Window(WindowMessage::ShowRequested(Some(pending))),
+    ));
+    assert_eq!(state.shell.window_id, Some(pending));
+    assert!(state.shell.images_visible);
+    assert!(state.playback.artwork_enabled);
   }
 
   #[test]

@@ -182,6 +182,23 @@ Missing icon assets may be obtained directly from [Reicon](https://reicon.dev); 
 - Avoid decorative looping animation except subtle indeterminate waiting indicators.
 - Respect the user's reduce-motion setting.
 
+### 2026-09-15 Desktop Motion Contract
+
+**Implemented; code-level validated, human visual acceptance pending.** This desktop-wide contract covers both App Modes, not Android. It supersedes older motion exceptions below where explicitly noted.
+
+- Use one shared native `standard` easing token with `cubic-bezier(0.24, 1, 0.4, 1)`, corresponding to the requested `--ease-standard` design name. Do not introduce CSS or a second styling mechanism.
+- Keep motion restrained: color, opacity, and small translations where appropriate; no bounce or decorative staggered entrances. Target 150ms for hover, press, and switches; 200ms for Settings, account surfaces, menus, and player-control visibility; 300ms for page navigation, Sidebar expansion/collapse, grid-column reflow, App Mode transitions, and long-overview expansion/collapse. Theme color changes and user-selected Hero changes also transition within this timing hierarchy.
+- Window dimensions and continuous layout sizing follow the actual window immediately, including dragging, maximize, and restore. Animate discrete structural changes such as Sidebar collapse and grid reflow, not a delayed layout chasing the window. This does not animate the operating system's window frame.
+- User-invoked interface changes transition; real-time data does not. Playback time, loading progress, first-arriving images, and background list refreshes update directly. Do not stagger poster arrivals or replay entrances on each network response.
+- Seek and volume dragging remain direct. The volume slider remains permanently visible rather than acquiring an expansion animation.
+- Transitions are interruptible and retarget from the currently displayed state, never queued. Actions take effect without waiting for animation; hit targets track visible geometry throughout movement.
+- Reduced motion presents the final state immediately. Existing skeleton waiting behavior and its static reduced-motion fallback remain unchanged. First display and restoration from Background Residency do not replay old transitions, and invisible UI keeps no animation frame loop.
+- Window close and Quit Application do not wait for exit animations. Their lifecycle is governed by [ADR 0043](adr/0043-desktop-background-residency.md).
+- Native integration uses `jellypilot_ui::widgets::motion::scope`, `transition`/`resize`, and `reveal`/`collapse`. Transition keys represent user-intended state changes, not data arrivals. Animated layout geometry is shared by drawing, hit-testing, widget operations, and nested overlays.
+- Popover callers keep supplying their actual panel content through dismissal. Replacing it with an empty or filling placeholder before the exit finishes changes the geometry of the still-visible surface.
+
+Human acceptance: review both themes and UI languages; rapidly reverse page, Sidebar, and overview transitions; resize across Sidebar/grid thresholds, maximize, and restore; exercise menus, Settings, account surfaces, and player controls during transitions; check direct seek/volume response, stable click targets, immediate background refreshes, and reduced-motion behavior. Confirm no stale entrance animations on first display or tray restoration. Headless regressions and native startup smoke pass, but do not establish visual acceptance.
+
 ## Out of Scope
 
 - UI sounds or haptics.
@@ -227,7 +244,7 @@ Human acceptance: check normal, fullscreen, and Control-Only embedded playback i
 
 ### Content Patterns
 
-- **Long overviews**: clamp to 2 lines with an end-fade and a 展开/收起 toggle, shown only when the text actually overflows (measured, not character-counted). No animation.
+- **Long overviews**: clamp to 2 lines with an end-fade and a 展开/收起 toggle, shown only when the text actually overflows (measured, not character-counted). Expansion/collapse follows the [desktop motion contract](#2026-09-15-desktop-motion-contract), replacing the former no-animation decision.
 - **Library browse**: grid/list segmented toggle; grid posters carry watch-progress bars; long titles single-line ellipsis; infinite scroll shows a loading indicator. List view lanes: index, 40×60 poster, title + episode count, year, rating (amber, tabular-nums), watch progress, favorite — fixed-width slots keep the lanes aligned.
 - **Empty/loading/focus**: empty states are centered icon + message + one primary recovery action; loading uses flat breathing skeleton blocks; keyboard focus is a 2px `primary` outer ring.
 - **Detail pages** share one skeleton (full-bleed hero with two-layer scrim — bottom fade to canvas plus a left darkening lane for the logo/legibility — action row, info columns, cast carousel, similar posters). 接下来观看 exists only on the series page, never on the single-episode page. Episode rows show watched check + 重看, in-progress bar + 继续, or plain 播放.

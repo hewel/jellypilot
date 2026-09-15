@@ -111,7 +111,7 @@ fn skeleton_style_with_radius(
     reduced_motion: bool,
 ) -> container::Style {
     let colors = palette(theme).colors;
-    let background = if reduced_motion || !phase.is_finite() {
+    let background = if reduced_motion || !phase.is_finite() || !super::motion::enabled() {
         colors.surfaceContainerLow
     } else {
         pulse_color(
@@ -143,7 +143,7 @@ fn skeleton_panel_style(
     phase: f32,
     reduced_motion: bool,
 ) -> container::Style {
-    let background_color = if reduced_motion || !phase.is_finite() {
+    let background_color = if reduced_motion || !phase.is_finite() || !super::motion::enabled() {
         base
     } else {
         pulse_color(phase, base, palette(theme).colors.surfaceContainerHigh)

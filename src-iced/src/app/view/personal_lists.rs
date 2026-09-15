@@ -284,7 +284,7 @@ fn list_card<'a>(
     (
       value,
       jellypilot_ui::widgets::library::artwork_progress_style(
-        &jellypilot_ui::theme::theme(state.theme_mode()),
+        &state.native_theme(),
         kind == Kind::Favorites,
       ),
     )

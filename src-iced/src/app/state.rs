@@ -23,7 +23,7 @@ use jellypilot_media_server::{
 };
 use jellypilot_mpv::playback::PlaybackController;
 use jellypilot_ui::theme::ThemeMode as UiThemeMode;
-use jellypilot_ui::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
+use jellypilot_ui::tokens::ThemePalette;
 use zeroize::Zeroizing;
 
 use super::kernel::Kernel;
@@ -222,6 +222,7 @@ pub struct HomeState {
   pub hovered_card: Option<String>,
   hero_candidates: Vec<HeroCandidate>,
   selected_hero_id: Option<String>,
+  hero_motion_revision: u64,
 }
 
 impl Default for HomeState {
@@ -243,6 +244,7 @@ impl Default for HomeState {
       hovered_card: None,
       hero_candidates: Vec::new(),
       selected_hero_id: None,
+      hero_motion_revision: 0,
     }
   }
 }
@@ -356,10 +358,19 @@ impl HomeState {
     let index = self
       .hero_candidates()
       .position(|(_, item)| item.id == item_id)?;
+    let changed = self.featured_item().is_none_or(|item| item.id != item_id);
     if self.selected_hero_id.as_deref() != Some(item_id) {
       self.selected_hero_id = Some(item_id.to_owned());
+      if changed {
+        self.hero_motion_revision = self.hero_motion_revision.wrapping_add(1);
+      }
     }
     Some(index)
+  }
+
+  /// Changes only when the user selects another displayed Hero, not on refresh.
+  pub fn hero_motion_revision(&self) -> u64 {
+    self.hero_motion_revision
   }
 
   fn refresh_hero_candidates(&mut self) {
@@ -612,6 +623,7 @@ pub struct State {
   /// Latest OS light/dark mode report; `None` until the boot one-shot task
   /// resolves. Read only while the theme mode setting is `System`.
   pub system_theme: iced::theme::Mode,
+  pub(crate) motion: super::motion::State,
   pub login: crate::app::login::Surface,
   pub settings: crate::app::settings::Surface,
   pub instance: Option<crate::instance::Guard>,
@@ -660,6 +672,7 @@ impl State {
     let mut state = Self {
       image_diagnostics: Default::default(),
       system_theme: iced::theme::Mode::None,
+      motion: Default::default(),
       kernel: Kernel {
         settings,
         locale,
@@ -756,12 +769,14 @@ impl State {
     }
   }
 
-  /// Semantic colors and shadows for the effective theme mode.
+  /// Semantic colors and shadows shared with Catalog styles during theme changes.
   pub fn palette(&self) -> &'static ThemePalette {
-    match self.theme_mode() {
-      UiThemeMode::Dark => &DARK_PALETTE,
-      UiThemeMode::Light => &LIGHT_PALETTE,
-    }
+    jellypilot_ui::theme::palette_at(self.motion.theme_progress(self.theme_mode()))
+  }
+
+  /// Native Catalog theme matching the explicit colors returned by [`Self::palette`].
+  pub fn native_theme(&self) -> iced::Theme {
+    jellypilot_ui::theme::theme_at(self.motion.theme_progress(self.theme_mode()))
   }
   /// Persisted app mode: Full (Library Browser shell) or Control-Only
   /// (compact Now Playing controller).

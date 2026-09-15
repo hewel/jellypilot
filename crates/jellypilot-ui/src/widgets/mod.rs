@@ -13,6 +13,7 @@ pub mod field;
 pub mod focus_scope;
 pub mod inert;
 pub mod library;
+pub mod motion;
 pub mod poster_card;
 pub mod rounded_image;
 pub mod scrollable;

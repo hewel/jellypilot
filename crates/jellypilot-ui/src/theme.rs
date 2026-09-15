@@ -1,10 +1,12 @@
 //! JellyPilot iced theme and widget catalog entry points.
 
+mod transition;
+
 use iced::theme::palette;
 use iced::widget::{button, container, scrollable as iced_scrollable, text_input};
 use iced::Theme;
 
-use crate::tokens::{DARK_PALETTE, LIGHT_PALETTE};
+use crate::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
 use crate::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::widgets;
 pub use crate::widgets::control_button::{control_button, ControlButton};
@@ -21,15 +23,31 @@ pub enum ThemeMode {
 /// `Palette.background` doubles as the palette identity that
 /// [`crate::tokens::palette`] resolves against.
 pub fn theme(mode: ThemeMode) -> Theme {
-    let colors = match mode {
-        ThemeMode::Dark => DARK_PALETTE.colors,
-        ThemeMode::Light => LIGHT_PALETTE.colors,
+    let (name, palette) = match mode {
+        ThemeMode::Dark => ("JellyPilot Dark", &DARK_PALETTE),
+        ThemeMode::Light => ("JellyPilot Light", &LIGHT_PALETTE),
     };
+    from_palette(name, palette)
+}
+
+/// Builds the native theme at a dark-to-light transition progress.
+pub fn theme_at(progress: f32) -> Theme {
+    from_palette("JellyPilot", palette_at(progress))
+}
+
+/// Returns shared semantic colors at dark-to-light transition progress.
+pub fn palette_at(progress: f32) -> &'static ThemePalette {
+    transition::at(progress)
+}
+
+pub(crate) fn palette_for_background(background: iced::Color) -> Option<&'static ThemePalette> {
+    transition::for_background(background)
+}
+
+fn from_palette(name: &'static str, palette: &ThemePalette) -> Theme {
+    let colors = palette.colors;
     Theme::custom(
-        match mode {
-            ThemeMode::Dark => "JellyPilot Dark",
-            ThemeMode::Light => "JellyPilot Light",
-        },
+        name,
         palette::Seed {
             background: colors.background,
             text: colors.onSurface,

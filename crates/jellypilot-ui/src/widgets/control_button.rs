@@ -1,8 +1,10 @@
 //! Status-aware icon and label button.
 
 use std::any::Any;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::mouse;
@@ -19,14 +21,180 @@ use crate::icons::{Icon, IconControlState, IconSize};
 use crate::tokens::TOKENS;
 use crate::variants::ButtonVariant;
 
-#[derive(Debug, Default)]
-struct State {
+use super::motion;
+
+#[derive(Debug)]
+pub(crate) struct State {
     is_pressed: bool,
     status: Option<button::Status>,
     is_focused: bool,
     pointer_interaction: bool,
     focus_visibility: Option<FocusVisibility>,
     focus_generation: u64,
+    motion: ControlMotion,
+    /// The style the last draw presented; retargets start here.
+    displayed: Cell<Option<Shown>>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            is_pressed: false,
+            status: None,
+            is_focused: false,
+            pointer_interaction: false,
+            focus_visibility: None,
+            focus_generation: 0,
+            motion: ControlMotion::default(),
+            displayed: Cell::new(None),
+        }
+    }
+}
+
+/// The resolved colors a control presents, captured for retargeting.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Shown {
+    pub(crate) background: Option<iced::Background>,
+    pub(crate) text_color: iced::Color,
+    pub(crate) border_color: iced::Color,
+    pub(crate) border_width: f32,
+}
+
+impl Shown {
+    fn of(style: &button::Style) -> Self {
+        Self {
+            background: style.background,
+            text_color: style.text_color,
+            border_color: style.border.color,
+            border_width: style.border.width,
+        }
+    }
+
+    fn lerp(from: &Self, to: &Self, progress: f32) -> Self {
+        Self {
+            background: motion::lerp_background(from.background, to.background, progress),
+            text_color: motion::lerp_color(from.text_color, to.text_color, progress),
+            border_color: motion::lerp_color(from.border_color, to.border_color, progress),
+            border_width: from.border_width + (to.border_width - from.border_width) * progress,
+        }
+    }
+}
+
+/// Status-color transition state for the 150ms control feedback contract.
+#[derive(Debug)]
+pub(crate) struct ControlMotion {
+    /// The status the transition is animating toward.
+    target: button::Status,
+    /// The displayed colors the in-flight transition started from.
+    from: Option<Shown>,
+    tween: Option<motion::Tween>,
+}
+
+impl Default for ControlMotion {
+    fn default() -> Self {
+        Self {
+            target: button::Status::Active,
+            from: None,
+            tween: None,
+        }
+    }
+}
+
+impl ControlMotion {
+    fn target(&self) -> button::Status {
+        self.target
+    }
+
+    /// Starts a transition toward `target` from the last displayed colors.
+    /// Without a displayed snapshot (never drawn) or under disabled motion the
+    /// target applies immediately.
+    fn retarget(&mut self, target: button::Status, displayed: Option<Shown>) {
+        self.target = target;
+        match displayed.filter(|_| motion::enabled()) {
+            Some(shown) => {
+                self.from = Some(shown);
+                self.tween = Some(motion::Tween::new(
+                    0.0,
+                    1.0,
+                    Instant::now(),
+                    TOKENS.durations.ms150,
+                ));
+            }
+            None => {
+                self.from = None;
+                self.tween = None;
+            }
+        }
+    }
+}
+
+/// Live interaction status shared with non-interactive content widgets.
+///
+/// Custom content built by [`control_button_content`] cannot observe the
+/// control's own status; a channel created by the caller and installed with
+/// [`ControlButton::status_channel`] lets content (the shared switch visual)
+/// animate against the same status the chrome uses.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ControlStatus(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl ControlStatus {
+    pub(crate) fn get(&self) -> button::Status {
+        match self.0.load(Ordering::Relaxed) {
+            1 => button::Status::Hovered,
+            2 => button::Status::Pressed,
+            3 => button::Status::Disabled,
+            _ => button::Status::Active,
+        }
+    }
+
+    fn set(&self, status: button::Status) {
+        let tag = match status {
+            button::Status::Active => 0,
+            button::Status::Hovered => 1,
+            button::Status::Pressed => 2,
+            button::Status::Disabled => 3,
+        };
+        self.0.store(tag, Ordering::Relaxed);
+    }
+}
+
+/// The text/icon color the control's standard content should draw with.
+/// Written by the control during `draw`, read by content style closures.
+#[derive(Debug, Clone)]
+pub(crate) struct ContentColor {
+    packed: Arc<AtomicU64>,
+    set: Arc<AtomicBool>,
+}
+
+impl Default for ContentColor {
+    fn default() -> Self {
+        Self {
+            packed: Arc::new(AtomicU64::new(0)),
+            set: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl ContentColor {
+    fn store(&self, color: iced::Color) {
+        let [r, g, b, a] = color.into_rgba8();
+        self.packed.store(
+            u64::from(u32::from_be_bytes([r, g, b, a])),
+            Ordering::Relaxed,
+        );
+        self.set.store(true, Ordering::Relaxed);
+    }
+
+    /// The last stored color, or `fallback` before the first draw.
+    fn load_or(&self, fallback: impl FnOnce() -> iced::Color) -> iced::Color {
+        if self.set.load(Ordering::Relaxed) {
+            let packed = self.packed.load(Ordering::Relaxed) as u32;
+            let [r, g, b, a] = packed.to_be_bytes();
+            iced::Color::from_rgba8(r, g, b, a as f32 / 255.0)
+        } else {
+            fallback()
+        }
+    }
 }
 
 impl State {
@@ -44,6 +212,10 @@ impl State {
                 .focus_visibility
                 .as_ref()
                 .map_or(!self.pointer_interaction, FocusVisibility::is_keyboard)
+    }
+
+    pub(crate) fn motion_active(&self) -> bool {
+        self.motion.tween.is_some()
     }
 }
 
@@ -170,6 +342,8 @@ pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     radius: Option<f32>,
     id: Option<widget::Id>,
     on_press: Option<Message>,
+    status_channel: ControlStatus,
+    content_color: ContentColor,
 }
 
 impl<'a, Message, Renderer> ControlButton<'a, Message, Renderer>
@@ -188,6 +362,7 @@ where
         let spacing = TOKENS.spacing.s1_5;
         let label_fill = false;
         let content_centered = false;
+        let content_color = ContentColor::default();
         let contents = build_contents(
             icon,
             label.as_deref(),
@@ -199,6 +374,7 @@ where
             spacing,
             label_fill,
             content_centered,
+            content_color.clone(),
         );
 
         Self {
@@ -221,7 +397,18 @@ where
             radius: None,
             id: None,
             on_press: None,
+            status_channel: ControlStatus::default(),
+            content_color,
         }
+    }
+
+    /// Installs the channel the control publishes its interaction status to.
+    /// Custom content that animates against the control's status (the shared
+    /// switch visual) reads the same channel.
+    #[must_use]
+    pub(crate) fn status_channel(mut self, channel: ControlStatus) -> Self {
+        self.status_channel = channel;
+        self
     }
 
     fn with_content(
@@ -373,6 +560,7 @@ where
             self.spacing,
             self.label_fill,
             self.content_centered,
+            self.content_color.clone(),
         );
     }
 }
@@ -395,13 +583,13 @@ pub fn control_button_content<'a, Message: Clone + 'a>(
 ) -> ControlButton<'a, Message> {
     ControlButton::with_content(build, variant)
 }
-
 fn icon_for_style_state<'a>(
     icon: Icon,
     size: impl Into<IconSize>,
     variant: ButtonVariant,
     state: IconControlState,
     style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
+    content_color: ContentColor,
 ) -> Svg<'a, Theme> {
     let px = size.into().pixels();
     let status = match state {
@@ -413,7 +601,7 @@ fn icon_for_style_state<'a>(
         .width(Length::Fixed(px))
         .height(Length::Fixed(px))
         .style(move |theme: &Theme, _status| svg::Style {
-            color: Some(style(theme, variant, status).text_color),
+            color: Some(content_color.load_or(|| style(theme, variant, status).text_color)),
         })
 }
 
@@ -432,6 +620,7 @@ fn build_contents<'a, Message, Renderer>(
     spacing: f32,
     label_fill: bool,
     content_centered: bool,
+    content_color: ContentColor,
 ) -> [Element<'a, Message, Theme, Renderer>; 3]
 where
     Message: 'a,
@@ -453,6 +642,7 @@ where
             label_fill,
             content_centered,
             IconControlState::Rest,
+            content_color.clone(),
         ),
         build_content(
             icon,
@@ -466,6 +656,7 @@ where
             label_fill,
             content_centered,
             IconControlState::Hovered,
+            content_color.clone(),
         ),
         build_content(
             icon,
@@ -479,6 +670,7 @@ where
             label_fill,
             content_centered,
             IconControlState::Disabled,
+            content_color,
         ),
     ]
 }
@@ -499,6 +691,7 @@ fn build_content<'a, Message, Renderer>(
     label_fill: bool,
     content_centered: bool,
     state: IconControlState,
+    content_color: ContentColor,
 ) -> Element<'a, Message, Theme, Renderer>
 where
     Message: 'a,
@@ -515,12 +708,21 @@ where
         IconControlState::Disabled => button::Status::Disabled,
     };
 
-    let icon = icon.map(|icon| icon_for_style_state(icon, icon_size, variant, state, style));
+    let icon = icon.map(|icon| {
+        icon_for_style_state(
+            icon,
+            icon_size,
+            variant,
+            state,
+            style,
+            content_color.clone(),
+        )
+    });
     let label = label.map(|label| {
         let mut label = text(label.to_owned())
             .size(label_size)
             .style(move |theme: &Theme| text::Style {
-                color: Some(style(theme, variant, status).text_color),
+                color: Some(content_color.load_or(|| style(theme, variant, status).text_color)),
             });
         if label_fill {
             label = label.width(Length::Fill);
@@ -599,6 +801,11 @@ where
     }
 
     fn diff(&mut self, tree: &mut Tree) {
+        if !motion::enabled() {
+            let state = tree.state.downcast_mut::<State>();
+            state.motion.tween = None;
+            state.motion.from = None;
+        }
         tree.diff_children(&mut self.contents);
     }
 
@@ -751,6 +958,7 @@ where
         }
 
         let current_status = status(self, state, bounds, cursor);
+        self.status_channel.set(current_status);
         if matches!(
             event,
             Event::Window(iced::window::Event::RedrawRequested(_))
@@ -759,6 +967,33 @@ where
         } else if state.status != Some(current_status) {
             state.status = Some(current_status);
             shell.request_redraw();
+        }
+        // Retarget the status-color transition from the displayed colors.
+        if state.motion.target() != current_status {
+            state.motion.retarget(current_status, state.displayed.get());
+        }
+        motion::tick_draw(&mut state.motion.tween, event, shell);
+
+        // Custom content (the switch visual) owns its own animation state and
+        // needs RedrawRequested ticks to advance. Pointer events stay with the
+        // control: hidden content variants must never capture them.
+        if matches!(
+            event,
+            Event::Window(iced::window::Event::RedrawRequested(_))
+        ) {
+            if let Some(content_layout) = layout.children().next() {
+                for (content, child) in self.contents.iter_mut().zip(tree.children.iter_mut()) {
+                    content.as_widget_mut().update(
+                        child,
+                        event,
+                        content_layout,
+                        mouse::Cursor::Unavailable,
+                        _renderer,
+                        shell,
+                        _viewport,
+                    );
+                }
+            }
         }
     }
 
@@ -773,13 +1008,26 @@ where
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let status = status(self, tree.state.downcast_ref::<State>(), bounds, cursor);
+        let state = tree.state.downcast_ref::<State>();
+        let status = status(self, state, bounds, cursor);
+        self.status_channel.set(status);
         let mut style = (self.style)(theme, self.variant, status);
         if let Some(radius) = self.radius {
             style.border.radius = radius.into();
         }
 
-        if tree.state.downcast_ref::<State>().is_focus_visible() {
+        // Blend toward the target status colors while a transition runs.
+        if let (Some(tween), Some(from)) = (state.motion.tween, state.motion.from) {
+            let shown = Shown::lerp(&from, &Shown::of(&style), tween.eased(Instant::now()));
+            style.background = shown.background;
+            style.text_color = shown.text_color;
+            style.border.color = shown.border_color;
+            style.border.width = shown.border_width;
+        }
+        state.displayed.set(Some(Shown::of(&style)));
+        self.content_color.store(style.text_color);
+
+        if state.is_focus_visible() {
             let colors = crate::tokens::palette(theme).colors;
             style.border.color = if self.variant == ButtonVariant::Primary {
                 colors.secondary
@@ -939,6 +1187,7 @@ mod tests {
             pointer_interaction: false,
             focus_visibility: None,
             focus_generation: 0,
+            ..State::default()
         };
 
         assert_eq!(

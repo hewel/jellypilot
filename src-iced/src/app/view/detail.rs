@@ -424,33 +424,43 @@ fn overview_copy<'a>(
         .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
         .color(state.palette().text.secondary)
         .width(Fill);
-      let visible: Element<'_, Message> = if clipped {
+      // The fade overlay lives outside the animated region so it stays
+      // anchored to the visible bottom edge while the measured height moves.
+      let copy_block: Element<'_, Message> = if clipped {
+        container(copy)
+          .height(line_height * 2.0)
+          .width(Fill)
+          .clip(true)
+          .into()
+      } else {
+        copy.into()
+      };
+      let fade_overlay: Element<'_, Message> = if clipped {
         let canvas = state.palette().colors.background;
         let fade = gradient::Linear::new(Degrees(90.0))
           .add_stop(0.0, canvas.scale_alpha(0.0))
           .add_stop(1.0, canvas);
-        stack![
-          container(copy)
-            .height(line_height * 2.0)
-            .width(Fill)
-            .clip(true),
-          container(
-            container(space::horizontal())
-              .width(100)
-              .height(line_height)
-              .style(
-                move |_| container::Style::default().background(Background::Gradient(fade.into()))
-              )
-          )
-          .width(Fill)
-          .height(Fill)
-          .align_x(Alignment::End)
-          .align_y(Alignment::End),
-        ]
+        container(
+          container(space::horizontal())
+            .width(100)
+            .height(line_height)
+            .style(move |_: &iced::Theme| {
+              container::Style::default().background(Background::Gradient(fade.into()))
+            }),
+        )
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::End)
         .into()
       } else {
-        copy.into()
+        space().into()
       };
+      let visible: Element<'_, Message> = stack![
+        super::motion::resize(copy_block, expanded as u64, super::motion::Axis::Vertical),
+        fade_overlay,
+      ]
+      .into();
       let mut body = column![visible].spacing(4).width(Fill);
       if expandable {
         body = body.push(
@@ -1049,14 +1059,10 @@ fn track_chip<'a>(
     .detail
     .track_menu_open
     == Some(menu);
-  let content: Element<'_, Message> = if open {
-    scrollable(track_list(palette, state.kernel.locale, streams))
-      .height(Length::Fit.max(280.0))
-      .style(jellypilot_ui::theme::scrollable)
-      .into()
-  } else {
-    space::vertical().into()
-  };
+  // The popover still draws this content while its exit animation settles.
+  let content = scrollable(track_list(palette, state.kernel.locale, streams))
+    .height(Length::Fit.max(280.0))
+    .style(jellypilot_ui::theme::scrollable);
   jellypilot_ui::overlay::popover(
     trigger,
     content,
@@ -2508,6 +2514,7 @@ mod tests {
       shell: shell::Surface::new(false),
       watchlist: Default::default(),
       accounts: accounts::Surface::new(),
+      motion: Default::default(),
     }
   }
 
@@ -2697,6 +2704,95 @@ mod tests {
       }
       cache = ui.into_cache();
     }
+  }
+
+  #[test]
+  fn closing_track_popover_keeps_its_size_until_exit_finishes() {
+    use iced::advanced::{layout, shell, widget, Layout, Shell};
+    use iced::{Event, Point, Rectangle, Size, Vector};
+
+    let renderer = headless_renderer();
+    let mut state = hero_state();
+    let tracks = [
+      media_track("Original", true),
+      media_track("Commentary", false),
+    ];
+    let bounds = Size::new(1568.0, 1018.0);
+    let viewport = Rectangle::with_size(bounds);
+    let limits = layout::Limits::new(Size::ZERO, bounds);
+    state.full.as_mut().unwrap().detail.track_menu_open = Some(TrackMenu::Audio);
+    let mut open = track_chip(&state, TrackMenu::Audio, &tracks, String::new());
+    let mut tree = widget::Tree::new(open.as_widget());
+    open.as_widget_mut().diff(&mut tree);
+    let node = open
+      .as_widget_mut()
+      .layout(&mut tree, &renderer, &limits)
+      .move_to(Point::new(525.0, 650.0));
+    let open_size = open
+      .as_widget_mut()
+      .overlay(
+        &mut tree,
+        Layout::new(&node),
+        &renderer,
+        &viewport,
+        Vector::ZERO,
+      )
+      .expect("open track panel")
+      .as_overlay_mut()
+      .layout(&renderer, bounds)
+      .size();
+    drop(open);
+
+    state.full.as_mut().unwrap().detail.track_menu_open = None;
+    let mut closing = track_chip(&state, TrackMenu::Audio, &tracks, String::new());
+    closing.as_widget_mut().diff(&mut tree);
+    let node = closing
+      .as_widget_mut()
+      .layout(&mut tree, &renderer, &limits)
+      .move_to(Point::new(525.0, 650.0));
+    let closing_size = closing
+      .as_widget_mut()
+      .overlay(
+        &mut tree,
+        Layout::new(&node),
+        &renderer,
+        &viewport,
+        Vector::ZERO,
+      )
+      .expect("panel remains during exit")
+      .as_overlay_mut()
+      .layout(&renderer, bounds)
+      .size();
+    assert_eq!(
+      closing_size, open_size,
+      "dismissal must not replace the panel with a viewport-height spacer"
+    );
+
+    let mut bus = shell::Bus::new();
+    closing.as_widget_mut().update(
+      &mut tree,
+      &Event::Window(iced::window::Event::RedrawRequested(
+        iced::time::Instant::now() + TOKENS.durations.ms200,
+      )),
+      Layout::new(&node),
+      iced::mouse::Cursor::Unavailable,
+      &renderer,
+      &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
+      &viewport,
+    );
+    assert!(
+      closing
+        .as_widget_mut()
+        .overlay(
+          &mut tree,
+          Layout::new(&node),
+          &renderer,
+          &viewport,
+          Vector::ZERO
+        )
+        .is_none(),
+      "the panel must disappear once its exit finishes"
+    );
   }
 
   #[test]

@@ -11,7 +11,7 @@
 //! window/shell state.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,12 +33,14 @@ use jellypilot_mpv::playback::{
   PlaybackSelection, PlaybackStartPosition, PlaybackWarning, VolumeMemoryPreference,
 };
 use jellypilot_mpv::playback_session::{
-  seek_intent, volume_intent, AdjacentDirection, ControllerAcceptance, ControllerCommand,
-  ControllerSettlement, EffectId, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent,
-  PlaybackNotice, PlaybackSession, PlaybackStep, PlaybackTransition, SessionView,
+  seek_intent, volume_intent, AdjacentAvailability, AdjacentDirection, ControllerAcceptance,
+  ControllerCommand, ControllerSettlement, EffectId, PlaybackEffect, PlaybackEvent, PlaybackInput,
+  PlaybackIntent, PlaybackNotice, PlaybackSession, PlaybackStep, PlaybackTransition, SessionView,
 };
-use jellypilot_mpv::remote_commands::{remote_command_action, RemoteCommandAction};
-use jellypilot_session::RemoteControlState;
+use jellypilot_mpv::remote_commands::{
+  remote_command_action, RemoteCommandAction, RemotePlaybackIntent,
+};
+use jellypilot_session::{JellyfinCommand, RemoteControlState};
 
 use crate::i18n::UiText;
 use crate::tray::TrayAction;
@@ -157,6 +159,22 @@ pub struct Surface {
   /// Resource-owning remote target runtime; its view/token gate all remote
   /// readiness, event, and teardown decisions.
   pub remote: remote::Runtime,
+  /// The current presentation lease (ADR 0043): commands capture it at
+  /// dispatch and the IPC writer reads it when their unpause is written.
+  /// Close revokes the lease permanently and mints a fresh held one, so work
+  /// admitted before the close can never unpause again; an ordinary Show
+  /// clears only the fresh lease. External MPV ignores it.
+  pub(crate) presentation_hold: Arc<AtomicBool>,
+  /// Clone of the embedded controller's MPV client, retained so the close
+  /// path can enqueue `pause=true` directly on the serialized writer without
+  /// waiting on the controller mutex.
+  presentation_client: Option<jellypilot_mpv::MpvClient>,
+  /// An explicit play command waiting for a visible window. Replaced by a
+  /// newer command and cancelled by a close or an open timeout.
+  pending_play: Option<PendingPlay>,
+  /// The docked player bar's last visible content, captured when Now Playing
+  /// clears so the view layer can draw its exit reveal (motion contract).
+  pub(crate) retained_player_bar: Option<crate::app::view::motion::RetainedPlayerBar>,
   account_playback_handoff: Option<AccountPlaybackHandoff>,
   pub seek_dragging: bool,
   pub volume_dragging: bool,
@@ -183,7 +201,13 @@ impl Surface {
       queue_generation: 0,
       active_queue_load: None,
       queue_menu_open: false,
+      // Embedded playback starts held: the first admitted window lifts it.
+      // This covers start-minimized boots without a separate boot path.
+      presentation_hold: Arc::new(AtomicBool::new(crate::embedded::enabled())),
       remote: remote::Runtime::new(request_gate),
+      pending_play: None,
+      presentation_client: None,
+      retained_player_bar: None,
       account_playback_handoff: None,
       seek_preview: None,
       seek_dragging: false,
@@ -234,10 +258,11 @@ pub fn update_remote(
   kernel: &mut Kernel,
   quit_requested: bool,
   message: RemoteMessage,
+  player_visible: bool,
 ) -> Task<Message> {
   let previous_state = surface.remote.view().state;
   let previous_notice = kernel.notice.as_ref().map(UiText::id);
-  let task = handle_remote(surface, kernel, quit_requested, message);
+  let task = handle_remote(surface, kernel, quit_requested, message, player_visible);
   let toast_task = record_remote_change(surface, kernel, previous_state, previous_notice);
   Task::batch([task, toast_task])
 }
@@ -406,6 +431,8 @@ pub(crate) fn apply_playback_configuration(
         .publish(kernel.settings.snapshot().remember_season_volume());
       controller
         .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
+      controller.set_presentation_hold(Arc::clone(&surface.presentation_hold));
+      surface.presentation_client = Some(controller.mpv_client());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
@@ -465,7 +492,7 @@ pub(crate) fn refinalize_playback_target(
       "Playback target name changed; remote registration requested.",
     );
   }
-  apply_remote_update(surface, kernel, false, update)
+  apply_remote_update(surface, kernel, false, update, true)
 }
 
 /// Starts the remote Playback Target runtime for the connected account.
@@ -484,7 +511,7 @@ pub(crate) fn start_remote_session(surface: &mut Surface, kernel: &mut Kernel) -
     remote::Input::Start { client, name },
     &mut kernel.request_gate,
   );
-  apply_remote_update(surface, kernel, false, update)
+  apply_remote_update(surface, kernel, false, update, true)
 }
 
 const REMOTE_CONNECTION_LOST_NOTICE: &str = "player-remote-connection-lost";
@@ -495,6 +522,7 @@ fn handle_remote(
   kernel: &mut Kernel,
   quit_requested: bool,
   message: RemoteMessage,
+  player_visible: bool,
 ) -> Task<Message> {
   match message {
     RemoteMessage::Completed(completion) => {
@@ -502,14 +530,14 @@ fn handle_remote(
         remote::Input::Completed(completion),
         &mut kernel.request_gate,
       );
-      apply_remote_update(surface, kernel, quit_requested, update)
+      apply_remote_update(surface, kernel, quit_requested, update, player_visible)
     }
     RemoteMessage::Event { remote, event } => {
       let update = surface.remote.update(
         remote::Input::Event { remote, event },
         &mut kernel.request_gate,
       );
-      apply_remote_update(surface, kernel, quit_requested, update)
+      apply_remote_update(surface, kernel, quit_requested, update, player_visible)
     }
     RemoteMessage::PlayResolved {
       remote,
@@ -518,6 +546,17 @@ fn handle_remote(
       start_position_ticks,
       selection,
     } => {
+      // A close or quit that landed after the command was admitted supersedes
+      // the in-flight resolution: the item never starts while the
+      // presentation is held or the session is shutting down.
+      if quit_requested || surface.presentation_hold.load(Ordering::Acquire) {
+        kernel.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::RemoteControl,
+          "Remote play resolution arrived after the window closed; playback stays paused.",
+        );
+        return Task::none();
+      }
       if remote != surface.remote.token()
         || !kernel.request_gate.is_current_remote(remote)
         || !kernel.request_gate.is_current_remote_play(play)
@@ -560,6 +599,7 @@ fn apply_remote_update(
   kernel: &mut Kernel,
   quit_requested: bool,
   update: remote::Update,
+  player_visible: bool,
 ) -> Task<Message> {
   let remote::Update {
     work,
@@ -585,6 +625,7 @@ fn apply_remote_update(
       quit_requested,
       remote,
       command,
+      player_visible,
     ));
   }
   for waiter in settled {
@@ -652,12 +693,60 @@ fn handle_remote_command(
   kernel: &mut Kernel,
   quit_requested: bool,
   remote: RemoteToken,
-  command: jellypilot_session::JellyfinCommand,
+  command: JellyfinCommand,
+  player_visible: bool,
 ) -> Task<Message> {
-  match remote_command_action(command, &surface.view) {
-    Some(RemoteCommandAction::Intent(intent)) => {
+  let Some(action) = remote_command_action(command, &surface.view) else {
+    return Task::none();
+  };
+  // ADR 0043: an explicit play command needs a visible embedded player. It
+  // defers while the presentation is held (window closed) and, for embedded
+  // playback, whenever the player is not the visible page — a remote resume
+  // on the Home page must surface Now Playing before it unpauses. During
+  // the quit handshake commands dispatch normally: the hold still blocks
+  // the unpause at the engine and no window is opened. External MPV never
+  // defers.
+  let player_hidden = surface.presentation_hold.load(Ordering::Acquire)
+    || (crate::embedded::enabled() && !player_visible);
+  if !quit_requested && player_hidden && remote_action_requires_window(&action, &surface.view) {
+    // Capture the resume now; a newer snapshot during Show must not turn it into pause.
+    let action = match action {
+      RemoteCommandAction::Intent(RemotePlaybackIntent::TogglePaused) => {
+        RemoteCommandAction::Intent(RemotePlaybackIntent::SetPaused(false))
+      }
+      action => action,
+    };
+    if defer_play(surface, PendingPlay::Remote(remote, action)) {
+      return Task::done(Message::Window(
+        super::message::WindowMessage::ShowForPlayback,
+      ));
+    }
+    // A newer play command replaced the deferred one; it stays pending.
+    return Task::none();
+  }
+  dispatch_remote_action(surface, kernel, quit_requested, remote, action)
+}
+
+/// Runs one translated remote command against the session. Deferred commands
+/// re-enter here once the window is admitted, so admission and direct
+/// dispatch share one path.
+fn dispatch_remote_action(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+  remote: RemoteToken,
+  action: RemoteCommandAction,
+) -> Task<Message> {
+  match action {
+    RemoteCommandAction::Intent(intent) => {
       if intent.invalidates_remote_play() {
         kernel.request_gate.begin_remote_play();
+      }
+      // A headless Stop supersedes a deferred play: the window admission must
+      // not replay a command the user already replaced. An adjacent command
+      // with nothing available changes nothing and leaves the deferral.
+      if matches!(intent, RemotePlaybackIntent::Stop) {
+        surface.pending_play = None;
       }
       let Some(intent) = intent.into_playback_intent(&surface.view) else {
         remote_notice(
@@ -675,11 +764,11 @@ fn handle_remote_command(
       )
       .task
     }
-    Some(RemoteCommandAction::Play {
+    RemoteCommandAction::Play {
       item_id,
       start_position_ticks,
       selection,
-    }) => {
+    } => {
       let play = kernel.request_gate.begin_remote_play();
       let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
         return Task::none();
@@ -707,7 +796,6 @@ fn handle_remote_command(
         },
       )
     }
-    None => Task::none(),
   }
 }
 
@@ -722,7 +810,7 @@ pub(crate) fn stop_remote_session_for_quit(
     remote::Input::Retire(remote::Waiter::Quit),
     &mut kernel.request_gate,
   );
-  apply_remote_update(surface, kernel, true, update)
+  apply_remote_update(surface, kernel, true, update, true)
 }
 
 /// Tray transport actions map onto playback intents. `Show`/`Quit` stay at
@@ -733,9 +821,30 @@ pub(crate) fn update_tray(
   kernel: &mut Kernel,
   quit_requested: bool,
   action: TrayAction,
+  player_visible: bool,
 ) -> Task<Message> {
+  // ADR 0043: an explicit play command needs a visible embedded player. The
+  // presentation hold covers the closed window; for embedded playback a
+  // hidden player page (e.g. Home) defers the same way so Now Playing is
+  // shown before the command unpauses. External MPV never defers.
+  let player_hidden = surface.presentation_hold.load(Ordering::Acquire)
+    || (crate::embedded::enabled() && !player_visible);
   match action {
     TrayAction::PlayPause => {
+      let resuming = surface
+        .view
+        .now_playing
+        .as_ref()
+        .is_some_and(|playing| playing.paused);
+      if !quit_requested && player_hidden && resuming {
+        if defer_play(surface, PendingPlay::Resume) {
+          return Task::done(Message::Window(
+            super::message::WindowMessage::ShowForPlayback,
+          ));
+        }
+        // A newer command replaced the deferred one; it stays pending.
+        return Task::none();
+      }
       apply_playback_input(
         surface,
         kernel,
@@ -744,21 +853,32 @@ pub(crate) fn update_tray(
       )
       .task
     }
-    TrayAction::Next => {
+    TrayAction::Next | TrayAction::Previous => {
+      let direction = match action {
+        TrayAction::Next => AdjacentDirection::Next,
+        _ => AdjacentDirection::Previous,
+      };
+      let availability = match direction {
+        AdjacentDirection::Next => &surface.view.adjacent.next,
+        AdjacentDirection::Previous => &surface.view.adjacent.previous,
+      };
+      if !quit_requested
+        && player_hidden
+        && matches!(availability, AdjacentAvailability::Available { .. })
+      {
+        if defer_play(surface, PendingPlay::Adjacent(direction)) {
+          return Task::done(Message::Window(
+            super::message::WindowMessage::ShowForPlayback,
+          ));
+        }
+        // A newer command replaced the deferred one; it stays pending.
+        return Task::none();
+      }
       apply_local_playback_intent(
         surface,
         kernel,
         quit_requested,
-        PlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
-      )
-      .task
-    }
-    TrayAction::Previous => {
-      apply_local_playback_intent(
-        surface,
-        kernel,
-        quit_requested,
-        PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
+        PlaybackIntent::PlayAdjacent(direction),
       )
       .task
     }
@@ -791,7 +911,8 @@ pub(crate) fn initialize_playback(
   quit_requested: bool,
 ) {
   surface.session = PlaybackSession::default();
-  surface.view = surface.session.view();
+  refresh_view(surface, kernel);
+  surface.retained_player_bar = None;
   surface.notice = None;
   surface.playable = None;
   surface.adjacent_playables = [None, None];
@@ -811,6 +932,7 @@ pub(crate) fn initialize_playback(
 
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.controller = None;
+    surface.presentation_client = None;
     return;
   };
   client.set_tmdb_api_key(kernel.settings.snapshot().tmdb_api_key().map(str::to_owned));
@@ -819,15 +941,18 @@ pub(crate) fn initialize_playback(
     Ok(mut controller) => {
       controller
         .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
+      controller.set_presentation_hold(Arc::clone(&surface.presentation_hold));
+      surface.presentation_client = Some(controller.mpv_client());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
         Instant::now(),
       );
-      surface.view = surface.session.view();
+      refresh_view(surface, kernel);
     }
     Err(_) => {
       surface.controller = None;
+      surface.presentation_client = None;
       surface.notice = Some(playback_error_text(PlaybackError::MpvNotFound));
     }
   }
@@ -1388,6 +1513,7 @@ fn update_playback(
       if cleanup_accepted && matches!(shutdown_cleanup, Some(Ok(()))) {
         surface.controller_configuration.invalidate_pending();
         surface.controller = None;
+        surface.presentation_client = None;
         let _ = surface.session.handle(
           PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(false))),
           Instant::now(),
@@ -1426,6 +1552,11 @@ fn update_playback(
       result,
       detail,
     } => {
+      // A close or quit supersedes an in-flight adjacent lookup the same way
+      // it supersedes a play resolution.
+      if quit_requested || surface.presentation_hold.load(Ordering::Acquire) {
+        return PlaybackUpdate::without_transition(Task::none());
+      }
       if remote != surface.remote.token()
         || !kernel.request_gate.is_current_remote(remote)
         || !kernel.request_gate.is_current_remote_play(play)
@@ -1469,6 +1600,22 @@ fn update_playback(
       surface
         .artwork
         .settle(kernel.request_gate.current_session(), completion);
+      PlaybackUpdate::without_transition(Task::none())
+    }
+    PlaybackMessage::PresentationPaused(result) => {
+      // The engine pause for a close that already completed (compositor
+      // kill, session end) resolved; a failure means the engine may still be
+      // playing without a visible player, so it is reported, not swallowed.
+      if let Err(error) = result {
+        kernel.diagnostics.record(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          format!("The close-path pause was not acknowledged: {error}."),
+        );
+        return PlaybackUpdate::without_transition(
+          kernel.show_toast(NoticeLevel::Error, playback_error_text(error)),
+        );
+      }
       PlaybackUpdate::without_transition(Task::none())
     }
   }
@@ -1572,6 +1719,7 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
     PlaybackMessage::AdjacentSettled { .. } => "adjacent-settled",
     PlaybackMessage::ArtworkLoaded(_) => "artwork-loaded",
+    PlaybackMessage::PresentationPaused(_) => "presentation-paused",
   }
 }
 fn playable_kind(playable: &Playable) -> &'static str {
@@ -1587,12 +1735,25 @@ pub(crate) fn quit_may_exit(surface: &Surface, quit_requested: bool) -> bool {
   quit_requested && surface.view.quit_may_proceed && surface.remote.view().quiescent
 }
 
+/// Replaces the projected session view and maintains the retained player-bar
+/// snapshot: captured once when Now Playing clears (so the view layer can
+/// draw the bar's exit reveal) and dropped when a new item appears.
+fn refresh_view(surface: &mut Surface, kernel: &Kernel) {
+  let new_view = surface.session.view();
+  if surface.view.now_playing.is_some() && new_view.now_playing.is_none() {
+    surface.retained_player_bar =
+      crate::app::view::player::retained_player_bar_snapshot(surface, kernel.locale);
+  } else if new_view.now_playing.is_some() {
+    surface.retained_player_bar = None;
+  }
+  surface.view = new_view;
+}
 pub(crate) fn sync_playback_projection(
   surface: &mut Surface,
   kernel: &Kernel,
   quit_requested: bool,
 ) {
-  surface.view = surface.session.view();
+  refresh_view(surface, kernel);
   surface.notice = surface.view.notice.as_ref().map(|notice| match notice {
     PlaybackNotice::Failed(error) => playback_error_text(*error),
     PlaybackNotice::Warnings(_) => UiText::new("player-setup-incomplete"),
@@ -1624,6 +1785,211 @@ pub(crate) fn suspend_artwork(surface: &mut Surface) {
 pub(crate) fn resume_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
   surface.artwork_enabled = true;
   ensure_player_artwork(surface, kernel)
+}
+
+/// An explicit play command deferred until a visible window is admitted
+/// (ADR 0043). The translated remote action is retained so admission replays
+/// the same command through the normal path.
+enum PendingPlay {
+  Remote(RemoteToken, RemoteCommandAction),
+  Resume,
+  Adjacent(AdjacentDirection),
+}
+
+/// Whether a translated remote command needs a visible embedded player before
+/// it may reach the session. Pause, stop, volume, seek, and track commands
+/// stay headless; resume and new-item commands must show the player first.
+fn remote_action_requires_window(action: &RemoteCommandAction, view: &SessionView) -> bool {
+  match action {
+    RemoteCommandAction::Play { .. } => true,
+    RemoteCommandAction::Intent(intent) => match intent {
+      RemotePlaybackIntent::SetPaused(paused) => !paused,
+      RemotePlaybackIntent::TogglePaused => view
+        .now_playing
+        .as_ref()
+        .is_some_and(|playing| playing.paused),
+      RemotePlaybackIntent::PlayAdjacent(direction) => {
+        let availability = match direction {
+          AdjacentDirection::Next => &view.adjacent.next,
+          AdjacentDirection::Previous => &view.adjacent.previous,
+        };
+        matches!(availability, AdjacentAvailability::Available { .. })
+      }
+      RemotePlaybackIntent::Seek(_)
+      | RemotePlaybackIntent::SetVolume(_)
+      | RemotePlaybackIntent::SetMuted(_)
+      | RemotePlaybackIntent::SelectAudioStream(_)
+      | RemotePlaybackIntent::SelectSubtitleStream(_)
+      | RemotePlaybackIntent::Stop => false,
+    },
+  }
+}
+
+/// Defers an explicit play command while the presentation is held. Returns
+/// true only for the first deferred command, so the router requests a window
+/// exactly once per close cycle.
+fn defer_play(surface: &mut Surface, pending: PendingPlay) -> bool {
+  let first = surface.pending_play.is_none();
+  surface.pending_play = Some(pending);
+  first
+}
+
+/// Result of the close path: the session-effects task plus the engine-pause
+/// acknowledgement. The pause is enqueued synchronously before this returns,
+/// so it is ordered on the wire before any later play command; the
+/// acknowledgement resolves independently so the router can hold the close
+/// until MPV confirms it (ADR 0043).
+pub(crate) struct BackgroundPause {
+  pub(crate) task: Task<Message>,
+  pub(crate) acknowledgement: Task<Result<(), PlaybackError>>,
+}
+
+/// The main window closed (or never opened) while the tray keeps the app
+/// resident. The old presentation lease is revoked permanently and replaced
+/// by a fresh held one: commands admitted before the close keep their
+/// revoked lease and can never unpause again, while commands dispatched
+/// under the fresh lease stay paused until a window is admitted. The engine
+/// pause is enqueued on the serialized IPC writer before this returns —
+/// ahead of any later play command — and the session is suspended so queued
+/// start/resume work and pending adjacent authorization are cancelled.
+/// External MPV is untouched.
+pub(crate) fn window_closed(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+) -> BackgroundPause {
+  if !crate::embedded::enabled() {
+    return BackgroundPause {
+      task: Task::none(),
+      acknowledgement: Task::done(Ok(())),
+    };
+  }
+  suspend_for_close(surface, kernel, quit_requested)
+}
+
+/// The embedded close path, split from `window_closed` so tests can drive it
+/// without an embedded engine. Revokes the captured lease, mints the fresh
+/// held one, enqueues the engine pause synchronously, and suspends the
+/// session.
+fn suspend_for_close(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+) -> BackgroundPause {
+  surface.pending_play = None;
+  // Revoke the lease every in-flight and queued command captured, then mint
+  // the fresh held lease new commands dispatch under.
+  surface.presentation_hold.store(true, Ordering::Release);
+  surface.presentation_hold = Arc::new(AtomicBool::new(true));
+  // Invalidate every in-flight remote play token: a resolution or adjacent
+  // lookup that outlives the close must not start playback when a later Show
+  // lifts the hold. Deferred commands re-issue fresh tokens at admission.
+  kernel.request_gate.begin_remote_play();
+  // The engine pause bypasses the controller mutex: it is admitted to the
+  // writer queue now, before any play a later Show can dispatch. A pause
+  // that cannot be enqueued only resolves Ok when nothing could be playing;
+  // while playback is active or a start is in flight the engine may still
+  // be live behind a dead IPC connection, so the close must surface the
+  // failure instead of hiding a playing video.
+  let playback_active = surface.view.lifecycle.playback_active;
+  let acknowledgement = match surface.presentation_client.as_ref() {
+    Some(client) => match client.queue_pause() {
+      Ok(ack) => Task::perform(ack, |result| {
+        result.map_err(|_| PlaybackError::MpvControlFailed)
+      }),
+      Err(_) if playback_active => Task::done(Err(PlaybackError::MpvControlFailed)),
+      Err(_) => Task::done(Ok(())),
+    },
+    None if playback_active => Task::done(Err(PlaybackError::MpvControlFailed)),
+    None => Task::done(Ok(())),
+  };
+  let task = apply_playback_input(
+    surface,
+    kernel,
+    quit_requested,
+    PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+  )
+  .task;
+  BackgroundPause {
+    task,
+    acknowledgement,
+  }
+}
+/// A window became visible. The fresh presentation lease clears and a
+/// deferred play command dispatches through the normal remote/local paths;
+/// without one the session stays paused — showing the window never resumes
+/// by itself. Leases revoked by earlier closes stay revoked, so work
+/// admitted before a close can never unpause again.
+/// Returns the play task when a deferred command was admitted.
+pub(crate) fn window_opened(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+) -> Option<Task<Message>> {
+  surface.presentation_hold.store(false, Ordering::Release);
+  match surface.pending_play.take()? {
+    PendingPlay::Remote(remote, action) => {
+      // A remote session that restarted while the command was deferred can no
+      // longer run it; report instead of dispatching into a stale token.
+      if !kernel.request_gate.is_current_remote(remote) {
+        remote_notice(
+          kernel,
+          "player-remote-session-unavailable",
+          "The remote playback session was replaced while the window was opening.",
+        );
+        return Some(kernel.show_toast(
+          NoticeLevel::Warning,
+          UiText::new("player-remote-session-unavailable"),
+        ));
+      }
+      Some(dispatch_remote_action(
+        surface,
+        kernel,
+        quit_requested,
+        remote,
+        action,
+      ))
+    }
+    PendingPlay::Resume => Some(
+      apply_local_playback_intent(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackIntent::SetPaused(false),
+      )
+      .task,
+    ),
+    PendingPlay::Adjacent(direction) => Some(
+      apply_local_playback_intent(
+        surface,
+        kernel,
+        quit_requested,
+        PlaybackIntent::PlayAdjacent(direction),
+      )
+      .task,
+    ),
+  }
+}
+
+/// A window opened for a deferred play never arrived. The command fails
+/// loudly and the hold stays in place; there is no headless playback.
+pub(crate) fn open_failed(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  let had_play = surface.pending_play.take().is_some();
+  kernel.diagnostics.record(
+    DiagnosticLevel::Error,
+    DiagnosticCategory::Player,
+    "The main window could not be restored for playback.",
+  );
+  if had_play {
+    kernel.show_toast(NoticeLevel::Error, UiText::new("player-window-unavailable"))
+  } else {
+    Task::none()
+  }
+}
+
+/// Whether a deferred play command is waiting for a window.
+pub(crate) fn play_pending(surface: &Surface) -> bool {
+  surface.pending_play.is_some()
 }
 
 fn clear_inactive_playback(surface: &mut Surface) -> Task<Message> {
@@ -1757,6 +2123,10 @@ fn execute_controller_command(
     ControllerCommand::Start { item, .. } => Some(rich_playable(&surface.adjacent_playables, item)),
     _ => None,
   };
+  // Capture the presentation lease before the async block: the command keeps
+  // the lease it was admitted under even when a close later replaces the
+  // surface's lease with a fresh held one.
+  let lease = Arc::clone(&surface.presentation_hold);
   let Some(controller) = surface.controller.as_ref().map(Arc::clone) else {
     let settlement = command.missing_controller_settlement();
     return Task::done(Message::Playback(PlaybackMessage::ControllerSettled {
@@ -1769,6 +2139,10 @@ fn execute_controller_command(
   Task::perform(
     async move {
       let mut controller = controller.lock().await;
+      // Attach this command's own lease before executing: a revoked lease
+      // stays revoked for this command even when a newer admission already
+      // minted a fresh one.
+      controller.set_presentation_hold(lease);
       controller.synchronize_volume_memory_preference().await;
       match command {
         ControllerCommand::Start {
@@ -1927,7 +2301,7 @@ pub(crate) fn begin_account_handoff(
     remote::Input::Retire(remote::Waiter::Account(generation)),
     &mut kernel.request_gate,
   );
-  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update);
+  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update, true);
 
   let playback_cleanup = if surface.view.can_start_login {
     surface.account_playback_handoff = None;
@@ -1976,7 +2350,7 @@ pub(crate) fn disconnect(
     remote::Input::Retire(remote::Waiter::Disconnect),
     &mut kernel.request_gate,
   );
-  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update);
+  let remote = apply_remote_update(surface, kernel, quit_requested, remote_update, true);
   Task::batch([playback.task, remote])
 }
 
@@ -2218,6 +2592,7 @@ mod tests {
             start_position_ticks: None,
             selection: PlaybackSelection::default(),
           },
+          true,
         ));
       } else {
         drop(update_tray(
@@ -2225,6 +2600,7 @@ mod tests {
           &mut kernel,
           false,
           TrayAction::Next,
+          true,
         ));
       }
       assert!(
@@ -3342,6 +3718,7 @@ mod tests {
         name: "SetAudioStreamIndex".to_owned(),
         arguments: Some(serde_json::json!({ "Index": 4 })),
       }),
+      false,
     ));
 
     assert_eq!(
@@ -3391,6 +3768,7 @@ mod tests {
         start_position_ticks: None,
         selection: PlaybackSelection::default(),
       },
+      true,
     ));
 
     assert!(surface.view.busy);
@@ -3606,6 +3984,7 @@ mod tests {
           subtitle_stream_index: None,
         })),
       },
+      true,
     ));
 
     assert!(kernel.request_gate.is_current_remote_play(pending));
@@ -3785,11 +4164,462 @@ mod tests {
       &mut kernel,
       false,
       crate::tray::TrayAction::PlayPause,
+      false,
     ));
 
     assert_eq!(
       surface.view.now_playing.as_ref().map(|np| np.paused),
       Some(true)
+    );
+  }
+
+  fn held_fixture() -> (Surface, Kernel) {
+    let (surface, kernel) = active_playback_fixture();
+    surface.presentation_hold.store(true, Ordering::Release);
+    (surface, kernel)
+  }
+
+  #[test]
+  fn deferred_resume_does_not_toggle_an_already_playing_session_to_pause() {
+    use jellypilot_mpv::playback::{PlaybackRefreshOutcome, PlaybackRefreshState};
+
+    fn refresh(surface: &mut Surface, kernel: &Kernel, paused: bool) {
+      let now = Instant::now();
+      let tick = surface
+        .session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
+      let (id, _) = controller_effect(tick.effects);
+      let mut snapshot = playback_snapshot(0.0);
+      snapshot.transport.paused = paused;
+      let _ = surface.session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Refreshed {
+            outcome: PlaybackRefreshOutcome {
+              snapshot,
+              state: PlaybackRefreshState::Active,
+              warnings: Vec::new(),
+            },
+            client_messages: Vec::new(),
+          },
+        })),
+        now,
+      );
+      sync_playback_projection(surface, kernel, false);
+    }
+
+    for remote_command in [false, true] {
+      let (mut surface, mut kernel) = held_fixture();
+      refresh(&mut surface, &kernel, true);
+      if remote_command {
+        let remote = surface.remote.token();
+        assert!(kernel.request_gate.is_current_remote(remote));
+        drop(handle_remote_command(
+          &mut surface,
+          &mut kernel,
+          false,
+          remote,
+          playstate("PlayPause"),
+          false,
+        ));
+      } else {
+        drop(update_tray(
+          &mut surface,
+          &mut kernel,
+          false,
+          TrayAction::PlayPause,
+          false,
+        ));
+      }
+      assert!(play_pending(&surface));
+
+      // A newer snapshot arrives while the earlier Resume waits for Show.
+      refresh(&mut surface, &kernel, false);
+      drop(window_opened(&mut surface, &mut kernel, false).expect("resume is admitted"));
+      assert!(
+        !surface
+          .view
+          .now_playing
+          .as_ref()
+          .expect("active session")
+          .paused,
+        "admission must preserve Resume rather than toggle the latest transport state"
+      );
+      assert!(kernel.active_toast.is_none());
+    }
+  }
+
+  fn play_request() -> JellyfinCommand {
+    JellyfinCommand::Play(PlayRequest {
+      item_ids: vec!["episode-2".to_owned()],
+      start_position_ticks: None,
+      play_command: "PlayNow".to_owned(),
+      media_source_id: None,
+      audio_stream_index: None,
+      subtitle_stream_index: None,
+    })
+  }
+
+  fn playstate(command: &str) -> JellyfinCommand {
+    JellyfinCommand::Playstate(jellypilot_session::PlaystateRequest {
+      command: command.to_owned(),
+      seek_position_ticks: None,
+    })
+  }
+
+  #[test]
+  fn held_presentation_defers_remote_play_until_a_window_is_admitted() {
+    let (mut surface, mut kernel) = held_fixture();
+    let remote = surface.remote.token();
+
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      play_request(),
+      false,
+    ));
+
+    assert!(play_pending(&surface));
+    // A second play command replaces the deferred one without requesting
+    // another window.
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      play_request(),
+      false,
+    ));
+    assert!(play_pending(&surface));
+
+    // Admission lifts the hold and replays the deferred command; without a
+    // client the resolution task is empty but the deferral is consumed.
+    let admitted = window_opened(&mut surface, &mut kernel, false);
+    assert!(admitted.is_some());
+    assert!(!play_pending(&surface));
+    assert!(!surface.presentation_hold.load(Ordering::Acquire));
+  }
+
+  #[test]
+  fn held_presentation_defers_remote_resume_but_runs_pause_headless() {
+    let (mut surface, mut kernel) = held_fixture();
+    surface
+      .view
+      .now_playing
+      .as_mut()
+      .expect("active playback")
+      .paused = true;
+    let remote = surface.remote.token();
+
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      playstate("Unpause"),
+      false,
+    ));
+    assert!(play_pending(&surface));
+
+    // Pause does not need a window and must not disturb the deferred play.
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      playstate("Pause"),
+      false,
+    ));
+    assert!(play_pending(&surface));
+
+    // Stop is headless too, but it supersedes the deferred play: admission
+    // must not replay a command the user already replaced.
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      playstate("Stop"),
+      false,
+    ));
+    assert!(!play_pending(&surface));
+  }
+
+  #[test]
+  fn closing_the_window_cancels_a_deferred_play() {
+    let (mut surface, mut kernel) = held_fixture();
+    let remote = surface.remote.token();
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      play_request(),
+      false,
+    ));
+    assert!(play_pending(&surface));
+
+    drop(suspend_for_close(&mut surface, &mut kernel, false));
+
+    assert!(!play_pending(&surface));
+    // The hold stays: a later Show alone must not replay the cancelled play.
+    assert!(window_opened(&mut surface, &mut kernel, false).is_none());
+  }
+
+  #[test]
+  fn a_timed_out_window_fails_the_deferred_play_loudly() {
+    let (mut surface, mut kernel) = held_fixture();
+    let remote = surface.remote.token();
+    drop(handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      play_request(),
+      false,
+    ));
+
+    drop(open_failed(&mut surface, &mut kernel));
+
+    assert!(!play_pending(&surface));
+    assert!(matches!(
+      kernel.active_toast.as_ref().map(|toast| toast.level),
+      Some(NoticeLevel::Error)
+    ));
+    assert!(kernel
+      .diagnostics
+      .rows()
+      .any(|event| event.category == DiagnosticCategory::Player));
+  }
+
+  #[test]
+  fn a_late_play_resolution_never_starts_while_held() {
+    let (mut surface, mut kernel) = held_fixture();
+    let remote = surface.remote.token();
+    let play = kernel.request_gate.begin_remote_play();
+
+    drop(handle_remote(
+      &mut surface,
+      &mut kernel,
+      false,
+      RemoteMessage::PlayResolved {
+        remote,
+        play,
+        result: Box::new(Ok(Playable::Library(episode("episode-2", 1)))),
+        start_position_ticks: None,
+        selection: PlaybackSelection::default(),
+      },
+      false,
+    ));
+
+    // The in-flight resolution is superseded: the held session keeps the
+    // previous item instead of starting the new one.
+    assert_eq!(
+      surface
+        .view
+        .now_playing
+        .as_ref()
+        .map(|playing| playing.item.item_id.as_str()),
+      Some("episode-1"),
+    );
+    assert!(kernel
+      .diagnostics
+      .rows()
+      .any(|event| event.category == DiagnosticCategory::RemoteControl));
+  }
+
+  #[test]
+  fn tray_resume_defers_while_tray_pause_stays_headless() {
+    let (mut surface, mut kernel) = held_fixture();
+    surface
+      .view
+      .now_playing
+      .as_mut()
+      .expect("active playback")
+      .paused = true;
+
+    drop(update_tray(
+      &mut surface,
+      &mut kernel,
+      false,
+      crate::tray::TrayAction::PlayPause,
+      false,
+    ));
+    assert!(play_pending(&surface));
+
+    // Pausing while held runs immediately and leaves the deferral alone.
+    surface
+      .view
+      .now_playing
+      .as_mut()
+      .expect("active playback")
+      .paused = false;
+    drop(update_tray(
+      &mut surface,
+      &mut kernel,
+      false,
+      crate::tray::TrayAction::PlayPause,
+      false,
+    ));
+    assert!(play_pending(&surface));
+  }
+
+  #[test]
+  fn tray_next_defers_only_when_a_next_item_is_available() {
+    let (mut surface, mut kernel) = held_fixture();
+
+    drop(update_tray(
+      &mut surface,
+      &mut kernel,
+      false,
+      crate::tray::TrayAction::Next,
+      false,
+    ));
+    assert!(
+      !play_pending(&surface),
+      "Next with no available item must not open a window"
+    );
+
+    surface.view.adjacent.next = AdjacentAvailability::Available {
+      title: "Next episode".to_owned(),
+    };
+    drop(update_tray(
+      &mut surface,
+      &mut kernel,
+      false,
+      crate::tray::TrayAction::Next,
+      false,
+    ));
+    assert!(play_pending(&surface));
+  }
+
+  #[test]
+  fn refresh_view_retains_the_player_bar_only_when_now_playing_clears() {
+    let (mut surface, kernel) = active_playback_fixture();
+    assert!(surface.retained_player_bar.is_none());
+
+    // Stopping the active item clears Now Playing; the refresh captures the
+    // outgoing bar once for the exit reveal.
+    let now = Instant::now();
+    let stop = surface
+      .session
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
+    let (stop_id, _) = controller_effect(stop.effects);
+    let _ = surface.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: stop_id,
+        settlement: ControllerSettlement::Stopped(Ok(
+          jellypilot_mpv::playback::PlaybackStopOutcome {
+            warnings: Vec::new(),
+          },
+        )),
+      })),
+      now,
+    );
+    refresh_view(&mut surface, &kernel);
+    assert!(surface.retained_player_bar.is_some());
+
+    // A new item drops the snapshot so the live bar takes over.
+    let start = surface.session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-2", 1)),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      })),
+      now,
+    );
+    let (start_id, _) = controller_effect(start.effects);
+    let _ = surface.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: start_id,
+        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: playback_snapshot(0.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    refresh_view(&mut surface, &kernel);
+    assert!(surface.retained_player_bar.is_none());
+  }
+
+  /// Drive a close-pause acknowledgement task to its output. Only
+  /// `Task::done` paths resolve synchronously; a live `queue_pause` future
+  /// would need a real IPC peer and is not exercised here.
+  fn pause_acknowledgement(
+    task: Task<Result<(), PlaybackError>>,
+  ) -> Option<Result<(), PlaybackError>> {
+    use iced::futures::StreamExt;
+
+    iced::futures::executor::block_on(async {
+      let stream = iced_runtime::task::into_stream(task)?;
+      stream
+        .filter_map(|action| {
+          std::future::ready(match action {
+            iced_runtime::Action::Output(result) => Some(result),
+            _ => None,
+          })
+        })
+        .next()
+        .await
+    })
+  }
+
+  #[test]
+  fn a_close_with_a_dead_pause_client_fails_loudly_while_playback_is_active() {
+    let (mut surface, mut kernel) = active_playback_fixture();
+    assert!(
+      surface.view.lifecycle.playback_active,
+      "the fixture must project active playback"
+    );
+    // A client whose IPC is already gone: MPV may still be playing behind
+    // the dead connection, so the close must not acknowledge the pause.
+    surface.presentation_client = Some(jellypilot_mpv::MpvClient::new(None));
+
+    let pause = suspend_for_close(&mut surface, &mut kernel, false);
+
+    assert_eq!(
+      pause_acknowledgement(pause.acknowledgement),
+      Some(Err(PlaybackError::MpvControlFailed)),
+      "a close that cannot pause an active engine must fail loudly"
+    );
+  }
+
+  #[test]
+  fn a_close_with_a_dead_pause_client_stays_quiet_when_nothing_is_playing() {
+    let (mut surface, mut kernel) = test_fixture();
+    assert!(
+      !surface.view.lifecycle.playback_active,
+      "the fixture must be idle"
+    );
+    surface.presentation_client = Some(jellypilot_mpv::MpvClient::new(None));
+
+    let pause = suspend_for_close(&mut surface, &mut kernel, false);
+
+    assert_eq!(
+      pause_acknowledgement(pause.acknowledgement),
+      Some(Ok(())),
+      "an idle player has nothing to pause; a dead client must not block the close"
+    );
+  }
+
+  #[test]
+  fn a_close_without_a_pause_client_fails_loudly_while_playback_is_active() {
+    let (mut surface, mut kernel) = active_playback_fixture();
+    surface.presentation_client = None;
+
+    let pause = suspend_for_close(&mut surface, &mut kernel, false);
+
+    assert_eq!(
+      pause_acknowledgement(pause.acknowledgement),
+      Some(Err(PlaybackError::MpvControlFailed)),
+      "active playback without a pause client must not acknowledge the close"
     );
   }
 }

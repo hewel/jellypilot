@@ -487,7 +487,20 @@ fn ready_surface<'a>(
   ) {
     surface = surface.push(banner);
   }
-  surface.into()
+  // Grid/list is a user structural change: key on the mode so data refreshes
+  // and scroll never re-animate.
+  super::motion::transition(surface, surface_mode_key(surface_mode(state)))
+}
+
+fn surface_mode(state: &State) -> ViewMode {
+  state.full.as_ref().expect("FullUi required").browse.mode
+}
+
+fn surface_mode_key(mode: ViewMode) -> u64 {
+  match mode {
+    ViewMode::Grid => 0,
+    ViewMode::List => 1,
+  }
 }
 
 /// Builds the viewport-pinned banner for a refresh or incremental load failure.
@@ -701,7 +714,7 @@ fn video_card<'a>(
           .get(&item.id)
           .and_then(ImageCell::handle)
           .cloned(),
-        library::artwork_progress_style(&jellypilot_ui::theme::theme(state.theme_mode()), true),
+        library::artwork_progress_style(&state.native_theme(), true),
       ))
       .width(Fill)
       .height(artwork_height)

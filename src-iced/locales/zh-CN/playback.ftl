@@ -54,6 +54,7 @@ player-remote-session-unavailable = 远程播放会话不可用，请重新连�
 player-remote-connect-failed = 无法连接远程播放，请检查服务器连接后重试。
 player-remote-registration-failed = 无法注册远程控制，请重新连接媒体服务器。
 player-remote-item-unavailable = 无法加载远程播放项目，请检查服务器连接后重试。
+player-window-unavailable = 无法恢复播放器窗口，播放将保持暂停，请尝试从托盘选择“显示”。
 tray-show = 显示
 tray-quit = 退出
 player-information = 播放信息

@@ -6,6 +6,8 @@ These definitions describe accepted product semantics. Delivery status for the S
 
 The [UI internationalization specification](docs/i18n-design-spec.md) records UI Language decisions separately from their implementation status.
 
+The desktop [motion contract](docs/design-system.md#2026-09-15-desktop-motion-contract) and [Background Residency decision](docs/adr/0043-desktop-background-residency.md) are implemented and code-level validated. Their desktop appearance, tray usability, and window-manager acceptance remain human checks.
+
 ## Language
 
 **Server URL**:
@@ -113,6 +115,14 @@ _Avoid_: View preference, layout setting, window profile
 **Control-Only Mode**:
 The lowest-idle-overhead media-controller App Mode: a fixed-size 480x760 window centered on Now Playing, with every Login Method and the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; closing its window leaves the tray and Playback Target available, and entering the mode drops Library Browser state.
 _Avoid_: Mini player, compact view, floating widget
+
+**Background Residency**:
+The desktop state in which JellyPilot's main window is closed while its tray and remote Playback Target remain available. Background Residency is distinct from App Mode and from quitting the application.
+_Avoid_: Quit, minimize, Control-Only Mode
+
+**Quit Application**:
+Explicitly ending JellyPilot, including its Playback Session and live media-server connection, rather than leaving it in Background Residency. Closing the main window is not Quit Application when a usable tray is available.
+_Avoid_: Close window, Disconnect, Sign Out
 
 **Library Browser**:
 The authenticated JellyPilot shell area for browsing video libraries, inspecting item details, launching Playback Sessions, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin or Emby client feature.

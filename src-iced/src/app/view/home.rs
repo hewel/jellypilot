@@ -141,7 +141,9 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
         reduced_motion,
       );
       scrim_start = metadata_top;
-      hero
+      // User hero changes animate; the revision key ignores data refreshes
+      // and first-content arrival.
+      super::motion::transition(hero, super::motion::hero_key(state))
     } else {
       featured_skeleton(skeleton_phase, reduced_motion)
     });
@@ -847,12 +849,13 @@ fn hero_imagery<'a>(
     );
   };
   let height = backdrop.size.height;
-  let image = container(
+  let image = container(super::image_transition::fade(
     Image::new(backdrop.handle)
       .content_fit(ContentFit::Contain)
       .width(Fill)
       .height(height),
-  )
+    super::motion::hero_key(state),
+  ))
   .id(widget::Id::new("home-backdrop"))
   .width(Fill)
   .height(height);

@@ -190,7 +190,7 @@ pub(super) fn active(state: &State) -> bool {
   crate::embedded::enabled()
     && state.shell.images_visible
     && state.shell.window_id.is_some()
-    && state.playback.view.now_playing.is_some()
+    && state.playback.view.lifecycle.playback_active
     && (state.shell.destination == Destination::NowPlaying
       || state.shell.player_fullscreen
       || state.app_mode() == AppMode::ControlOnly)

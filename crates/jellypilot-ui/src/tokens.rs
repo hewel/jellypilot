@@ -314,6 +314,36 @@ pub enum Easing {
     Linear,
 }
 
+impl Easing {
+    /// Samples elapsed-time progress, inverting the Bézier's x axis rather
+    /// than treating its curve parameter as elapsed time.
+    pub fn sample(self, progress: f32) -> f32 {
+        if !progress.is_finite() || progress >= 1.0 {
+            return 1.0;
+        }
+        if progress <= 0.0 {
+            return 0.0;
+        }
+        let Self::CubicBezier([x1, y1, x2, y2]) = self else {
+            return progress;
+        };
+        fn component(t: f32, a: f32, b: f32) -> f32 {
+            let remaining = 1.0 - t;
+            3.0 * remaining * remaining * t * a + 3.0 * remaining * t * t * b + t * t * t
+        }
+        let (mut low, mut high) = (0.0, 1.0);
+        for _ in 0..18 {
+            let t = (low + high) * 0.5;
+            if component(t, x1, x2) < progress {
+                low = t;
+            } else {
+                high = t;
+            }
+        }
+        component((low + high) * 0.5, y1, y2)
+    }
+}
+
 /// Panda easing tokens.
 #[derive(Debug, Clone, Copy)]
 pub struct Easings {
@@ -463,7 +493,7 @@ pub const TOKENS: DesignTokens = DesignTokens {
         ms1000: Duration::from_millis(1_000),
     },
     easings: Easings {
-        standard: Easing::CubicBezier([0.2, 0.0, 0.0, 1.0]),
+        standard: Easing::CubicBezier([0.24, 1.0, 0.4, 1.0]),
         emphasized: Easing::CubicBezier([0.16, 1.0, 0.3, 1.0]),
         in_out: Easing::CubicBezier([0.4, 0.0, 0.6, 1.0]),
         linear: Easing::Linear,
@@ -623,15 +653,11 @@ pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     },
 };
 
-/// Resolves the palette for an iced theme by matching its background color
-/// against the two palettes' `background` values. Unknown themes fall back
-/// to the dark palette.
+/// Resolves the palette for a native theme, including an active dark/light
+/// transition. Unknown themes fall back to the dark palette.
 pub fn palette(theme: &Theme) -> &'static ThemePalette {
-    if theme.palette().background.base.color == LIGHT_PALETTE.colors.background {
-        &LIGHT_PALETTE
-    } else {
-        &DARK_PALETTE
-    }
+    crate::theme::palette_for_background(theme.palette().background.base.color)
+        .unwrap_or(&DARK_PALETTE)
 }
 
 const fn shadow(
@@ -659,6 +685,15 @@ mod tests {
         palette, Breakpoints, SemanticColors, TextColors, ThemePalette, DARK_PALETTE,
         LIGHT_PALETTE, TOKENS,
     };
+
+    #[test]
+    fn bezier_progress_uses_elapsed_time_not_the_curve_parameter() {
+        // At curve parameter 1/2, x = 0.365 and y = 0.875 for this easing.
+        let easing = super::Easing::CubicBezier([0.24, 1.0, 0.4, 1.0]);
+        assert!((easing.sample(0.365) - 0.875).abs() < 0.00001);
+        assert_eq!(easing.sample(-1.0), 0.0);
+        assert_eq!(easing.sample(2.0), 1.0);
+    }
 
     fn luminance(color: Color) -> f32 {
         0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b

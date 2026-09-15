@@ -57,6 +57,7 @@ player-remote-session-unavailable = The remote playback session is unavailable. 
 player-remote-connect-failed = Remote playback could not connect. Check the server connection and reconnect.
 player-remote-registration-failed = Could not register remote playback controls. Reconnect to the media server.
 player-remote-item-unavailable = Could not load remote playback item. Check the server connection and try again.
+player-window-unavailable = Could not restore the player window. Playback stays paused; try Show from the tray.
 tray-show = Show
 tray-quit = Quit
 player-information = Playback information

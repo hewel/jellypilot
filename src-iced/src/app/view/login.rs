@@ -63,10 +63,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
       .into()
   };
 
-  let method: Element<'_, Message> = match login.method {
-    LoginMethod::QuickConnect => quick_connect(state),
-    LoginMethod::Password => password(state),
-  };
+  // Key on the user's provider+method choice only: QuickConnect polling and
+  // request phases never re-animate the form.
+  let method: Element<'_, Message> = super::motion::transition(
+    match login.method {
+      LoginMethod::QuickConnect => quick_connect(state),
+      LoginMethod::Password => password(state),
+    },
+    login_key(login.provider, login.method),
+  );
 
   let mut form = column![
     language_selector(state),
@@ -103,6 +108,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .padding([36, 24])
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
+}
+
+fn login_key(provider: MediaServerProvider, method: LoginMethod) -> u64 {
+  let provider = match provider {
+    MediaServerProvider::Jellyfin => 0u64,
+    MediaServerProvider::Emby => 1,
+  };
+  let method = match method {
+    LoginMethod::QuickConnect => 0u64,
+    LoginMethod::Password => 1,
+  };
+  provider * 2 + method
 }
 
 fn provider_button<'a>(

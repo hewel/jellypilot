@@ -5,7 +5,7 @@
 //! they live here because the destination stack they mutate is this surface's
 //! state.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use iced::Task;
 use jellypilot_core::browse_model::BrowseSource;
@@ -136,6 +136,17 @@ pub struct Surface {
   pub smoke: bool,
   /// The live window, when the daemon currently owns one.
   pub window_id: Option<iced::window::Id>,
+  /// A window whose open task has not resolved yet. Show requests focus it
+  /// instead of opening a duplicate; a close request for it suppresses the
+  /// late admission.
+  pub pending_window_id: Option<iced::window::Id>,
+  /// Embedded close waits for the engine pause acknowledgement while this
+  /// native window remains visible. Show cancels only this pending close.
+  pub(crate) pending_close: Option<(iced::window::Id, u64)>,
+  pub(crate) close_generation: u64,
+  /// A pending window the user closed before its open resolved; its late
+  /// admission is re-closed instead of shown.
+  suppressed_window_id: Option<iced::window::Id>,
   /// False after hide/close; queued geometry must not recreate hidden demand.
   pub images_visible: bool,
   /// Latest known logical window size; drives size-class layout decisions.
@@ -173,6 +184,10 @@ impl Surface {
     Self {
       smoke,
       window_id: None,
+      pending_window_id: None,
+      pending_close: None,
+      close_generation: 0,
+      suppressed_window_id: None,
       images_visible: true,
       window_size: FULL_DEFAULT_WINDOW_SIZE,
       full_window_size: None,
@@ -266,7 +281,23 @@ pub const CONTROL_ONLY_WINDOW_SIZE: iced::Size = iced::Size::new(480.0, 760.0);
 pub const FULL_MIN_WINDOW_SIZE: iced::Size = iced::Size::new(1024.0, 640.0);
 /// Full-mode window size applied when no stashed size exists.
 pub const FULL_DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1760.0, 900.0);
+/// How long a window opened for an explicit play command may take before the
+/// command fails instead of waiting on a wedged window system forever.
+pub(crate) const WINDOW_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Arms the open deadline for a pending window: if `ShowRequested` admission
+/// never arrives, `OpenTimedOut` clears the pending id so a later play
+/// command can retry instead of waiting on a wedged open forever. Boot and
+/// the deferred-play restore share this one policy.
+pub(crate) fn open_timeout(id: iced::window::Id) -> Task<Message> {
+  Task::perform(
+    async move {
+      tokio::time::sleep(WINDOW_OPEN_TIMEOUT).await;
+      id
+    },
+    |id| Message::Window(WindowMessage::OpenTimedOut(id)),
+  )
+}
 /// Window geometry decision for one app mode. Pure so the fixed/restore
 /// policy is testable without executing window tasks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -405,6 +436,9 @@ pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn reconcile_player_fullscreen(state: &mut State) -> Task<Message> {
+  if state.shell.pending_close.is_some() {
+    return Task::none();
+  }
   if !state.shell.images_visible
     || state.shell.quit_requested
     || super::accounts::content_mutations_blocked(&state.accounts)
@@ -427,48 +461,180 @@ pub fn update(
   kernel: &mut Kernel,
   skeletons_active: bool,
   now_playing: bool,
+  pause_before_close: bool,
   message: WindowMessage,
 ) -> Task<Message> {
-  if matches!(message, WindowMessage::CloseRequested(_)) {
-    surface.images_visible = false;
-  }
   match message {
     WindowMessage::CloseRequested(id) if kernel.tray.is_some() => {
-      if kernel.settings.snapshot().app_mode() == AppMode::ControlOnly {
-        surface.window_id = None;
-        surface.settings_open = false;
-        surface.skeleton_animation_start = None;
-        surface.skeleton_phase = 0.0;
-        if now_playing {
-          kernel.artwork_adapter.clear_caches();
-        } else {
-          kernel.artwork_adapter.reset_session();
+      // ADR 0043: the window is actually closed in both modes; the runtime,
+      // tray, and remote target stay resident. Only the transient surfaces
+      // reset — browsing context, history, and settings drafts are retained
+      // for the next admission.
+      if surface.window_id == Some(id) {
+        // A pending open loses its purpose when the live window closes; its
+        // late admission is re-closed instead of appearing after the close.
+        if let Some(pending) = surface.pending_window_id.take() {
+          surface.suppressed_window_id = Some(pending);
         }
+        close_transient(surface, kernel, now_playing);
+        if pause_before_close {
+          surface.close_generation = surface.close_generation.wrapping_add(1);
+          surface.pending_close = Some((id, surface.close_generation));
+          Task::none()
+        } else {
+          surface.window_id = None;
+          surface.player_fullscreen = false;
+          iced::window::close(id)
+        }
+      } else if surface.pending_window_id == Some(id) {
+        // The user closed a window whose open task never resolved; suppress
+        // its late admission instead of letting it appear after the close.
+        surface.pending_window_id = None;
+        surface.suppressed_window_id = Some(id);
+        // Only the last window's loss suspends image demand.
+        surface.images_visible = surface.window_id.is_some();
         iced::window::close(id)
       } else {
-        iced::window::set_mode(id, iced::window::Mode::Hidden)
+        // A stale or second window: close it without touching tracked state.
+        iced::window::close(id)
       }
     }
-    WindowMessage::CloseRequested(_) => {
-      surface.quit_requested = true;
+    WindowMessage::Closed(id) => {
+      // The compositor destroyed the window without a request; the same
+      // residency rules apply, minus the close task (it is already gone).
+      let mut removed = false;
+      if surface.window_id == Some(id) {
+        surface.window_id = None;
+        surface.pending_close = None;
+        surface.player_fullscreen = false;
+        if let Some(pending) = surface.pending_window_id.take() {
+          surface.suppressed_window_id = Some(pending);
+        }
+        close_transient(surface, kernel, now_playing);
+        removed = true;
+      } else if surface.pending_window_id == Some(id) {
+        surface.pending_window_id = None;
+        surface.suppressed_window_id = Some(id);
+        // Only the last window's loss suspends image demand.
+        surface.images_visible = surface.window_id.is_some();
+        removed = true;
+      }
+      // No tray and no window left means nothing can reach the runtime;
+      // arm the quit handshake. A stale/suppressed id must not quit while a
+      // live window remains.
+      if removed
+        && kernel.tray.is_none()
+        && surface.window_id.is_none()
+        && surface.pending_window_id.is_none()
+      {
+        surface.quit_requested = true;
+      }
+      Task::none()
+    }
+    WindowMessage::CloseRequested(id) => {
+      if surface.window_id == Some(id) || surface.pending_window_id == Some(id) {
+        surface.images_visible = false;
+        surface.pending_close = None;
+        surface.quit_requested = true;
+      }
       Task::none()
     }
     WindowMessage::ShowRequested(id) => {
-      surface.player_fullscreen = false;
-      // A second-instance activation arrives with no id; focus the tracked
-      // window when one exists instead of opening a duplicate.
-      if let Some(id) = id.or(surface.window_id) {
-        surface.window_id = Some(id);
-        surface.images_visible = true;
-        iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
-      } else {
-        let geometry = mode_geometry(
-          kernel.settings.snapshot().app_mode(),
-          surface.full_window_size,
+      if surface.quit_requested {
+        // A window that resolved after the quit handshake started is closed,
+        // never admitted.
+        return id.map_or_else(Task::none, iced::window::close);
+      }
+      match id {
+        // A second-instance activation arrives with no id; focus the tracked
+        // window when one exists instead of opening a duplicate.
+        None => {
+          if let Some(id) = surface.window_id {
+            surface.pending_close = None;
+            surface.images_visible = true;
+            iced::window::gain_focus(id)
+          } else if surface.pending_window_id.is_some() {
+            // An open is already in flight; its admission focuses the window.
+            Task::none()
+          } else {
+            // Restore the last live size: `window_size` tracks every resize,
+            // while `full_window_size` is only stashed across an App Mode
+            // switch and would reset a resized Full window to the default.
+            let geometry = mode_geometry(
+              kernel.settings.snapshot().app_mode(),
+              Some(surface.window_size),
+            );
+            let (id, open) = iced::window::open(crate::app::window_settings(geometry));
+            surface.pending_window_id = Some(id);
+            Task::batch([
+              open.map(|id| Message::Window(WindowMessage::ShowRequested(Some(id)))),
+              open_timeout(id),
+            ])
+          }
+        }
+        // An open task resolved: admit the window unless the user closed it
+        // while the open was in flight.
+        Some(id) if surface.suppressed_window_id == Some(id) => {
+          surface.suppressed_window_id = None;
+          iced::window::close(id)
+        }
+        Some(id) if surface.pending_window_id == Some(id) => {
+          surface.pending_window_id = None;
+          surface.window_id = Some(id);
+          surface.pending_close = None;
+          surface.player_fullscreen = false;
+          surface.images_visible = true;
+          iced::window::set_mode(id, iced::window::Mode::Windowed)
+            .chain(iced::window::gain_focus(id))
+        }
+        Some(id) if surface.window_id == Some(id) => {
+          // A duplicate open callback is not a fresh Show intent.
+          Task::none()
+        }
+        Some(id) => {
+          // A stale or foreign id (timed-out open, second instance's window)
+          // is never admitted: close it rather than displacing the live or
+          // pending window.
+          iced::window::close(id)
+        }
+      }
+    }
+    // Playback-specific shows are admitted by the cross-surface router.
+    WindowMessage::ShowForPlayback => Task::none(),
+    WindowMessage::OpenTimedOut(id) => {
+      if surface.pending_window_id == Some(id) {
+        surface.pending_window_id = None;
+        kernel.diagnostics.record(
+          jellypilot_core::diagnostics::DiagnosticLevel::Error,
+          jellypilot_core::diagnostics::DiagnosticCategory::Player,
+          "The main window did not open in time.",
         );
-        surface.window_size = geometry.size;
-        let (_id, open) = iced::window::open(crate::app::window_settings(geometry));
-        open.map(|id| Message::Window(WindowMessage::ShowRequested(Some(id))))
+        return iced::window::close(id);
+      }
+      Task::none()
+    }
+    WindowMessage::BackgroundPauseSettled {
+      id,
+      generation,
+      result,
+    } => {
+      if surface.pending_close != Some((id, generation)) {
+        return Task::none();
+      }
+      surface.pending_close = None;
+      if surface.quit_requested {
+        return Task::none();
+      }
+      if result.is_ok() && surface.window_id == Some(id) {
+        surface.window_id = None;
+        surface.player_fullscreen = false;
+        close_transient(surface, kernel, now_playing);
+        iced::window::close(id)
+      } else {
+        // Never hide a player whose pause failed. The router reports the
+        // error and restores demand without resuming playback.
+        surface.images_visible = surface.window_id.is_some();
+        Task::none()
       }
     }
     WindowMessage::Resized(size) => {
@@ -493,6 +659,23 @@ pub fn update(
       }
       Task::none()
     }
+  }
+}
+/// Resets the surfaces that belong to the window itself: overlays, the
+/// embedded chrome, and the skeleton clock. Browsing context, history,
+/// scroll, and settings drafts live in `state.full`/`state.settings` and are
+/// retained for the next admission (ADR 0043).
+fn close_transient(surface: &mut Surface, kernel: &mut Kernel, now_playing: bool) {
+  surface.images_visible = false;
+  surface.settings_open = false;
+  surface.compact_search_open = false;
+  surface.account_popover_open = false;
+  surface.skeleton_animation_start = None;
+  surface.skeleton_phase = 0.0;
+  if now_playing {
+    kernel.artwork_adapter.clear_caches();
+  } else {
+    kernel.artwork_adapter.reset_session();
   }
 }
 pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
@@ -1275,6 +1458,7 @@ mod tests {
       &mut kernel,
       true,
       false,
+      false,
       WindowMessage::FrameTick(start),
     ));
     assert_eq!(surface.skeleton_phase, 0.0);
@@ -1285,6 +1469,7 @@ mod tests {
       &mut kernel,
       true,
       false,
+      false,
       WindowMessage::FrameTick(start + Duration::from_millis(800)),
     ));
     assert_eq!(surface.skeleton_phase, 0.5);
@@ -1293,6 +1478,7 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
+      false,
       false,
       false,
       WindowMessage::FrameTick(start + Duration::from_millis(1200)),
@@ -1309,6 +1495,7 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
+      false,
       false,
       false,
       WindowMessage::Resized(size),
@@ -1463,5 +1650,325 @@ mod tests {
     );
     assert!(surface.navigate_back());
     assert_eq!(surface.destination, library);
+  }
+
+  #[test]
+  fn close_with_tray_closes_the_tracked_window_and_keeps_browsing_context() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let id = iced::window::Id::unique();
+    surface.window_id = Some(id);
+    surface.settings_open = true;
+    surface.account_popover_open = true;
+    surface.compact_search_open = true;
+    surface.player_fullscreen = true;
+    surface.navigation_stack.push(NavigationEntry {
+      destination: Destination::Home,
+      scroll_memory: ScrollMemory::default(),
+      page_state: None,
+    });
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::CloseRequested(id),
+    ));
+
+    assert!(surface.window_id.is_none());
+    assert!(!surface.images_visible);
+    assert!(!surface.settings_open);
+    assert!(!surface.account_popover_open);
+    assert!(!surface.compact_search_open);
+    assert!(!surface.player_fullscreen);
+    assert!(!surface.quit_requested);
+    // Background Residency retains the browsing context for the next show.
+    assert_eq!(surface.navigation_stack.len(), 1);
+  }
+
+  #[test]
+  fn close_request_for_a_pending_window_suppresses_its_late_admission() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let pending = iced::window::Id::unique();
+    surface.pending_window_id = Some(pending);
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::CloseRequested(pending),
+    ));
+    assert!(surface.pending_window_id.is_none());
+    assert_eq!(surface.suppressed_window_id, Some(pending));
+
+    // The open task resolves after the close: the window is closed again
+    // instead of appearing.
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::ShowRequested(Some(pending)),
+    ));
+    assert!(surface.window_id.is_none());
+    assert!(surface.suppressed_window_id.is_none());
+  }
+
+  #[test]
+  fn show_request_does_not_open_a_second_window_while_one_is_pending() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let pending = iced::window::Id::unique();
+    surface.pending_window_id = Some(pending);
+    surface.images_visible = false;
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::ShowRequested(None),
+    ));
+
+    assert_eq!(surface.pending_window_id, Some(pending));
+    assert!(surface.window_id.is_none());
+  }
+
+  #[test]
+  fn open_timeout_only_clears_its_own_pending_window() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let pending = iced::window::Id::unique();
+    surface.pending_window_id = Some(pending);
+
+    // A stale timeout for a different window leaves the pending open alone.
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::OpenTimedOut(iced::window::Id::unique()),
+    ));
+    assert_eq!(surface.pending_window_id, Some(pending));
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::OpenTimedOut(pending),
+    ));
+    assert!(surface.pending_window_id.is_none());
+  }
+
+  #[test]
+  fn show_request_admits_the_pending_window_and_restores_visibility() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let pending = iced::window::Id::unique();
+    surface.pending_window_id = Some(pending);
+    surface.images_visible = false;
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::ShowRequested(Some(pending)),
+    ));
+
+    assert_eq!(surface.window_id, Some(pending));
+    assert!(surface.pending_window_id.is_none());
+    assert!(surface.images_visible);
+  }
+
+  #[test]
+  fn close_request_for_an_untracked_window_leaves_the_live_window_alone() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let live = iced::window::Id::unique();
+    surface.window_id = Some(live);
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      false,
+      WindowMessage::CloseRequested(iced::window::Id::unique()),
+    ));
+
+    assert_eq!(surface.window_id, Some(live));
+    assert!(surface.images_visible);
+  }
+
+  fn closed_window_ids(task: Task<Message>) -> Vec<iced::window::Id> {
+    use iced::futures::StreamExt;
+
+    iced::futures::executor::block_on(async {
+      let Some(stream) = iced_runtime::task::into_stream(task) else {
+        return Vec::new();
+      };
+      stream
+        .filter_map(|action| async move {
+          match action {
+            iced_runtime::Action::Window(iced_runtime::window::Action::Close(id)) => Some(id),
+            _ => None,
+          }
+        })
+        .collect()
+        .await
+    })
+  }
+
+  fn begin_embedded_close(surface: &mut Surface, kernel: &mut Kernel, id: iced::window::Id) -> u64 {
+    assert!(closed_window_ids(update(
+      surface,
+      kernel,
+      false,
+      false,
+      true,
+      WindowMessage::CloseRequested(id),
+    ))
+    .is_empty());
+    surface
+      .pending_close
+      .expect("pause acknowledgement is pending")
+      .1
+  }
+
+  #[test]
+  fn embedded_close_waits_for_pause_ack_and_ignores_duplicate_open_callbacks() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let id = iced::window::Id::unique();
+    surface.window_id = Some(id);
+    surface.player_fullscreen = true;
+    let generation = begin_embedded_close(&mut surface, &mut kernel, id);
+    assert!(
+      surface.player_fullscreen,
+      "the player remains presented until pause settles"
+    );
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      true,
+      WindowMessage::ShowRequested(Some(id)),
+    ));
+    assert_eq!(
+      closed_window_ids(update(
+        &mut surface,
+        &mut kernel,
+        false,
+        false,
+        true,
+        WindowMessage::BackgroundPauseSettled {
+          id,
+          generation,
+          result: Ok(())
+        },
+      )),
+      vec![id]
+    );
+  }
+
+  #[test]
+  fn show_and_repeated_close_reject_old_acks_and_pause_failure_allows_retry() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.tray = Some(crate::tray::Tray::stub());
+    let id = iced::window::Id::unique();
+    surface.window_id = Some(id);
+    surface.player_fullscreen = true;
+    let cancelled = begin_embedded_close(&mut surface, &mut kernel, id);
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      true,
+      WindowMessage::ShowRequested(None),
+    ));
+    assert!(
+      surface.player_fullscreen,
+      "cancelling a close preserves the live presentation"
+    );
+    assert!(closed_window_ids(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      true,
+      WindowMessage::BackgroundPauseSettled {
+        id,
+        generation: cancelled,
+        result: Ok(())
+      },
+    ))
+    .is_empty());
+
+    let superseded = begin_embedded_close(&mut surface, &mut kernel, id);
+    let current = begin_embedded_close(&mut surface, &mut kernel, id);
+    assert!(closed_window_ids(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      true,
+      WindowMessage::BackgroundPauseSettled {
+        id,
+        generation: superseded,
+        result: Ok(())
+      },
+    ))
+    .is_empty());
+    assert!(closed_window_ids(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      false,
+      true,
+      WindowMessage::BackgroundPauseSettled {
+        id,
+        generation: current,
+        result: Err(jellypilot_mpv::playback::PlaybackError::MpvControlFailed),
+      },
+    ))
+    .is_empty());
+    assert_eq!(surface.window_id, Some(id));
+    assert!(surface.images_visible);
+    assert!(
+      surface.player_fullscreen,
+      "a failed pause cannot hide the player"
+    );
+
+    let generation = begin_embedded_close(&mut surface, &mut kernel, id);
+    assert_eq!(
+      closed_window_ids(update(
+        &mut surface,
+        &mut kernel,
+        false,
+        false,
+        true,
+        WindowMessage::BackgroundPauseSettled {
+          id,
+          generation,
+          result: Ok(())
+        },
+      )),
+      vec![id]
+    );
   }
 }

@@ -272,6 +272,23 @@ impl Tray {
   }
 }
 
+#[cfg(test)]
+impl Tray {
+  /// A tray handle whose channels are live but whose menu thread never ran;
+  /// enough for window-lifecycle tests that only need `kernel.tray.is_some()`.
+  pub(crate) fn stub() -> Self {
+    let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<TrayCommand>();
+    let (_action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<TrayAction>();
+    Self {
+      cmd_tx,
+      action_rx: Arc::new(tokio::sync::Mutex::new(action_rx)),
+      #[cfg(target_os = "linux")]
+      glib_context: gtk::glib::MainContext::default(),
+      thread: None,
+    }
+  }
+}
+
 impl Drop for Tray {
   fn drop(&mut self) {
     let _ = self.cmd_tx.send(TrayCommand::Shutdown);

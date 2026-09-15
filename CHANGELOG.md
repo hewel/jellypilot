@@ -8,10 +8,15 @@ All notable changes to JellyPilot are documented in this file.
 - Added Android risk bring-up modules for Compose account/browse queries, a shared Rust SDK/UniFFI bridge, Keystore-backed credentials, and an independent libmpv/Media3 player. Debug builds and nonvisual emulator checks pass, and physical-device manual verification was reported passed by the user; the complete client and detailed device/HDR evidence remain outstanding.
 - Added desktop movie and episode Media Specifications with first-source resolution, range, codec and frame rate, default-first audio/subtitle summaries, and bounded read-only track popovers. Missing metadata remains distinct from confirmed empty track lists.
 - Added episode-to-parent-series navigation through the series name, preserving browsing history and selecting the originating season when available.
+- Added shared, interruptible desktop motion for controls, floating surfaces, navigation, responsive structural changes, overview expansion, theme colors, and user-selected Hero changes, with reduced-motion support and no invisible animation frame loop.
 
 ### Changed
 - Separated display-free and desktop Rust workspaces and added Android preparation, native build, and validation entries to the existing task dispatcher. Desktop business-SDK migration and clean-room Android release acceptance remain later gates.
 - Aligned complete detail-page media information with the main content lane and added narrow-width stacking and long-value wrapping.
+- With an initialized tray, closing either desktop App Mode now destroys its window while retaining the runtime and Full-mode browsing context. Embedded playback pauses before a requested close completes; explicit Play restores the player, while ordinary Show does not resume. External MPV continues, and explicit Quit still shuts down.
+
+### Fixed
+- Prevented detail-page audio and subtitle popovers from stretching into a blank full-height panel during dismissal.
 
 ## [2.2.1] - 2026-09-14
 

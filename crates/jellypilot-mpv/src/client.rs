@@ -1,6 +1,8 @@
 //! High-level MPV client with command methods.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -484,6 +486,53 @@ impl MpvClient {
   /// Set pause state.
   pub async fn set_pause(&self, paused: bool) -> Result<(), MpvError> {
     self.send(MpvCommand::set_pause(paused)).await?;
+    Ok(())
+  }
+
+  /// Request an unpause that the serialized IPC writer may still veto.
+  ///
+  /// `hold` is checked when the writer dequeues the command, not when this
+  /// future is created: if the hold is raised before the write, the wire
+  /// command becomes `pause=true` instead. A resume queued before or after
+  /// the hold was raised therefore cannot unpause behind a held
+  /// presentation (ADR 0043).
+  pub(crate) async fn set_pause_guarded(&self, hold: Arc<AtomicBool>) -> Result<(), MpvError> {
+    let ipc = self.get_ipc()?;
+    let ack = ipc.enqueue_guarded_resume(hold).await?;
+    let response = ack.wait().await?;
+    if !response.is_success() {
+      return Err(MpvError::CommandFailed);
+    }
+    Ok(())
+  }
+
+  /// Enqueue `pause=true` synchronously, before this function returns.
+  ///
+  /// The command is registered and admitted to the writer queue when `Ok` is
+  /// returned; the returned future only waits for MPV's acknowledgement and
+  /// may be awaited or dropped independently. Admission fails only when the
+  /// connection is already closed.
+  pub fn queue_pause(
+    &self,
+  ) -> Result<impl Future<Output = Result<(), MpvError>> + Send + 'static, MpvError> {
+    let ipc = self.get_ipc()?;
+    let ack = ipc.enqueue_command(MpvCommand::set_pause(true), None)?;
+    Ok(async move {
+      let response = ack.wait().await?;
+      if !response.is_success() {
+        return Err(MpvError::CommandFailed);
+      }
+      Ok(())
+    })
+  }
+
+  /// Queue a barrier that parks the IPC writer until `gate` fires. Commands
+  /// enqueued afterwards stay queued until the gate opens, letting tests
+  /// observe dequeue-time decisions deterministically.
+  #[cfg(any(test, feature = "test-utils"))]
+  #[doc(hidden)]
+  pub fn enqueue_writer_barrier(&self, gate: Arc<tokio::sync::Notify>) -> Result<(), MpvError> {
+    self.get_ipc()?.enqueue_writer_barrier(gate)?;
     Ok(())
   }
 
@@ -1005,5 +1054,75 @@ mod tests {
     .expect("IPC reader should observe EOF");
 
     assert!(!client.is_connected());
+  }
+
+  #[tokio::test]
+  async fn queue_pause_admits_the_command_before_its_future_is_polled() {
+    let (client_stream, peer_stream) = duplex(8);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let client = MpvClient::from_io_for_test(reader, writer)
+      .await
+      .expect("test client should be constructed");
+    let (peer_reader, mut peer_writer) = tokio::io::split(peer_stream);
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let peer = tokio::spawn(async move {
+      let mut lines = BufReader::new(peer_reader).lines();
+      let command: serde_json::Value =
+        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+      seen_tx.send(()).unwrap();
+      peer_writer
+        .write_all(
+          format!(
+            "{{\"request_id\":{},\"error\":\"success\"}}\n",
+            command["request_id"]
+          )
+          .as_bytes(),
+        )
+        .await
+        .unwrap();
+      command
+    });
+
+    // The acknowledgement future is never polled before `seen_rx` resolves:
+    // the command can only reach the engine if queue_pause admitted it
+    // synchronously, before returning.
+    let ack = client.queue_pause().expect("pause must be admitted");
+
+    tokio::time::timeout(Duration::from_secs(2), seen_rx)
+      .await
+      .expect("the queued pause must reach the engine without polling the ack")
+      .unwrap();
+    ack.await.expect("acknowledgement must resolve");
+    let command = tokio::time::timeout(Duration::from_secs(2), peer)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      command["command"],
+      serde_json::json!(["set_property", "pause", true])
+    );
+  }
+
+  #[tokio::test]
+  async fn queue_pause_on_a_closed_connection_fails_at_enqueue() {
+    let (client_stream, peer_stream) = duplex(64);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let client = MpvClient::from_io_for_test(reader, writer)
+      .await
+      .expect("test client should be constructed");
+    drop(peer_stream);
+    client
+      .runtime
+      .lock()
+      .ipc
+      .as_ref()
+      .expect("ipc should be installed")
+      .close();
+
+    let Err(error) = client.queue_pause() else {
+      panic!("a closed connection must refuse admission synchronously");
+    };
+
+    assert!(matches!(error, MpvError::IpcDisconnected));
   }
 }

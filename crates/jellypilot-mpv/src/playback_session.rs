@@ -47,6 +47,12 @@ pub enum PlaybackIntent {
   SelectSubtitleTrack(Option<i64>),
   Stop,
   PlayAdjacent(AdjacentDirection),
+  /// Display-free suspension (ADR 0043): the main window closed while the
+  /// session stays resident. Queued start/resume work is cancelled, pending
+  /// adjacent authorization is revoked, and the active item is held paused;
+  /// automatic adjacent/end-file work stays suspended until an explicit
+  /// Start, resume, or PlayAdjacent intent lifts the suspension.
+  Suspend,
   #[cfg_attr(not(test), allow(dead_code))]
   SkipIntro,
   DismissIntro,
@@ -390,6 +396,10 @@ pub struct PlaybackSession {
   pending: VecDeque<ControllerRequest>,
   cleanup_pending: bool,
   quitting: bool,
+  /// Display-free suspension: queued start/resume work was cancelled and
+  /// automatic adjacent/end-file advancement stays parked until an explicit
+  /// play intent lifts it (ADR 0043).
+  suspended: bool,
   replacing: bool,
   replacement_generation: u64,
 }
@@ -417,6 +427,7 @@ impl Default for PlaybackSession {
       quitting: false,
       replacing: false,
       replacement_generation: 0,
+      suspended: false,
     }
   }
 }
@@ -487,6 +498,18 @@ impl PlaybackSession {
   }
 
   fn handle_intent(&mut self, intent: PlaybackIntent, now: Instant) -> PlaybackStep {
+    // An explicit play intent is the only way out of display-free
+    // suspension; it is lifted before the intent is evaluated so the command
+    // authorizes fresh controller work on its own lease.
+    if matches!(
+      intent,
+      PlaybackIntent::Start { .. }
+        | PlaybackIntent::PlayAdjacent(_)
+        | PlaybackIntent::TogglePaused
+        | PlaybackIntent::SetPaused(false)
+    ) {
+      self.suspended = false;
+    }
     match intent {
       PlaybackIntent::Start {
         item,
@@ -569,6 +592,7 @@ impl PlaybackSession {
       PlaybackIntent::SelectAudioTrack(id) => self.select_track(true, Some(id)),
       PlaybackIntent::SelectSubtitleTrack(id) => self.select_track(false, id),
       PlaybackIntent::Stop => self.enqueue(ControllerRequest::stop()),
+      PlaybackIntent::Suspend => self.suspend(),
       PlaybackIntent::PlayAdjacent(direction) => self.play_adjacent(direction),
       PlaybackIntent::SkipIntro => self.apply_intro_action(now, true),
       PlaybackIntent::DismissIntro => {
@@ -898,6 +922,11 @@ impl PlaybackSession {
         self.snapshot = Some(snapshot);
         self.sync_desired_transport();
         self.set_warning_notice(warnings);
+        // Automatic follow-on work stays parked while the session is
+        // suspended; only explicit play intents resume it.
+        if self.suspended {
+          return Vec::new();
+        }
         if let Some(direction) = adjacent_direction_from_client_messages(client_messages) {
           return self.play_adjacent(direction).effects;
         }
@@ -913,8 +942,10 @@ impl PlaybackSession {
       PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
         self.notice = None;
         // Natural end of playback advances to the prefetched next episode,
-        // dispatching the same start a manual Next press would.
-        if self.adjacent.item(AdjacentDirection::Next).is_some() {
+        // dispatching the same start a manual Next press would. A suspended
+        // session never advances on its own: the ended item is retired and
+        // the next one waits for an explicit play intent.
+        if !self.suspended && self.adjacent.item(AdjacentDirection::Next).is_some() {
           return self.play_adjacent(AdjacentDirection::Next).effects;
         }
         self.clear_playback_context();
@@ -1073,6 +1104,30 @@ impl PlaybackSession {
       }
     }
   }
+  /// Display-free suspension (ADR 0043): the window closed while the session
+  /// stays resident. Queued work that could start or resume playback is
+  /// cancelled outright — it must never inherit a fresh presentation lease
+  /// from a later explicit command — while display-free controls (pause,
+  /// volume, seek, tracks) still drain. Outstanding adjacent lookups lose
+  /// their authorization; resolved adjacent items stay available for an
+  /// explicit PlayAdjacent. The transport projection is untouched: it keeps
+  /// reporting the real engine state, so a close pause that never landed
+  /// never masquerades as paused.
+  fn suspend(&mut self) -> PlaybackStep {
+    self.suspended = true;
+    self.pending.retain(|pending| {
+      !matches!(pending.kind, RequestKind::Start { .. })
+        && !matches!(pending.command, ControllerCommand::SetPaused(false))
+    });
+    self.pending_adjacent = [None, None];
+    // Lookups cancelled above must not project Loading forever.
+    for slot in [&mut self.adjacent.previous, &mut self.adjacent.next] {
+      if matches!(slot, AdjacentSlot::Loading) {
+        *slot = AdjacentSlot::Idle;
+      }
+    }
+    PlaybackStep::default()
+  }
 
   fn begin_teardown(&mut self, quitting: bool) -> PlaybackStep {
     if quitting {
@@ -1176,9 +1231,12 @@ impl PlaybackSession {
         .map(|snapshot| snapshot.transport.paused)
     })
   }
-
   fn sync_desired_transport(&mut self) {
     if let Some(snapshot) = self.snapshot.as_ref() {
+      // The projection reports the real transport even while suspended: a
+      // close whose pause was never acknowledged must not leave the player
+      // and tray showing paused while the engine still plays. Suspension
+      // only parks automatic work; it never falsifies the transport.
       self.desired_paused = Some(snapshot.transport.paused);
       self.desired_muted = Some(snapshot.transport.muted);
     } else {
@@ -3422,5 +3480,286 @@ mod tests {
     assert!(!lifecycle.settled);
     assert!(lifecycle.playback_active);
     assert!(lifecycle.retain_presentation);
+  }
+  #[test]
+  fn suspension_cancels_a_queued_start_so_it_never_dispatches() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    // Occupy the controller so the next start queues instead of dispatching.
+    let (busy_id, _) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(5.0))),
+          now,
+        )
+        .effects,
+    );
+    let queued = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2", "Second")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      })),
+      now,
+    );
+    assert!(queued.effects.is_empty(), "the second start must queue");
+
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+      now,
+    );
+
+    // Settling the in-flight command must not dispatch the cancelled start:
+    // a queued start can never inherit a fresh presentation lease.
+    let dispatched = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: busy_id,
+        settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-1", "Episode", 5.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    assert!(
+      dispatched.effects.is_empty(),
+      "the suspended session must not dispatch the queued start"
+    );
+    assert_eq!(
+      session
+        .view()
+        .now_playing
+        .as_ref()
+        .map(|view| view.item.item_id.as_str()),
+      Some("episode-1"),
+      "the active item is preserved"
+    );
+
+    // An explicit resume lifts the suspension and reaches the controller.
+    let resumed = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(false))),
+      now,
+    );
+    let (_, command) = controller_effect(resumed.effects);
+    assert!(matches!(command, ControllerCommand::SetPaused(false)));
+  }
+
+  #[test]
+  fn suspension_cancels_a_queued_resume_but_keeps_display_free_controls() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let (busy_id, _) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(5.0))),
+          now,
+        )
+        .effects,
+    );
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(false))),
+      now,
+    );
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetVolume(40.0))),
+      now,
+    );
+
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+      now,
+    );
+
+    let dispatched = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: busy_id,
+        settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-1", "Episode", 5.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    let (_, command) = controller_effect(dispatched.effects);
+    assert!(
+      matches!(command, ControllerCommand::SetVolume(_)),
+      "display-free controls still drain; the queued resume was cancelled"
+    );
+  }
+
+  #[test]
+  fn suspension_parks_automatic_end_file_advance_and_adjacent_authorization() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    session.adjacent.set(
+      AdjacentDirection::Next,
+      Ok(Some(media_item("episode-2", "Second"))),
+    );
+    session.pending_adjacent[AdjacentDirection::Next.index()] = Some(EffectId {
+      epoch: session.epoch,
+      sequence: 99,
+    });
+
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+      now,
+    );
+
+    // The pending lookup's authorization is revoked: its late settlement is
+    // ignored instead of arming an automatic advance.
+    let stale = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+        id: EffectId {
+          epoch: session.epoch,
+          sequence: 99,
+        },
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-3", "Third"))),
+      })),
+      now,
+    );
+    assert!(stale.effects.is_empty());
+
+    // End-of-file while suspended retires the item instead of advancing.
+    let (refresh_id, _) = controller_effect(
+      session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
+    );
+    let ended = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 1_500.0),
+            state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      now,
+    );
+    assert!(
+      ended.effects.is_empty(),
+      "a suspended session must not auto-advance to the next item"
+    );
+    assert!(session.view().now_playing.is_none());
+  }
+
+  #[test]
+  fn suspension_without_a_snapshot_still_cancels_queued_starts() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    let in_flight = start_command(&mut session, now, IntroSkipMode::Off);
+    // The first start is still in flight when the window closes: there is no
+    // snapshot to pause, but the queued second start must still be dropped.
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2", "Second")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      })),
+      now,
+    );
+
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+      now,
+    );
+
+    let settled = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: in_flight,
+        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-1", "Episode", 0.0),
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    // Auxiliary lookups may follow the settled start, but no controller
+    // command may dispatch for the cancelled start.
+    assert!(
+      settled
+        .effects
+        .iter()
+        .all(|effect| !matches!(effect, PlaybackEffect::Controller(_, _))),
+      "the queued start must not dispatch after suspension"
+    );
+    assert!(
+      session
+        .view()
+        .now_playing
+        .as_ref()
+        .is_some_and(|view| !view.paused),
+      "the projection reports the settled transport; suspension never falsifies it"
+    );
+  }
+
+  #[test]
+  fn suspension_never_falsifies_the_transport_projection() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+      now,
+    );
+
+    // The close pause never landed: a refresh settles reporting the engine
+    // still playing. The projection must show the real transport — a
+    // falsely-paused player and tray would hide live playback forever.
+    let (refresh_id, _) = controller_effect(
+      session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
+    );
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 42.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      now,
+    );
+
+    assert_eq!(
+      session.view().now_playing.as_ref().map(|view| view.paused),
+      Some(false),
+      "a suspended session still projects the real transport"
+    );
+    // Suspension itself is unaffected: automatic work stays parked until an
+    // explicit play intent lifts it.
+    session.adjacent.set(
+      AdjacentDirection::Next,
+      Ok(Some(media_item("episode-2", "Second"))),
+    );
+    let (tick_id, _) = controller_effect(
+      session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
+    );
+    let ended = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: tick_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 1_500.0),
+            state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      now,
+    );
+    assert!(
+      ended.effects.is_empty(),
+      "suspension still parks automatic end-file advance"
+    );
   }
 }

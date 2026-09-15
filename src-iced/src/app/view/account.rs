@@ -29,7 +29,7 @@ use crate::app::shell::{
   profile_action_id, ACCOUNT_ADD_TRIGGER_ID, ACCOUNT_DISCONNECT_TRIGGER_ID, ACCOUNT_TRIGGER_ID,
 };
 use crate::app::state::{LoginMethod, QuickConnectState, State};
-use crate::i18n::Localizer;
+use crate::i18n::{Localizer, UiText};
 
 const POPOVER_WIDTH: f32 = 320.0;
 const PROFILE_LIST_HEIGHT: f32 = 192.0;
@@ -121,26 +121,107 @@ pub fn management(state: &State) -> Element<'_, Message> {
   management_content(state, &account)
 }
 
+/// Whether the account modal logically shields the base layer right now.
+///
+/// The shield follows the open state, not the exit animation: once dismissed,
+/// the retained presentation keeps drawing but stops capturing input.
+pub fn modal_open(state: &State) -> bool {
+  accounts::blocking_modal(&state.accounts)
+}
+
+/// Whether this message can close the account modal. Snapshot capture keys off
+/// this so the retained exit presentation is only built for real close-capable
+/// actions, not per-keystroke candidate updates or unrelated settlements.
+pub(crate) fn may_close_modal(message: &Message) -> bool {
+  matches!(
+    message,
+    Message::Account(
+      accounts::Message::CancelConfirmation
+        | accounts::Message::CloseAddAccount
+        | accounts::Message::Confirm
+    )
+  )
+}
+
+/// Snapshots the currently open account modal for its exit presentation.
+///
+/// The snapshot is sanitized: the password field reduces to its length so the
+/// retained dialog can mask it without keeping the secret.
+pub(crate) fn retained_modal_snapshot(state: &State) -> Option<super::motion::RetainedModal> {
+  let account = accounts::view(state);
+  if let Some(confirmation) = account.confirmation {
+    return Some(super::motion::RetainedModal::Confirmation {
+      kind: confirmation.kind,
+      account: confirmation.account.map(str::to_owned),
+      delete_watchlist: confirmation.delete_watchlist,
+      active_profile: confirmation.active_profile,
+    });
+  }
+  account.add_account.map(|candidate| {
+    super::motion::RetainedModal::AddAccount(super::motion::RetainedAddAccount {
+      provider: candidate.flow.provider,
+      method: candidate.flow.method,
+      server_url: candidate.flow.server_url.clone(),
+      username: candidate.flow.username.clone(),
+      password_len: candidate.flow.password.len(),
+      remember: candidate.flow.remember,
+      quick_connect: candidate.flow.quick_connect.clone(),
+      busy: candidate.busy(),
+      error: candidate.flow.error.clone(),
+    })
+  })
+}
+
 /// Adds a blurred-backdrop, focus-contained full-window layer for account
 /// confirmation and new-account authentication. Hiding the presentation never cancels an
 /// in-flight candidate or handoff; the account reducer owns that work.
-pub fn modal_layer(state: &State) -> Option<Element<'_, Message>> {
+///
+/// The layer stays mounted so `motion::reveal` can animate the exit: while the
+/// modal is logically closed it draws the retained snapshot captured at
+/// dismissal, then settles to an empty layout.
+pub fn modal_layer(state: &State) -> Element<'_, Message> {
   let account = accounts::view(state);
-  if let Some(confirmation) = account.confirmation {
-    return Some(full_window_modal(
+  let content: Element<'_, Message> = if let Some(confirmation) = account.confirmation {
+    full_window_modal(
       state,
       confirmation_modal(state, confirmation),
       Message::Account(accounts::Message::CancelConfirmation),
-    ));
-  }
-  if let Some(candidate) = account.add_account {
-    return Some(full_window_modal(
+    )
+  } else if let Some(candidate) = account.add_account {
+    full_window_modal(
       state,
-      add_account_modal(state, candidate),
+      add_account_modal(state, AddAccountView::live(candidate)),
       Message::Account(accounts::Message::CloseAddAccount),
-    ));
-  }
-  None
+    )
+  } else {
+    match state.motion.retained_modal.as_ref() {
+      Some(super::motion::RetainedModal::Confirmation {
+        kind,
+        account,
+        delete_watchlist,
+        active_profile,
+      }) => full_window_modal(
+        state,
+        confirmation_modal(
+          state,
+          accounts::ConfirmationView {
+            kind: *kind,
+            account: account.as_deref(),
+            delete_watchlist: *delete_watchlist,
+            active_profile: *active_profile,
+          },
+        ),
+        Message::Account(accounts::Message::CancelConfirmation),
+      ),
+      Some(super::motion::RetainedModal::AddAccount(retained)) => full_window_modal(
+        state,
+        add_account_modal(state, AddAccountView::retained(retained)),
+        Message::Account(accounts::Message::CloseAddAccount),
+      ),
+      None => space().into(),
+    }
+  };
+  super::motion::reveal(content, modal_open(state))
 }
 
 fn identity_card<'a>(
@@ -1138,34 +1219,97 @@ fn confirmation_modal<'a>(
   body.into()
 }
 
-fn add_account_modal<'a>(
-  state: &'a State,
-  candidate: &'a CandidateSurface,
-) -> Element<'a, Message> {
+/// Display facts for the add-account dialog. The live path borrows the
+/// candidate; the retained exit presentation borrows the sanitized snapshot.
+struct AddAccountView<'a> {
+  provider: MediaServerProvider,
+  method: LoginMethod,
+  server_url: &'a str,
+  username: &'a str,
+  /// The password field's displayed value: the real draft while interactive,
+  /// mask bullets while exiting so the secret is never retained.
+  password: std::borrow::Cow<'a, str>,
+  remember: bool,
+  quick_connect: &'a QuickConnectState,
+  busy: bool,
+  password_busy: bool,
+  error: Option<&'a UiText>,
+  interactive: bool,
+}
+
+impl<'a> AddAccountView<'a> {
+  fn live(candidate: &'a CandidateSurface) -> Self {
+    Self {
+      provider: candidate.flow.provider,
+      method: candidate.flow.method,
+      server_url: &candidate.flow.server_url,
+      username: &candidate.flow.username,
+      password: std::borrow::Cow::Borrowed(candidate.flow.password.as_str()),
+      remember: candidate.flow.remember,
+      quick_connect: &candidate.flow.quick_connect,
+      busy: candidate.busy(),
+      password_busy: candidate.password_busy,
+      error: candidate.flow.error.as_ref(),
+      interactive: true,
+    }
+  }
+
+  fn retained(retained: &'a super::motion::RetainedAddAccount) -> Self {
+    Self {
+      provider: retained.provider,
+      method: retained.method,
+      server_url: &retained.server_url,
+      username: &retained.username,
+      password: std::borrow::Cow::Owned("•".repeat(retained.password_len)),
+      remember: retained.remember,
+      quick_connect: &retained.quick_connect,
+      busy: retained.busy,
+      password_busy: retained.busy,
+      error: retained.error.as_ref(),
+      interactive: false,
+    }
+  }
+}
+
+fn add_account_modal<'a>(state: &'a State, view: AddAccountView<'a>) -> Element<'a, Message> {
   let palette = state.palette();
-  let flow = &candidate.flow;
+  let interactive = view.interactive;
   let provider = row![
-    candidate_button("Jellyfin", MediaServerProvider::Jellyfin, flow.provider),
-    candidate_button("Emby", MediaServerProvider::Emby, flow.provider),
+    candidate_button(
+      "Jellyfin",
+      MediaServerProvider::Jellyfin,
+      view.provider,
+      interactive
+    ),
+    candidate_button(
+      "Emby",
+      MediaServerProvider::Emby,
+      view.provider,
+      interactive
+    ),
   ]
   .spacing(TOKENS.spacing.s2);
-  let server = text_input("https://media.example.com", &flow.server_url)
-    .on_input(|value| account_message(CandidateMessage::ServerUrlChanged(value)))
+  let server = text_input("https://media.example.com", view.server_url)
+    .on_input_maybe(
+      interactive.then_some(|value| account_message(CandidateMessage::ServerUrlChanged(value))),
+    )
     .padding([8, 12])
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-  let method: Element<'_, Message> = if flow.provider == MediaServerProvider::Jellyfin {
+  let method: Element<'_, Message> = if view.provider == MediaServerProvider::Jellyfin {
     row![
       candidate_method(
         state.t("login-quick-connect"),
         LoginMethod::QuickConnect,
-        flow.method
+        view.method,
+        interactive
       ),
       candidate_method(
         state.t("login-password"),
         LoginMethod::Password,
-        flow.method
+        view.method,
+        interactive
       ),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -1173,7 +1317,7 @@ fn add_account_modal<'a>(
   } else {
     text(state.t("login-emby-password")).size(13).into()
   };
-  let sign_in = candidate_sign_in(state.kernel.locale, candidate);
+  let sign_in = candidate_sign_in(state.kernel.locale, &view);
   let mut form = column![
     row![
       column![
@@ -1189,7 +1333,9 @@ fn add_account_modal<'a>(
       .width(Fill),
       control_button(Some(Icon::Close), None, ButtonVariant::Tonal)
         .padding([5, 8])
-        .on_press(Message::Account(accounts::Message::CloseAddAccount)),
+        .on_press_maybe(
+          interactive.then_some(Message::Account(accounts::Message::CloseAddAccount))
+        ),
     ]
     .align_y(Alignment::Center),
     provider,
@@ -1201,7 +1347,7 @@ fn add_account_modal<'a>(
     sign_in,
   ]
   .spacing(TOKENS.spacing.s3);
-  if let Some(error) = &flow.error {
+  if let Some(error) = view.error {
     form = form.push(
       text(state.kernel.locale.message(error))
         .size(13)
@@ -1218,6 +1364,7 @@ fn candidate_button<'a>(
   label: &'a str,
   provider: MediaServerProvider,
   selected: MediaServerProvider,
+  interactive: bool,
 ) -> Element<'a, Message> {
   control_button(
     Some(Icon::Server),
@@ -1231,9 +1378,11 @@ fn candidate_button<'a>(
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
-  .on_press(account_message(CandidateMessage::ProviderSelected(
-    provider,
-  )))
+  .on_press_maybe(
+    interactive.then_some(account_message(CandidateMessage::ProviderSelected(
+      provider,
+    ))),
+  )
   .into()
 }
 
@@ -1241,6 +1390,7 @@ fn candidate_method<'a>(
   label: String,
   method: LoginMethod,
   selected: LoginMethod,
+  interactive: bool,
 ) -> Element<'a, Message> {
   control_button(
     Some(if method == LoginMethod::QuickConnect {
@@ -1258,17 +1408,14 @@ fn candidate_method<'a>(
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
-  .on_press(account_message(CandidateMessage::MethodSelected(method)))
+  .on_press_maybe(interactive.then_some(account_message(CandidateMessage::MethodSelected(method))))
   .into()
 }
 
-fn candidate_sign_in<'a>(
-  locale: Localizer,
-  candidate: &'a CandidateSurface,
-) -> Element<'a, Message> {
-  let flow = &candidate.flow;
-  match flow.method {
-    LoginMethod::QuickConnect => match &flow.quick_connect {
+fn candidate_sign_in<'a>(locale: Localizer, view: &AddAccountView<'a>) -> Element<'a, Message> {
+  let interactive = view.interactive;
+  match view.method {
+    LoginMethod::QuickConnect => match view.quick_connect {
       QuickConnectState::Idle | QuickConnectState::Failed => control_button(
         Some(Icon::QrCode),
         Some(locale.text("login-request-code")),
@@ -1277,12 +1424,13 @@ fn candidate_sign_in<'a>(
       .spacing(TOKENS.spacing.s2)
       .padding([8, 14])
       .on_press_maybe(
-        (!candidate.busy()).then_some(account_message(CandidateMessage::QuickConnectSubmitted)),
+        (interactive && !view.busy)
+          .then_some(account_message(CandidateMessage::QuickConnectSubmitted)),
       )
       .into(),
       QuickConnectState::Requesting => text(locale.text("login-requesting-code")).size(13).into(),
       QuickConnectState::Waiting(code) => column![
-        text(code).font(HEADING_FONT).size(30),
+        text(code.clone()).font(HEADING_FONT).size(30),
         text(locale.text("account-approve-code")).size(13),
         control_button(
           Some(Icon::Close),
@@ -1292,45 +1440,53 @@ fn candidate_sign_in<'a>(
         .icon_size(IconSize::Xs)
         .spacing(TOKENS.spacing.s1)
         .padding([6, 10])
-        .on_press(account_message(CandidateMessage::QuickConnectCancelled)),
+        .on_press_maybe(
+          interactive.then_some(account_message(CandidateMessage::QuickConnectCancelled)),
+        ),
       ]
       .spacing(TOKENS.spacing.s2)
       .into(),
       QuickConnectState::Approving => text(locale.text("login-approving")).size(13).into(),
     },
     LoginMethod::Password => {
-      let username = text_input(locale.text("login-username"), &flow.username)
-        .on_input(|value| account_message(CandidateMessage::UsernameChanged(value)))
+      let username = text_input(locale.text("login-username"), view.username)
+        .on_input_maybe(
+          interactive.then_some(|value| account_message(CandidateMessage::UsernameChanged(value))),
+        )
         .padding([8, 12])
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
-      let password = text_input(locale.text("login-password"), flow.password.as_str())
-        .on_input(|value| account_message(CandidateMessage::PasswordChanged(value)))
+      let password = text_input(locale.text("login-password"), view.password.clone())
+        .on_input_maybe(
+          interactive.then_some(|value| account_message(CandidateMessage::PasswordChanged(value))),
+        )
         .secure(true)
-        .on_submit(account_message(CandidateMessage::PasswordSubmitted))
+        .on_submit_maybe(
+          interactive.then_some(account_message(CandidateMessage::PasswordSubmitted)),
+        )
         .padding([8, 12])
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
       let remember = control_button(
         None,
-        Some(if flow.remember {
+        Some(if view.remember {
           locale.text("account-remember-on")
         } else {
           locale.text("account-remember-off")
         }),
-        if flow.remember {
+        if view.remember {
           ButtonVariant::TonalActive
         } else {
           ButtonVariant::Tonal
         },
       )
       .padding([6, 10])
-      .on_press(account_message(CandidateMessage::RememberToggled));
+      .on_press_maybe(interactive.then_some(account_message(CandidateMessage::RememberToggled)));
       let submit = control_button(
-        Some(Icon::UserCheck),
-        Some(if candidate.password_busy {
+        None,
+        Some(if view.password_busy {
           locale.text("login-signing-in")
         } else {
           locale.text("account-connect-switch")
@@ -1340,7 +1496,7 @@ fn candidate_sign_in<'a>(
       .spacing(TOKENS.spacing.s2)
       .padding([8, 14])
       .on_press_maybe(
-        (!candidate.busy()).then_some(account_message(CandidateMessage::PasswordSubmitted)),
+        (interactive && !view.busy).then_some(account_message(CandidateMessage::PasswordSubmitted)),
       );
       column![username, password, remember, submit]
         .spacing(TOKENS.spacing.s2)

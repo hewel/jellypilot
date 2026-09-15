@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use super::{account, browse, detail, home, personal_lists, player, settings};
+use super::{account, browse, detail, home, motion, personal_lists, player, settings};
 use crate::app::message::{BrowseMessage, HomeMessage, Message, SettingsMessage, ShellMessage};
 use crate::app::personal_lists::Route;
 use crate::app::shell::{SEARCH_INPUT_ID, SEARCH_TRIGGER_ID, SETTINGS_TRIGGER_ID};
@@ -57,14 +57,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
   }
   if crate::embedded::enabled()
     && state.shell.destination == Destination::NowPlaying
-    && state.playback.view.now_playing.is_some()
+    && state.playback.view.lifecycle.playback_active
   {
     let player = player::embedded(state);
-    return if state.shell.settings_open {
-      stack![inert(player), settings_modal(state)]
-    } else {
-      stack![player]
-    }
+    return stack![
+      if state.shell.settings_open {
+        inert(player)
+      } else {
+        player
+      },
+      settings_layer(state)
+    ]
     .width(Fill)
     .height(Fill)
     .into();
@@ -73,8 +76,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let class = SizeClass::from_width(state.shell.window_size.width);
-  let sidebar = sidebar(state, class, skeleton_phase, reduced_motion)
-    .width(Length::Fixed(sidebar_width(class)));
+  // Discrete collapse animates the structural width; continuous window sizing
+  // keeps the same key and stays direct.
+  let sidebar = motion::resize(
+    sidebar(state, class, skeleton_phase, reduced_motion)
+      .width(Length::Fixed(sidebar_width(class))),
+    sidebar_width(class) as u64,
+    motion::Axis::Horizontal,
+  );
   let content: Element<'_, Message> = match &state.shell.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
@@ -83,7 +92,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::NowPlaying if crate::embedded::enabled() => player::full(state),
     Destination::NowPlaying => home::view(state),
   };
-  let content = super::scroll_memory::remember(content, &state.shell.scroll_memory);
+  let content = motion::transition(
+    super::scroll_memory::remember(content, &state.shell.scroll_memory),
+    motion::page_key(&state.shell.destination),
+  );
   // One of the two shell hairlines: 1px between the sidebar and the content.
   let sidebar_divider = container(space::vertical())
     .width(HAIRLINE_WIDTH)
@@ -96,16 +108,30 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let mut right = Column::new()
     .spacing(0.0)
     .push(container(content).width(Fill).height(Fill));
-  if let Some(player_bar) = player::bar(state) {
-    // The second shell hairline: 1px above the player bar.
-    let player_divider = container(space::horizontal())
-      .width(Fill)
-      .height(HAIRLINE_WIDTH)
-      .style(move |_| {
-        iced::widget::container::Style::default().background(palette.colors.outlineVariant)
-      });
-    right = right.push(player_divider).push(player_bar);
-  }
+  // The docked bar is a player-control surface: it collapses over the surface
+  // duration so the content above reclaims its slot as it exits. When playback
+  // stops, the retained snapshot keeps drawing the real bar through the exit.
+  let player_bar = player::bar(state);
+  let player_bar_visible = player_bar.is_some();
+  let player_bar: Element<'_, Message> =
+    if let Some(player_bar) = player_bar.or_else(|| player::retained_bar(state)) {
+      Column::new()
+        .spacing(0.0)
+        .push(
+          container(space::horizontal())
+            .width(Fill)
+            .height(HAIRLINE_WIDTH)
+            .style(move |_| {
+              iced::widget::container::Style::default().background(palette.colors.outlineVariant)
+            }),
+        )
+        .push(player_bar)
+        .into()
+    } else {
+      space().into()
+    };
+  let player_bar = motion::collapse(player_bar, player_bar_visible);
+  right = right.push(player_bar);
   let body = row![sidebar, sidebar_divider, right]
     .spacing(0.0)
     .width(Fill)
@@ -116,25 +142,37 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas));
 
-  // Keep the background at the same tree position across modal transitions;
-  // inserting a Stack only when open discards descendant scroll state.
-  let layers = if state.shell.settings_open {
-    stack![inert(base_view), settings_modal(state)]
-  } else {
-    stack![base_view]
-  };
+  // The modal layer stays mounted so its exit can animate; the inert shield
+  // follows the logical open state, not the animation.
+  let layers = stack![
+    if state.shell.settings_open {
+      inert(base_view)
+    } else {
+      base_view.into()
+    },
+    settings_layer(state)
+  ];
   layers.width(Fill).height(Fill).into()
+}
+
+/// The Settings dialog wrapped in the shared surface reveal so open/close
+/// animate over the surface duration.
+fn settings_layer(state: &State) -> Element<'_, Message> {
+  motion::reveal(settings_modal(state), state.shell.settings_open)
 }
 
 /// Control-Only shell: full-window Now Playing without browser chrome,
 /// with the same Settings dialog used by the full shell.
 fn control_only_view(state: &State) -> Element<'_, Message> {
   let player = player::full(state);
-  let content = if state.shell.settings_open {
-    stack![inert(player), settings_modal(state)]
-  } else {
-    stack![player]
-  };
+  let content = stack![
+    if state.shell.settings_open {
+      inert(player)
+    } else {
+      player
+    },
+    settings_layer(state)
+  ];
   container(content)
     .width(Fill)
     .height(Fill)

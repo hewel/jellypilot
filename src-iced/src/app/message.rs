@@ -111,7 +111,23 @@ pub enum Message {
 #[derive(Clone, Copy, Debug)]
 pub enum WindowMessage {
   ShowRequested(Option<window::Id>),
+  /// An explicit play command needs a visible player (ADR 0043). The router
+  /// normalizes this into a real show only while a deferred play is still
+  /// pending; the shell itself treats it as a no-op.
+  ShowForPlayback,
   CloseRequested(window::Id),
+  /// The compositor destroyed the window without a close request (kill,
+  /// session end); the shell treats it as a close that already happened.
+  Closed(window::Id),
+  /// A window opened for an explicit play command did not arrive in time.
+  OpenTimedOut(window::Id),
+  /// The close-path engine pause resolved: the window stays closed only
+  /// after the acknowledgement lands (ADR 0043).
+  BackgroundPauseSettled {
+    id: window::Id,
+    generation: u64,
+    result: Result<(), PlaybackError>,
+  },
   Resized(iced::Size),
   /// One rendered frame; carries the compositor timestamp so animation
   /// phases derive from frame cadence instead of wall-clock polling.
@@ -314,6 +330,10 @@ pub enum PlaybackMessage {
     detail: Option<Box<VideoItemDetail>>,
   },
   ArtworkLoaded(super::artwork::ImageCompletion),
+  /// The close-path engine pause resolved for a window that was already
+  /// destroyed (compositor kill, session end): errors surface here because
+  /// no pending close is waiting on the acknowledgement.
+  PresentationPaused(Result<(), PlaybackError>),
 }
 #[derive(Clone)]
 pub enum RemoteMessage {

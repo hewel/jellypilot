@@ -54,7 +54,12 @@ fn content_column(state: &State) -> Column<'_, Message> {
       bottom: if has_feedback { TOKENS.spacing.s5 } else { 0.0 },
       ..iced::Padding::ZERO
     }),
-    selected_section(state, state.settings.view.active_section),
+    // Section switches are user structural changes; the key ignores data and
+    // save-state updates within a section.
+    super::motion::transition(
+      selected_section(state, state.settings.view.active_section),
+      section_key(state.settings.view.active_section),
+    ),
   ]
   .padding([TOKENS.spacing.s5, TOKENS.spacing.s6])
   .width(Fill)
@@ -73,6 +78,19 @@ fn selected_section<'a>(state: &'a State, section: SettingsSection) -> Element<'
       .spacing(TOKENS.spacing.s5)
       .width(Fill)
       .into(),
+  }
+}
+
+fn section_key(section: SettingsSection) -> u64 {
+  match section {
+    SettingsSection::Account => 0,
+    SettingsSection::Mpv => 1,
+    SettingsSection::Playback => 2,
+    SettingsSection::Subtitles => 3,
+    SettingsSection::Shortcuts => 4,
+    SettingsSection::Appearance => 5,
+    SettingsSection::Storage => 6,
+    SettingsSection::Diagnostics => 7,
   }
 }
 

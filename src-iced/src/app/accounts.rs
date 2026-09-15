@@ -455,6 +455,16 @@ pub fn hide(surface: &mut Surface) {
   surface.copy_generation = None;
 }
 
+/// Dismisses every transient account surface when the window that hosted it
+/// closes (ADR 0043): the management popover, add-account sheet, and pending
+/// confirmation. In-flight authentication or an irreversible handoff keeps
+/// running — only the presentation is dropped.
+pub fn dismiss_transient(surface: &mut Surface) {
+  hide(surface);
+  let _ = close_add_account(surface);
+  let _ = cancel_confirmation(surface);
+}
+
 pub fn update(
   surface: &mut Surface,
   login_flow: &mut LoginState,

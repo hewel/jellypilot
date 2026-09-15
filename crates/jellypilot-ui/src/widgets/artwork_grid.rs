@@ -1,14 +1,28 @@
-//! Viewport-sliced artwork grid built from normal iced layout widgets.
+//! Viewport-sliced artwork grid with animated column reflow.
 //!
 //! Renders a full-height sparse range where cells look up items by global index.
-//! This allows the browse grid to represent the total item count with top and
-//! bottom spacers while only generating iced widget trees for the visible and
-//! overscanned rows.
+//! This allows the browse grid to represent the total item count while only
+//! generating iced widget trees for the visible and overscanned rows.
+//!
+//! A change in column count animates each materialized cell from its previous
+//! grid position to its new one over `durations.ms300` under the enclosing
+//! [`motion::scope`] policy. Animated positions belong to the actual layout,
+//! so drawing, pointer/touch input, focus, and image observation agree.
+//! Continuous sizing, scrolling, and data updates stay direct.
 
-use iced::widget::{container, scrollable, Column, Row, Space};
-use iced::{Element, Length};
+use std::time::Instant;
+
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::mouse;
+use iced::advanced::renderer;
+use iced::advanced::widget::{self, Tree, Widget};
+use iced::advanced::{overlay, Shell};
+use iced::widget::{scrollable, Space};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Theme, Vector};
 
 use crate::tokens::TOKENS;
+
+use super::motion::{self, GridMotion};
 
 /// Poster width used when the available width cannot yet be measured.
 pub const MIN_ARTWORK_CELL_WIDTH: f32 = TOKENS.spacing.x9l;
@@ -109,6 +123,9 @@ impl ArtworkGridMetrics {
 /// Before its first measurement it may supply a bounded fallback viewport.
 /// Cells look up items by global item index and may contain any normal
 /// iced widgets.
+///
+/// When `metrics.columns` changes, materialized cells animate from their
+/// previous positions; every other change (width, scroll, data) is direct.
 pub fn artwork_grid<'a, Message, Builder>(
     item_count: usize,
     metrics: ArtworkGridMetrics,
@@ -130,39 +147,371 @@ where
         viewport.height,
         metrics.row_height,
     );
-    let mut content: Column<'a, Message> = Column::new()
-        .width(Length::Fill)
-        .push(spacer(window.top_spacer));
-
-    for row_index in window.start..window.end {
-        let item_start = row_index * metrics.columns;
-        let item_end = (item_start + metrics.columns).min(item_count);
-        let row_height = if row_index + 1 == row_count {
-            metrics.cell_height
-        } else {
-            metrics.row_height
-        };
-        let mut row = Row::new()
-            .spacing(column_gap)
-            .width(Length::Fill)
-            .height(row_height);
-
-        for index in item_start..item_end {
-            row = row.push(
-                container(cell_builder(index))
-                    .width(metrics.cell_width)
-                    .height(metrics.cell_height),
-            );
-        }
-
-        content = content.push(row);
-    }
-
-    content.push(spacer(window.bottom_spacer)).into()
+    let first_item = window.start * metrics.columns;
+    let last_item = (window.end * metrics.columns).min(item_count);
+    Element::new(ArtworkGrid {
+        cells: (first_item..last_item).map(&cell_builder).collect(),
+        first_item,
+        item_count,
+        metrics,
+        column_gap,
+    })
 }
 
-fn spacer<'a, Message: 'a>(height: f32) -> Element<'a, Message> {
-    container(Space::new()).height(height).into()
+/// The materialized window of grid cells. `cells[i]` renders item
+/// `first_item + i`; positions are absolute in grid-local coordinates, which
+/// replaces the former top/bottom spacer elements.
+struct ArtworkGrid<'a, Message, Renderer = iced::Renderer> {
+    cells: Vec<Element<'a, Message, Theme, Renderer>>,
+    first_item: usize,
+    item_count: usize,
+    metrics: ArtworkGridMetrics,
+    column_gap: f32,
+}
+
+/// Grid animation state; `motion` holds the per-item position maps.
+#[derive(Debug, Default)]
+pub(crate) struct ArtworkGridState {
+    pub(crate) motion: GridMotion,
+    first_item: usize,
+    pointer_owner: Option<usize>,
+    touch_owner: Option<(iced::touch::Finger, usize)>,
+}
+
+impl ArtworkGridState {
+    pub(crate) fn motion_active(&self) -> bool {
+        self.motion.tween.is_some()
+    }
+}
+
+impl<Message, Renderer> ArtworkGrid<'_, Message, Renderer> {
+    fn topmost(
+        &self,
+        layout: Layout<'_>,
+        point: Option<Point>,
+        viewport: &Rectangle,
+    ) -> Option<usize> {
+        let point = point.filter(|point| viewport.contains(*point))?;
+        layout
+            .children()
+            .enumerate()
+            .rev()
+            .find(|(_, child)| child.bounds().contains(point))
+            .map(|(slot, _)| self.first_item + slot)
+    }
+}
+
+impl<Message, Renderer> Widget<Message, Theme, Renderer> for ArtworkGrid<'_, Message, Renderer>
+where
+    Renderer: iced::advanced::Renderer,
+{
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<ArtworkGridState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(ArtworkGridState::default())
+    }
+
+    fn diff(&mut self, tree: &mut Tree) {
+        let state = tree.state.downcast_mut::<ArtworkGridState>();
+        if !motion::enabled() {
+            state.motion.tween = None;
+            state.motion.from.clear();
+        } else if state.motion.columns != self.metrics.columns
+            && state.motion.columns != 0
+            && !state.motion.current.is_empty()
+        {
+            // Column-count change: animate materialized cells from their
+            // displayed positions — final positions plus any in-flight delta —
+            // so an interrupted reflow continues from what the user sees.
+            // Items without a recorded position appear directly.
+            let now = Instant::now();
+            state.motion.from = state
+                .motion
+                .current
+                .iter()
+                .map(|(item, to)| (*item, *to + state.motion.delta(*item)))
+                .collect();
+            state.motion.reflow_target = Some((self.metrics, self.column_gap));
+            state.motion.tween = Some(motion::Tween::new(0.0, 1.0, now, TOKENS.durations.ms300));
+            state.motion.shown = 0.0;
+        }
+        state.motion.columns = self.metrics.columns;
+        // Widget state follows the item index, not its temporary viewport slot.
+        let old_first = state.first_item;
+        let old_end = old_first.saturating_add(tree.children.len());
+        let new_end = self.first_item.saturating_add(self.cells.len());
+        if self.first_item >= old_end || new_end <= old_first {
+            tree.children.clear();
+        } else if self.first_item > old_first {
+            tree.children.drain(..self.first_item - old_first);
+        } else if self.first_item < old_first {
+            tree.children
+                .splice(0..0, (self.first_item..old_first).map(|_| Tree::empty()));
+        }
+        state.first_item = self.first_item;
+        state.pointer_owner = state
+            .pointer_owner
+            .filter(|item| (self.first_item..new_end).contains(item));
+        state.touch_owner = state
+            .touch_owner
+            .filter(|(_, item)| (self.first_item..new_end).contains(item));
+        tree.diff_children(&mut self.cells);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fit)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let state = tree.state.downcast_mut::<ArtworkGridState>();
+        let cell_size = Size::new(self.metrics.cell_width, self.metrics.cell_height);
+        let cell_limits = layout::Limits::new(Size::ZERO, cell_size);
+        let mut children = Vec::with_capacity(self.cells.len());
+        state.motion.current.clear();
+        for (slot, cell) in self.cells.iter_mut().enumerate() {
+            let item = self.first_item + slot;
+            let position = motion::cell_position(
+                item,
+                self.metrics.columns,
+                self.metrics.cell_width,
+                self.metrics.row_height,
+                self.column_gap,
+            );
+            state.motion.current.insert(item, position);
+            children.push(
+                cell.as_widget_mut()
+                    .layout(&mut tree.children[slot], renderer, &cell_limits)
+                    .move_to(position + state.motion.delta(item)),
+            );
+        }
+        let row_count = self.item_count.div_ceil(self.metrics.columns.max(1));
+        let height = if row_count == 0 {
+            0.0
+        } else {
+            row_count as f32 * self.metrics.row_height - ROW_GAP
+        };
+        layout::Node::with_children(
+            limits.resolve(
+                Length::Fill,
+                Length::Fit,
+                Size::new(limits.max().width, height),
+            ),
+            children,
+        )
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        operation.custom(
+            None,
+            layout.bounds(),
+            tree.state.downcast_mut::<ArtworkGridState>(),
+        );
+        // Image demand and keyboard focus use the same presented bounds as input.
+        operation.traverse(&mut |operation| {
+            for (slot, (cell, child_layout)) in
+                self.cells.iter_mut().zip(layout.children()).enumerate()
+            {
+                cell.as_widget_mut().operate(
+                    &mut tree.children[slot],
+                    child_layout,
+                    renderer,
+                    operation,
+                );
+            }
+        });
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_mut::<ArtworkGridState>();
+        motion::tick_layout(
+            &mut state.motion.tween,
+            &mut state.motion.shown,
+            1.0,
+            event,
+            shell,
+        );
+        if state.motion.tween.is_none() {
+            state.motion.from.clear();
+        }
+        let touch = match event {
+            Event::Touch(
+                iced::touch::Event::FingerPressed { id, .. }
+                | iced::touch::Event::FingerMoved { id, .. }
+                | iced::touch::Event::FingerLifted { id, .. }
+                | iced::touch::Event::FingerLost { id, .. },
+            ) => Some(*id),
+            _ => None,
+        };
+        // Scrollable has already translated the cursor into content coordinates;
+        // raw touch positions remain in window coordinates.
+        let hit = self.topmost(layout, cursor.position(), viewport);
+        let target = if let Some(id) = touch {
+            state
+                .touch_owner
+                .filter(|(owner, _)| *owner == id)
+                .map(|(_, item)| item)
+                .or_else(|| state.touch_owner.is_none().then_some(hit).flatten())
+        } else {
+            state.pointer_owner.or(hit)
+        };
+        for (slot, (cell, child_layout)) in self
+            .cells
+            .iter_mut()
+            .zip(layout.children())
+            .enumerate()
+            .rev()
+        {
+            let item = self.first_item + slot;
+            if touch.is_some() && target != Some(item) {
+                continue;
+            }
+            let available = target == Some(item);
+            let child_cursor = if available {
+                cursor
+            } else {
+                mouse::Cursor::Unavailable
+            };
+            let was_captured = shell.is_event_captured();
+            cell.as_widget_mut().update(
+                &mut tree.children[slot],
+                event,
+                child_layout,
+                child_cursor,
+                renderer,
+                shell,
+                viewport,
+            );
+            if available && !was_captured && shell.is_event_captured() {
+                match event {
+                    Event::Mouse(mouse::Event::ButtonPressed(_)) => {
+                        state.pointer_owner = Some(item)
+                    }
+                    Event::Touch(iced::touch::Event::FingerPressed { id, .. }) => {
+                        state.touch_owner = Some((*id, item))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match event {
+            Event::Mouse(mouse::Event::ButtonReleased(_))
+            | Event::Window(iced::window::Event::Unfocused) => state.pointer_owner = None,
+            Event::Touch(
+                iced::touch::Event::FingerLifted { id, .. }
+                | iced::touch::Event::FingerLost { id, .. },
+            ) if state.touch_owner.is_some_and(|(owner, _)| owner == *id) => {
+                state.touch_owner = None
+            }
+            _ => {}
+        }
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let state = tree.state.downcast_ref::<ArtworkGridState>();
+        let target = state
+            .pointer_owner
+            .or_else(|| self.topmost(layout, cursor.position(), viewport));
+        for (slot, (cell, child_layout)) in self.cells.iter().zip(layout.children()).enumerate() {
+            let cursor = if target == Some(self.first_item + slot) {
+                cursor
+            } else {
+                mouse::Cursor::Unavailable
+            };
+            cell.as_widget().draw(
+                &tree.children[slot],
+                renderer,
+                theme,
+                style,
+                child_layout,
+                cursor,
+                viewport,
+            );
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let state = tree.state.downcast_ref::<ArtworkGridState>();
+        let target = state
+            .pointer_owner
+            .or_else(|| self.topmost(layout, cursor.position(), viewport));
+        let Some(slot) = target
+            .and_then(|item| item.checked_sub(self.first_item))
+            .filter(|slot| *slot < self.cells.len())
+        else {
+            return mouse::Interaction::None;
+        };
+        self.cells[slot].as_widget().mouse_interaction(
+            &tree.children[slot],
+            layout.child(slot),
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut Tree,
+        layout: Layout<'a>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+        let children = self
+            .cells
+            .iter_mut()
+            .zip(tree.children.iter_mut())
+            .zip(layout.children())
+            .filter_map(|((cell, child_tree), child_layout)| {
+                cell.as_widget_mut().overlay(
+                    child_tree,
+                    child_layout,
+                    renderer,
+                    viewport,
+                    translation,
+                )
+            })
+            .collect::<Vec<_>>();
+        (!children.is_empty()).then(|| overlay::Group::with_children(children).overlay())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -508,5 +857,203 @@ mod tests {
         });
 
         assert!(built_indexes.into_inner().is_empty());
+    }
+    fn clickable_grid(width: f32, first_item: usize) -> super::ArtworkGrid<'static, usize, ()> {
+        super::ArtworkGrid {
+            cells: (first_item..first_item + 8)
+                .map(|item| {
+                    iced::widget::button(iced::widget::Space::new())
+                        .padding(0)
+                        .width(iced::Length::Fill)
+                        .height(iced::Length::Fill)
+                        .on_press(item)
+                        .into()
+                })
+                .collect(),
+            first_item,
+            item_count: 100,
+            metrics: ArtworkGridMetrics::for_width(width),
+            column_gap: COLUMN_GAP,
+        }
+    }
+
+    fn pointer(
+        grid: &mut super::ArtworkGrid<'_, usize, ()>,
+        tree: &mut iced::advanced::widget::Tree,
+        node: &iced::advanced::layout::Node,
+        event: iced::mouse::Event,
+        point: iced::Point,
+    ) -> Vec<usize> {
+        use iced::advanced::{shell, widget::Widget, Layout, Shell};
+        let mut bus = shell::Bus::new();
+        grid.update(
+            tree,
+            &iced::Event::Mouse(event),
+            Layout::new(node),
+            iced::mouse::Cursor::Available(point),
+            &(),
+            &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
+            &iced::Rectangle::with_size(iced::Size::new(800.0, 800.0)),
+        );
+        bus.into_iter().collect()
+    }
+
+    #[test]
+    fn overlapping_reflow_activates_the_topmost_painted_item() {
+        use iced::advanced::{
+            layout,
+            widget::{Tree, Widget},
+        };
+        use iced::mouse::{Button, Event};
+        let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(800.0, 800.0));
+        let mut grid = clickable_grid(560.0, 0);
+        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        grid.diff(&mut tree);
+        grid.layout(&mut tree, &(), &limits);
+
+        let mut grid = clickable_grid(559.0, 0);
+        grid.diff(&mut tree);
+        let node = grid.layout(&mut tree, &(), &limits);
+        let point = iced::Point::new(170.0, 30.0);
+        assert!(node.children()[0].bounds().contains(point));
+        assert!(node.children()[1].bounds().contains(point));
+        assert!(pointer(
+            &mut grid,
+            &mut tree,
+            &node,
+            Event::ButtonPressed(Button::Left),
+            point
+        )
+        .is_empty());
+        assert_eq!(
+            pointer(
+                &mut grid,
+                &mut tree,
+                &node,
+                Event::ButtonReleased(Button::Left),
+                point
+            ),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn virtualized_slot_reuse_cannot_transfer_a_press_to_another_item() {
+        use iced::advanced::{
+            layout,
+            widget::{Tree, Widget},
+        };
+        use iced::mouse::{Button, Event};
+        let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(800.0, 800.0));
+        let mut grid = clickable_grid(560.0, 0);
+        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        grid.diff(&mut tree);
+        let node = grid.layout(&mut tree, &(), &limits);
+        pointer(
+            &mut grid,
+            &mut tree,
+            &node,
+            Event::ButtonPressed(Button::Left),
+            iced::Point::new(20.0, 20.0),
+        );
+
+        let mut grid = clickable_grid(560.0, 4);
+        grid.diff(&mut tree);
+        let node = grid.layout(&mut tree, &(), &limits);
+        let point = iced::Point::new(20.0, grid.metrics.row_height + 20.0);
+        assert!(pointer(
+            &mut grid,
+            &mut tree,
+            &node,
+            Event::ButtonReleased(Button::Left),
+            point
+        )
+        .is_empty());
+        pointer(
+            &mut grid,
+            &mut tree,
+            &node,
+            Event::ButtonPressed(Button::Left),
+            point,
+        );
+        assert_eq!(
+            pointer(
+                &mut grid,
+                &mut tree,
+                &node,
+                Event::ButtonReleased(Button::Left),
+                point
+            ),
+            vec![4]
+        );
+    }
+
+    #[test]
+    fn touch_selects_the_scrolled_item_using_content_coordinates() {
+        use iced::advanced::{
+            layout, shell,
+            widget::{Tree, Widget},
+            Layout, Shell,
+        };
+        use iced::{mouse, touch, Event, Point, Rectangle, Size};
+        let limits = layout::Limits::new(Size::ZERO, Size::new(800.0, 800.0));
+        let mut grid = clickable_grid(560.0, 4);
+        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        grid.diff(&mut tree);
+        let node = grid.layout(&mut tree, &(), &limits);
+        let viewport = Rectangle::new(
+            Point::new(0.0, grid.metrics.row_height),
+            Size::new(560.0, 200.0),
+        );
+        let cursor = mouse::Cursor::Available(Point::new(20.0, grid.metrics.row_height + 20.0));
+        let position = Point::new(20.0, 20.0);
+        let mut messages = shell::Bus::new();
+        // Native Scrollable translates the cursor, not the raw touch event.
+        for event in [
+            touch::Event::FingerPressed {
+                id: touch::Finger(1),
+                position,
+            },
+            touch::Event::FingerLifted {
+                id: touch::Finger(1),
+                position,
+            },
+        ] {
+            grid.update(
+                &mut tree,
+                &Event::Touch(event),
+                Layout::new(&node),
+                cursor,
+                &(),
+                &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut messages),
+                &viewport,
+            );
+        }
+        assert_eq!(messages.into_iter().collect::<Vec<_>>(), vec![4]);
+    }
+
+    #[test]
+    fn continuous_resize_remains_direct_during_column_reflow() {
+        use iced::advanced::{
+            layout,
+            widget::{Tree, Widget},
+        };
+        use iced::Size;
+        let limits = layout::Limits::new(Size::ZERO, Size::new(800.0, 800.0));
+        let mut grid = clickable_grid(560.0, 0);
+        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        grid.diff(&mut tree);
+        grid.layout(&mut tree, &(), &limits);
+        let mut grid = clickable_grid(559.0, 0);
+        grid.diff(&mut tree);
+        let before = grid.layout(&mut tree, &(), &limits).children()[1].bounds();
+        let previous_width = grid.metrics.cell_width;
+
+        let mut grid = clickable_grid(558.0, 0);
+        grid.diff(&mut tree);
+        let after = grid.layout(&mut tree, &(), &limits).children()[1].bounds();
+        let width_delta = grid.metrics.cell_width - previous_width;
+        assert!((after.x - before.x - width_delta).abs() < 0.001);
+        assert!((after.width - before.width - width_delta).abs() < 0.001);
     }
 }

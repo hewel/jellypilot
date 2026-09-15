@@ -16,6 +16,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     Event::Window(window::Event::CloseRequested) if status == event::Status::Ignored => {
       Some(Message::Window(WindowMessage::CloseRequested(window_id)))
     }
+    // A compositor-driven close (kill, session end) bypasses CloseRequested;
+    // the shell still needs to drop the dead window id and suspend demand.
+    Event::Window(window::Event::Closed) => Some(Message::Window(WindowMessage::Closed(window_id))),
     // The compositor can constrain the requested startup size before a resize
     // subscription exists. Opened carries the actual logical layout size.
     Event::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
@@ -31,7 +34,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         .map(|_| Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)))),
     );
   }
-  if state.shell.window_id.is_some() {
+  if state.shell.window_id.is_some() && state.shell.pending_close.is_none() {
     if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
     } else {
@@ -100,12 +103,13 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     subscriptions.push(iced::system::theme_changes().map(Message::SystemThemeChanged));
   }
 
-  // Drive the shimmer phase only while skeletons are actually on screen (or a
-  // smoke run waits on its first frame); an always-on frames subscription
-  // would redraw the shell at display refresh for no visible change.
+  // Theme and skeleton motion share one bounded frame stream; settled or
+  // invisible UI must not keep requesting application updates.
   if state.shell.window_id.is_some()
     && (state.shell.smoke
-      || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion()))
+      || (state.shell.images_visible
+        && (state.skeletons_active() || state.motion.active())
+        && !state.kernel.settings.snapshot().reduced_motion()))
   {
     subscriptions
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
@@ -637,6 +641,58 @@ mod tests {
       .await
       .iter()
       .any(|message| matches!(message, Message::Window(WindowMessage::FrameTick(_))))
+  }
+
+  #[tokio::test]
+  async fn a_pending_close_blocks_keyboard_actions_until_show_cancels_it() {
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    let id = window::Id::unique();
+    state.shell.window_id = Some(id);
+    let command = if cfg!(target_os = "macos") {
+      keyboard::Modifiers::LOGO
+    } else {
+      keyboard::Modifiers::CTRL
+    };
+    let input = iced::advanced::subscription::Event::Interaction {
+      window: id,
+      event: key_pressed(keyboard::Key::Character("k".into()), command),
+      status: event::Status::Ignored,
+    };
+    state.shell.pending_close = Some((id, 1));
+    assert!(!emitted_messages(&state, input.clone())
+      .await
+      .iter()
+      .any(|message| matches!(message, Message::Shell(ShellMessage::FocusSearch))));
+    state.shell.pending_close = None;
+    assert!(emitted_messages(&state, input)
+      .await
+      .iter()
+      .any(|message| matches!(message, Message::Shell(ShellMessage::FocusSearch))));
+  }
+
+  #[tokio::test]
+  async fn theme_transition_requests_frames_only_while_visible_and_active() {
+    use jellypilot_ui::theme::ThemeMode as PaletteMode;
+
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.shell.window_id = Some(window::Id::unique());
+    let now = std::time::Instant::now();
+    state.motion.sync(PaletteMode::Dark, true, now);
+    assert!(!emits_frame(&state).await);
+    state.motion.sync(PaletteMode::Light, true, now);
+    assert!(emits_frame(&state).await);
+    state.shell.images_visible = false;
+    assert!(!emits_frame(&state).await);
+    state.shell.images_visible = true;
+    state.motion.sync(
+      PaletteMode::Light,
+      true,
+      now + jellypilot_ui::tokens::TOKENS.durations.ms200,
+    );
+    assert!(!emits_frame(&state).await);
   }
 
   #[tokio::test]

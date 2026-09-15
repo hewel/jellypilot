@@ -4,9 +4,11 @@ use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::MpvError;
 use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, statistics::StatisticsReader, MpvClient,
   MpvEvent, PlayerState, PropertyValue,
@@ -756,6 +758,12 @@ pub struct PlaybackController {
   unloading: bool,
   volume_preference: Option<VolumeMemoryPreference>,
   volume_preference_revision: u64,
+  /// The presentation lease captured by the command currently executing.
+  /// Each dispatched controller command re-attaches the lease it was
+  /// admitted under, so a close revoking an old lease still vetoes that
+  /// command's unpause even after a later admission minted a fresh one
+  /// (ADR 0043); external MPV never receives a lease.
+  presentation_hold: Option<Arc<AtomicBool>>,
 }
 
 impl PlaybackController {
@@ -842,6 +850,40 @@ impl PlaybackController {
       unloading: false,
       volume_preference: None,
       volume_preference_revision: 0,
+      presentation_hold: None,
+    }
+  }
+
+  /// Attach the presentation lease the next command executes under. The
+  /// serialized IPC writer reads the flag when it dequeues a guarded resume,
+  /// so a lease revoked while the command is still in flight or queued still
+  /// vetoes its unpause.
+  pub fn set_presentation_hold(&mut self, hold: Arc<AtomicBool>) {
+    self.presentation_hold = Some(hold);
+  }
+
+  /// Clone of the MPV client for the shell's presentation pause. The close
+  /// path enqueues `pause=true` directly on the serialized writer so the
+  /// pause is ordered before any later play command without waiting on the
+  /// controller mutex (ADR 0043). Callers must not use it for anything else.
+  pub fn mpv_client(&self) -> MpvClient {
+    self.mpv.clone()
+  }
+
+  fn presentation_held(&self) -> bool {
+    self
+      .presentation_hold
+      .as_ref()
+      .is_some_and(|hold| hold.load(Ordering::Acquire))
+  }
+
+  /// Unpause through the revocable lease when one is attached: the IPC
+  /// writer downgrades the command to `pause=true` if the lease was revoked
+  /// before the write. Without a lease this is an ordinary resume.
+  async fn resume_guarded(&self) -> Result<(), MpvError> {
+    match &self.presentation_hold {
+      Some(hold) => self.mpv.set_pause_guarded(Arc::clone(hold)).await,
+      None => self.mpv.set_pause(false).await,
     }
   }
 
@@ -1254,17 +1296,29 @@ impl PlaybackController {
   /// [`PlaybackError::MpvControlFailed`] when MPV rejects the command.
   pub async fn set_paused(&mut self, paused: bool) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
-    self
-      .mpv
-      .set_pause(paused)
-      .await
-      .map_err(|_| PlaybackError::MpvControlFailed)?;
+    // Resumes go through the revocable lease: the serialized writer turns
+    // the command back into a pause when the lease was revoked before the
+    // write, so a close landing mid-command cannot leave the engine
+    // unpaused. A failed write propagates — the transport is never reported
+    // paused on the strength of the hold alone.
+    if paused {
+      self
+        .mpv
+        .set_pause(true)
+        .await
+        .map_err(|_| PlaybackError::MpvControlFailed)?;
+    } else {
+      self
+        .resume_guarded()
+        .await
+        .map_err(|_| PlaybackError::MpvControlFailed)?;
+    }
 
     let mut transport = self
       .collect_transport()
       .await
       .unwrap_or_else(|| self.last_transport.clone());
-    transport.paused = paused;
+    transport.paused = paused || self.presentation_held();
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
     Ok(self.control_outcome(transport, reporting))
@@ -1522,7 +1576,12 @@ impl PlaybackController {
     self.active_volume_generation = Some(generation);
     self.observed_volume = Some(observed_volume);
     self.observe_volume().await;
-    if self.mpv.set_pause(false).await.is_err() {
+    // The unpause goes through the revocable lease: a close landing while
+    // the command is queued turns it back into a pause at the writer, so the
+    // new file never plays behind a held presentation. The per-file
+    // `pause=yes` load option already covers the pre-write window. A failed
+    // write fails the load instead of leaving the engine state ambiguous.
+    if self.resume_guarded().await.is_err() {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvLoadFailed);
     }
@@ -1607,7 +1666,7 @@ impl PlaybackController {
 
     let mut baseline = self.last_transport.clone();
     baseline.connected = true;
-    baseline.paused = false;
+    baseline.paused = self.presentation_held();
     baseline.time_pos = start_position_seconds;
     baseline.duration = runtime_seconds.unwrap_or_default();
     let sample = collect_player_state_sample(&self.mpv).await;
@@ -1619,7 +1678,7 @@ impl PlaybackController {
     // The load boundary is authoritative for the new item's initial transport.
     // A late property response can still describe the replaced file.
     transport.connected = true;
-    transport.paused = false;
+    transport.paused = self.presentation_held();
     transport.time_pos = start_position_seconds;
     self.record_transport(&transport);
     let active = self
@@ -5950,6 +6009,186 @@ mod tests {
           .now_playing
           .map(|item| item.start_position_seconds),
         Some(0.0)
+      );
+    });
+  }
+
+  #[test]
+  fn a_held_presentation_starts_paused_and_vetoes_resumes() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+      let hold = Arc::new(AtomicBool::new(true));
+      controller.set_presentation_hold(Arc::clone(&hold));
+
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      assert!(
+        outcome.snapshot.transport.paused,
+        "a held start must report paused"
+      );
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .all(|c| !(c[0] == "set_property" && c[1] == "pause" && c[2] == false)),
+        "a held start must never unpause the engine"
+      );
+
+      // A resume raised while held is downgraded to a pause at the writer.
+      let resumed = controller
+        .set_paused(false)
+        .await
+        .expect("held resume is downgraded, not failed");
+      assert!(resumed.snapshot.transport.paused);
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .all(|c| !(c[0] == "set_property" && c[1] == "pause" && c[2] == false)),
+        "a held resume must never unpause the engine"
+      );
+
+      // Lifting the hold restores normal control.
+      hold.store(false, Ordering::Release);
+      let resumed = controller
+        .set_paused(false)
+        .await
+        .expect("resume after release");
+      assert!(!resumed.snapshot.transport.paused);
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .any(|c| c[0] == "set_property" && c[1] == "pause" && c[2] == false),
+        "releasing the hold must let resumes through"
+      );
+    });
+  }
+
+  #[test]
+  fn a_lease_revoked_mid_start_vetoes_the_unpause() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+      let lease = Arc::new(AtomicBool::new(false));
+      controller.set_presentation_hold(Arc::clone(&lease));
+      // Park the writer so every command the start enqueues stays queued
+      // until the lease is revoked — the close lands while the start is
+      // genuinely in flight, not before it begins.
+      let gate = Arc::new(tokio::sync::Notify::new());
+      mpv
+        .client
+        .enqueue_writer_barrier(Arc::clone(&gate))
+        .expect("writer barrier should enqueue");
+
+      let outcome = {
+        let mut play = std::pin::pin!(controller.play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        ));
+        std::future::poll_fn(|context| {
+          assert!(
+            play.as_mut().poll(context).is_pending(),
+            "the parked writer must hold the start in flight"
+          );
+          std::task::Poll::Ready(())
+        })
+        .await;
+
+        lease.store(true, Ordering::Release);
+        gate.notify_one();
+        play.await.expect("playback should start")
+      };
+
+      assert!(
+        outcome.snapshot.transport.paused,
+        "a start whose lease was revoked in flight must settle paused"
+      );
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .all(|c| !(c[0] == "set_property" && c[1] == "pause" && c[2] == false)),
+        "the revoked start's unpause must reach the engine as pause=true"
+      );
+
+      // A fresh lease (the window shown again) admits new commands normally
+      // without reviving the revoked one.
+      controller.set_presentation_hold(Arc::new(AtomicBool::new(false)));
+      let resumed = controller
+        .set_paused(false)
+        .await
+        .expect("resume under a fresh lease");
+      assert!(!resumed.snapshot.transport.paused);
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .any(|c| c[0] == "set_property" && c[1] == "pause" && c[2] == false),
+        "a fresh lease must let resumes through"
+      );
+    });
+  }
+
+  #[test]
+  fn a_resume_revoked_while_queued_is_written_as_pause() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+      let lease = Arc::new(AtomicBool::new(false));
+      controller.set_presentation_hold(Arc::clone(&lease));
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      let unpauses = || {
+        mpv
+          .received_commands()
+          .iter()
+          .filter(|c| c[0] == "set_property" && c[1] == "pause" && c[2] == false)
+          .count()
+      };
+      assert_eq!(unpauses(), 1, "the start unpaused the engine once");
+
+      // Park the writer, then queue the resume behind the barrier so the
+      // revocation lands before the wire write.
+      let gate = Arc::new(tokio::sync::Notify::new());
+      mpv
+        .client
+        .enqueue_writer_barrier(Arc::clone(&gate))
+        .expect("writer barrier should enqueue");
+      let mut resume = std::pin::pin!(controller.set_paused(false));
+      std::future::poll_fn(|context| {
+        assert!(
+          resume.as_mut().poll(context).is_pending(),
+          "the parked writer must hold the resume in flight"
+        );
+        std::task::Poll::Ready(())
+      })
+      .await;
+
+      lease.store(true, Ordering::Release);
+      gate.notify_one();
+      let outcome = resume.await.expect("the downgraded resume still settles");
+
+      assert!(
+        outcome.snapshot.transport.paused,
+        "a resume revoked while queued must report paused"
+      );
+      assert_eq!(
+        unpauses(),
+        1,
+        "the revoked resume must never reach the engine as an unpause"
       );
     });
   }

@@ -9,6 +9,7 @@ pub mod home;
 pub mod kernel;
 pub mod login;
 pub mod message;
+pub(crate) mod motion;
 pub mod personal_lists;
 pub mod playback;
 pub mod settings;
@@ -78,8 +79,10 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
       };
     }
     state.shell.window_size = geometry.size;
-    let (_id, open) = iced::window::open(window_settings(geometry));
+    let (id, open) = iced::window::open(window_settings(geometry));
+    state.shell.pending_window_id = Some(id);
     tasks.push(open.map(|id| Message::Window(message::WindowMessage::ShowRequested(Some(id)))));
+    tasks.push(shell::open_timeout(id));
   }
   (state, Task::batch(tasks))
 }
@@ -101,8 +104,7 @@ fn window_settings(geometry: shell::ModeGeometry) -> iced::window::Settings {
     },
     resizable: !crate::regression::active() && geometry.resizable,
     icon: crate::window_icon(),
-    // The close request is handled by the shell so Full mode can preserve its
-    // hide-to-tray behavior and Control-Only can destroy the window.
+    // Both App Modes close the window while the tray/runtime remain available.
     exit_on_close_request: false,
     ..iced::window::Settings::default()
   }
@@ -112,7 +114,37 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   if let Some(task) = crate::regression::update(state, &message) {
     return task;
   }
-  update::update(state, message)
+  let now = match &message {
+    Message::Window(message::WindowMessage::FrameTick(now)) => *now,
+    _ => std::time::Instant::now(),
+  };
+  // The first OS theme report is startup discovery, not a user transition.
+  let discovered = matches!(message, Message::SystemThemeDiscovered(_));
+  let before = state.theme_mode();
+  let enabled = motion_enabled(state) && !discovered;
+  state.motion.sync(before, enabled, now);
+  let modal_was_open = accounts::blocking_modal(&state.accounts);
+  let retained = if enabled && modal_was_open && view::account::may_close_modal(&message) {
+    view::account::retained_modal_snapshot(state)
+  } else {
+    None
+  };
+  let task = update::update(state, message);
+  let after = state.theme_mode();
+  let enabled = motion_enabled(state) && !discovered;
+  state.motion.sync(after, enabled, now);
+  let modal_is_open = accounts::blocking_modal(&state.accounts);
+  if !enabled || (!modal_was_open && modal_is_open) {
+    state.motion.retained_modal = None;
+  } else if modal_was_open && !modal_is_open {
+    state.motion.retained_modal = retained;
+  }
+  if let Some(toast) = &state.kernel.active_toast {
+    if state.motion.toast.as_ref().map(|last| last.id) != Some(toast.id) {
+      state.motion.toast = Some(toast.clone());
+    }
+  }
+  task
 }
 
 pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Message> {
@@ -122,22 +154,43 @@ pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Me
       .height(size.height)
       .into();
   }
-  jellypilot_ui::widgets::focus_scope::focus_scope(
-    view::image_observer::observe_images(view::view(state)),
-    state.shell.focus_visibility.clone(),
+  let enabled = motion_enabled(state);
+  let content = jellypilot_ui::widgets::motion::transition(
+    view::view(state),
+    u64::from(state.app_mode() == AppMode::Full),
+    enabled,
+    jellypilot_ui::tokens::TOKENS.durations.ms300,
+  );
+  let content = if state.shell.pending_close.is_some() {
+    jellypilot_ui::widgets::inert::inert(content)
+  } else {
+    content
+  };
+  jellypilot_ui::widgets::motion::scope(
+    jellypilot_ui::widgets::focus_scope::focus_scope(
+      view::image_observer::observe_images(content),
+      state.shell.focus_visibility.clone(),
+    ),
+    enabled,
   )
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {
-  if crate::regression::active() {
-    return Subscription::batch([
-      subscriptions::subscription(state),
-      crate::regression::subscription(),
-    ]);
-  }
-  subscriptions::subscription(state)
+  let base = subscriptions::subscription(state);
+  let regression = if crate::regression::active() {
+    crate::regression::subscription()
+  } else {
+    Subscription::none()
+  };
+  Subscription::batch([base, regression])
+}
+
+fn motion_enabled(state: &State) -> bool {
+  state.shell.window_id.is_some()
+    && state.shell.images_visible
+    && !state.kernel.settings.snapshot().reduced_motion()
 }
 
 pub fn theme(state: &State, _window_id: iced::window::Id) -> Theme {
-  jellypilot_ui::theme::theme(state.theme_mode())
+  state.native_theme()
 }
