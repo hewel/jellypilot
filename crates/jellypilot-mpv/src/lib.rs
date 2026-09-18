@@ -12,6 +12,7 @@ pub mod remote_commands;
 mod state;
 pub mod statistics;
 
+pub mod video_source;
 pub use client::{has_mpv_option, MpvClient, MpvError};
 pub use config::configured_mpv_args;
 pub use process::{find_mpv, jellypilot_input_conf_path, write_input_conf};

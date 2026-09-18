@@ -20,12 +20,14 @@
 //! `DeviceContext::queue_lock`; never hold it across Host methods or synchronous
 //! mpv calls. Device and queue handles do not escape the closed integration;
 //! the unsafe engine and surface handoffs document that obligation. Load only the
-//! packaged, trusted fork implementing host ABI version 1 and its trusted baseline.
+//! packaged, trusted fork implementing host ABI version 2 and its trusted baseline.
+//! A version 1 build is accepted but keeps the fixed SDR target contract.
 //! Dynamic loading is an executable-code trust boundary, not a sandbox. Playback controls
 //! and errors use the existing JSON IPC client, not a second libmpv event model.
 //!
 //! mpv blocks for producer completion; this does not claim full-chain zero-copy,
-//! hardware decoding, HDR output, or downstream compositor presentation feedback.
+//! hardware decoding, or downstream compositor presentation feedback. HDR10
+//! presentation is available when the negotiated ABI and display chain allow it.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg(any(target_os = "linux", target_os = "windows"))]
 
@@ -38,7 +40,7 @@ pub use gpu::DeviceContext;
 pub use iced_wgpu::wgpu;
 #[cfg(target_os = "linux")]
 pub use idle::IdleInhibit;
-pub use interop::{Host, QueueGuard, QueueLock};
+pub use interop::{Host, QueueGuard, QueueLock, TargetColor};
 
 /// Sanitized initialization or GPU-host error; never includes media input.
 #[derive(Debug, thiserror::Error)]

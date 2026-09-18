@@ -28,6 +28,16 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   });
   let mut subscriptions = vec![window_events];
   subscriptions.push(super::embedded_player::subscription(state));
+  if cfg!(target_os = "linux") && crate::embedded::enabled() {
+    subscriptions.push(
+      Subscription::run(crate::embedded::hdr_events)
+        .map(|status| Message::Settings(super::message::SettingsMessage::HdrStatusChanged(status))),
+    );
+    subscriptions.push(
+      Subscription::run(crate::embedded::hdr_content_events)
+        .map(|hdr| Message::Settings(super::message::SettingsMessage::HdrContentChanged(hdr))),
+    );
+  }
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))

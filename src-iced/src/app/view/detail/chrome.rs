@@ -196,7 +196,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for BackGlass<'_> {
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: iced::Vector,
-  ) -> Option<iced::advanced::overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
+  ) -> Vec<iced::advanced::overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
     self.content.as_widget_mut().overlay(
       &mut tree.children[0],
       layout,

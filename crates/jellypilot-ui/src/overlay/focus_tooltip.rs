@@ -171,18 +171,18 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let mut focus = FocusProbe::default();
         self.trigger
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, &mut focus);
         if focus.0 {
-            Some(overlay::Element::new(Box::new(FocusHint {
+            vec![overlay::Element::new(Box::new(FocusHint {
                 content: &mut self.hint,
                 tree: &mut tree.children[1],
                 anchor: layout.bounds() + translation,
                 options: self.options,
-            })))
+            }))]
         } else {
             self.trigger.as_widget_mut().overlay(
                 &mut tree.children[0],
@@ -291,7 +291,7 @@ mod tests {
         assert!(control
             .as_widget_mut()
             .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO,)
-            .is_none());
+            .is_empty());
         control.as_widget_mut().operate(
             &mut tree,
             layout,
@@ -301,6 +301,8 @@ mod tests {
         let mut hint = control
             .as_widget_mut()
             .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO)
+            .into_iter()
+            .next()
             .expect("keyboard focus reveals the selected account's full value");
         let hint_bounds = hint
             .as_overlay_mut()
@@ -331,6 +333,6 @@ mod tests {
         assert!(control
             .as_widget_mut()
             .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO,)
-            .is_none());
+            .is_empty());
     }
 }

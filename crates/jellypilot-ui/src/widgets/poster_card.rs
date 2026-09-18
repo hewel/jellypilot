@@ -324,30 +324,31 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+    ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
         let mut children = layout.children();
-        let poster_layout = children.next()?;
-        let copy_layout = children.next()?;
+        let Some(poster_layout) = children.next() else {
+            return Vec::new();
+        };
+        let Some(copy_layout) = children.next() else {
+            return Vec::new();
+        };
 
         let (poster_tree, copy_tree) = tree.children.split_at_mut(1);
-        self.poster
-            .as_widget_mut()
-            .overlay(
-                &mut poster_tree[0],
-                poster_layout,
-                renderer,
-                viewport,
-                translation,
-            )
-            .or_else(|| {
-                self.copy.as_widget_mut().overlay(
-                    &mut copy_tree[0],
-                    copy_layout,
-                    renderer,
-                    viewport,
-                    translation,
-                )
-            })
+        let mut overlays = self.poster.as_widget_mut().overlay(
+            &mut poster_tree[0],
+            poster_layout,
+            renderer,
+            viewport,
+            translation,
+        );
+        overlays.extend(self.copy.as_widget_mut().overlay(
+            &mut copy_tree[0],
+            copy_layout,
+            renderer,
+            viewport,
+            translation,
+        ));
+        overlays
     }
 }
 

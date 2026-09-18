@@ -236,7 +236,7 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
-  ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+  ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
     self.content.as_widget_mut().overlay(
       &mut tree.children[0],
       layout,

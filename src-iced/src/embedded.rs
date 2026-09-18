@@ -24,11 +24,121 @@ pub(crate) fn view<'a, Message: 'a>() -> iced::Element<'a, Message> {
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{LazyLock, OnceLock};
 
-use jellypilot_core::config::{PlaybackBackend, SettingsStore};
+use jellypilot_core::config::{HdrOutput, PlaybackBackend, SettingsStore};
 
 static OPTIONS: OnceLock<Options> = OnceLock::new();
+
+/// Mirrors the persisted HDR output preference for the compositor, which runs
+/// outside application state. Written at startup and on settings edits; read
+/// on surface (re)configuration. Defaults to Auto until initialize runs.
+static HDR_OUTPUT: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_hdr_output(mode: HdrOutput) {
+  HDR_OUTPUT.store(mode as u8, Ordering::Relaxed);
+}
+
+pub(crate) fn hdr_output() -> HdrOutput {
+  match HDR_OUTPUT.load(Ordering::Relaxed) {
+    1 => HdrOutput::On,
+    2 => HdrOutput::Off,
+    _ => HdrOutput::Auto,
+  }
+}
+
+static HDR_CONTENT: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_hdr_content(hdr: bool) {
+  HDR_CONTENT.store(hdr, Ordering::Relaxed);
+}
+
+pub(crate) fn hdr_content() -> bool {
+  HDR_CONTENT.load(Ordering::Relaxed)
+}
+
+/// Decoder transfer notifications are independent of controls visibility,
+/// account sessions and pause. A connection loss must not leave Auto in HDR.
+pub(crate) fn hdr_content_events() -> impl iced::futures::Stream<Item = bool> {
+  use iced::futures::SinkExt;
+  use jellypilot_mpv::video_source::VideoSourceObserver;
+
+  iced::stream::channel(1, async move |mut output| {
+    let Some(options) = options() else {
+      return;
+    };
+    let mut current = false;
+    if output.send(current).await.is_err() {
+      return;
+    }
+    loop {
+      if let Ok(mut observer) = VideoSourceObserver::connect(&options.ipc).await {
+        while let Ok(hdr) = observer.next_hdr().await {
+          if hdr != current {
+            current = hdr;
+            if output.send(current).await.is_err() {
+              return;
+            }
+          }
+        }
+      }
+      if current {
+        current = false;
+        if output.send(current).await.is_err() {
+          return;
+        }
+      }
+      // The compositor may not yet exist at subscription startup. The same
+      // endpoint is reused if the retained host is recreated.
+      tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+  })
+}
+
+/// Compositor-observed HDR presentation state, surfaced in the diagnostics
+/// information string and the settings page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HdrState {
+  /// SDR presentation: HDR off, or no HDR content under Auto.
+  Sdr,
+  /// HDR10 PQ presentation active.
+  Active,
+  /// HDR requested (On, or Auto with HDR content) but the chain cannot signal it.
+  Unavailable,
+}
+
+static HDR_STATE: LazyLock<tokio::sync::watch::Sender<HdrState>> =
+  LazyLock::new(|| tokio::sync::watch::channel(HdrState::Sdr).0);
+
+pub(crate) fn set_hdr_state(state: HdrState) {
+  HDR_STATE.send_if_modified(|current| {
+    if *current == state {
+      return false;
+    }
+    *current = state;
+    true
+  });
+}
+
+pub(crate) fn hdr_state() -> HdrState {
+  *HDR_STATE.borrow()
+}
+
+/// Event-driven status projection: a compositor transition must rebuild the
+/// settings view even when no input, playback tick or animation is active.
+pub(crate) fn hdr_events() -> impl iced::futures::Stream<Item = HdrState> {
+  use iced::futures::SinkExt;
+  iced::stream::channel(1, async move |mut output| {
+    let mut receiver = HDR_STATE.subscribe();
+    loop {
+      let state = *receiver.borrow_and_update();
+      if output.send(state).await.is_err() || receiver.changed().await.is_err() {
+        break;
+      }
+    }
+  })
+}
 
 #[derive(Debug)]
 pub(crate) struct Options {
@@ -158,13 +268,20 @@ pub(crate) fn initialize(
   if explicit_embedded && explicit_external {
     return Err("Choose either --embedded or --external, not both".into());
   }
+  // Load once for both backend selection and the initial HDR preference.
+  // The ordinary boot path owns load-error diagnostics and recovery.
+  let settings = if explicit_external || (smoke && !explicit_embedded) {
+    None
+  } else {
+    SettingsStore::load().ok()
+  };
   let selected = if explicit_external || (smoke && !explicit_embedded) {
     PlaybackBackend::External
   } else if explicit_embedded {
     PlaybackBackend::Embedded
   } else {
-    // The ordinary boot path owns configuration-load diagnostics and recovery.
-    SettingsStore::load()
+    settings
+      .as_ref()
       .map(|store| store.snapshot().playback_backend())
       .unwrap_or_default()
   };
@@ -211,6 +328,14 @@ pub(crate) fn initialize(
       r"\\.\pipe\jellypilot-embedded-{}",
       std::process::id()
     ));
+    // The compositor reads this mirror on every surface (re)configuration;
+    // settings edits update it without restarting embedded playback.
+    set_hdr_output(
+      settings
+        .as_ref()
+        .map(|store| store.snapshot().hdr_output())
+        .unwrap_or_default(),
+    );
     OPTIONS
       .set(Options {
         libmpv,

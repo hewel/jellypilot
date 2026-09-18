@@ -494,23 +494,15 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
-        let children = self
-            .cells
-            .iter_mut()
-            .zip(tree.children.iter_mut())
-            .zip(layout.children())
-            .filter_map(|((cell, child_tree), child_layout)| {
-                cell.as_widget_mut().overlay(
-                    child_tree,
-                    child_layout,
-                    renderer,
-                    viewport,
-                    translation,
-                )
-            })
-            .collect::<Vec<_>>();
-        (!children.is_empty()).then(|| overlay::Group::with_children(children).overlay())
+    ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
+        overlay::from_children(
+            &mut self.cells,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 }
 

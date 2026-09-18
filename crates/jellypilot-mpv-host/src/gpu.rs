@@ -43,10 +43,21 @@ impl DeviceContext {
         &self.adapter
     }
 
-    /// Presentation format shared by iced's pipelines and every window surface.
+    /// Presentation format of every window surface.
     /// MPV's producer images and private sampled texture remain RGB10A2.
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.surface_format
+    }
+
+    /// Linux's HDR compositor needs continuous alpha coverage for translucent UI.
+    /// Keep a single renderer format across SDR/HDR transitions; the final pass
+    /// preserves SDR code values or converts the UI into the HDR10 container.
+    pub fn render_format(&self) -> wgpu::TextureFormat {
+        if cfg!(target_os = "linux") {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            self.surface_format
+        }
     }
 
     /// Builds iced's engine with this device's mandatory queue synchronization.
@@ -66,7 +77,7 @@ impl DeviceContext {
             &self.adapter,
             self.device.clone(),
             self.queue.clone(),
-            self.surface_format,
+            self.render_format(),
             antialiasing,
             shell,
             self.queue_lock.clone(),
@@ -92,6 +103,24 @@ impl DeviceContext {
     ) {
         let _guard = self.queue_lock.lock();
         surface.configure(&self.device, configuration);
+    }
+
+    /// Presents an acquired surface texture on this context's queue (wgpu 30
+    /// moved presentation off the texture). Call under the queue gate.
+    pub fn present_frame(&self, frame: wgpu::SurfaceTexture) {
+        self.queue.present(frame);
+    }
+
+    /// The shared device for compositor-owned auxiliary passes. Every
+    /// submission must run under `queue_lock`; nothing escapes the integration.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// The shared queue for compositor-owned auxiliary passes. Every call must
+    /// run under `queue_lock`.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
     }
 
     /// Polls GPU completion outside the queue gate; callbacks may run here.

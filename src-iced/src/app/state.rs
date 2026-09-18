@@ -555,6 +555,7 @@ impl SettingsSection {
 
 pub struct SettingsState {
   pub active_section: SettingsSection,
+  pub hdr_state: crate::embedded::HdrState,
   pub mpv_path_input: String,
   pub mpv_args_input: String,
   pub playback_target_name_input: String,
@@ -576,6 +577,7 @@ impl SettingsState {
   pub fn from_settings(settings: &Settings) -> Self {
     Self {
       active_section: SettingsSection::default(),
+      hdr_state: crate::embedded::hdr_state(),
       mpv_path_input: settings.mpv_path().unwrap_or_default().to_owned(),
       mpv_args_input: settings.mpv_args().join(" "),
       playback_target_name_input: settings

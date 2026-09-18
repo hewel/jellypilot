@@ -1,5 +1,6 @@
 //! Input-method tracking before widgets or overlays can capture an event.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
@@ -28,7 +29,7 @@ struct FocusScope<'a, Message> {
 struct State {
     // iced forwards exactly the root overlay's ignored events to the base, in order.
     // Retain their input state until that second pass; captured events never queue.
-    pending: VecDeque<FocusSnapshot>,
+    pending: RefCell<VecDeque<FocusSnapshot>>,
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message> {
@@ -75,8 +76,13 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let snapshot = input_method(event)
-            .and_then(|_| tree.state.downcast_mut::<State>().pending.pop_front());
+        let snapshot = input_method(event).and_then(|_| {
+            tree.state
+                .downcast_mut::<State>()
+                .pending
+                .borrow_mut()
+                .pop_front()
+        });
         let final_state = snapshot.map(|snapshot| {
             let final_state = self.visibility.snapshot();
             self.visibility.restore(snapshot);
@@ -156,7 +162,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let content = self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             layout,
@@ -164,8 +170,14 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
             viewport,
             translation,
         );
-        let pending = &mut tree.state.downcast_mut::<State>().pending;
-        content.map(|content| scoped_overlay(content, &mut self.visibility, Some(pending)))
+        let state = tree.state.downcast_mut::<State>();
+        let visibility = self.visibility.clone();
+        let pending = &state.pending;
+        vec![scoped_overlay(
+            overlay::Element::new(Box::new(OverlayBatch::new(content))),
+            visibility,
+            Some(pending),
+        )]
     }
 }
 
@@ -193,8 +205,8 @@ fn observe<Message>(visibility: &FocusVisibility, event: &Event, shell: &mut She
 
 fn scoped_overlay<'a, Message: 'a>(
     content: overlay::Element<'a, Message, Theme, iced::Renderer>,
-    visibility: &'a mut FocusVisibility,
-    pending: Option<&'a mut VecDeque<FocusSnapshot>>,
+    visibility: FocusVisibility,
+    pending: Option<&'a RefCell<VecDeque<FocusSnapshot>>>,
 ) -> overlay::Element<'a, Message, Theme, iced::Renderer> {
     overlay::Element::new(Box::new(FocusOverlay {
         content,
@@ -205,15 +217,15 @@ fn scoped_overlay<'a, Message: 'a>(
 
 struct FocusOverlay<'a, Message> {
     content: overlay::Element<'a, Message, Theme, iced::Renderer>,
-    visibility: &'a mut FocusVisibility,
-    pending: Option<&'a mut VecDeque<FocusSnapshot>>,
+    visibility: FocusVisibility,
+    pending: Option<&'a RefCell<VecDeque<FocusSnapshot>>>,
 }
 
 impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusOverlay<'_, Message> {
     fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
         let content = self.content.as_overlay_mut();
         let node = content.layout(renderer, bounds);
-        content.operate(Layout::new(&node), renderer, self.visibility);
+        content.operate(Layout::new(&node), renderer, &mut self.visibility);
         node
     }
 
@@ -225,13 +237,13 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusOverlay<
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
     ) {
-        observe(self.visibility, event, shell);
+        observe(&self.visibility, event, shell);
         self.content
             .as_overlay_mut()
             .update(event, layout, cursor, renderer, shell);
         if input_method(event).is_some() && shell.event_status() == iced::event::Status::Ignored {
-            if let Some(pending) = self.pending.as_mut() {
-                pending.push_back(self.visibility.snapshot());
+            if let Some(pending) = &self.pending {
+                pending.borrow_mut().push_back(self.visibility.snapshot());
             }
         }
     }
@@ -275,15 +287,127 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusOverlay<
         &'a mut self,
         layout: Layout<'a>,
         renderer: &iced::Renderer,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        self.content
-            .as_overlay_mut()
-            .overlay(layout, renderer)
-            .map(|content| scoped_overlay(content, self.visibility, None))
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+        let mut overlays = Vec::new();
+        for content in self.content.as_overlay_mut().overlay(layout, renderer) {
+            overlays.push(scoped_overlay(content, self.visibility.clone(), None));
+        }
+        overlays
     }
 
     fn index(&self) -> f32 {
         self.content.as_overlay().index()
+    }
+}
+
+/// A single overlay that batches sibling overlays so observers such as
+/// [`FocusOverlay`] see the whole layer as one unit. This preserves the
+/// pre-Vec "one wrapper per overlay group" event-record semantics: the
+/// wrapper's `update` runs once for the batch, not once per sibling.
+struct OverlayBatch<'a, Message> {
+    children: RefCell<Vec<overlay::Element<'a, Message, Theme, iced::Renderer>>>,
+}
+
+impl<'a, Message> OverlayBatch<'a, Message> {
+    fn new(mut children: Vec<overlay::Element<'a, Message, Theme, iced::Renderer>>) -> Self {
+        children.sort_by(|a, b| {
+            a.as_overlay()
+                .index()
+                .partial_cmp(&b.as_overlay().index())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Self {
+            children: RefCell::new(children),
+        }
+    }
+}
+
+impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for OverlayBatch<'_, Message> {
+    fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
+        let children = self
+            .children
+            .get_mut()
+            .iter_mut()
+            .map(|child| child.as_overlay_mut().layout(renderer, bounds))
+            .collect();
+        layout::Node::with_children(bounds, children)
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) {
+        for (child, child_layout) in self.children.borrow_mut().iter_mut().zip(layout.children()) {
+            child
+                .as_overlay()
+                .draw(renderer, theme, style, child_layout, cursor);
+        }
+    }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+            child
+                .as_overlay_mut()
+                .operate(child_layout, renderer, operation);
+        }
+    }
+
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+            if shell.event_status() != iced::event::Status::Ignored {
+                return;
+            }
+            child
+                .as_overlay_mut()
+                .update(event, child_layout, cursor, renderer, shell);
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        self.children
+            .borrow_mut()
+            .iter_mut()
+            .zip(layout.children())
+            .map(|(child, child_layout)| {
+                child
+                    .as_overlay()
+                    .mouse_interaction(child_layout, cursor, renderer)
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        layout: Layout<'a>,
+        renderer: &iced::Renderer,
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+        let mut overlays = Vec::new();
+        for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+            overlays.extend(child.as_overlay_mut().overlay(child_layout, renderer));
+        }
+        overlays
     }
 }
 

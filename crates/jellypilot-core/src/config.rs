@@ -242,6 +242,35 @@ impl Default for PlaybackBackend {
     }
 }
 
+/// HDR presentation mode for the embedded Linux/Wayland Vulkan host. SDR
+/// presentation is unaffected; changes apply on the next output configuration.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HdrOutput {
+    /// Enter HDR only while HDR content plays and the display signals HDR10 support.
+    #[default]
+    Auto,
+    /// Keep the window in HDR whenever the display signals support; SDR content
+    /// is mapped into the PQ container at the 203 nit reference white.
+    On,
+    /// Never present HDR.
+    Off,
+}
+
+impl HdrOutput {
+    /// Resolves whether HDR presentation is active. Every mode requires the
+    /// display chain to advertise HDR10; Auto additionally requires HDR
+    /// content. Detection of both belongs to the presentation layer.
+    pub const fn active(self, display_hdr10: bool, content_hdr: bool) -> bool {
+        display_hdr10
+            && match self {
+                Self::Auto => content_hdr,
+                Self::On => true,
+                Self::Off => false,
+            }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Settings {
     remember: bool,
@@ -263,6 +292,8 @@ pub struct Settings {
     app_mode: AppMode,
     #[serde(default)]
     playback_backend: PlaybackBackend,
+    #[serde(default)]
+    hdr_output: HdrOutput,
     #[serde(default)]
     settings_revision: u32,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
@@ -323,6 +354,7 @@ impl Default for Settings {
             ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
             playback_backend: PlaybackBackend::default(),
+            hdr_output: HdrOutput::default(),
             settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: None,
             mpv_args: Vec::new(),
@@ -373,6 +405,10 @@ impl Settings {
 
     pub const fn playback_backend(&self) -> PlaybackBackend {
         self.playback_backend
+    }
+
+    pub const fn hdr_output(&self) -> HdrOutput {
+        self.hdr_output
     }
 
     pub fn mpv_path(&self) -> Option<&str> {
@@ -616,6 +652,13 @@ impl SettingsStore {
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.playback_backend = backend;
+            Ok(())
+        })
+    }
+
+    pub fn set_hdr_output(&mut self, output: HdrOutput) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.hdr_output = output;
             Ok(())
         })
     }
@@ -1163,6 +1206,20 @@ mod tests {
     }
 
     #[test]
+    fn hdr_output_activation_requires_capability_and_respects_content() {
+        for (mode, display_hdr10, content_hdr, expected) in [
+            (HdrOutput::Auto, true, true, true),
+            (HdrOutput::Auto, true, false, false),
+            (HdrOutput::Auto, false, true, false),
+            (HdrOutput::On, true, false, true),
+            (HdrOutput::On, false, true, false),
+            (HdrOutput::Off, true, true, false),
+        ] {
+            assert_eq!(mode.active(display_hdr10, content_hdr), expected);
+        }
+    }
+
+    #[test]
     fn linux_legacy_external_settings_adopt_embedded_default_once() {
         let path = test_path("linux-embedded-default");
         let _ = fs::remove_file(&path);
@@ -1221,6 +1278,7 @@ mod tests {
             app_mode: AppMode::ControlOnly,
             tmdb_api_key: Some("tmdb-key".to_owned()),
             playback_backend: PlaybackBackend::External,
+            hdr_output: HdrOutput::On,
             settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],

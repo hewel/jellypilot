@@ -109,8 +109,8 @@ where
         _renderer: &iced::Renderer,
         _viewport: &Rectangle,
         _translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        None
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+        Vec::new()
     }
 }
 
@@ -176,7 +176,7 @@ mod tests {
                 &viewport,
                 Vector::ZERO
             )
-            .is_none());
+            .is_empty());
         // A focus operation must not traverse the obscured background.
         obscured.as_widget_mut().operate(
             &mut tree,
@@ -191,7 +191,7 @@ mod tests {
             .as_widget_mut()
             .layout(&mut tree, &renderer, &limits);
         assert!(
-            restored
+            !restored
                 .as_widget_mut()
                 .overlay(
                     &mut tree,
@@ -200,7 +200,7 @@ mod tests {
                     &viewport,
                     Vector::ZERO
                 )
-                .is_some(),
+                .is_empty(),
             "the original keyboard focus hint returns after the modal closes"
         );
     }

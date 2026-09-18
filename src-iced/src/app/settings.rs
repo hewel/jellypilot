@@ -41,6 +41,37 @@ fn update_settings(
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
+    SettingsMessage::HdrOutputSelected(output) => {
+      let result = kernel.settings.set_hdr_output(output);
+      if result.is_ok() {
+        crate::embedded::set_hdr_output(output);
+      }
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
+    SettingsMessage::HdrContentChanged(hdr) => {
+      crate::embedded::set_hdr_content(hdr);
+      Task::none()
+    }
+    SettingsMessage::HdrStatusChanged(status) => {
+      if surface.view.hdr_state != status {
+        surface.view.hdr_state = status;
+        let (level, message) = match status {
+          crate::embedded::HdrState::Active => {
+            (DiagnosticLevel::Info, "HDR10 PQ presentation active.")
+          }
+          crate::embedded::HdrState::Sdr => (DiagnosticLevel::Info, "SDR presentation active."),
+          crate::embedded::HdrState::Unavailable => (
+            DiagnosticLevel::Warning,
+            "HDR10 presentation unavailable; using SDR.",
+          ),
+        };
+        kernel
+          .diagnostics
+          .record(level, DiagnosticCategory::Player, message);
+      }
+      Task::none()
+    }
     SettingsMessage::FontLicensesToggled => {
       surface.view.font_licenses_expanded = !surface.view.font_licenses_expanded;
       Task::none()

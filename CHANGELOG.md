@@ -5,6 +5,7 @@ All notable changes to JellyPilot are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added experimental HDR10 output for Linux Wayland Embedded MPV Playback, with Auto / On / Off selection, decoded PQ/HLG detection, a 203-nit UI reference white, and SDR fallback when unsupported. Broader display-chain compatibility and automatic-transition visual acceptance remain under validation.
 - Added Android risk bring-up modules for Compose account/browse queries, a shared Rust SDK/UniFFI bridge, Keystore-backed credentials, and an independent libmpv/Media3 player. Debug builds and nonvisual emulator checks pass, and physical-device manual verification was reported passed by the user; the complete client and detailed device/HDR evidence remain outstanding.
 - Added desktop movie and episode Media Specifications with first-source resolution, range, codec and frame rate, default-first audio/subtitle summaries, and bounded read-only track popovers. Missing metadata remains distinct from confirmed empty track lists.
 - Added episode-to-parent-series navigation through the series name, preserving browsing history and selecting the originating season when available.

@@ -1,6 +1,6 @@
 {
   "remote": "https://github.com/hewel/mpv.git",
-  "revision": "94527e484a40e2f810f541099ae4ebab787ca30a",
+  "revision": "7248ce7c0114396ae2c19afa4ac12c21b984e39a",
   "baseline": "TOOLS/gpu-next-host-baseline.conf",
   "mesonOptions": [
     "--buildtype=debugoptimized",

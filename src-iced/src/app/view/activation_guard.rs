@@ -5,6 +5,7 @@
 //! do not disarm it. Keyboard/taskbar activation without intervening input is
 //! indistinguishable and therefore also protects one background click.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use iced::advanced::{layout, mouse, overlay, renderer, shell::Bus, widget, Layout, Shell, Widget};
@@ -115,11 +116,11 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
   for ActivationGuard<'_, Message, F>
 {
   fn tag(&self) -> widget::tree::Tag {
-    widget::tree::Tag::of::<State<Message>>()
+    widget::tree::Tag::of::<RefCell<State<Message>>>()
   }
 
   fn state(&self) -> widget::tree::State {
-    widget::tree::State::new(State::<Message>::default())
+    widget::tree::State::new(RefCell::new(State::<Message>::default()))
   }
 
   fn diff(&mut self, tree: &mut widget::Tree) {
@@ -165,12 +166,16 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
     shell: &mut Shell<'_, Message>,
     viewport: &Rectangle,
   ) {
-    let state = tree.state.downcast_mut::<State<Message>>();
-    let activation = state
-      .pending
-      .pop_front()
-      .unwrap_or_else(|| state.observe(event, cursor));
+    let state = tree.state.downcast_mut::<RefCell<State<Message>>>();
+    let activation = {
+      let mut state = state.borrow_mut();
+      state
+        .pending
+        .pop_front()
+        .unwrap_or_else(|| state.observe(event, cursor))
+    };
 
+    let mut state = state.borrow_mut();
     let mut local = shell.local(&mut state.messages);
     self.content.as_widget_mut().update(
       &mut tree.children[0],
@@ -232,24 +237,26 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
-  ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
-    self
-      .content
-      .as_widget_mut()
-      .overlay(
-        &mut tree.children[0],
-        layout,
-        renderer,
-        viewport,
-        translation,
-      )
-      .map(|content| guarded_overlay(content, tree.state.downcast_mut::<State<Message>>(), true))
+  ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+    let state = tree.state.downcast_mut::<RefCell<State<Message>>>();
+    let children = self.content.as_widget_mut().overlay(
+      &mut tree.children[0],
+      layout,
+      renderer,
+      viewport,
+      translation,
+    );
+    vec![guarded_overlay(
+      overlay::Element::new(Box::new(OverlayBatch::new(children))),
+      state,
+      true,
+    )]
   }
 }
 
 fn guarded_overlay<'a, Message: 'a>(
   content: overlay::Element<'a, Message, Theme, iced::Renderer>,
-  state: &'a mut State<Message>,
+  state: &'a RefCell<State<Message>>,
   root: bool,
 ) -> overlay::Element<'a, Message, Theme, iced::Renderer> {
   overlay::Element::new(Box::new(ActivationOverlay {
@@ -261,7 +268,7 @@ fn guarded_overlay<'a, Message: 'a>(
 
 struct ActivationOverlay<'a, Message> {
   content: overlay::Element<'a, Message, Theme, iced::Renderer>,
-  state: &'a mut State<Message>,
+  state: &'a RefCell<State<Message>>,
   root: bool,
 }
 
@@ -278,13 +285,13 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for ActivationOve
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
   ) {
-    let activation = self.state.observe(event, cursor);
+    let activation = self.state.borrow_mut().observe(event, cursor);
     self
       .content
       .as_overlay_mut()
       .update(event, layout, cursor, renderer, shell);
     if self.root && shell.event_status() == iced::event::Status::Ignored {
-      self.state.pending.push_back(activation);
+      self.state.borrow_mut().pending.push_back(activation);
     }
   }
 
@@ -330,15 +337,128 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for ActivationOve
     &'a mut self,
     layout: Layout<'a>,
     renderer: &iced::Renderer,
-  ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+  ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
     self
       .content
       .as_overlay_mut()
       .overlay(layout, renderer)
+      .into_iter()
       .map(|content| guarded_overlay(content, self.state, false))
+      .collect()
   }
 
   fn index(&self) -> f32 {
     self.content.as_overlay().index()
+  }
+}
+
+/// Batches sibling overlays so that observers like [`ActivationOverlay`] treat
+/// the whole layer as one unit, preserving the pre-Vec "one wrapper per group"
+/// event-record semantics.
+struct OverlayBatch<'a, Message> {
+  children: RefCell<Vec<overlay::Element<'a, Message, Theme, iced::Renderer>>>,
+}
+
+impl<'a, Message> OverlayBatch<'a, Message> {
+  fn new(mut children: Vec<overlay::Element<'a, Message, Theme, iced::Renderer>>) -> Self {
+    children.sort_by(|a, b| {
+      a.as_overlay()
+        .index()
+        .partial_cmp(&b.as_overlay().index())
+        .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Self {
+      children: RefCell::new(children),
+    }
+  }
+}
+
+impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for OverlayBatch<'_, Message> {
+  fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
+    let children = self
+      .children
+      .get_mut()
+      .iter_mut()
+      .map(|child| child.as_overlay_mut().layout(renderer, bounds))
+      .collect();
+    layout::Node::with_children(bounds, children)
+  }
+
+  fn draw(
+    &self,
+    renderer: &mut iced::Renderer,
+    theme: &Theme,
+    style: &renderer::Style,
+    layout: Layout<'_>,
+    cursor: mouse::Cursor,
+  ) {
+    for (child, child_layout) in self.children.borrow_mut().iter_mut().zip(layout.children()) {
+      child
+        .as_overlay()
+        .draw(renderer, theme, style, child_layout, cursor);
+    }
+  }
+
+  fn operate(
+    &mut self,
+    layout: Layout<'_>,
+    renderer: &iced::Renderer,
+    operation: &mut dyn widget::Operation,
+  ) {
+    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+      child
+        .as_overlay_mut()
+        .operate(child_layout, renderer, operation);
+    }
+  }
+
+  fn update(
+    &mut self,
+    event: &Event,
+    layout: Layout<'_>,
+    cursor: mouse::Cursor,
+    renderer: &iced::Renderer,
+    shell: &mut Shell<'_, Message>,
+  ) {
+    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+      if shell.event_status() != iced::event::Status::Ignored {
+        return;
+      }
+      child
+        .as_overlay_mut()
+        .update(event, child_layout, cursor, renderer, shell);
+    }
+  }
+
+  fn mouse_interaction(
+    &self,
+    layout: Layout<'_>,
+    cursor: mouse::Cursor,
+    renderer: &iced::Renderer,
+  ) -> mouse::Interaction {
+    self
+      .children
+      .borrow_mut()
+      .iter_mut()
+      .zip(layout.children())
+      .map(|(child, child_layout)| {
+        child
+          .as_overlay()
+          .mouse_interaction(child_layout, cursor, renderer)
+      })
+      .max()
+      .unwrap_or_default()
+  }
+
+  fn overlay<'a>(
+    &'a mut self,
+    layout: Layout<'a>,
+    renderer: &iced::Renderer,
+  ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    let mut overlays = Vec::new();
+    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+      overlays.extend(child.as_overlay_mut().overlay(child_layout, renderer));
+    }
+    overlays
   }
 }

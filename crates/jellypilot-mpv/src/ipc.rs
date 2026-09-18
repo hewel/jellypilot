@@ -188,7 +188,7 @@ impl MpvIpc {
         tokio::time::sleep(Duration::from_millis(100 * (attempt as u64 + 1))).await;
       }
 
-      match Self::try_connect(path).await {
+      match Self::try_connect(path, true).await {
         Ok(ipc) => return Ok(ipc),
         Err(e) => {
           log::debug!("IPC connect attempt {} failed: {}", attempt + 1, e);
@@ -200,8 +200,13 @@ impl MpvIpc {
     Err(last_error.unwrap_or_else(|| IpcError::ConnectionFailed("Unknown error".into())))
   }
 
+  /// A dedicated property observer must not duplicate the control client's logs.
+  pub(crate) async fn connect_observer(path: &str) -> Result<Self, IpcError> {
+    Self::try_connect(path, false).await
+  }
+
   #[cfg(windows)]
-  async fn try_connect(path: &str) -> Result<Self, IpcError> {
+  async fn try_connect(path: &str, capture_logs: bool) -> Result<Self, IpcError> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
     let client = ClientOptions::new()
@@ -209,11 +214,11 @@ impl MpvIpc {
       .map_err(|e| IpcError::ConnectionFailed(format!("Failed to open pipe: {}", e)))?;
 
     let (reader, writer) = tokio::io::split(client);
-    Self::setup(reader, writer).await
+    Self::setup(reader, writer, capture_logs).await
   }
 
   #[cfg(not(windows))]
-  async fn try_connect(path: &str) -> Result<Self, IpcError> {
+  async fn try_connect(path: &str, capture_logs: bool) -> Result<Self, IpcError> {
     use tokio::net::UnixStream;
 
     let stream = UnixStream::connect(path)
@@ -221,10 +226,10 @@ impl MpvIpc {
       .map_err(|e| IpcError::ConnectionFailed(e.to_string()))?;
 
     let (reader, writer) = tokio::io::split(stream);
-    Self::setup(reader, writer).await
+    Self::setup(reader, writer, capture_logs).await
   }
 
-  async fn setup<R, W>(reader: R, writer: W) -> Result<Self, IpcError>
+  async fn setup<R, W>(reader: R, writer: W, capture_logs: bool) -> Result<Self, IpcError>
   where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
@@ -233,6 +238,7 @@ impl MpvIpc {
       reader,
       writer,
       jellypilot_core::player_logs::global().clone(),
+      capture_logs,
     )
     .await
   }
@@ -241,6 +247,7 @@ impl MpvIpc {
     reader: R,
     writer: W,
     logs: Arc<PlayerLogs>,
+    capture_logs: bool,
   ) -> Result<Self, IpcError>
   where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -271,6 +278,7 @@ impl MpvIpc {
         reader_closed,
         reader_logs,
         connection_id,
+        capture_logs,
       )
       .await;
     });
@@ -296,6 +304,9 @@ impl MpvIpc {
       logs,
       connection_id,
     };
+    if !capture_logs {
+      return Ok(ipc);
+    }
     let initially_enabled = ipc.logs.enabled();
     if initially_enabled {
       // Subscribe before the caller can load media when capture was pre-enabled.
@@ -347,7 +358,7 @@ impl MpvIpc {
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Unpin + 'static,
   {
-    Self::setup(reader, writer).await
+    Self::setup(reader, writer, true).await
   }
 
   async fn reader_loop<R: tokio::io::AsyncRead + Unpin>(
@@ -357,6 +368,7 @@ impl MpvIpc {
     closed: Arc<AtomicBool>,
     logs: Arc<PlayerLogs>,
     connection_id: u64,
+    capture_logs: bool,
   ) {
     log::info!("MPV IPC reader loop started");
     let mut buf_reader = BufReader::new(reader);
@@ -393,38 +405,50 @@ impl MpvIpc {
               }
             }
             Ok(MpvMessage::Log(message)) => {
-              logs.record(
-                connection_id,
-                &message.prefix,
-                &message.level,
-                &message.text,
-              );
-            }
-            Ok(MpvMessage::Event(event)) => {
-              if matches!(
-                event.event.as_str(),
-                "file-loaded"
-                  | "seek"
-                  | "playback-restart"
-                  | "audio-reconfig"
-                  | "video-reconfig"
-                  | "tracks-changed"
-                  | "track-switched"
-                  | "end-file"
-                  | "shutdown"
-              ) {
-                logs.record(connection_id, "ipc", "info", &event.event);
-              } else if event.event == "queue-overflow" {
+              if capture_logs {
                 logs.record(
                   connection_id,
-                  "ipc",
-                  "warn",
-                  "MPV event queue overflow; player log may be incomplete",
+                  &message.prefix,
+                  &message.level,
+                  &message.text,
                 );
+              }
+            }
+            Ok(MpvMessage::Event(event)) => {
+              if !capture_logs && event.event == "event-queue-overflow" {
+                // An observer must reconnect for a fresh initial value after
+                // either MPV's queue or our delivery queue loses a change.
+                break;
+              }
+              if capture_logs {
+                if matches!(
+                  event.event.as_str(),
+                  "file-loaded"
+                    | "seek"
+                    | "playback-restart"
+                    | "audio-reconfig"
+                    | "video-reconfig"
+                    | "tracks-changed"
+                    | "track-switched"
+                    | "end-file"
+                    | "shutdown"
+                ) {
+                  logs.record(connection_id, "ipc", "info", &event.event);
+                } else if event.event == "event-queue-overflow" {
+                  logs.record(
+                    connection_id,
+                    "ipc",
+                    "warn",
+                    "MPV event queue overflow; player log may be incomplete",
+                  );
+                }
               }
               log::debug!("MPV event: {} (reason={:?})", event.event, event.reason);
               // Use try_send to avoid blocking if channel is full
               if event_tx.try_send(event).is_err() {
+                if !capture_logs {
+                  break;
+                }
                 log::warn!("Event channel full, dropping event");
               }
             }
@@ -864,6 +888,57 @@ mod tests {
   use std::future::{poll_fn, Future};
 
   #[tokio::test]
+  async fn observer_does_not_duplicate_player_log_records() {
+    let logs = Arc::new(PlayerLogs::new(4096));
+    logs.set_enabled(true);
+    let before = logs.snapshot();
+    let (client, mut peer) = tokio::io::duplex(4096);
+    let (reader, writer) = tokio::io::split(client);
+    let ipc = MpvIpc::setup_with_logs(reader, writer, logs.clone(), false)
+      .await
+      .unwrap();
+    peer
+      .write_all(
+        b"{\"event\":\"log-message\",\"prefix\":\"vo\",\"level\":\"info\",\"text\":\"frame\"}\n\
+          {\"event\":\"file-loaded\"}\n",
+      )
+      .await
+      .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), ipc.events().recv())
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(logs.snapshot(), before);
+  }
+
+  #[tokio::test]
+  async fn observer_disconnects_when_either_event_queue_overflows() {
+    for events in [
+      "{\"event\":\"video-reconfig\"}\n".repeat(101),
+      "{\"event\":\"event-queue-overflow\"}\n".to_owned(),
+    ] {
+      let (client, mut peer) = tokio::io::duplex(64 * 1024);
+      let (reader, writer) = tokio::io::split(client);
+      let mut ipc = MpvIpc::setup_with_logs(reader, writer, Arc::new(PlayerLogs::new(4096)), false)
+        .await
+        .unwrap();
+      // Keep the peer open and withhold consumption until overflow: EOF must
+      // not be what invalidates this observer's cached source classification.
+      peer.write_all(events.as_bytes()).await.unwrap();
+      tokio::time::timeout(Duration::from_secs(2), &mut ipc.reader_handle)
+        .await
+        .unwrap()
+        .unwrap();
+      assert!(matches!(
+        ipc
+          .send_command(MpvCommand::observe_property(1, "video-params/gamma"))
+          .await,
+        Err(IpcError::Disconnected)
+      ));
+    }
+  }
+
+  #[tokio::test]
   async fn player_logs_toggle_over_ipc_without_consuming_playback_events() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let logs = Arc::new(PlayerLogs::new(64 * 1024));
@@ -933,7 +1008,7 @@ mod tests {
       disabled_tx.send(()).unwrap();
       assert!(reader.next_line().await.unwrap().is_none());
     });
-    let ipc = MpvIpc::setup_with_logs(reader, writer, logs.clone())
+    let ipc = MpvIpc::setup_with_logs(reader, writer, logs.clone(), true)
       .await
       .unwrap();
     assert!(logs.snapshot().contains("Player log subscription active"));

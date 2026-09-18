@@ -341,6 +341,21 @@ The daemon factory retains the host/device resources across last-window close; r
 creates a new surface and renderer for the same playback session. Daemon exit terminates
 mpv before removing its process-private IPC directory.
 
+Linux Wayland Embedded MPV offers **experimental HDR10 output** in Settings →
+MPV → HDR output (experimental).
+**Auto** selects HDR for decoded PQ or HLG video when the pinned host and Vulkan
+surface support PQ, returning to SDR for SDR video or when video is unloaded.
+Pausing retains the source mode. **On** keeps the whole window in HDR whenever
+supported, including SDR video mapped into PQ; **Off** stays SDR. Unsupported
+chains remain SDR, with status in Settings and Diagnostics. PQ signaling does not
+prove the physical display's HDR mode; human verification is still required.
+Compatibility across display chains and automatic transitions still need broader
+human validation. Select **Off** if colors or brightness appear incorrect.
+UI white is fixed at 203 nits. Linux embedded composition uses a float scene and
+a final presentation pass, preserving video clipping and backdrop blur; RGBA8
+screenshots remain clipped SDR previews, not HDR captures. See
+[ADR 0044](docs/adr/0044-linux-embedded-hdr10-presentation.md).
+
 ### Fork maintenance and joint acceptance
 
 The locked combination is the **JellyPilot commit and its working-tree state**, `Cargo.lock`,

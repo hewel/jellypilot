@@ -141,7 +141,7 @@ where
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         self.input.as_widget_mut().overlay(
             &mut tree.children[0],
             layout,

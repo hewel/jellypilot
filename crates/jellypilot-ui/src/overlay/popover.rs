@@ -230,7 +230,7 @@ where
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let mut children = tree.children.iter_mut();
         let trigger_tree = children.next().expect("popover trigger tree");
         let content_tree = children.next().expect("popover content tree");
@@ -247,7 +247,7 @@ where
             activity.is_active()
         };
         if self.is_open || exiting {
-            Some(overlay::Element::new(Box::new(PopoverOverlay {
+            vec![overlay::Element::new(Box::new(PopoverOverlay {
                 content: &mut self.content,
                 tree: content_tree,
                 anchor_bounds: layout.bounds() + translation,
@@ -255,7 +255,7 @@ where
                 options: self.options,
                 on_dismiss: self.on_dismiss.clone(),
                 is_open: self.is_open,
-            })))
+            }))]
         } else {
             self.trigger.as_widget_mut().overlay(
                 trigger_tree,
@@ -448,7 +448,7 @@ where
         &'a mut self,
         layout: Layout<'a>,
         renderer: &iced::Renderer,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         self.content.as_widget_mut().overlay(
             self.tree,
             layout.child(0),

@@ -151,6 +151,19 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
       ),
     ),
   );
+  // mpv can disable Vulkan when the loader exists but headers are missing,
+  // even with -Dvulkan=enabled. Do not stage a library that rejects gpu-api.
+  const configHeader = yield* buildIo('Vulkan feature check', () =>
+    readFile(path.join(build, 'config.h'), 'utf8'),
+  );
+  if (!/^#define HAVE_VULKAN 1$/m.test(configHeader)) {
+    return yield* Effect.fail(
+      new TaskMpvBuildError({
+        step: 'Vulkan feature check',
+        message: `Meson configured mpv without Vulkan despite -Dvulkan=enabled. Check ${path.join(build, 'meson-logs/meson-log.txt')}; install both Vulkan development headers and loader, or configure a documented SDK through PKG_CONFIG_PATH.`,
+      }),
+    );
+  }
   yield* runCommand(command('meson', ['compile', '-C', build, 'mpv']));
   // Recheck after compilation to avoid certifying a checkout edited during the build.
   yield* verifySource(checkout);

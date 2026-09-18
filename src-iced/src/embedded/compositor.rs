@@ -4,7 +4,7 @@ use iced::advanced::graphics::{self, compositor, Shell, Viewport};
 use iced::advanced::renderer;
 use iced::{Color, Renderer};
 use iced_wgpu::{wgpu, Engine, QueueGuard};
-use jellypilot_mpv_host::{DeviceContext, Host, HostOptions};
+use jellypilot_mpv_host::{DeviceContext, Host, HostOptions, TargetColor};
 
 use super::video::{self, FRAME};
 
@@ -13,10 +13,14 @@ pub(crate) struct Compositor {
   host: Host,
   context: Arc<DeviceContext>,
   engine: Engine,
+  composite: video::Composite,
   instance: wgpu::Instance,
   binding_layout: wgpu::BindGroupLayout,
   generation: u64,
   integration: crate::EmbeddedEngineFactory,
+  /// Last target color applied to the retained host; surfaces come and go
+  /// (background residency) while the host persists.
+  target_hdr: bool,
   probe: Option<crate::regression::Probe>,
 }
 
@@ -28,6 +32,9 @@ pub(crate) struct Surface {
   /// drop (the compositor creates the replacement before dropping the old
   /// surface) leave the newer registration untouched.
   idle_token: u64,
+  hdr: bool,
+  size: (u32, u32),
+  ui_target: Option<(wgpu::TextureView, wgpu::BindGroup)>,
 }
 
 impl Drop for Surface {
@@ -38,6 +45,41 @@ impl Drop for Surface {
     if self.regression {
       crate::regression::surface_dropped();
     }
+  }
+}
+
+impl Surface {
+  /// Retain the float scene and its sampling binding until the window resizes.
+  fn ui_view(
+    &mut self,
+    context: &DeviceContext,
+    composite: &video::Composite,
+  ) -> &(wgpu::TextureView, wgpu::BindGroup) {
+    let size = (self.size.0.max(1), self.size.1.max(1));
+    let recreate = match &self.ui_target {
+      Some((view, _)) => view.texture().width() != size.0 || view.texture().height() != size.1,
+      None => true,
+    };
+    if recreate {
+      let texture = context.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("Embedded extended-sRGB scene"),
+        size: wgpu::Extent3d {
+          width: size.0,
+          height: size.1,
+          depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: context.render_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+      });
+      let view = texture.create_view(&Default::default());
+      let binding = composite.bind_scene(context.device(), &view);
+      self.ui_target = Some((view, binding));
+    }
+    self.ui_target.as_ref().expect("created above")
   }
 }
 
@@ -65,6 +107,57 @@ fn unavailable(reason: impl std::fmt::Display) -> iced::advanced::graphics::core
   }
 }
 
+impl Compositor {
+  /// The surface must support PQ signaling. This describes the presentation
+  /// chain, not the physical display's current HDR mode or peak luminance.
+  fn hdr_capable(&self, native: &wgpu::Surface) -> bool {
+    if !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_none() {
+      return false;
+    }
+    native
+      .get_capabilities(self.context.adapter())
+      .format_capabilities
+      .iter()
+      .any(|capability| {
+        capability.format == self.context.surface_format()
+          && capability
+            .color_spaces
+            .contains(wgpu::SurfaceColorSpaces::BT2100_PQ)
+      })
+  }
+
+  /// Resolve the preference against decoded content and actual PQ capability.
+  fn hdr_target(&self, native: &wgpu::Surface) -> bool {
+    // ABI v1 libmpv cannot describe a dynamic target: HDR stays off.
+    crate::embedded::hdr_output().active(
+      self.host.abi_version() >= 2 && self.hdr_capable(native),
+      crate::embedded::hdr_content(),
+    )
+  }
+
+  /// Syncs HDR presentation with the setting and surface capabilities.
+  /// Updates the observed status even when no surface transition is needed.
+  fn sync_hdr(&mut self, surface: &mut Surface) {
+    if surface.size.0 == 0 || surface.size.1 == 0 {
+      return;
+    }
+    let desired = surface
+      .native
+      .as_ref()
+      .is_some_and(|native| self.hdr_target(native));
+    crate::embedded::set_hdr_state(if desired {
+      crate::embedded::HdrState::Active
+    } else if crate::embedded::hdr_output().active(true, crate::embedded::hdr_content()) {
+      // Both manual and content-driven requests report an unsupported chain.
+      crate::embedded::HdrState::Unavailable
+    } else {
+      crate::embedded::HdrState::Sdr
+    });
+    if desired != surface.hdr {
+      graphics::Compositor::configure_surface(self, surface, surface.size.0, surface.size.1);
+    }
+  }
+}
 impl graphics::Compositor for Compositor {
   type Renderer = Renderer;
   type Surface = Surface;
@@ -123,6 +216,7 @@ impl graphics::Compositor for Compositor {
       crate::regression::host_created(context.adapter().get_info().name);
     }
     let binding_layout = context.create_bind_group_layout(&video::layout_descriptor());
+    let composite = video::Composite::new(context.device(), surface_format);
     let generation = host.frame_generation();
     {
       let mut frame = FRAME
@@ -139,11 +233,13 @@ impl graphics::Compositor for Compositor {
       host,
       context,
       engine,
+      composite,
       instance,
       binding_layout,
       generation,
       integration: options.engine_factory,
       probe: None,
+      target_hdr: false,
     })
   }
 
@@ -190,6 +286,9 @@ impl graphics::Compositor for Compositor {
       synchronization: self.context.queue_lock(),
       regression: crate::regression::active(),
       idle_token: crate::embedded::idle::surface_changed(window),
+      hdr: false,
+      size: (width, height),
+      ui_target: None,
     };
     if surface.regression {
       crate::regression::surface_created();
@@ -207,12 +306,19 @@ impl graphics::Compositor for Compositor {
     if width == 0 || height == 0 {
       return;
     }
+    surface.size = (width, height);
+    let hdr = self.hdr_target(native);
     (self.integration.configure_surface)(
       &self.context,
       native,
       &wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: self.context.surface_format(),
+        color_space: if hdr {
+          wgpu::SurfaceColorSpace::Bt2100Pq
+        } else {
+          wgpu::SurfaceColorSpace::Auto
+        },
         width,
         height,
         present_mode: wgpu::PresentMode::AutoVsync,
@@ -221,14 +327,34 @@ impl graphics::Compositor for Compositor {
         desired_maximum_frame_latency: 1,
       },
     );
+    // The retained host outlives surfaces (background residency): compare
+    // against the last target applied to the host, not the surface's.
+    if self.target_hdr != hdr {
+      self.target_hdr = hdr;
+      self.host.set_target_color(if hdr {
+        TargetColor::HDR10
+      } else {
+        TargetColor::SDR
+      });
+      // Paused or idle playback schedules no frame; force one so the new
+      // target takes effect immediately.
+      let _ = self.host.request_redraw();
+      tracing::info!(hdr, "Embedded MPV presentation color space switched");
+    }
+    surface.hdr = hdr;
   }
 
   fn information(&self) -> compositor::Information {
     compositor::Information {
       adapter: self.context.adapter().get_info().name,
       backend: format!(
-        "Vulkan · embedded MPV · {:?} SDR",
-        self.context.surface_format()
+        "Vulkan · embedded MPV · {:?} {}",
+        self.context.surface_format(),
+        match crate::embedded::hdr_state() {
+          crate::embedded::HdrState::Active => "HDR10 PQ",
+          crate::embedded::HdrState::Unavailable => "SDR · HDR10 unavailable",
+          crate::embedded::HdrState::Sdr => "SDR",
+        }
       ),
     }
   }
@@ -245,10 +371,10 @@ impl graphics::Compositor for Compositor {
       tracing::error!("Embedded MPV refuses a software fallback renderer");
       return Err(compositor::SurfaceError::Other);
     };
-    let native = surface
-      .native
-      .as_mut()
-      .ok_or(compositor::SurfaceError::Other)?;
+    if surface.native.is_none() {
+      return Err(compositor::SurfaceError::Other);
+    }
+    self.sync_hdr(surface);
     let size = FRAME
       .lock()
       .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -274,6 +400,9 @@ impl graphics::Compositor for Compositor {
     let lock = self.context.queue_lock();
     let mut acquired = {
       let _guard = QueueGuard::acquire(lock.as_ref());
+      let Some(native) = surface.native.as_mut() else {
+        return Err(compositor::SurfaceError::Other);
+      };
       match native.get_current_texture() {
         // A supported 10-bit swapchain can remain suboptimal on an 8-bit desktop.
         // Its image is valid; rejecting it forever prevents any video presentation.
@@ -289,21 +418,48 @@ impl graphics::Compositor for Compositor {
         wgpu::CurrentSurfaceTexture::Validation => return Err(compositor::SurfaceError::Other),
       }
     };
+    {
+      let mut shared = FRAME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      shared.hdr = surface.hdr;
+      shared.valid = self.host.has_current_frame();
+    }
+    let mut scene_binding = None;
     if let Some(frame) = &acquired.frame {
-      let view = frame.texture.create_view(&Default::default());
-      // Renderer owns the submit guard; an outer guard here would deadlock.
-      renderer.present(
-        Some(background),
-        self.context.surface_format(),
-        &view,
-        viewport,
-      );
+      if self.context.render_format() != self.context.surface_format() {
+        let (view, binding) = surface.ui_view(&self.context, &self.composite);
+        // The float scene preserves video headroom through iced's ordinary
+        // stacking, gamma-domain blending and backdrop effects.
+        renderer.present(
+          Some(background),
+          self.context.render_format(),
+          view,
+          viewport,
+        );
+        scene_binding = Some(binding.clone());
+      } else {
+        let view = frame.texture.create_view(&Default::default());
+        // Renderer owns the submit guard; an outer guard here would deadlock.
+        renderer.present(
+          Some(background),
+          self.context.surface_format(),
+          &view,
+          viewport,
+        );
+      }
     }
     on_pre_present();
     {
       let _guard = QueueGuard::acquire(lock.as_ref());
+      if let (Some(frame), Some(binding)) = (&acquired.frame, &scene_binding) {
+        let view = frame.texture.create_view(&Default::default());
+        self
+          .composite
+          .submit(&self.context, &view, binding, surface.hdr);
+      }
       if let Some(frame) = acquired.frame.take() {
-        frame.present();
+        self.context.present_frame(frame);
       }
     }
     if crate::regression::active() {

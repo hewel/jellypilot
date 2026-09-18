@@ -314,7 +314,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let content = with_policy(self.enabled, || {
             self.content
                 .as_widget_mut()
@@ -322,12 +322,15 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
         });
         // Overlay layers live outside the scoped traversal, so the policy must
         // be re-established around every overlay call.
-        content.map(|content| {
-            overlay::Element::new(Box::new(PolicyOverlay {
-                content,
-                enabled: self.enabled,
-            }))
-        })
+        content
+            .into_iter()
+            .map(|content| {
+                overlay::Element::new(Box::new(PolicyOverlay {
+                    content,
+                    enabled: self.enabled,
+                }))
+            })
+            .collect()
     }
 }
 
@@ -404,16 +407,18 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PolicyOverlay
         &'a mut self,
         layout: Layout<'a>,
         renderer: &iced::Renderer,
-    ) -> Option<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         with_policy(self.enabled, || {
             self.content.as_overlay_mut().overlay(layout, renderer)
         })
+        .into_iter()
         .map(|content| {
             overlay::Element::new(Box::new(PolicyOverlay {
                 content,
                 enabled: self.enabled,
             }))
         })
+        .collect()
     }
 
     fn index(&self) -> f32 {
@@ -652,8 +657,10 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
-        let child_layout = layout.children().next()?;
+    ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
+        let Some(child_layout) = layout.children().next() else {
+            return Vec::new();
+        };
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             child_layout,
@@ -921,12 +928,14 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
         let state = tree.state.downcast_ref::<CollapseState>();
         if !state.visible {
-            return None;
+            return Vec::new();
         }
-        let child_layout = layout.children().next()?;
+        let Some(child_layout) = layout.children().next() else {
+            return Vec::new();
+        };
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             child_layout,
@@ -1168,12 +1177,14 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+    ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
         let state = tree.state.downcast_ref::<RevealState>();
         if !state.visible {
-            return None;
+            return Vec::new();
         }
-        let child_layout = layout.children().next()?;
+        let Some(child_layout) = layout.children().next() else {
+            return Vec::new();
+        };
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             child_layout,
@@ -1504,8 +1515,10 @@ where
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
-        let child_layout = layout.children().next()?;
+    ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
+        let Some(child_layout) = layout.children().next() else {
+            return Vec::new();
+        };
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             child_layout,

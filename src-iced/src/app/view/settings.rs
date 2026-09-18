@@ -2,7 +2,9 @@ use iced::widget::{
   button, column, container, row, scrollable, space, text, text_input, Column, Row,
 };
 use iced::{Alignment, Element, Fill, Length};
-use jellypilot_core::config::{AppMode, IntroMode, PlaybackBackend, ShortcutKind, ThemeMode};
+use jellypilot_core::config::{
+  AppMode, HdrOutput, IntroMode, PlaybackBackend, ShortcutKind, ThemeMode,
+};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
@@ -240,6 +242,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   let backend = state.kernel.settings.snapshot().playback_backend();
+  let hdr_output = state.kernel.settings.snapshot().hdr_output();
   column![
     column![
       column![
@@ -266,6 +269,49 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
       ]),
     ]
     .spacing(TOKENS.spacing.s2),
+    if cfg!(target_os = "linux") && crate::embedded::enabled() {
+      Element::from(
+        column![
+          column![
+            text(state.t("settings-hdr-output"))
+              .font(HEADING_FONT)
+              .size(TOKENS.font_sizes.s14)
+              .color(palette.text.secondary),
+            text(state.t("settings-hdr-output-help"))
+              .size(TOKENS.font_sizes.s12)
+              .color(palette.text.body),
+          ]
+          .spacing(TOKENS.spacing.s0_5),
+          segmented_row(row![
+            segmented_option(
+              state.t("settings-hdr-auto"),
+              hdr_output == HdrOutput::Auto,
+              SettingsMessage::HdrOutputSelected(HdrOutput::Auto),
+            ),
+            segmented_option(
+              state.t("settings-hdr-on"),
+              hdr_output == HdrOutput::On,
+              SettingsMessage::HdrOutputSelected(HdrOutput::On),
+            ),
+            segmented_option(
+              state.t("settings-hdr-off"),
+              hdr_output == HdrOutput::Off,
+              SettingsMessage::HdrOutputSelected(HdrOutput::Off),
+            ),
+          ]),
+          text(match state.settings.view.hdr_state {
+            crate::embedded::HdrState::Active => state.t("settings-hdr-status-active"),
+            crate::embedded::HdrState::Unavailable => state.t("settings-hdr-status-unavailable"),
+            crate::embedded::HdrState::Sdr => state.t("settings-hdr-status-sdr"),
+          })
+          .size(TOKENS.font_sizes.s12)
+          .color(palette.text.body),
+        ]
+        .spacing(TOKENS.spacing.s2),
+      )
+    } else {
+      Element::from(space::horizontal().width(0))
+    },
     labeled_field(
       palette,
       state.kernel.locale,

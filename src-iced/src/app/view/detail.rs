@@ -2737,6 +2737,8 @@ mod tests {
         &viewport,
         Vector::ZERO,
       )
+      .into_iter()
+      .next()
       .expect("open track panel")
       .as_overlay_mut()
       .layout(&renderer, bounds)
@@ -2759,6 +2761,8 @@ mod tests {
         &viewport,
         Vector::ZERO,
       )
+      .into_iter()
+      .next()
       .expect("panel remains during exit")
       .as_overlay_mut()
       .layout(&renderer, bounds)
@@ -2790,7 +2794,7 @@ mod tests {
           &viewport,
           Vector::ZERO
         )
-        .is_none(),
+        .is_empty(),
       "the panel must disappear once its exit finishes"
     );
   }

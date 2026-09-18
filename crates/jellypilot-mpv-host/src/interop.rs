@@ -22,6 +22,43 @@ struct Target {
     usage: vk::ImageUsageFlags,
     token: u64,
 }
+/// Mirrors `mpv_gpu_next_color` (host ABI version 2). The integer fields
+/// numerically match libplacebo's `pl_color_primaries` / `pl_color_transfer`.
+/// Zero fields are unknown and fall back to mpv's fixed SDR constants.
+/// `depth` is reserved: the host image is always 10-bit, so pass 0 or 10.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TargetColor {
+    pub primaries: c_int,
+    pub transfer: c_int,
+    pub ref_luma: f32,
+    pub min_luma: f32,
+    pub max_luma: f32,
+    pub depth: c_int,
+}
+impl TargetColor {
+    /// mpv's fixed BT.709 gamma-2.2 SDR target (every field unknown).
+    pub const SDR: Self = Self {
+        primaries: 0,
+        transfer: 0,
+        ref_luma: 0.0,
+        min_luma: 0.0,
+        max_luma: 0.0,
+        depth: 0,
+    };
+    /// HDR10: BT.2020 primaries, PQ transfer, 203 nit reference white, 1000 nit
+    /// peak, 10-bit. Static metadata is not signaled in ABI v2. `ref_luma` is
+    /// honored only with libplacebo API >= 371; older builds keep the fixed
+    /// 203 nit default, which equals this value.
+    pub const HDR10: Self = Self {
+        primaries: 6,
+        transfer: 12,
+        ref_luma: 203.0,
+        min_luma: 0.0001,
+        max_luma: 1000.0,
+        depth: 10,
+    };
+}
 #[repr(C)]
 struct Descriptor {
     version: u32,
@@ -38,7 +75,14 @@ struct Descriptor {
     unlock_queue: unsafe extern "C" fn(*mut c_void, u32, u32),
     acquire: unsafe extern "C" fn(*mut c_void, *mut Target) -> c_int,
     release: unsafe extern "C" fn(*mut c_void, *const Target, c_int),
+    target_color: unsafe extern "C" fn(*mut c_void, *mut TargetColor),
 }
+
+// v2 appends exactly one pointer to the v1 layout; mpv never reads it for v1.
+const _: () = assert!(
+    std::mem::offset_of!(Descriptor, target_color)
+        == std::mem::size_of::<Descriptor>() - std::mem::size_of::<usize>()
+);
 
 /// Shared external Vulkan queue synchronization for mpv and the compositor.
 /// Acquire around submit/present/configure, not an entire renderer frame.
@@ -77,12 +121,61 @@ struct Slot {
     target: Target,
     memory: vk::DeviceMemory,
     busy: bool,
+    color_epoch: u64,
 }
 struct Pool {
     slots: Vec<Slot>,
     ready: VecDeque<usize>,
     stopping: bool,
     size: (u32, u32),
+    color: TargetColor,
+    color_epoch: u64,
+}
+
+impl Pool {
+    fn acquire(&mut self) -> Option<Target> {
+        if self.stopping {
+            return None;
+        }
+        let slot = self.slots.iter_mut().find(|slot| {
+            !slot.busy && (slot.target.width as u32, slot.target.height as u32) == self.size
+        })?;
+        slot.busy = true;
+        slot.color_epoch = self.color_epoch;
+        Some(slot.target)
+    }
+
+    /// Returns whether a target change discarded a completed render that needs retrying.
+    fn release(&mut self, target: Target, status: c_int) -> bool {
+        let index = target.token as usize;
+        let slot = &mut self.slots[index];
+        if status != 0 {
+            slot.target.layout = vk::ImageLayout::UNDEFINED;
+            slot.busy = false;
+            return false;
+        }
+        slot.target.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        if slot.color_epoch != self.color_epoch {
+            // A target change raced this render. Its transfer function is
+            // indeterminate; mpv has now completed it, so it is safe to recycle.
+            slot.busy = false;
+            return true;
+        }
+        self.ready.push_back(index);
+        false
+    }
+
+    fn set_target_color(&mut self, color: TargetColor) -> bool {
+        if self.color == color {
+            return false;
+        }
+        self.color = color;
+        self.color_epoch = self.color_epoch.wrapping_add(1);
+        while let Some(index) = self.ready.pop_front() {
+            self.slots[index].busy = false;
+        }
+        true
+    }
 }
 struct Shared {
     // Also retained by completion callbacks, beyond Host teardown if necessary.
@@ -162,6 +255,7 @@ impl Shared {
                 },
                 memory,
                 busy: false,
+                color_epoch: 0,
             })
         }
     }
@@ -197,36 +291,24 @@ unsafe extern "C" fn acquire(opaque: *mut c_void, out: *mut Target) -> c_int {
         shared.exhausted.store(true, Ordering::Release);
         return 0;
     };
-    if pool.stopping {
-        return 0;
-    }
-    let size = pool.size;
-    let Some(slot) = pool
-        .slots
-        .iter_mut()
-        .find(|s| !s.busy && (s.target.width as u32, s.target.height as u32) == size)
-    else {
+    let Some(target) = pool.acquire() else {
         shared.exhausted.store(true, Ordering::Release);
         return 0;
     };
-    slot.busy = true;
-    unsafe { out.write(slot.target) };
+    unsafe { out.write(target) };
     1
 }
+// VO thread: copy the latest host-described target and return immediately.
+unsafe extern "C" fn target_color(opaque: *mut c_void, out: *mut TargetColor) {
+    let shared = unsafe { &*opaque.cast::<Shared>() };
+    unsafe { *out = shared.pool.lock().color };
+}
+
 unsafe extern "C" fn release(opaque: *mut c_void, target: *const Target, status: c_int) {
     let shared = unsafe { &*opaque.cast::<Shared>() };
     let target = unsafe { *target };
-    {
-        let mut pool = shared.pool.lock();
-        let index = target.token as usize;
-        let slot = &mut pool.slots[index];
-        if status == 0 {
-            slot.target.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-            pool.ready.push_back(index);
-        } else {
-            slot.target.layout = vk::ImageLayout::UNDEFINED;
-            slot.busy = false;
-        }
+    if shared.pool.lock().release(target, status) {
+        shared.exhausted.store(true, Ordering::Release);
     }
     shared.notify();
 }
@@ -243,6 +325,8 @@ pub struct Host {
     shared: Arc<Shared>,
     current: wgpu::Texture,
     frame_generation: u64,
+    current_color_epoch: Option<u64>,
+    abi_version: u32,
 }
 // SAFETY: libmpv permits client calls on different threads; Host is not Sync,
 // so mutation/teardown remain exclusive. Vulkan sharing uses the retained mutex.
@@ -325,6 +409,8 @@ impl Host {
                     ready: VecDeque::new(),
                     stopping: false,
                     size: (options.width, options.height),
+                    color: TargetColor::SDR,
+                    color_epoch: 0,
                 }),
                 exhausted: AtomicBool::new(false),
                 wake: Box::new(wake),
@@ -339,7 +425,7 @@ impl Host {
                 .map(|e| e.as_ptr())
                 .collect();
             let descriptor = Box::new(Descriptor {
-                version: 1,
+                version: 2,
                 instance: instance.raw_instance().handle(),
                 physical_device: native.raw_physical_device(),
                 device: shared.raw.handle(),
@@ -353,6 +439,7 @@ impl Host {
                 unlock_queue,
                 acquire,
                 release,
+                target_color,
             });
             // Do not retain a wgpu internal guard across libmpv initialization
             // or fallible teardown paths that poll the same device.
@@ -401,7 +488,7 @@ impl Host {
                     options.height,
                 )
             };
-            let host = Self {
+            let mut host = Self {
                 handle,
                 terminate,
                 request_redraw,
@@ -411,13 +498,15 @@ impl Host {
                 shared,
                 current,
                 frame_generation: 0,
+                current_color_epoch: None,
+                abi_version: 0,
             };
             let option = |name: &str, value: &str| -> Result<(), Error> {
-                let name = CString::new(name)?;
-                let value = CString::new(value)?;
-                let result = set_option(handle, name.as_ptr(), value.as_ptr());
+                let name_c = CString::new(name)?;
+                let value_c = CString::new(value)?;
+                let result = set_option(handle, name_c.as_ptr(), value_c.as_ptr());
                 if result < 0 {
-                    return Err(format!("embedded mpv option failed: {result}").into());
+                    return Err(format!("embedded mpv option {name} failed: {result}").into());
                 }
                 Ok(())
             };
@@ -459,10 +548,17 @@ impl Host {
                 "input-ipc-server",
                 options.ipc.to_str().ok_or("IPC path is not UTF-8")?,
             )?;
-            let result = set_host(handle, &*host._descriptor);
+            let mut result = set_host(handle, &*host._descriptor);
             if result < 0 {
-                return Err(format!("mpv_gpu_next_set_host failed: {result}").into());
+                // Older pinned builds only accept version 1: retry with the v1
+                // contract (fixed SDR target; target_color is never read).
+                host._descriptor.version = 1;
+                result = set_host(handle, &*host._descriptor);
+                if result < 0 {
+                    return Err(format!("mpv_gpu_next_set_host failed: {result}").into());
+                }
             }
+            host.abi_version = host._descriptor.version;
             let result = initialize(handle);
             if result < 0 {
                 return Err(format!("mpv_initialize failed: {result}").into());
@@ -498,6 +594,28 @@ impl Host {
         } else {
             Ok(())
         }
+    }
+
+    /// Negotiated host ABI version: 2 enables `set_target_color`; 1 is the
+    /// legacy fixed-SDR contract of older pinned builds.
+    pub fn abi_version(&self) -> u32 {
+        self.abi_version
+    }
+
+    /// Changes the target color and invalidates all previously rendered frames.
+    /// Call `request_redraw` afterward, including while paused. Until a frame
+    /// for the new target is copied, `has_current_frame` is false.
+    /// Application-thread only, outside the queue lock and VO callbacks.
+    pub fn set_target_color(&mut self, color: TargetColor) {
+        if self.shared.pool.lock().set_target_color(color) {
+            self.current_color_epoch = None;
+        }
+    }
+
+    /// Whether the private texture has a copied frame for the current target.
+    /// Submissions that sample it must use the shared ordered queue.
+    pub fn has_current_frame(&self) -> bool {
+        self.current_color_epoch == Some(self.shared.pool.lock().color_epoch)
     }
 
     pub fn resize(&self, width: u32, height: u32) -> Result<(), Error> {
@@ -550,7 +668,7 @@ impl Host {
         height: u32,
     ) -> wgpu::Texture {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("private 10-bit current SDR frame"),
+            label: Some("private 10-bit current frame"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -570,7 +688,7 @@ impl Host {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("initialize private SDR texture"),
+            label: Some("initialize private video texture"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 depth_slice: None,
@@ -596,10 +714,10 @@ impl Host {
         let _guard = self.shared.queue_lock.lock();
         let queue = &self.shared.context.queue;
         let destination = &mut self.current;
-        let target = {
+        let (target, color_epoch) = {
             let mut pool = self.shared.pool.lock();
             let index = pool.ready.pop_front()?;
-            pool.slots[index].target
+            (pool.slots[index].target, pool.color_epoch)
         };
         let resized = destination.width() != target.width as u32
             || destination.height() != target.height as u32;
@@ -617,7 +735,7 @@ impl Host {
                 .context
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("scheduled SDR copy"),
+                    label: Some("scheduled video copy"),
                 });
         encoder.transition_resources(
             std::iter::empty(),
@@ -628,14 +746,14 @@ impl Host {
             }),
         );
         let before = encoder.finish();
-        // wgpu 29 forbids mixing its encoder API with raw HAL recording.
+        // wgpu forbids mixing its encoder API with raw HAL recording.
         // Keep tracked transitions in separate command buffers around the copy.
         let mut encoder =
             self.shared
                 .context
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("raw SDR image copy"),
+                    label: Some("raw video image copy"),
                 });
         unsafe {
             let dest = destination
@@ -693,7 +811,7 @@ impl Host {
                 .context
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("sample copied SDR image"),
+                    label: Some("sample copied video image"),
                 });
         encoder.transition_resources(
             std::iter::empty(),
@@ -704,6 +822,8 @@ impl Host {
             }),
         );
         queue.submit([before, copy, encoder.finish()]);
+        // Later sampling submits to the same queue, after these copy commands.
+        self.current_color_epoch = Some(color_epoch);
         let shared = self.shared.clone();
         queue.on_submitted_work_done(move || {
             {
@@ -784,4 +904,67 @@ pub(crate) fn parse_argument(argument: &str) -> Result<(&str, &str), Error> {
         return Err("embedded mpv argument is not an allowed playback option".into());
     }
     Ok((name, value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool() -> Pool {
+        Pool {
+            slots: (0..3)
+                .map(|token| Slot {
+                    target: Target {
+                        image: vk::Image::null(),
+                        width: 1,
+                        height: 1,
+                        layout: vk::ImageLayout::UNDEFINED,
+                        usage: vk::ImageUsageFlags::empty(),
+                        token,
+                    },
+                    memory: vk::DeviceMemory::null(),
+                    busy: false,
+                    color_epoch: 0,
+                })
+                .collect(),
+            ready: VecDeque::new(),
+            stopping: false,
+            size: (1, 1),
+            color: TargetColor::SDR,
+            color_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn color_transition_discards_ready_and_in_flight_old_frames() {
+        let mut pool = pool();
+        let ready = pool.acquire().unwrap();
+        let rendering = pool.acquire().unwrap();
+        pool.release(ready, 0);
+        pool.set_target_color(TargetColor::HDR10);
+        let replacement = pool.acquire().unwrap();
+        assert!(
+            pool.release(rendering, 0),
+            "stale completion requests a redraw"
+        );
+        pool.release(replacement, 0);
+        assert_eq!(
+            pool.ready.into_iter().collect::<Vec<_>>(),
+            [replacement.token as usize]
+        );
+    }
+
+    #[test]
+    fn returning_to_the_same_color_does_not_revive_an_old_frame() {
+        let mut pool = pool();
+        pool.set_target_color(TargetColor::HDR10);
+        let rendering = pool.acquire().unwrap();
+        pool.set_target_color(TargetColor::SDR);
+        pool.set_target_color(TargetColor::HDR10);
+        assert!(pool.release(rendering, 0));
+        assert!(pool.ready.is_empty());
+        let replacement = pool.acquire().unwrap();
+        pool.release(replacement, 0);
+        assert_eq!(pool.ready.pop_front(), Some(replacement.token as usize));
+    }
 }
