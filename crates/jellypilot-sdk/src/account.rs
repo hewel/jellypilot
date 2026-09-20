@@ -57,18 +57,6 @@ pub struct SignOutOutcome {
     pub watchlist_error: Option<SdkError>,
 }
 
-/// Committed result of [`Sdk::remove_saved_profile`].
-///
-/// Carries the storage mutation's own result so a later reload failure
-/// cannot masquerade as a failed deletion.
-#[derive(Debug)]
-pub struct ProfileRemovalOutcome {
-    /// Saved profiles remaining after the deletion.
-    pub remaining: Vec<SavedProfileSummary>,
-    /// Startup-restore selection after the deletion, when one remains.
-    pub last_activated_key: Option<SavedProfileKey>,
-}
-
 /// Keeps new playback and writes out of an active-profile transition while
 /// the committed worker owns teardown, including dropped caller futures.
 struct AccountHandoff {
@@ -458,69 +446,6 @@ impl Sdk {
         receiver
             .await
             .map_err(|_| SdkError::Request("the sign-out task failed unexpectedly".to_owned()))?
-    }
-
-    /// Removes a saved profile that is not currently active.
-    ///
-    /// Removing the active profile is a sign-out; callers must use
-    /// [`Sdk::sign_out`] so teardown ordering is preserved. The returned
-    /// outcome is the storage mutation's own result.
-    pub async fn remove_saved_profile(
-        &self,
-        key: String,
-    ) -> Result<ProfileRemovalOutcome, SdkError> {
-        self.inner.check_open()?;
-        let permit = self
-            .inner
-            .account_op
-            .clone()
-            .try_lock_owned()
-            .map_err(|_| SdkError::OperationInProgress)?;
-        let key = SavedProfileKey::from_raw(key);
-        {
-            let state = self.inner.state.lock().map_err(|_| SdkError::Closed)?;
-            if state
-                .active
-                .as_ref()
-                .is_some_and(|active| active.key == key)
-            {
-                return Err(SdkError::InvalidInput(
-                    "the active profile must be signed out, not removed".to_owned(),
-                ));
-            }
-        }
-        let snapshot = self
-            .inner
-            .store
-            .load_profiles_snapshot()
-            .await
-            .map_err(SdkError::from)?;
-        let was_last_activated = snapshot.last_successfully_activated() == Some(&key);
-
-        let inner = Arc::clone(&self.inner);
-        let receiver = self.inner.spawn_committed(move || {
-            let inner = inner;
-            async move {
-                let _permit = permit;
-                inner.check_open()?;
-                let remaining = inner
-                    .store
-                    .remove_profile(key)
-                    .await
-                    .map_err(SdkError::from)?;
-                Ok(ProfileRemovalOutcome {
-                    remaining,
-                    last_activated_key: if was_last_activated {
-                        None
-                    } else {
-                        snapshot.last_successfully_activated().cloned()
-                    },
-                })
-            }
-        })?;
-        receiver
-            .await
-            .map_err(|_| SdkError::Request("the removal task failed unexpectedly".to_owned()))?
     }
 
     /// Retries a previously failed, opted-in Sign Out Watchlist deletion.

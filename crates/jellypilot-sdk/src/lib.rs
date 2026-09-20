@@ -46,7 +46,7 @@ use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-pub use account::{ActivationOutcome, ProfileRemovalOutcome, SignOutOutcome};
+pub use account::{ActivationOutcome, SignOutOutcome};
 pub use error::SdkError;
 pub use hooks::SdkHooks;
 pub use image::LibraryImageTarget;

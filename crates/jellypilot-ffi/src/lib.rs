@@ -283,18 +283,6 @@ impl JellypilotSdk {
             .map_err(SdkError::from)
     }
 
-    /// Removes a saved profile that is not currently active.
-    pub async fn remove_saved_profile(
-        &self,
-        key: String,
-    ) -> Result<ProfileRemovalOutcome, SdkError> {
-        self.sdk
-            .remove_saved_profile(key)
-            .await
-            .map(ProfileRemovalOutcome::from)
-            .map_err(SdkError::from)
-    }
-
     /// The currently active profile, if any.
     pub fn active_profile(&self) -> Option<ActiveProfile> {
         self.sdk.active_profile().map(ActiveProfile::from)

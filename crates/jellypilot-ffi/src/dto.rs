@@ -183,27 +183,6 @@ impl From<jellypilot_sdk::SignOutOutcome> for SignOutOutcome {
     }
 }
 
-/// Committed result of `remove_saved_profile`: the storage mutation's own
-/// result rather than a later reload.
-#[derive(Clone, Debug, uniffi::Record)]
-pub struct ProfileRemovalOutcome {
-    /// Saved profiles remaining after the deletion.
-    pub remaining: Vec<SavedProfile>,
-    /// Startup-restore selection after the deletion, when one remains.
-    pub last_activated_key: Option<String>,
-}
-
-impl From<jellypilot_sdk::ProfileRemovalOutcome> for ProfileRemovalOutcome {
-    fn from(outcome: jellypilot_sdk::ProfileRemovalOutcome) -> Self {
-        Self {
-            remaining: outcome.remaining.iter().map(SavedProfile::from).collect(),
-            last_activated_key: outcome
-                .last_activated_key
-                .map(|key| key.as_str().to_owned()),
-        }
-    }
-}
-
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ActiveProfile {
     pub key: String,
