@@ -21,7 +21,7 @@ use jellypilot_media_server::{
   VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodes, VideoSeasonEpisodesPage,
   VideoUserDataUpdate,
 };
-use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection, TrackInfo};
+use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection};
 use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerSettlement, EffectId, PlaybackEvent, PlaybackIntent,
 };
@@ -325,7 +325,6 @@ pub enum PlaybackMessage {
     id: EffectId,
     settlement: Box<ControllerSettlement>,
     started: Option<Box<Playable>>,
-    tracks: Option<Result<Vec<TrackInfo>, PlaybackError>>,
   },
   AdjacentSettled {
     remote: RemoteToken,

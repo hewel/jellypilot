@@ -2314,8 +2314,8 @@ mod tests {
   use jellypilot_core::intro_skipper::IntroSkipMode;
   use jellypilot_media_server::VideoLibraryItem;
   use jellypilot_mpv::playback::{
-    NowPlayingItem, Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState,
-    PlaybackSnapshot, PlaybackStartPosition,
+    NowPlayingItem, Playable, PlaybackError, PlaybackOutcome, PlaybackRefreshOutcome,
+    PlaybackRefreshState, PlaybackSnapshot, PlaybackStartOutcome, PlaybackStartPosition,
   };
   use jellypilot_mpv::playback_session::{
     ControllerSettlement, IntroAvailability, IntroPromptView, NowPlayingView, PlaybackEffect,
@@ -3562,28 +3562,31 @@ mod tests {
     state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: *start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: PlaybackSnapshot {
-            now_playing: Some(NowPlayingItem {
-              item_id: "episode-1".to_owned(),
-              title: "Pilot Episode".to_owned(),
-              item_type: "Episode".to_owned(),
-              series_id: Some("series-1".to_owned()),
-              runtime_seconds: Some(2_400.0),
-              start_position_seconds: 0.0,
-              play_method: "DirectPlay".to_owned(),
-              original_language: None,
-            }),
-            transport: PlayerState {
-              connected: true,
-              paused: false,
-              muted: false,
-              time_pos: 120.0,
-              duration: 2_400.0,
-              volume: 85.0,
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: PlaybackSnapshot {
+              now_playing: Some(NowPlayingItem {
+                item_id: "episode-1".to_owned(),
+                title: "Pilot Episode".to_owned(),
+                item_type: "Episode".to_owned(),
+                series_id: Some("series-1".to_owned()),
+                runtime_seconds: Some(2_400.0),
+                start_position_seconds: 0.0,
+                play_method: "DirectPlay".to_owned(),
+                original_language: None,
+              }),
+              transport: PlayerState {
+                connected: true,
+                paused: false,
+                muted: false,
+                time_pos: 120.0,
+                duration: 2_400.0,
+                volume: 85.0,
+              },
             },
+            warnings: Vec::new(),
           },
-          warnings: Vec::new(),
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,

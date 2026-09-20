@@ -14,6 +14,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added shared, interruptible desktop motion for controls, floating surfaces, navigation, responsive structural changes, overview expansion, theme colors, and user-selected Hero changes, with reduced-motion support and no invisible animation frame loop.
 
 ### Changed
+- Centralized desktop playback command execution in the controller and bundled initial tracks with the accepted start result, while keeping track-query failures nonfatal to playback.
 - Added automatic complete/minimal embedded-player presentation: leaving controls immediately reveals a read-only edge timeline, which hides after three seconds during playback and remains while paused. Visibility switches without animation so drawing and hit targets change together; the central pause indicator is also instantaneous. Information and manual skip prompts remain independent of hidden controls; human visual acceptance is pending.
 - Changed desktop Intro Skipper to Automatic / Manual, migrating legacy Off to Manual. Manual actions last for the current range stay and return after re-entry; automatic attempts remain once per range per playback session, including failures. Android retains its existing contract.
 - Separated display-free and desktop Rust workspaces and added Android preparation, native build, and validation entries to the existing task dispatcher. Desktop business-SDK migration and clean-room Android release acceptance remain later gates.

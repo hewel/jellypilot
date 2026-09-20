@@ -181,6 +181,13 @@ impl MpvClient {
     client
   }
 
+  /// Whether this client talks to an application-owned libmpv host rather
+  /// than a spawned MPV process. The controller uses the backend identity to
+  /// decide which OSD surfaces the embedded player owns natively.
+  pub(crate) fn is_embedded(&self) -> bool {
+    self.embedded_ipc.is_some()
+  }
+
   /// Update MPV path (takes effect on next start).
   pub fn set_mpv_path(&self, path: Option<PathBuf>) {
     *self.mpv_path.lock() = path;

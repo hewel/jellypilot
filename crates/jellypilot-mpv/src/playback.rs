@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::playback_session::{ControllerCommand, ControllerSettlement};
 use crate::MpvError;
 use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, statistics::StatisticsReader, MpvClient,
@@ -320,6 +321,19 @@ pub enum PlaybackRefreshState {
 pub struct PlaybackOutcome {
   pub snapshot: PlaybackSnapshot,
   pub warnings: Vec<PlaybackWarning>,
+}
+
+/// Result returned after MPV accepted a new item, pairing the playback
+/// outcome with the initial track list read that follows a successful start.
+///
+/// The start settlement waits for the track read so the session installs
+/// tracks atomically with the accepted start; a track read failure is carried
+/// as `Err` and never fails playback that already started.
+#[must_use = "playback warnings must be surfaced to the user"]
+#[derive(Debug, Clone)]
+pub struct PlaybackStartOutcome {
+  pub playback: PlaybackOutcome,
+  pub tracks: Result<Vec<TrackInfo>, PlaybackError>,
 }
 
 /// Result returned after selecting a media track.
@@ -856,14 +870,6 @@ impl PlaybackController {
     }
   }
 
-  /// Attach the presentation lease the next command executes under. The
-  /// serialized IPC writer reads the flag when it dequeues a guarded resume,
-  /// so a lease revoked while the command is still in flight or queued still
-  /// vetoes its unpause.
-  pub fn set_presentation_hold(&mut self, hold: Arc<AtomicBool>) {
-    self.presentation_hold = Some(hold);
-  }
-
   /// Clone of the MPV client for the shell's presentation pause. The close
   /// path enqueues `pause=true` directly on the serialized writer so the
   /// pause is ordered before any later play command without waiting on the
@@ -947,7 +953,7 @@ impl PlaybackController {
   }
 
   /// Discard mute retained for an adjacent start without changing window state.
-  pub fn discard_continuation(&mut self) {
+  fn discard_continuation(&mut self) {
     self.pending_mute = None;
   }
 
@@ -983,6 +989,87 @@ impl PlaybackController {
     }
     self.configured_mpv_args = config.extra_args;
     Ok(())
+  }
+
+  /// Execute a session-dispatched controller command under its admitted
+  /// presentation lease and produce the settlement the session consumes.
+  ///
+  /// The lease is bound before the first await so a close revoking it still
+  /// vetoes this command's unpause even after a later admission minted a
+  /// fresh lease (ADR 0043). The live volume-memory preference is
+  /// synchronized at command time so a change published while the command
+  /// was queued still applies. A successful start waits for the initial
+  /// track read and carries its result in [`PlaybackStartOutcome`]; the
+  /// track read never fails a start that already succeeded. On the embedded
+  /// backend the session-owned intro prompt renders natively, so only the
+  /// `IntroPrompt` OSD is suppressed — `ShowText` and `ToggleStats` still
+  /// reach MPV.
+  pub async fn execute(
+    &mut self,
+    command: ControllerCommand,
+    presentation_hold: Arc<AtomicBool>,
+  ) -> ControllerSettlement {
+    self.presentation_hold = Some(presentation_hold);
+    self.synchronize_volume_memory_preference().await;
+    match command {
+      ControllerCommand::Start {
+        item,
+        position,
+        selection,
+        continue_playback,
+      } => {
+        if !continue_playback {
+          self.discard_continuation();
+        }
+        match self.play_selected(item, position, selection).await {
+          Ok(playback) => ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback,
+            tracks: self.tracks().await,
+          })),
+          Err(error) => ControllerSettlement::Started(Err(error)),
+        }
+      }
+      ControllerCommand::SetPaused(paused) => {
+        ControllerSettlement::Controlled(self.set_paused(paused).await)
+      }
+      ControllerCommand::ToggleFullscreen => {
+        ControllerSettlement::Controlled(self.toggle_fullscreen().await)
+      }
+      ControllerCommand::Seek(position) => {
+        ControllerSettlement::Controlled(self.seek(position).await)
+      }
+      ControllerCommand::SetVolume(volume) => {
+        ControllerSettlement::Controlled(self.set_volume(volume).await)
+      }
+      ControllerCommand::SetMuted(muted) => {
+        ControllerSettlement::Controlled(self.set_muted(muted).await)
+      }
+      ControllerCommand::SelectAudioTrack(id) => {
+        ControllerSettlement::TrackSelected(self.select_audio_track(id).await)
+      }
+      ControllerCommand::SelectSubtitleTrack(id) => {
+        ControllerSettlement::TrackSelected(self.select_subtitle_track(id).await)
+      }
+      ControllerCommand::ShowText { text, duration_ms } => {
+        ControllerSettlement::OsdShown(self.show_text(&text, duration_ms).await)
+      }
+      ControllerCommand::IntroPrompt { text, duration_ms } => {
+        ControllerSettlement::OsdShown(if self.mpv.is_embedded() {
+          // The embedded surface owns the prompt; MPV OSD is reserved for
+          // unrelated feedback and its independently toggled statistics.
+          Ok(())
+        } else {
+          self.show_text(&text, duration_ms).await
+        })
+      }
+      ControllerCommand::ToggleStats => ControllerSettlement::OsdShown(self.toggle_stats().await),
+      ControllerCommand::Stop => ControllerSettlement::Stopped(self.stop().await),
+      ControllerCommand::Refresh => ControllerSettlement::Refreshed {
+        outcome: self.refresh().await,
+        client_messages: self.take_client_messages(),
+      },
+      ControllerCommand::Shutdown => ControllerSettlement::Shutdown(self.shutdown().await),
+    }
   }
 
   /// Resolve and play an item.
@@ -1195,7 +1282,7 @@ impl PlaybackController {
   }
 
   /// Drain script-message names observed since the last shell refresh.
-  pub fn take_client_messages(&mut self) -> Vec<String> {
+  fn take_client_messages(&mut self) -> Vec<String> {
     std::mem::take(&mut self.pending_client_messages)
   }
   /// Reconcile the active item with MPV and report periodic progress.
@@ -3154,6 +3241,14 @@ mod tests {
     }
   }
 
+  /// One-shot response gates installed at peer construction, each consumed by
+  /// the first matching command the peer receives.
+  #[derive(Default)]
+  struct WithheldResponses {
+    sub_add: Option<SubAddResponseGate>,
+    track_list: Option<SubAddResponseGate>,
+  }
+
   struct InMemoryMpv {
     client: MpvClient,
     writer: Arc<tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
@@ -3171,12 +3266,18 @@ mod tests {
     }
 
     async fn new_with_failing_quit() -> Self {
-      Self::connect_with_options(MpvClient::new(None), None, true).await
+      Self::connect_with_options(MpvClient::new(None), WithheldResponses::default(), true).await
     }
 
     async fn new_with_withheld_sub_add() -> (Self, SubAddResponseGate) {
       let gate = SubAddResponseGate::new();
       let mpv = Self::connect_with_sub_add_gate(MpvClient::new(None), Some(gate.clone())).await;
+      (mpv, gate)
+    }
+
+    async fn new_with_withheld_track_list() -> (Self, SubAddResponseGate) {
+      let gate = SubAddResponseGate::new();
+      let mpv = Self::connect_with_track_list_gate(MpvClient::new(None), Some(gate.clone())).await;
       (mpv, gate)
     }
 
@@ -3190,12 +3291,35 @@ mod tests {
       client: MpvClient,
       withheld_sub_add: Option<SubAddResponseGate>,
     ) -> Self {
-      Self::connect_with_options(client, withheld_sub_add, false).await
+      Self::connect_with_options(
+        client,
+        WithheldResponses {
+          sub_add: withheld_sub_add,
+          ..WithheldResponses::default()
+        },
+        false,
+      )
+      .await
+    }
+
+    async fn connect_with_track_list_gate(
+      client: MpvClient,
+      withheld_track_list: Option<SubAddResponseGate>,
+    ) -> Self {
+      Self::connect_with_options(
+        client,
+        WithheldResponses {
+          track_list: withheld_track_list,
+          ..WithheldResponses::default()
+        },
+        false,
+      )
+      .await
     }
 
     async fn connect_with_options(
       client: MpvClient,
-      withheld_sub_add: Option<SubAddResponseGate>,
+      withheld: WithheldResponses,
       fail_quit: bool,
     ) -> Self {
       let (client_stream, peer_stream) = duplex(128 * 1024);
@@ -3221,7 +3345,10 @@ mod tests {
       let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
-        let mut withheld_sub_add = withheld_sub_add;
+        let WithheldResponses {
+          sub_add: mut withheld_sub_add,
+          track_list: mut withheld_track_list,
+        } = withheld;
         let mut volume_observer = None;
         let mut loaded = false;
         while let Ok(Some(line)) = lines.next_line().await {
@@ -3271,6 +3398,19 @@ mod tests {
                 .acquire()
                 .await
                 .expect("sub-add response gate should remain open")
+                .forget();
+            }
+          }
+          if name == Some("get_property")
+            && command.get(1).and_then(serde_json::Value::as_str) == Some("track-list")
+          {
+            if let Some(gate) = withheld_track_list.take() {
+              gate.command_received.add_permits(1);
+              gate
+                .release_response
+                .acquire()
+                .await
+                .expect("track-list response gate should remain open")
                 .forget();
             }
           }
@@ -3554,6 +3694,33 @@ mod tests {
     let mpv = InMemoryMpv::new().await;
     let controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
     (controller, mpv)
+  }
+
+  /// The command an explicit (non-continuation) start dispatches through
+  /// [`PlaybackController::execute`].
+  fn start_command(item: Playable) -> ControllerCommand {
+    ControllerCommand::Start {
+      item,
+      position: PlaybackStartPosition::Beginning,
+      selection: PlaybackSelection::default(),
+      continue_playback: false,
+    }
+  }
+
+  /// The playback half of an accepted start settlement.
+  fn started_playback(settlement: ControllerSettlement) -> PlaybackOutcome {
+    let ControllerSettlement::Started(Ok(outcome)) = settlement else {
+      panic!("expected an accepted start settlement");
+    };
+    outcome.playback
+  }
+
+  /// The playback half of a transport-control settlement.
+  fn controlled_playback(settlement: ControllerSettlement) -> PlaybackOutcome {
+    let ControllerSettlement::Controlled(Ok(outcome)) = settlement else {
+      panic!("expected an accepted control settlement");
+    };
+    outcome
   }
 
   #[test]
@@ -4101,15 +4268,17 @@ mod tests {
       mpv.client.set_fullscreen(true).await.expect("fullscreen");
       mpv.emit_eof().await;
       let _ = controller.refresh().await;
-      controller.discard_continuation();
       let _next = mpv.respawn().await;
-      let outcome = controller
-        .play(
-          library_item("Movie").into(),
-          PlaybackStartPosition::Beginning,
-        )
-        .await
-        .expect("unrelated movie");
+      // An explicit unrelated start dispatches with continue_playback=false,
+      // which discards the mute the EOF continuation retained.
+      let outcome = started_playback(
+        controller
+          .execute(
+            start_command(library_item("Movie").into()),
+            Arc::new(AtomicBool::new(false)),
+          )
+          .await,
+      );
       assert!(!outcome.snapshot.transport.muted);
       assert_eq!(controller.capture_fullscreen().await, Some(true));
     });
@@ -6023,15 +6192,15 @@ mod tests {
       let server = Arc::new(MockPlaybackServer::new());
       let (mut controller, mpv) = controller_harness(server).await;
       let hold = Arc::new(AtomicBool::new(true));
-      controller.set_presentation_hold(Arc::clone(&hold));
 
-      let outcome = controller
-        .play(
-          library_item("Episode").into(),
-          PlaybackStartPosition::Beginning,
-        )
-        .await
-        .expect("playback should start");
+      let outcome = started_playback(
+        controller
+          .execute(
+            start_command(library_item("Episode").into()),
+            Arc::clone(&hold),
+          )
+          .await,
+      );
 
       assert!(
         outcome.snapshot.transport.paused,
@@ -6046,10 +6215,11 @@ mod tests {
       );
 
       // A resume raised while held is downgraded to a pause at the writer.
-      let resumed = controller
-        .set_paused(false)
-        .await
-        .expect("held resume is downgraded, not failed");
+      let resumed = controlled_playback(
+        controller
+          .execute(ControllerCommand::SetPaused(false), Arc::clone(&hold))
+          .await,
+      );
       assert!(resumed.snapshot.transport.paused);
       assert!(
         mpv
@@ -6061,10 +6231,11 @@ mod tests {
 
       // Lifting the hold restores normal control.
       hold.store(false, Ordering::Release);
-      let resumed = controller
-        .set_paused(false)
-        .await
-        .expect("resume after release");
+      let resumed = controlled_playback(
+        controller
+          .execute(ControllerCommand::SetPaused(false), Arc::clone(&hold))
+          .await,
+      );
       assert!(!resumed.snapshot.transport.paused);
       assert!(
         mpv
@@ -6082,7 +6253,6 @@ mod tests {
       let server = Arc::new(MockPlaybackServer::new());
       let (mut controller, mpv) = controller_harness(server).await;
       let lease = Arc::new(AtomicBool::new(false));
-      controller.set_presentation_hold(Arc::clone(&lease));
       // Park the writer so every command the start enqueues stays queued
       // until the lease is revoked — the close lands while the start is
       // genuinely in flight, not before it begins.
@@ -6093,13 +6263,13 @@ mod tests {
         .expect("writer barrier should enqueue");
 
       let outcome = {
-        let mut play = std::pin::pin!(controller.play(
-          library_item("Episode").into(),
-          PlaybackStartPosition::Beginning,
+        let mut start = std::pin::pin!(controller.execute(
+          start_command(library_item("Episode").into()),
+          Arc::clone(&lease),
         ));
         std::future::poll_fn(|context| {
           assert!(
-            play.as_mut().poll(context).is_pending(),
+            start.as_mut().poll(context).is_pending(),
             "the parked writer must hold the start in flight"
           );
           std::task::Poll::Ready(())
@@ -6108,7 +6278,7 @@ mod tests {
 
         lease.store(true, Ordering::Release);
         gate.notify_one();
-        play.await.expect("playback should start")
+        started_playback(start.await)
       };
 
       assert!(
@@ -6125,11 +6295,14 @@ mod tests {
 
       // A fresh lease (the window shown again) admits new commands normally
       // without reviving the revoked one.
-      controller.set_presentation_hold(Arc::new(AtomicBool::new(false)));
-      let resumed = controller
-        .set_paused(false)
-        .await
-        .expect("resume under a fresh lease");
+      let resumed = controlled_playback(
+        controller
+          .execute(
+            ControllerCommand::SetPaused(false),
+            Arc::new(AtomicBool::new(false)),
+          )
+          .await,
+      );
       assert!(!resumed.snapshot.transport.paused);
       assert!(
         mpv
@@ -6147,14 +6320,14 @@ mod tests {
       let server = Arc::new(MockPlaybackServer::new());
       let (mut controller, mpv) = controller_harness(server).await;
       let lease = Arc::new(AtomicBool::new(false));
-      controller.set_presentation_hold(Arc::clone(&lease));
-      let _ = controller
-        .play(
-          library_item("Episode").into(),
-          PlaybackStartPosition::Beginning,
-        )
-        .await
-        .expect("playback should start");
+      let _ = started_playback(
+        controller
+          .execute(
+            start_command(library_item("Episode").into()),
+            Arc::clone(&lease),
+          )
+          .await,
+      );
       let unpauses = || {
         mpv
           .received_commands()
@@ -6171,7 +6344,8 @@ mod tests {
         .client
         .enqueue_writer_barrier(Arc::clone(&gate))
         .expect("writer barrier should enqueue");
-      let mut resume = std::pin::pin!(controller.set_paused(false));
+      let mut resume =
+        std::pin::pin!(controller.execute(ControllerCommand::SetPaused(false), Arc::clone(&lease)));
       std::future::poll_fn(|context| {
         assert!(
           resume.as_mut().poll(context).is_pending(),
@@ -6183,7 +6357,7 @@ mod tests {
 
       lease.store(true, Ordering::Release);
       gate.notify_one();
-      let outcome = resume.await.expect("the downgraded resume still settles");
+      let outcome = controlled_playback(resume.await);
 
       assert!(
         outcome.snapshot.transport.paused,
@@ -6194,6 +6368,192 @@ mod tests {
         1,
         "the revoked resume must never reach the engine as an unpause"
       );
+    });
+  }
+
+  #[test]
+  fn start_settlement_waits_for_the_initial_track_read() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mpv, gate) = InMemoryMpv::new_with_withheld_track_list().await;
+      let mut controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
+
+      let mut start = Box::pin(controller.execute(
+        start_command(library_item("Episode").into()),
+        Arc::new(AtomicBool::new(false)),
+      ));
+      tokio::select! {
+        () = gate.wait_for_command() => {}
+        _ = &mut start => panic!("start settled before the initial track query"),
+      }
+      std::future::poll_fn(|context| {
+        assert!(
+          start.as_mut().poll(context).is_pending(),
+          "the start settlement must wait for the withheld track-list response"
+        );
+        std::task::Poll::Ready(())
+      })
+      .await;
+
+      gate.release_response();
+      let ControllerSettlement::Started(Ok(outcome)) = start.await else {
+        panic!("expected an accepted start settlement");
+      };
+      let tracks = outcome.tracks.expect("the track read should succeed");
+      assert!(
+        tracks
+          .iter()
+          .any(|track| track.track_type == "audio" && track.selected),
+        "the settlement must carry the tracks read after the start"
+      );
+    });
+  }
+
+  #[test]
+  fn start_succeeds_when_the_track_read_fails() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+      *mpv.fail_command.lock().expect("failure control") = Some(vec![
+        serde_json::json!("get_property"),
+        serde_json::json!("track-list"),
+      ]);
+
+      let settlement = controller
+        .execute(
+          start_command(library_item("Episode").into()),
+          Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+
+      let ControllerSettlement::Started(Ok(outcome)) = settlement else {
+        panic!("a failed track read must not fail the accepted start");
+      };
+      assert_eq!(outcome.tracks, Err(PlaybackError::MpvControlFailed));
+      assert!(
+        outcome.playback.snapshot.now_playing.is_some(),
+        "playback still settled with the started item"
+      );
+    });
+  }
+
+  #[test]
+  fn an_embedded_backend_suppresses_the_intro_prompt_but_not_osd_text() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mpv = InMemoryMpv::connect(MpvClient::embedded(PathBuf::from(
+        "/tmp/jellypilot-test-embedded.sock",
+      )))
+      .await;
+      let mut controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
+      let lease = || Arc::new(AtomicBool::new(false));
+
+      let prompt = controller
+        .execute(
+          ControllerCommand::IntroPrompt {
+            text: "Skip intro".to_owned(),
+            duration_ms: 4_000,
+          },
+          lease(),
+        )
+        .await;
+      assert!(
+        matches!(prompt, ControllerSettlement::OsdShown(Ok(()))),
+        "the embedded prompt settles without touching MPV OSD"
+      );
+
+      let text = controller
+        .execute(
+          ControllerCommand::ShowText {
+            text: "Volume".to_owned(),
+            duration_ms: 1_000,
+          },
+          lease(),
+        )
+        .await;
+      assert!(matches!(text, ControllerSettlement::OsdShown(Ok(()))));
+
+      let show_texts = mpv
+        .received_commands()
+        .into_iter()
+        .filter(|command| command.first().and_then(serde_json::Value::as_str) == Some("show-text"))
+        .count();
+      assert_eq!(
+        show_texts, 1,
+        "only the ordinary ShowText reaches the embedded engine"
+      );
+    });
+  }
+
+  #[test]
+  fn an_external_backend_shows_the_intro_prompt_on_mpv_osd() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+
+      let settlement = controller
+        .execute(
+          ControllerCommand::IntroPrompt {
+            text: "Skip intro".to_owned(),
+            duration_ms: 4_000,
+          },
+          Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+
+      assert!(matches!(settlement, ControllerSettlement::OsdShown(Ok(()))));
+      assert!(
+        mpv
+          .received_commands()
+          .iter()
+          .any(|command| command.first().and_then(serde_json::Value::as_str) == Some("show-text")),
+        "the external engine must render the prompt through MPV OSD"
+      );
+    });
+  }
+
+  #[test]
+  fn refresh_settlement_drains_pending_client_messages() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+      let _ = started_playback(
+        controller
+          .execute(
+            start_command(library_item("Episode").into()),
+            Arc::new(AtomicBool::new(false)),
+          )
+          .await,
+      );
+
+      {
+        let mut writer = mpv.writer.lock().await;
+        write_mpv_message(
+          &mut writer,
+          &serde_json::json!({
+            "event": "client-message",
+            "args": ["jellypilot-test-message"],
+          }),
+        )
+        .await;
+      }
+      // The property round-trip orders the event ahead of the refresh drain.
+      mpv
+        .client
+        .get_property("pause")
+        .await
+        .expect("event barrier");
+
+      let settlement = controller
+        .execute(ControllerCommand::Refresh, Arc::new(AtomicBool::new(false)))
+        .await;
+      let ControllerSettlement::Refreshed {
+        client_messages, ..
+      } = settlement
+      else {
+        panic!("expected a refresh settlement");
+      };
+      assert_eq!(client_messages, vec!["jellypilot-test-message".to_owned()]);
     });
   }
 }

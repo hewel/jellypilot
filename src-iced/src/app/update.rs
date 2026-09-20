@@ -928,7 +928,8 @@ mod tests {
     JellyfinClient, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
   };
   use jellypilot_mpv::playback::{
-    Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
+    Playable, PlaybackError, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState,
+    PlaybackSnapshot, PlaybackStartOutcome,
   };
   use jellypilot_mpv::playback_session::{
     ControllerCommand, ControllerSettlement, IntroAvailability, PlaybackEffect, PlaybackEvent,
@@ -2427,9 +2428,12 @@ mod tests {
     let auxiliary = state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: playback_snapshot(0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,

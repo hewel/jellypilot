@@ -431,7 +431,6 @@ pub(crate) fn apply_playback_configuration(
         .publish(kernel.settings.snapshot().remember_season_volume());
       controller
         .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
-      controller.set_presentation_hold(Arc::clone(&surface.presentation_hold));
       surface.presentation_client = Some(controller.mpv_client());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
@@ -941,7 +940,6 @@ pub(crate) fn initialize_playback(
     Ok(mut controller) => {
       controller
         .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
-      controller.set_presentation_hold(Arc::clone(&surface.presentation_hold));
       surface.presentation_client = Some(controller.mpv_client());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
@@ -1577,7 +1575,6 @@ fn update_playback(
       id,
       settlement,
       started,
-      tracks,
     } => {
       // The session decides whether this settlement is a normal acceptance,
       // detached cleanup, or stale; sidecars and shutdown effects follow its
@@ -1650,17 +1647,6 @@ fn update_playback(
         "controller settled"
       );
       if accepted {
-        if let Some(result) = tracks {
-          tasks.push(
-            apply_playback_input(
-              surface,
-              kernel,
-              quit_requested,
-              PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled { id, result })),
-            )
-            .task,
-          );
-        }
         if let Some(playable) = started.as_deref() {
           tasks.push(load_queue_after_start(surface, kernel, playable));
         }
@@ -2305,105 +2291,21 @@ fn execute_controller_command(
       id,
       settlement: Box::new(settlement),
       started: started.map(Box::new),
-      tracks: None,
     }));
   };
   Task::perform(
     async move {
       let mut controller = controller.lock().await;
-      // Attach this command's own lease before executing: a revoked lease
-      // stays revoked for this command even when a newer admission already
-      // minted a fresh one.
-      controller.set_presentation_hold(lease);
-      controller.synchronize_volume_memory_preference().await;
-      match command {
-        ControllerCommand::Start {
-          item,
-          position,
-          selection,
-          continue_playback,
-        } => {
-          if !continue_playback {
-            controller.discard_continuation();
-          }
-          let result = controller.play_selected(item, position, selection).await;
-          let tracks = if result.is_ok() {
-            Some(controller.tracks().await)
-          } else {
-            None
-          };
-          (ControllerSettlement::Started(result), tracks)
-        }
-        ControllerCommand::SetPaused(paused) => (
-          ControllerSettlement::Controlled(controller.set_paused(paused).await),
-          None,
-        ),
-        ControllerCommand::ToggleFullscreen => (
-          ControllerSettlement::Controlled(controller.toggle_fullscreen().await),
-          None,
-        ),
-        ControllerCommand::Seek(position) => (
-          ControllerSettlement::Controlled(controller.seek(position).await),
-          None,
-        ),
-        ControllerCommand::SetVolume(volume) => (
-          ControllerSettlement::Controlled(controller.set_volume(volume).await),
-          None,
-        ),
-        ControllerCommand::SetMuted(muted) => (
-          ControllerSettlement::Controlled(controller.set_muted(muted).await),
-          None,
-        ),
-        ControllerCommand::SelectAudioTrack(id) => (
-          ControllerSettlement::TrackSelected(controller.select_audio_track(id).await),
-          None,
-        ),
-        ControllerCommand::SelectSubtitleTrack(id) => (
-          ControllerSettlement::TrackSelected(controller.select_subtitle_track(id).await),
-          None,
-        ),
-        ControllerCommand::ShowText { text, duration_ms } => (
-          ControllerSettlement::OsdShown(controller.show_text(&text, duration_ms).await),
-          None,
-        ),
-        ControllerCommand::IntroPrompt { text, duration_ms } => (
-          ControllerSettlement::OsdShown(if crate::embedded::enabled() {
-            // The embedded surface owns the prompt; MPV OSD is reserved for
-            // unrelated feedback and its independently toggled statistics.
-            Ok(())
-          } else {
-            controller.show_text(&text, duration_ms).await
-          }),
-          None,
-        ),
-        ControllerCommand::ToggleStats => (
-          ControllerSettlement::OsdShown(controller.toggle_stats().await),
-          None,
-        ),
-        ControllerCommand::Stop => (ControllerSettlement::Stopped(controller.stop().await), None),
-        ControllerCommand::Refresh => {
-          let outcome = controller.refresh().await;
-          let client_messages = controller.take_client_messages();
-          (
-            ControllerSettlement::Refreshed {
-              outcome,
-              client_messages,
-            },
-            None,
-          )
-        }
-        ControllerCommand::Shutdown => {
-          let outcome = controller.shutdown().await;
-          (ControllerSettlement::Shutdown(outcome), None)
-        }
-      }
+      // The controller binds this command's own lease before executing: a
+      // revoked lease stays revoked for this command even when a newer
+      // admission already minted a fresh one.
+      controller.execute(command, lease).await
     },
-    move |(settlement, tracks)| {
+    move |settlement| {
       Message::Playback(PlaybackMessage::ControllerSettled {
         id,
         settlement: Box::new(settlement),
         started: started.map(Box::new),
-        tracks,
       })
     },
   )
@@ -2551,7 +2453,7 @@ mod tests {
   };
   use jellypilot_mpv::playback::{
     NowPlayingItem, PlaybackEndReason, PlaybackOutcome, PlaybackRefreshOutcome,
-    PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
+    PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot, PlaybackStartOutcome,
   };
   use jellypilot_mpv::playback_session::{IntroAvailability, NowPlayingView, TracksView};
   use jellypilot_session::{GeneralCommand, JellyfinCommand, JellyfinWebSocketEvent, PlayRequest};
@@ -2862,9 +2764,12 @@ mod tests {
       .handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id,
-          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-            snapshot: playback_snapshot(10.0),
-            warnings: Vec::new(),
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: playback_snapshot(10.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
           })),
         })),
         now,
@@ -2943,7 +2848,6 @@ mod tests {
             warnings: Vec::new(),
           }))),
           started: None,
-          tracks: None,
         },
       ));
       assert!(
@@ -3132,7 +3036,6 @@ mod tests {
           client_messages: Vec::new(),
         }),
         started: None,
-        tracks: None,
       },
     ));
     assert_eq!(surface.seek_preview, Some(90.0));
@@ -3241,12 +3144,14 @@ mod tests {
       false,
       PlaybackMessage::ControllerSettled {
         id,
-        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(0.0),
-          warnings: Vec::new(),
+        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: playback_snapshot(0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         }))),
         started: Some(Box::new(started)),
-        tracks: None,
       },
     ));
 
@@ -3575,7 +3480,6 @@ mod tests {
           client_messages: Vec::new(),
         }),
         started: None,
-        tracks: None,
       },
     ));
 
@@ -3617,7 +3521,6 @@ mod tests {
           client_messages: Vec::new(),
         }),
         started: None,
-        tracks: None,
       },
     ));
 
@@ -3926,15 +3829,17 @@ mod tests {
       false,
       PlaybackMessage::ControllerSettled {
         id,
-        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(10.0),
-          warnings: Vec::new(),
+        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: playback_snapshot(10.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         }))),
         started: Some(Box::new(Playable::Detail(detail_with_series_poster(
           "episode-2",
           "series-poster",
         )))),
-        tracks: None,
       },
     ));
 
@@ -4140,9 +4045,12 @@ mod tests {
       .handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id,
-          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-            snapshot: playback_snapshot(10.0),
-            warnings: Vec::new(),
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: playback_snapshot(10.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
           })),
         })),
         now,
@@ -4192,9 +4100,12 @@ mod tests {
     let settle = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: playback_snapshot(0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
@@ -4396,7 +4307,6 @@ mod tests {
           client_messages: Vec::new(),
         }),
         started: None,
-        tracks: None,
       },
     ));
     assert!(
@@ -4860,9 +4770,12 @@ mod tests {
     let _ = surface.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: playback_snapshot(0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: playback_snapshot(0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,

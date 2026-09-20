@@ -813,7 +813,8 @@ mod gpu_probe {
     use jellypilot_core::request_gate::RequestGate;
     use jellypilot_media_server::MediaItem;
     use jellypilot_mpv::playback::{
-      NowPlayingItem, PlaybackOutcome, PlaybackSnapshot, PlaybackStartPosition, PlaybackStopOutcome,
+      NowPlayingItem, PlaybackError, PlaybackOutcome, PlaybackSnapshot, PlaybackStartOutcome,
+      PlaybackStartPosition, PlaybackStopOutcome,
     };
     use jellypilot_mpv::playback_session::{
       ControllerSettlement, EffectId, IntroAvailability, PlaybackEffect, PlaybackEvent,
@@ -1033,9 +1034,12 @@ mod gpu_probe {
             self.settle(
               kernel,
               id,
-              ControllerSettlement::Started(Ok(PlaybackOutcome {
-                snapshot,
-                warnings: Vec::new(),
+              ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+                playback: PlaybackOutcome {
+                  snapshot,
+                  warnings: Vec::new(),
+                },
+                tracks: Err(PlaybackError::TrackUnavailable),
               })),
             );
             // The probe loaded the media paused: a paused session must not

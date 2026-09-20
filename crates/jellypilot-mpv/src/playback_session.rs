@@ -11,8 +11,8 @@ use jellypilot_media_server::{IntroSkipKind, IntroSkipRange, MediaItem};
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackCleanupError, PlaybackEndReason, PlaybackError,
   PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection,
-  PlaybackShutdownOutcome, PlaybackSnapshot, PlaybackStartPosition, PlaybackStopOutcome,
-  PlaybackWarning, TrackInfo, TrackSelectionOutcome,
+  PlaybackShutdownOutcome, PlaybackSnapshot, PlaybackStartOutcome, PlaybackStartPosition,
+  PlaybackStopOutcome, PlaybackWarning, TrackInfo, TrackSelectionOutcome,
 };
 
 const INTRO_CONFIRMATION_DURATION_MS: i64 = 1_500;
@@ -86,15 +86,11 @@ pub enum PlaybackEvent {
     direction: AdjacentDirection,
     result: Result<Option<MediaItem>, ()>,
   },
-  TracksSettled {
-    id: EffectId,
-    result: Result<Vec<TrackInfo>, PlaybackError>,
-  },
 }
 
 #[derive(Clone)]
 pub enum ControllerSettlement {
-  Started(Result<PlaybackOutcome, PlaybackError>),
+  Started(Result<PlaybackStartOutcome, PlaybackError>),
   Controlled(Result<PlaybackOutcome, PlaybackError>),
   Stopped(Result<PlaybackStopOutcome, PlaybackError>),
   Refreshed {
@@ -670,16 +666,6 @@ impl PlaybackSession {
         self.adjacent.set(direction, result);
         PlaybackStep::default()
       }
-      PlaybackEvent::TracksSettled { id, result } => {
-        if id.epoch != self.epoch || self.snapshot.is_none() {
-          return PlaybackStep::default();
-        }
-        self.tracks = match result {
-          Ok(tracks) => ready_tracks(tracks),
-          Err(_) => TracksView::Unavailable,
-        };
-        PlaybackStep::default()
-      }
     }
   }
 
@@ -887,15 +873,19 @@ impl PlaybackSession {
 
   fn finish_start(
     &mut self,
-    result: Result<PlaybackOutcome, PlaybackError>,
+    result: Result<PlaybackStartOutcome, PlaybackError>,
     intro: IntroAvailability,
   ) -> Vec<PlaybackEffect> {
     match result {
       Ok(outcome) => {
-        let PlaybackOutcome { snapshot, warnings } = outcome;
+        let PlaybackStartOutcome { playback, tracks } = outcome;
+        let PlaybackOutcome { snapshot, warnings } = playback;
         self.snapshot = Some(snapshot);
         self.sync_desired_transport();
-        self.tracks = TracksView::Unavailable;
+        self.tracks = match tracks {
+          Ok(tracks) => ready_tracks(tracks),
+          Err(_) => TracksView::Unavailable,
+        };
         self.adjacent = AdjacentState::default();
         self.intro = IntroSkipper::with_manual_policy(intro.mode, ManualPromptPolicy::WholeRange);
         self.skipper_available = intro.skipper_available;
@@ -1738,9 +1728,12 @@ mod tests {
       .handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id,
-          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-            snapshot: snapshot("episode-1", item_type, 0.0),
-            warnings: Vec::new(),
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: snapshot("episode-1", item_type, 0.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
           })),
         })),
         now,
@@ -1813,9 +1806,12 @@ mod tests {
       .handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id: replacement,
-          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-            snapshot: snapshot("episode-2", "Episode", 0.0),
-            warnings: Vec::new(),
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: snapshot("episode-2", "Episode", 0.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
           })),
         })),
         now,
@@ -2315,9 +2311,12 @@ mod tests {
     let step = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: stale,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-1", "Episode", 0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-1", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
@@ -2663,9 +2662,12 @@ mod tests {
     let step = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-1", "Episode", 0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-1", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
@@ -2733,33 +2735,82 @@ mod tests {
   }
 
   #[test]
-  fn stale_tracks_settlement_is_dropped() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
-    assert!(!matches!(session.view().tracks, TracksView::Ready { .. }));
-
-    // A real current-epoch id anchors the stale/current comparison.
-    let current = adjacent_id(&auxiliary, AdjacentDirection::Next);
-    let stale = EffectId {
-      epoch: current.epoch.wrapping_add(1),
-      sequence: 0,
+  fn start_tracks_require_the_exact_pending_controller_settlement() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    let current = start_command(&mut session, now, IntroSkipMode::Off);
+    let completion = |id, audio_id| {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-1", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Ok(vec![TrackInfo {
+            id: audio_id,
+            track_type: "audio".to_owned(),
+            title: None,
+            language: Some("eng".to_owned()),
+            selected: true,
+            provider_index: Some(1),
+          }]),
+        })),
+      }))
     };
-    session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled {
-        id: stale,
-        result: Ok(Vec::new()),
-      })),
-      now,
-    );
-    assert!(!matches!(session.view().tracks, TracksView::Ready { .. }));
+    let stale = EffectId {
+      epoch: current.epoch,
+      sequence: current.sequence.wrapping_add(1),
+    };
+    session.handle(completion(stale, 9), now);
+    assert!(session.view().now_playing.is_none());
+    assert!(matches!(session.view().tracks, TracksView::Unavailable));
 
+    session.handle(completion(current, 7), now);
+    assert_eq!(
+      session.view().now_playing.unwrap().item.item_id,
+      "episode-1"
+    );
+    assert!(matches!(
+      session.view().tracks,
+      TracksView::Ready { audio: Some(7), .. }
+    ));
+
+    // Replaying a completed start cannot replace tracks, even in the same epoch.
+    session.handle(completion(current, 9), now);
+    assert!(matches!(
+      session.view().tracks,
+      TracksView::Ready { audio: Some(7), .. }
+    ));
+  }
+
+  #[test]
+  fn failed_start_track_read_preserves_playback_and_start_warnings() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    let id = start_command(&mut session, now, IntroSkipMode::Off);
     session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled {
-        id: current,
-        result: Ok(Vec::new()),
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-1", "Episode", 0.0),
+            warnings: vec![PlaybackWarning::PlaybackStartNotReported],
+          },
+          tracks: Err(PlaybackError::MpvControlFailed),
+        })),
       })),
       now,
     );
-    assert!(matches!(session.view().tracks, TracksView::Ready { .. }));
+    let view = session.view();
+    assert_eq!(view.now_playing.unwrap().item.item_id, "episode-1");
+    assert!(matches!(view.tracks, TracksView::Unavailable));
+    assert!(view.lifecycle.settled);
+    assert!(matches!(
+      view.notice,
+      Some(PlaybackNotice::Warnings(warnings))
+        if warnings == vec![PlaybackWarning::PlaybackStartNotReported]
+    ));
   }
 
   #[test]
@@ -2990,9 +3041,12 @@ mod tests {
       .handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id: start_id,
-          settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-            snapshot: snapshot("episode-2", "Episode", 0.0),
-            warnings: Vec::new(),
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: snapshot("episode-2", "Episode", 0.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
           })),
         })),
         now,
@@ -3518,87 +3572,6 @@ mod tests {
   }
 
   #[test]
-  fn missing_controller_settlement_matches_each_command_kind() {
-    let item = Playable::Media(media_item("episode-1", "Pilot"));
-    let cases: Vec<(ControllerCommand, ControllerSettlement)> = vec![
-      (
-        ControllerCommand::Start {
-          item,
-          position: PlaybackStartPosition::Beginning,
-          selection: PlaybackSelection::default(),
-          continue_playback: false,
-        },
-        ControllerSettlement::Started(Err(PlaybackError::MpvNotFound)),
-      ),
-      (
-        ControllerCommand::Stop,
-        ControllerSettlement::Stopped(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::SetPaused(true),
-        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::Seek(10.0),
-        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::SetVolume(50.0),
-        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::SetMuted(true),
-        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::SelectAudioTrack(2),
-        ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::ToggleStats,
-        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::SelectSubtitleTrack(None),
-        ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::ShowText {
-          text: "Hi".to_owned(),
-          duration_ms: 1_000,
-        },
-        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::IntroPrompt {
-          text: "Skip".to_owned(),
-          duration_ms: 3_000,
-        },
-        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
-      ),
-      (
-        ControllerCommand::Shutdown,
-        ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
-      ),
-    ];
-    for (command, expected) in cases {
-      assert_eq!(
-        std::mem::discriminant(&command.missing_controller_settlement()),
-        std::mem::discriminant(&expected),
-      );
-    }
-    let ControllerSettlement::Refreshed { outcome, .. } =
-      ControllerCommand::Refresh.missing_controller_settlement()
-    else {
-      panic!("refresh should settle as a synthetic refresh");
-    };
-    assert_eq!(
-      outcome.state,
-      PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected)
-    );
-  }
-
-  #[test]
   fn failed_stop_settlement_reports_failed_completion() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
     let (stop_id, _) = controller_effect(
@@ -3678,9 +3651,12 @@ mod tests {
     let step = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: stop_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-9", "Episode", 0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-9", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
@@ -3740,9 +3716,12 @@ mod tests {
     session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-2", "Episode", 0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-2", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
@@ -3995,9 +3974,12 @@ mod tests {
     let settled = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: in_flight,
-        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-1", "Episode", 0.0),
-          warnings: Vec::new(),
+        settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+          playback: PlaybackOutcome {
+            snapshot: snapshot("episode-1", "Episode", 0.0),
+            warnings: Vec::new(),
+          },
+          tracks: Err(PlaybackError::TrackUnavailable),
         })),
       })),
       now,
