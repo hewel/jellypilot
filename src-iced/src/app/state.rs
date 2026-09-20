@@ -434,7 +434,6 @@ pub struct DetailState {
   pub requested_season_number: Option<i32>,
   pub overview_expanded: bool,
   pub expanded_episode_ids: HashSet<String>,
-  pub user_data_busy: Option<UserDataActionKind>,
   pub user_data_error: Option<UiText>,
 }
 
@@ -675,6 +674,7 @@ impl State {
       system_theme: iced::theme::Mode::None,
       motion: Default::default(),
       kernel: Kernel {
+        item_actions: Default::default(),
         settings,
         locale,
         diagnostics,

@@ -19,7 +19,6 @@ use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
   VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodes, VideoSeasonEpisodesPage,
-  VideoUserDataUpdate,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection};
 use jellypilot_mpv::playback_session::{
@@ -35,6 +34,7 @@ impl std::fmt::Debug for Message {
       Self::Shell(_) => formatter.write_str("Shell"),
       Self::PersonalLists(_) => formatter.write_str("PersonalLists"),
       Self::Collections(_) => formatter.write_str("Collections"),
+      Self::ItemActions(_) => formatter.write_str("ItemActions"),
       Self::Account(_) => formatter.write_str("Account([redacted])"),
       Self::Login(_) => formatter.write_str("Login([redacted])"),
       Self::Home(_) => formatter.write_str("Home"),
@@ -75,6 +75,7 @@ pub enum Message {
   Shell(ShellMessage),
   PersonalLists(super::personal_lists::PersonalListsMessage),
   Collections(super::collections::CollectionMessage),
+  ItemActions(super::item_actions::Message),
   Account(super::accounts::Message),
   Login(LoginMessage),
   Home(HomeMessage),
@@ -212,9 +213,6 @@ pub enum DetailMessage {
   TrackMenuDismissed,
   /// Opens the loaded episode's parent series through normal navigation.
   OpenSeries,
-  FavoriteToggled,
-  WatchlistToggled,
-  PlayedToggled,
   Loaded {
     token: DetailToken,
     result: Box<Result<jellypilot_core::detail::DetailContent, String>>,
@@ -230,10 +228,6 @@ pub enum DetailMessage {
   SimilarLoaded {
     token: DetailAuxToken,
     result: Result<Vec<VideoLibraryItem>, String>,
-  },
-  UserDataUpdated {
-    token: DetailAuxToken,
-    result: Result<VideoUserDataUpdate, String>,
   },
   ArtworkLoaded(super::artwork::ImageCompletion),
 }

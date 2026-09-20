@@ -414,6 +414,7 @@ mod tests {
       view: SettingsState::from_settings(settings.snapshot()),
     };
     let kernel = Kernel {
+      item_actions: Default::default(),
       settings,
       locale: crate::i18n::Localizer::new(jellypilot_core::locale::UiLanguage::English),
       diagnostics: Diagnostics::default(),

@@ -9,6 +9,7 @@ use crate::app::detail::{
   card_image_spec, cast_image_spec, detail_next_up_key, episode_image_spec, hero_image_spec,
   DETAIL_BACKDROP_KEY, DETAIL_LOGO_KEY,
 };
+use crate::app::item_actions::{self, Message as ItemActionsMessage};
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
 use crate::app::state::{State, TrackMenu, UserDataActionKind};
 use crate::i18n::media::{
@@ -23,6 +24,7 @@ use iced::widget::{
 use iced::{gradient, padding};
 use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length, Pixels};
 use jellypilot_core::detail::{detail_episode_key, detail_similar_key, DetailContent};
+use jellypilot_core::item_actions::Action;
 use jellypilot_core::LoadState;
 use jellypilot_media_server::{
   VideoCastMember, VideoItemDetail, VideoLibraryItem, VideoMediaInfo, VideoSeason, VideoShowDetail,
@@ -569,8 +571,8 @@ fn detail_actions<'a>(
       .filter(|_| playback_enabled)
       .map(|(item, position)| playback_message(state, item, position)),
   );
-  let any_busy =
-    crate::app::collections::busy(state.full.as_ref().expect("FullUi required"), item_id);
+  // One pending write per item blocks every Favorite/Played/Watchlist action.
+  let busy = item_actions::busy(&state.kernel, item_id);
   // The favorited heart stays rose across hover (fixed `favorite` accent);
   // the unfavorited heart is an ordinary Tonal control on `control_button`.
   let favorite_button: Element<'_, Message> = if favorite {
@@ -605,7 +607,11 @@ fn detail_actions<'a>(
     )
     .padding([9, 16])
     .min_height(36.0)
-    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
+    .on_press_maybe(
+      (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
+        UserDataActionKind::Favorite,
+      ))),
+    )
     .into()
   } else {
     control_button(
@@ -618,12 +624,15 @@ fn detail_actions<'a>(
     .min_height(36.0)
     .spacing(8.0)
     .padding([8, 16])
-    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
+    .on_press_maybe(
+      (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
+        UserDataActionKind::Favorite,
+      ))),
+    )
     .into()
   };
   let watchlist = &state.full.as_ref().expect("FullUi required").personal_lists;
   let watchlisted = watchlist.watchlist_ids.contains(item_id);
-  let watchlist_busy = watchlist.busy_items.contains(item_id);
   let watchlist_button = control_button(
     Some(if watchlisted {
       Icon::BookmarkFilled
@@ -646,7 +655,7 @@ fn detail_actions<'a>(
   .min_height(36.0)
   .spacing(8.0)
   .padding([8, 16])
-  .on_press_maybe((!watchlist_busy).then_some(Message::Detail(DetailMessage::WatchlistToggled)));
+  .on_press_maybe((!busy).then_some(Message::ItemActions(ItemActionsMessage::DetailWatchlist)));
   let (played_icon, played_label, played_variant) = if played {
     (
       Icon::CircleCheck,
@@ -666,7 +675,11 @@ fn detail_actions<'a>(
     .min_height(36.0)
     .spacing(8.0)
     .padding([8, 16])
-    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)));
+    .on_press_maybe(
+      (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
+        UserDataActionKind::Played,
+      ))),
+    );
   let mut actions = Row::new()
     .spacing(10)
     .align_y(Alignment::Center)
@@ -674,18 +687,12 @@ fn detail_actions<'a>(
     .push(favorite_button)
     .push(watchlist_button)
     .push(played_button);
-  if let Some(kind) = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .detail
-    .data
-    .user_data_busy
-  {
+  if let Some(action) = state.kernel.item_actions.pending(item_id) {
     actions = actions.push(
-      text(match kind {
-        UserDataActionKind::Favorite => state.t("detail-updating-favorite"),
-        UserDataActionKind::Played => state.t("detail-updating-played"),
+      text(match action {
+        Action::Favorite(_) => state.t("detail-updating-favorite"),
+        Action::Played(_) => state.t("detail-updating-played"),
+        Action::Watchlist(_) => state.t("collection-updating"),
       })
       .size(13)
       .color(state.palette().text.metadata),
@@ -2485,6 +2492,7 @@ mod tests {
     let playback = playback::Surface::new(&mut request_gate);
     State {
       kernel: Kernel {
+        item_actions: Default::default(),
         settings,
         locale: Localizer::default(),
         diagnostics: Default::default(),

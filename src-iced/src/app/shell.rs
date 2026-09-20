@@ -42,6 +42,23 @@ enum PageState {
   ),
 }
 
+/// Navigation owns saved Detail projections; accepted writes patch them directly.
+pub(crate) fn apply_user_data_update(
+  surface: &mut Surface,
+  update: &jellypilot_media_server::VideoUserDataUpdate,
+) {
+  for page in surface
+    .navigation_stack
+    .iter_mut()
+    .filter_map(|entry| entry.page_state.as_mut())
+    .chain(surface.page_state.iter_mut())
+  {
+    if let PageState::Detail(snapshot) = page {
+      detail::apply_snapshot_update(snapshot, update);
+    }
+  }
+}
+
 struct RefreshTarget {
   destination: Destination,
   browse_identity: Option<String>,
@@ -1351,6 +1368,7 @@ mod tests {
 
   fn test_fixture() -> (Surface, Kernel) {
     let kernel = Kernel {
+      item_actions: Default::default(),
       settings: SettingsStore::default(),
       locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),

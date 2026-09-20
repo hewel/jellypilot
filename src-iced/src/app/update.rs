@@ -203,8 +203,15 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+  let session = state.kernel.request_gate.current_session();
+  let client = state.kernel.client.as_ref().map(std::sync::Arc::as_ptr);
   let was_fullscreen = state.shell.player_fullscreen;
   let task = route_message(state, message);
+  if state.kernel.request_gate.current_session() != session
+    || state.kernel.client.as_ref().map(std::sync::Arc::as_ptr) != client
+  {
+    super::item_actions::sync_scope(&mut state.kernel);
+  }
   if was_fullscreen && !state.shell.player_fullscreen {
     playback::cancel_slider_drags(&mut state.playback);
   }
@@ -263,19 +270,8 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         task
       }
     }
+    Message::ItemActions(message) => super::item_actions::update(state, message),
     Message::PersonalLists(message) => {
-      if accounts::content_mutations_blocked(&state.accounts)
-        && matches!(
-          &message,
-          super::personal_lists::PersonalListsMessage::ToggleWatchlist(_)
-            | super::personal_lists::PersonalListsMessage::RemoveWatchlist(_)
-        )
-      {
-        return state.kernel.show_toast(
-          NoticeLevel::Warning,
-          UiText::new("shell-account-change-lists"),
-        );
-      }
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
@@ -609,41 +605,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         _ => Task::none(),
       }
     }
-    Message::Detail(DetailMessage::WatchlistToggled) => {
-      if accounts::content_mutations_blocked(&state.accounts) {
-        return state.kernel.show_toast(
-          NoticeLevel::Warning,
-          UiText::new("shell-account-change-lists"),
-        );
-      }
-      let Some(full) = state.full.as_mut() else {
-        return Task::none();
-      };
-      let Destination::Detail(id) = &state.shell.destination else {
-        return Task::none();
-      };
-      let Some(item) = full.detail.items.get(id).cloned() else {
-        return Task::none();
-      };
-      super::personal_lists::update(
-        &mut full.personal_lists,
-        &mut state.kernel,
-        &state.watchlist,
-        super::personal_lists::PersonalListsMessage::ToggleWatchlist(Box::new(item)),
-      )
-    }
     Message::Detail(message) => {
-      if accounts::content_mutations_blocked(&state.accounts)
-        && matches!(
-          &message,
-          DetailMessage::FavoriteToggled | DetailMessage::PlayedToggled
-        )
-      {
-        return state.kernel.show_toast(
-          NoticeLevel::Warning,
-          UiText::new("shell-account-change-item"),
-        );
-      }
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
@@ -651,13 +613,6 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         Destination::Detail(item_id) => Some(item_id.as_str()),
         _ => None,
       };
-      if matches!(
-        &message,
-        DetailMessage::FavoriteToggled | DetailMessage::PlayedToggled
-      ) && detail_item_id.is_some_and(|id| super::collections::busy(full, id))
-      {
-        return Task::none();
-      }
       detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message)
     }
     Message::Settings(message @ (SettingsMessage::Open | SettingsMessage::OpenAccounts)) => {
@@ -976,6 +931,7 @@ mod tests {
       motion: Default::default(),
       image_diagnostics: Default::default(),
       kernel: Kernel {
+        item_actions: Default::default(),
         settings,
         locale: Localizer::default(),
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
@@ -2610,20 +2566,11 @@ mod tests {
     assert!(state.kernel.client.is_some());
     drop(update(
       &mut state,
-      Message::PersonalLists(
-        super::super::personal_lists::PersonalListsMessage::ToggleWatchlist(Box::new(episode(
-          "late-write",
-          1,
-        ))),
-      ),
+      Message::ItemActions(super::super::item_actions::Message::WatchlistToggle(
+        Box::new(episode("late-write", 1)),
+      )),
     ));
-    assert!(state
-      .full
-      .as_ref()
-      .unwrap()
-      .personal_lists
-      .busy_items
-      .is_empty());
+    assert!(state.kernel.item_actions.pending("late-write").is_none());
     assert!(matches!(
       state.kernel.active_toast.as_ref().map(|toast| toast.level),
       Some(NoticeLevel::Warning)

@@ -16,7 +16,8 @@ use jellypilot_ui::{full_radius, rounded_image};
 
 use super::image_observer::{observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageStatus};
-use crate::app::collections::{self, CollectionMessage};
+use crate::app::collections::CollectionMessage;
+use crate::app::item_actions;
 use crate::app::message::{HomeMessage, Message};
 use crate::app::personal_lists::{
   artwork_key, artwork_spec, ItemAvailability, Kind, ListEntry, ListPage, PersonalListsMessage,
@@ -472,7 +473,6 @@ fn card_action<'a>(
   kind: Kind,
   entry: &'a ListEntry,
 ) -> Option<Element<'a, Message>> {
-  let full = state.full.as_ref().expect("FullUi required");
   let (icon, action) = match kind {
     Kind::Favorites => {
       let item = entry.item.as_ref()?;
@@ -487,11 +487,11 @@ fn card_action<'a>(
     }
     Kind::Watchlist => (
       Icon::Trash,
-      Message::PersonalLists(PersonalListsMessage::RemoveWatchlist(entry.id.clone())),
+      Message::ItemActions(item_actions::Message::WatchlistRemove(entry.id.clone())),
     ),
     Kind::History => return None,
   };
-  let busy = collections::busy(full, &entry.id);
+  let busy = item_actions::busy(&state.kernel, &entry.id);
   let disabled = busy || crate::app::accounts::content_mutations_blocked(&state.accounts);
   let control = control_button(Some(icon), None, ButtonVariant::Tonal)
     .icon_size(IconSize::Sm)
@@ -892,7 +892,7 @@ mod tests {
         .drain()
         .map(|(message, _)| match message {
           Message::OpenDetail(_) => "details",
-          Message::PersonalLists(PersonalListsMessage::RemoveWatchlist(_)) => "remove",
+          Message::ItemActions(item_actions::Message::WatchlistRemove(_)) => "remove",
           _ => "other",
         })
         .collect::<Vec<_>>();

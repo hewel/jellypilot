@@ -25,6 +25,8 @@ pub mod home_hero;
 pub mod image_lifecycle;
 #[cfg(feature = "portable")]
 pub mod intro_skipper;
+#[cfg(feature = "portable")]
+pub mod item_actions;
 mod load_state;
 pub mod locale;
 #[cfg(feature = "portable")]

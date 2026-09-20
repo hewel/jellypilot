@@ -2603,6 +2603,7 @@ mod tests {
     let mut request_gate = RequestGate::default();
     let surface = Surface::new(&mut request_gate);
     let kernel = Kernel {
+      item_actions: Default::default(),
       locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),

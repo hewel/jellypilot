@@ -6,6 +6,7 @@ pub(crate) mod collections;
 pub mod detail;
 pub mod embedded_player;
 pub mod home;
+pub(crate) mod item_actions;
 pub mod kernel;
 pub mod login;
 pub mod message;

@@ -5,17 +5,14 @@ use std::sync::Arc;
 
 use iced::{task, Task};
 use jellypilot_core::collections::{collection_target, CollectionTarget};
-use jellypilot_core::detail::{apply_user_data_update, DetailContent};
 use jellypilot_core::request_gate::SessionToken;
-use jellypilot_core::LoadState;
 use jellypilot_media_server::{VideoLibraryItem, VideoUserDataUpdate};
 use jellypilot_mpv::playback::Playable;
 
 use super::accounts;
 use super::message::Message;
-use super::personal_lists::{self, PersonalListsMessage};
-use super::state::{Destination, FullUi, NoticeLevel, State};
-use crate::i18n::UiText;
+use super::personal_lists;
+use super::state::{Destination, FullUi, State};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Source {
@@ -30,11 +27,6 @@ pub(crate) struct Controls {
   pub watchlist_action: Option<Message>,
   pub favorite_label: String,
   pub watchlist_label: String,
-}
-
-pub(crate) enum Change {
-  Confirmed(VideoUserDataUpdate),
-  Invalidated(String),
 }
 
 struct Entry {
@@ -110,19 +102,6 @@ fn target(state: &State, source: Source) -> Option<CollectionTarget<'_>> {
   }
 }
 
-pub(crate) fn busy(full: &FullUi, item_id: &str) -> bool {
-  full.personal_lists.busy_items.contains(item_id) || detail_busy(full, item_id)
-}
-fn detail_busy(full: &FullUi, item_id: &str) -> bool {
-  full.detail.pending_user_data.contains_key(item_id)
-    || full.detail.data.user_data_busy.is_some()
-      && match &full.detail.data.content {
-        LoadState::Ready(DetailContent::Item(item)) => item.id == item_id,
-        LoadState::Ready(DetailContent::Show(show)) => show.id == item_id,
-        _ => false,
-      }
-}
-
 pub(crate) fn controls(state: &State, source: Source) -> Controls {
   let current = target(state, source);
   let session = state.kernel.request_gate.current_session();
@@ -141,11 +120,7 @@ pub(crate) fn controls(state: &State, source: Source) -> Controls {
       .filter(|_| full.personal_lists.membership_loaded)
       .map(|item| full.personal_lists.watchlist_ids.contains(&item.id))
   });
-  let busy = current.is_some_and(|target| {
-    full.is_some_and(|full| {
-      full.personal_lists.busy_items.contains(target.item_id) || detail_busy(full, target.item_id)
-    })
-  });
+  let busy = current.is_some_and(|target| super::item_actions::busy(&state.kernel, target.item_id));
   let enabled = !busy
     && !accounts::content_mutations_blocked(&state.accounts)
     && !state.shell.quit_requested
@@ -204,7 +179,7 @@ pub(crate) fn controls(state: &State, source: Source) -> Controls {
   }
 }
 
-/// Applies accepted cross-surface changes and admits at most two metadata requests.
+/// Admits at most two metadata requests for the currently presented collection targets.
 pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
   let Some(full) = state.full.as_mut() else {
     return Task::none();
@@ -217,48 +192,6 @@ pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
     };
   }
   let mut tasks = Vec::new();
-  for (change, refresh_detail) in [
-    (full.detail.collection_change.take(), false),
-    (full.personal_lists.collection_change.take(), true),
-  ] {
-    match change {
-      Some(Change::Confirmed(update)) => {
-        tasks.push(super::browse::apply_user_data_update(
-          &mut full.browse,
-          &mut state.kernel,
-          &update,
-        ));
-        if let Some(entry) = full.collections.entries.get_mut(&update.item_id) {
-          if let Some(item) = &mut entry.item {
-            item.favorite = update.favorite;
-            item.played = update.played;
-          }
-          if entry.pending.is_some() {
-            entry.confirmed_during_load = Some(update.clone());
-          }
-        }
-        apply_user_data_update(&mut full.detail.data.content, &update);
-        if let Some(item) = full.detail.items.get_mut(&update.item_id) {
-          item.favorite = update.favorite;
-          item.played = update.played;
-        }
-        if refresh_detail
-          && matches!(&state.shell.destination, Destination::Detail(id) if id == &update.item_id)
-        {
-          super::detail::cancel_refresh(&mut full.detail, &mut state.kernel);
-          tasks.push(super::detail::refresh(
-            &mut full.detail,
-            &mut state.kernel,
-            &update.item_id,
-          ));
-        }
-      }
-      Some(Change::Invalidated(item_id)) => {
-        full.collections.entries.remove(&item_id);
-      }
-      None => {}
-    }
-  }
   let desired = [hero_target(&full.home), playing_target(&state.playback)];
   full
     .collections
@@ -272,7 +205,7 @@ pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
   };
   for target in desired.into_iter().flatten() {
     if full.collections.entries.contains_key(target.item_id)
-      || full.personal_lists.busy_items.contains(target.item_id)
+      || super::item_actions::busy(&state.kernel, target.item_id)
     {
       continue;
     }
@@ -312,6 +245,18 @@ pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
     tasks.push(task);
   }
   Task::batch(tasks)
+}
+
+pub(crate) fn apply_confirmed(surface: &mut Surface, update: &VideoUserDataUpdate) {
+  if let Some(entry) = surface.entries.get_mut(&update.item_id) {
+    if let Some(item) = &mut entry.item {
+      item.favorite = update.favorite;
+      item.played = update.played;
+    }
+    if entry.pending.is_some() {
+      entry.confirmed_during_load = Some(update.clone());
+    }
+  }
 }
 
 pub(crate) fn invalidate(state: &mut State) {
@@ -372,16 +317,10 @@ pub(crate) fn update(state: &mut State, message: CollectionMessage) -> Task<Mess
   if !state.kernel.request_gate.is_current_session(session) || state.shell.quit_requested {
     return Task::none();
   }
-  if accounts::content_mutations_blocked(&state.accounts) {
-    return state.kernel.show_toast(
-      NoticeLevel::Warning,
-      UiText::new("shell-account-change-lists"),
-    );
-  }
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
-  if full.personal_lists.busy_items.contains(item_id) || detail_busy(full, item_id) {
+  if super::item_actions::busy(&state.kernel, item_id) {
     return Task::none();
   }
   match message {
@@ -391,12 +330,15 @@ pub(crate) fn update(state: &mut State, message: CollectionMessage) -> Task<Mess
       if !favorite_is_known(full, &state.shell.destination, session, &item_id) {
         return Task::none();
       }
-      personal_lists::set_favorite(
-        &mut full.personal_lists,
-        &mut state.kernel,
-        &state.watchlist,
+      super::item_actions::start_server(
+        state,
         item_id,
-        favorite,
+        if favorite {
+          jellypilot_media_server::VideoUserDataAction::Favorite
+        } else {
+          jellypilot_media_server::VideoUserDataAction::Unfavorite
+        },
+        super::item_actions::Origin::Other,
       )
     }
     CollectionMessage::Watchlist { watchlisted, .. } => {
@@ -417,11 +359,9 @@ pub(crate) fn update(state: &mut State, message: CollectionMessage) -> Task<Mess
         return Task::none();
       }
       let item = item.clone();
-      personal_lists::update(
-        &mut full.personal_lists,
-        &mut state.kernel,
-        &state.watchlist,
-        PersonalListsMessage::ToggleWatchlist(Box::new(item)),
+      super::item_actions::update(
+        state,
+        super::item_actions::Message::WatchlistToggle(Box::new(item)),
       )
     }
     CollectionMessage::Loaded { .. } => Task::none(),
@@ -476,12 +416,29 @@ fn favorite_is_known(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::app::message::DetailMessage;
+  use crate::app::{item_actions, state::UserDataActionKind};
+  use iced::futures::StreamExt;
+  use jellypilot_core::{detail::DetailContent, LoadState};
 
-  fn fixture() -> State {
+  fn fixture(server_url: &str) -> State {
     let mut state = State::boot(false);
     state.full = Some(FullUi::default());
     state.kernel.client = Some(Arc::new(jellypilot_media_server::JellyfinClient::new()));
+    state
+      .kernel
+      .client
+      .as_ref()
+      .unwrap()
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: server_url.to_owned(),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
     state
       .kernel
       .request_gate
@@ -566,29 +523,61 @@ mod tests {
     state
   }
 
-  #[test]
-  fn detail_confirmation_after_navigation_updates_the_hero_collection() {
-    let mut state = fixture();
-    drop(crate::app::update::update(
+  async fn server(response: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+      let (socket, _) = listener.accept().await.unwrap();
+      let mut socket = BufReader::new(socket);
+      loop {
+        let mut line = String::new();
+        assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+          break;
+        }
+      }
+      socket.get_mut().write_all(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+        response.len(),
+      ).as_bytes()).await.unwrap();
+    });
+    (format!("http://{address}"), peer)
+  }
+
+  async fn completion(task: Task<Message>) -> Message {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+      let mut stream = iced_runtime::task::into_stream(task).expect("action emits work");
+      while let Some(action) = stream.next().await {
+        if let iced_runtime::Action::Output(
+          message @ Message::ItemActions(item_actions::Message::Settled { .. }),
+        ) = action
+        {
+          return message;
+        }
+      }
+      panic!("action ended without a settlement");
+    })
+    .await
+    .expect("action settles")
+  }
+
+  #[tokio::test]
+  async fn detail_confirmation_after_navigation_updates_the_hero_collection() {
+    let (url, peer) = server(r#"{"Key":"series","IsFavorite":true,"Played":false}"#).await;
+    let mut state = fixture(&url);
+    let task = crate::app::update::update(
       &mut state,
-      Message::Detail(DetailMessage::FavoriteToggled),
-    ));
+      Message::ItemActions(item_actions::Message::Detail(UserDataActionKind::Favorite)),
+    );
+    assert_eq!(controls(&state, Source::Hero).favorite, Some(false));
     let full = state.full.as_mut().unwrap();
-    let token = full.detail.pending_user_data["series"].clone();
     super::super::detail::leave_view(&mut full.detail, &mut state.kernel);
     state.shell.destination = Destination::Home;
     assert!(controls(&state, Source::Hero).favorite_action.is_none());
-    drop(crate::app::update::update(
-      &mut state,
-      Message::Detail(DetailMessage::UserDataUpdated {
-        token,
-        result: Ok(VideoUserDataUpdate {
-          item_id: "series".to_owned(),
-          favorite: true,
-          played: false,
-        }),
-      }),
-    ));
+    let message = completion(task).await;
+    drop(crate::app::update::update(&mut state, message));
+    peer.await.unwrap();
     let hero = controls(&state, Source::Hero);
     assert_eq!(hero.favorite, Some(true));
     assert!(matches!(hero.favorite_action, Some(Message::Collections(
@@ -597,18 +586,52 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn confirmation_updates_detail_saved_in_navigation_history() {
+    let (url, peer) = server(r#"{"Key":"series","IsFavorite":true,"Played":false}"#).await;
+    let mut state = fixture(&url);
+    let task = crate::app::update::update(
+      &mut state,
+      Message::ItemActions(item_actions::Message::Detail(UserDataActionKind::Favorite)),
+    );
+    drop(crate::app::update::update(
+      &mut state,
+      Message::Home(crate::app::message::HomeMessage::Navigate(
+        Destination::Detail("other".to_owned()),
+      )),
+    ));
+    let message = completion(task).await;
+    drop(crate::app::update::update(&mut state, message));
+    peer.await.unwrap();
+    drop(crate::app::update::update(
+      &mut state,
+      Message::Detail(crate::app::message::DetailMessage::Back),
+    ));
+    assert_eq!(
+      state.shell.destination,
+      Destination::Detail("series".to_owned())
+    );
+    assert!(matches!(
+      &state.full.as_ref().unwrap().detail.data.content,
+      LoadState::Ready(DetailContent::Show(show)) if show.favorite
+    ));
+  }
+
+  #[tokio::test]
   async fn detail_cannot_start_a_conflicting_write_while_collection_mutation_is_pending() {
-    use iced::futures::StreamExt;
-    let mut state = fixture();
-    state
-      .full
-      .as_mut()
-      .unwrap()
-      .personal_lists
-      .busy_items
-      .insert("series".to_owned());
-    let task =
-      crate::app::update::update(&mut state, Message::Detail(DetailMessage::PlayedToggled));
+    let mut state = fixture("http://127.0.0.1:9");
+    let session = state.kernel.request_gate.current_session();
+    let pending = update(
+      &mut state,
+      CollectionMessage::Favorite {
+        session,
+        item_id: "series".to_owned(),
+        favorite: true,
+      },
+    );
+    let task = crate::app::update::update(
+      &mut state,
+      Message::ItemActions(item_actions::Message::Detail(UserDataActionKind::Played)),
+    );
     if let Some(mut stream) = iced_runtime::task::into_stream(task) {
       assert!(
         stream.next().await.is_none(),
@@ -616,5 +639,48 @@ mod tests {
       );
     }
     assert!(controls(&state, Source::Hero).favorite_action.is_none());
+    drop(pending);
+  }
+
+  #[tokio::test]
+  async fn unconfirmed_detail_action_keeps_flags_and_reports_inline_failure() {
+    let (url, peer) = server(r#"{"Key":"series","IsFavorite":false,"Played":false}"#).await;
+    let mut state = fixture(&url);
+    let task = crate::app::update::update(
+      &mut state,
+      Message::ItemActions(item_actions::Message::Detail(UserDataActionKind::Favorite)),
+    );
+    let message = completion(task).await;
+    drop(crate::app::update::update(&mut state, message));
+    peer.await.unwrap();
+    assert_eq!(controls(&state, Source::Hero).favorite, Some(false));
+    assert!(controls(&state, Source::Hero).favorite_action.is_some());
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .detail
+      .data
+      .user_data_error
+      .is_some());
+    assert!(state.kernel.active_toast.is_none());
+  }
+
+  #[tokio::test]
+  async fn previous_session_confirmation_cannot_update_current_collections() {
+    let (url, peer) = server(r#"{"Key":"series","IsFavorite":true,"Played":false}"#).await;
+    let mut state = fixture(&url);
+    let task = crate::app::update::update(
+      &mut state,
+      Message::ItemActions(item_actions::Message::Detail(UserDataActionKind::Favorite)),
+    );
+    let message = completion(task).await;
+    peer.await.unwrap();
+    state.kernel.request_gate.disconnect();
+    state.full.as_mut().unwrap().collections.session =
+      Some(state.kernel.request_gate.current_session());
+    drop(crate::app::update::update(&mut state, message));
+    assert_eq!(controls(&state, Source::Hero).favorite, Some(false));
+    assert!(controls(&state, Source::Hero).favorite_action.is_some());
   }
 }

@@ -1059,6 +1059,7 @@ mod tests {
       quick_connect_task: None,
     };
     let kernel = Kernel {
+      item_actions: Default::default(),
       locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),

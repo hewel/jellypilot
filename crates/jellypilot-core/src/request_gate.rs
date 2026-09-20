@@ -23,7 +23,6 @@ pub enum DetailAuxKind {
     Recommendations,
     SeasonNeighbors,
     SimilarItems,
-    UserData,
 }
 
 /// Identity of one detail-auxiliary request.
@@ -33,19 +32,6 @@ pub struct DetailAuxToken {
     kind: DetailAuxKind,
     sequence: u64,
     item_id: String,
-}
-
-impl DetailAuxToken {
-    /// Authentication identity, independent of the originating Detail navigation.
-    #[must_use]
-    pub fn session(&self) -> SessionToken {
-        self.session
-    }
-
-    #[must_use]
-    pub fn item_id(&self) -> &str {
-        &self.item_id
-    }
 }
 
 /// Identity of one remote-control lifecycle generation.
@@ -73,8 +59,8 @@ pub struct RequestGate {
     detail_sequence: u64,
     detail: Option<DetailToken>,
     detail_item: Option<String>,
-    aux_sequence: [u64; 5],
-    aux_live: [bool; 5],
+    aux_sequence: [u64; 4],
+    aux_live: [bool; 4],
     remote: u64,
     remote_play: u64,
     image_cache: u64,
@@ -88,7 +74,6 @@ impl DetailAuxKind {
             Self::Recommendations => 1,
             Self::SeasonNeighbors => 2,
             Self::SimilarItems => 3,
-            Self::UserData => 4,
         }
     }
 }
@@ -170,7 +155,7 @@ impl RequestGate {
         for sequence in &mut self.aux_sequence {
             *sequence = sequence.saturating_add(1);
         }
-        self.aux_live = [false; 5];
+        self.aux_live = [false; 4];
     }
 
     /// Invalidates one aux family regardless of whether a detail item is set.
@@ -273,7 +258,7 @@ impl RequestGate {
         self.home = None;
         self.detail = None;
         self.detail_item = None;
-        self.aux_live = [false; 5];
+        self.aux_live = [false; 4];
     }
 }
 
@@ -392,16 +377,16 @@ mod tests {
     fn navigate_rejects_detail_aux_after_reopening_the_same_item() {
         let mut gate = RequestGate::default();
         gate.set_detail_item(Some("item-1".to_owned()));
-        let user_data = gate
-            .begin_detail_aux(DetailAuxKind::UserData)
-            .expect("user-data aux requires a detail item");
+        let similar = gate
+            .begin_detail_aux(DetailAuxKind::SimilarItems)
+            .expect("similar-items aux requires a detail item");
         let season_neighbors = gate
             .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
             .expect("season-neighbor aux requires a detail item");
         gate.navigate();
         gate.set_detail_item(Some("item-1".to_owned()));
 
-        assert!(!gate.finish_detail_aux(user_data));
+        assert!(!gate.finish_detail_aux(similar));
         assert!(!gate.finish_detail_aux(season_neighbors));
     }
 
@@ -417,7 +402,7 @@ mod tests {
         gate.cancel_detail_loads();
 
         assert!(gate.finish_detail_aux(streams));
-        assert!(gate.begin_detail_aux(DetailAuxKind::UserData).is_some());
+        assert!(gate.begin_detail_aux(DetailAuxKind::SimilarItems).is_some());
     }
 
     #[test]
@@ -453,12 +438,12 @@ mod tests {
     fn invalidate_detail_aux_rejects_outstanding_token() {
         let mut gate = RequestGate::default();
         gate.set_detail_item(Some("show-1".to_owned()));
-        let user_data = gate
-            .begin_detail_aux(DetailAuxKind::UserData)
-            .expect("user-data aux requires a detail item");
-        gate.invalidate_detail_aux(DetailAuxKind::UserData);
+        let similar = gate
+            .begin_detail_aux(DetailAuxKind::SimilarItems)
+            .expect("similar-items aux requires a detail item");
+        gate.invalidate_detail_aux(DetailAuxKind::SimilarItems);
 
-        assert!(!gate.finish_detail_aux(user_data));
+        assert!(!gate.finish_detail_aux(similar));
     }
 
     #[test]

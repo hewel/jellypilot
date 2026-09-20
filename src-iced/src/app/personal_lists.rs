@@ -8,18 +8,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::i18n::media::media_type;
 use crate::i18n::{Localizer, UiText};
 use iced::Task;
+use jellypilot_core::item_actions::Action;
 use jellypilot_core::request_gate::SessionToken;
 use jellypilot_core::watchlist::{ProfileScope, WatchlistRecord, WatchlistStore};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
-  FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataAction, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest, WatchHistoryPage, WatchHistoryPageRequest,
+  FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataUpdate, WatchHistoryPage,
+  WatchHistoryPageRequest,
 };
 
 use super::artwork::{ImageCollection, ImageCompletion, ImageSpec};
 use super::kernel::Kernel;
 use super::message::Message;
-use super::state::NoticeLevel;
 
 pub const PAGE_SIZE: usize = 24;
 
@@ -73,10 +73,8 @@ pub struct Surface {
   pub history: ListPage,
   pub watchlist_ids: HashSet<String>,
   pub(crate) membership_loaded: bool,
-  pub busy_items: HashSet<String>,
   pub mutation_error: Option<UiText>,
   pub artwork: ImageCollection,
-  pub(crate) collection_change: Option<super::collections::Change>,
   scope: Option<ProfileScope>,
   watchlist_records: Vec<WatchlistRecord>,
   store_revision: u64,
@@ -84,7 +82,6 @@ pub struct Surface {
   watchlist_generation: u64,
   history_generation: u64,
   membership_generation: u64,
-  mutations: HashMap<String, u64>,
 }
 
 #[derive(Default)]
@@ -158,7 +155,7 @@ impl Runtime {
       .await
   }
 
-  async fn set_membership(
+  pub(crate) async fn set_membership(
     &self,
     scope: ProfileScope,
     item: VideoLibraryItem,
@@ -203,7 +200,7 @@ impl Runtime {
       .await
   }
 
-  async fn remove_item(
+  pub(crate) async fn remove_item(
     &self,
     scope: ProfileScope,
     item_id: String,
@@ -251,7 +248,7 @@ impl Runtime {
     .map_err(|error| format!("Watchlist worker failed: {error}"))?
   }
 
-  fn scope_epoch(&self, scope: &ProfileScope) -> u64 {
+  pub(crate) fn scope_epoch(&self, scope: &ProfileScope) -> u64 {
     self
       .inner
       .scope_epochs
@@ -300,8 +297,6 @@ pub enum PersonalListsMessage {
   Retry(Kind),
   NextPage(Kind),
   PreviousPage(Kind),
-  ToggleWatchlist(Box<VideoLibraryItem>),
-  RemoveWatchlist(String),
   FavoritesLoaded {
     session: SessionToken,
     generation: u64,
@@ -325,21 +320,6 @@ pub enum PersonalListsMessage {
     generation: u64,
     scope: ProfileScope,
     result: Result<Vec<VideoLibraryItem>, String>,
-  },
-  WatchlistMutationFinished {
-    session: SessionToken,
-    operation: u64,
-    scope: ProfileScope,
-    item_id: String,
-    result: Result<(u64, Vec<WatchlistRecord>), String>,
-  },
-  FavoriteMutationFinished {
-    session: SessionToken,
-    operation: u64,
-    scope: ProfileScope,
-    item_id: String,
-    favorite: bool,
-    result: Result<VideoUserDataUpdate, String>,
   },
   ArtworkLoaded(ImageCompletion),
 }
@@ -463,15 +443,6 @@ pub fn update(
     }
     PersonalListsMessage::NextPage(kind) => change_page(surface, kernel, runtime, kind, true),
     PersonalListsMessage::PreviousPage(kind) => change_page(surface, kernel, runtime, kind, false),
-    PersonalListsMessage::ToggleWatchlist(item) => {
-      mutate_watchlist(surface, kernel, runtime, *item)
-    }
-    PersonalListsMessage::RemoveWatchlist(item_id) => {
-      let Some(item_id) = nonempty(item_id) else {
-        return Task::none();
-      };
-      mutate_watchlist_by_id(surface, kernel, runtime, item_id)
-    }
     PersonalListsMessage::FavoritesLoaded {
       session,
       generation,
@@ -573,44 +544,6 @@ pub fn update(
       apply_watchlist_metadata(&mut surface.watchlist, result);
       prepare_artwork(surface)
     }
-    PersonalListsMessage::WatchlistMutationFinished {
-      session,
-      operation,
-      scope,
-      item_id,
-      result,
-    } => settle_watchlist_mutation(
-      surface,
-      kernel,
-      runtime,
-      WatchlistMutationSettlement {
-        session,
-        operation,
-        scope,
-        item_id,
-        result,
-      },
-    ),
-    PersonalListsMessage::FavoriteMutationFinished {
-      session,
-      operation,
-      scope,
-      item_id,
-      favorite,
-      result,
-    } => settle_favorite_mutation(
-      surface,
-      kernel,
-      runtime,
-      FavoriteMutationSettlement {
-        session,
-        operation,
-        scope,
-        item_id,
-        favorite,
-        result,
-      },
-    ),
     PersonalListsMessage::ArtworkLoaded(completion) => {
       surface
         .artwork
@@ -632,7 +565,7 @@ fn prepare_scope(
   Ok(scope)
 }
 
-fn active_scope(kernel: &Kernel) -> Result<ProfileScope, UiText> {
+pub(crate) fn active_scope(kernel: &Kernel) -> Result<ProfileScope, UiText> {
   let client = kernel
     .client
     .as_ref()
@@ -653,7 +586,7 @@ fn active_scope(kernel: &Kernel) -> Result<ProfileScope, UiText> {
   })
 }
 
-fn current_scope(surface: &Surface, kernel: &Kernel) -> Option<ProfileScope> {
+pub(crate) fn current_scope(surface: &Surface, kernel: &Kernel) -> Option<ProfileScope> {
   let scope = active_scope(kernel).ok()?;
   (surface.scope.as_ref() == Some(&scope)).then_some(scope)
 }
@@ -868,287 +801,101 @@ fn change_page(
   }
 }
 
-fn mutate_watchlist(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  runtime: &Runtime,
-  item: VideoLibraryItem,
-) -> Task<Message> {
-  let Some(scope) = current_scope(surface, kernel) else {
-    return Task::none();
-  };
-  let item_id = item.id.trim().to_owned();
-  if item_id.is_empty() || surface.busy_items.contains(&item_id) {
-    return Task::none();
-  }
-  let should_add = !surface.watchlist_ids.contains(&item_id);
-  begin_mutation(surface, runtime, &item_id);
-  let operation = surface.mutations[&item_id];
-  let session = kernel.request_gate.current_session();
-  let worker = runtime.clone();
-  let scope_epoch = runtime.scope_epoch(&scope);
-  let result_scope = scope.clone();
-  let result_id = item_id.clone();
-  Task::perform(
-    async move {
-      worker
-        .set_membership(scope, item, should_add, scope_epoch)
-        .await
-    },
-    move |result| {
-      Message::PersonalLists(PersonalListsMessage::WatchlistMutationFinished {
-        session,
-        operation,
-        scope: result_scope,
-        item_id: result_id,
-        result,
-      })
-    },
-  )
-}
-
-fn mutate_watchlist_by_id(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  runtime: &Runtime,
-  item_id: String,
-) -> Task<Message> {
-  let Some(scope) = current_scope(surface, kernel) else {
-    return Task::none();
-  };
-  if surface.busy_items.contains(&item_id) {
-    return Task::none();
-  }
-  begin_mutation(surface, runtime, &item_id);
-  let operation = surface.mutations[&item_id];
-  let session = kernel.request_gate.current_session();
-  let worker = runtime.clone();
-  let scope_epoch = runtime.scope_epoch(&scope);
-  let result_scope = scope.clone();
-  let result_id = item_id.clone();
-  Task::perform(
-    async move { worker.remove_item(scope, item_id, scope_epoch).await },
-    move |result| {
-      Message::PersonalLists(PersonalListsMessage::WatchlistMutationFinished {
-        session,
-        operation,
-        scope: result_scope,
-        item_id: result_id,
-        result,
-      })
-    },
-  )
-}
-
-fn begin_mutation(surface: &mut Surface, runtime: &Runtime, item_id: &str) {
-  let operation = runtime.next_generation();
-  surface.mutations.insert(item_id.to_owned(), operation);
-  surface.busy_items.insert(item_id.to_owned());
+/// Clears the inline mutation error when the coordinator admits a write.
+/// In-flight reads stay viable: a failed write leaves their data current, and
+/// an accepted write supersedes pending reads with fresh generations.
+pub(crate) fn prepare_mutation(surface: &mut Surface) {
   surface.mutation_error = None;
-  surface.watchlist_generation = 0;
-  surface.membership_generation = 0;
-  surface.watchlist.loading = false;
 }
 
-struct WatchlistMutationSettlement {
-  session: SessionToken,
-  operation: u64,
-  scope: ProfileScope,
-  item_id: String,
-  result: Result<(u64, Vec<WatchlistRecord>), String>,
-}
-
-fn settle_watchlist_mutation(
+/// Propagates accepted flags and supersedes every pending server read, so no
+/// pre-write response can restore stale flags on another list.
+pub(crate) fn apply_user_data_update(
   surface: &mut Surface,
   kernel: &mut Kernel,
   runtime: &Runtime,
-  settlement: WatchlistMutationSettlement,
-) -> Task<Message> {
-  let WatchlistMutationSettlement {
-    session,
-    operation,
-    scope,
-    item_id,
-    result,
-  } = settlement;
-  let session_ok = kernel.request_gate.is_current_session(session);
-  let scope_ok =
-    surface.scope.as_ref() == Some(&scope) && active_scope(kernel).ok() == Some(scope.clone());
-  let operation_ok = surface.mutations.get(&item_id) == Some(&operation);
-  if !session_ok || !scope_ok || !operation_ok {
-    if session_ok && active_scope(kernel).ok().as_ref() == Some(&scope) {
-      if let Err(error) = &result {
-        return kernel.show_toast(
-          NoticeLevel::Error,
-          list_failure("lists-watchlist-update-error", error),
-        );
-      }
-    }
-    if session_ok && scope_ok && result.is_ok() {
-      return load_membership_for_scope(surface, kernel, runtime, scope);
-    }
-    return Task::none();
-  }
-  surface.mutations.remove(&item_id);
-  surface.busy_items.remove(&item_id);
-  match result {
-    Ok((revision, records)) => {
-      if apply_store_snapshot(surface, revision, records) {
-        load_watchlist_metadata(surface, kernel, runtime, scope)
-      } else {
-        Task::none()
-      }
-    }
-    Err(error) => {
-      let error = list_failure("lists-watchlist-update-error", &error);
-      surface.mutation_error = Some(error.clone());
-      kernel.show_toast(NoticeLevel::Error, error)
-    }
-  }
-}
-
-pub(crate) fn set_favorite(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  runtime: &Runtime,
-  item_id: String,
-  favorite: bool,
+  update: &VideoUserDataUpdate,
+  action: Action,
 ) -> Task<Message> {
   let Some(scope) = current_scope(surface, kernel) else {
     return Task::none();
   };
-  let item_id = item_id.trim().to_owned();
-  if item_id.is_empty() || surface.busy_items.contains(&item_id) {
-    return Task::none();
+  let item_id = update.item_id.as_str();
+  for entry in surface
+    .favorites
+    .entries
+    .iter_mut()
+    .chain(&mut surface.watchlist.entries)
+    .chain(&mut surface.history.entries)
+  {
+    if let Some(item) = entry.item.as_mut().filter(|item| item.id == item_id) {
+      item.favorite = update.favorite;
+      item.played = update.played;
+    }
   }
-  let operation = runtime.next_generation();
-  surface.mutations.insert(item_id.clone(), operation);
-  surface.busy_items.insert(item_id.clone());
-  surface.mutation_error = None;
-  surface.favorites_generation = 0;
-  surface.favorites.loading = false;
-  let session = kernel.request_gate.current_session();
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.mutations.remove(&item_id);
-    surface.busy_items.remove(&item_id);
-    surface.mutation_error = Some(UiText::new("lists-session-error"));
-    return Task::none();
+  match action {
+    Action::Favorite(false) => remove_entry(&mut surface.favorites, item_id),
+    Action::Played(false) => remove_entry(&mut surface.history, item_id),
+    _ => {}
+  }
+  let favorites = if surface.favorites.loading || matches!(action, Action::Favorite(_)) {
+    load_favorites(surface, kernel, runtime, scope.clone())
+  } else {
+    Task::none()
   };
-  let result_scope = scope.clone();
-  let result_id = item_id.clone();
-  Task::perform(
-    async move {
-      client
-        .library()
-        .update_user_data(VideoUserDataUpdateRequest {
-          item_id,
-          action: if favorite {
-            VideoUserDataAction::Favorite
-          } else {
-            VideoUserDataAction::Unfavorite
-          },
-        })
-        .await
-        .map_err(|error| error.to_string())
-    },
-    move |result| {
-      Message::PersonalLists(PersonalListsMessage::FavoriteMutationFinished {
-        session,
-        operation,
-        scope: result_scope,
-        item_id: result_id,
-        favorite,
-        result,
-      })
-    },
-  )
+  let history = if surface.history.loading || matches!(action, Action::Played(_)) {
+    load_history(surface, kernel, runtime, scope.clone())
+  } else {
+    Task::none()
+  };
+  let watchlist = if surface.watchlist.loading {
+    load_watchlist_metadata(surface, kernel, runtime, scope)
+  } else {
+    Task::none()
+  };
+  Task::batch([favorites, history, watchlist])
 }
 
-struct FavoriteMutationSettlement {
-  session: SessionToken,
-  operation: u64,
-  scope: ProfileScope,
-  item_id: String,
-  favorite: bool,
-  result: Result<VideoUserDataUpdate, String>,
-}
-
-fn settle_favorite_mutation(
+/// Applies an accepted local Watchlist snapshot and refreshes the page's
+/// server metadata. `revision` fences stale snapshots: older revisions never
+/// overwrite newer membership.
+pub(crate) fn apply_watchlist_snapshot(
   surface: &mut Surface,
   kernel: &mut Kernel,
   runtime: &Runtime,
-  settlement: FavoriteMutationSettlement,
+  scope: &ProfileScope,
+  revision: u64,
+  records: Vec<WatchlistRecord>,
 ) -> Task<Message> {
-  let FavoriteMutationSettlement {
-    session,
-    operation,
-    scope,
-    item_id,
-    favorite,
-    result,
-  } = settlement;
-  let session_ok = kernel.request_gate.is_current_session(session);
-  let scope_ok =
-    surface.scope.as_ref() == Some(&scope) && active_scope(kernel).ok() == Some(scope.clone());
-  let operation_ok = surface.mutations.get(&item_id) == Some(&operation);
-  if !session_ok || !scope_ok || !operation_ok {
-    if session_ok && active_scope(kernel).ok().as_ref() == Some(&scope) {
-      let error = match &result {
-        Err(error) => Some(list_failure("lists-favorite-update-error", error)),
-        Ok(update) if update.favorite != favorite || update.item_id != item_id => {
-          Some(UiText::new("lists-favorite-not-updated"))
-        }
-        Ok(_) => None,
-      };
-      if let Some(error) = error {
-        return kernel.show_toast(NoticeLevel::Error, error);
-      }
-    }
-    if session_ok && scope_ok && result.is_ok() {
-      surface.collection_change = Some(super::collections::Change::Invalidated(item_id));
-      return load_favorites(surface, kernel, runtime, scope);
-    }
+  if active_scope(kernel).ok().as_ref() != Some(scope) {
     return Task::none();
   }
-  surface.mutations.remove(&item_id);
-  surface.busy_items.remove(&item_id);
-  match result {
-    Ok(update) if update.favorite == favorite && update.item_id == item_id => {
-      if !favorite {
-        surface
-          .favorites
-          .entries
-          .retain(|entry| entry.id != item_id);
-        surface.favorites.total = surface.favorites.total.saturating_sub(1);
-        surface.favorites.offset = surface
-          .favorites
-          .offset
-          .min((surface.favorites.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
-      }
-      for entry in surface
-        .watchlist
-        .entries
-        .iter_mut()
-        .chain(&mut surface.history.entries)
-      {
-        if let Some(item) = entry.item.as_mut().filter(|item| item.id == item_id) {
-          item.favorite = favorite;
-        }
-      }
-      surface.collection_change = Some(super::collections::Change::Confirmed(update));
-      load_favorites(surface, kernel, runtime, scope)
-    }
-    Ok(_) => {
-      let error = UiText::new("lists-favorite-not-updated");
-      surface.mutation_error = Some(error.clone());
-      kernel.show_toast(NoticeLevel::Error, error)
-    }
-    Err(error) => {
-      let error = list_failure("lists-favorite-update-error", &error);
-      surface.mutation_error = Some(error.clone());
-      kernel.show_toast(NoticeLevel::Error, error)
-    }
+  if surface.scope.as_ref() != Some(scope) {
+    reset_for_scope(surface, runtime, scope.clone());
   }
+  if !apply_store_snapshot(surface, revision, records) {
+    return Task::none();
+  }
+  load_watchlist_metadata(surface, kernel, runtime, scope.clone())
+}
+
+/// Records the inline error for a rejected or failed mutation. Toast reporting
+/// stays with the item-action coordinator.
+pub(crate) fn mutation_failed(surface: &mut Surface, error: UiText) {
+  surface.mutation_error = Some(error);
+}
+
+/// Drops `item_id` from a page whose membership the confirmed write ended and
+/// clamps the offset so a now-empty final page falls back to the previous one.
+fn remove_entry(page: &mut ListPage, item_id: &str) {
+  if !page.entries.iter().any(|entry| entry.id == item_id) {
+    return;
+  }
+  page.entries.retain(|entry| entry.id != item_id);
+  page.total = page.total.saturating_sub(1);
+  page.offset = page
+    .offset
+    .min((page.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
 }
 
 fn settlement_is_current(
@@ -1360,11 +1107,6 @@ fn subtitle_from_record(record: &WatchlistRecord) -> ListSubtitle {
 fn list_failure(id: &'static str, error: &str) -> UiText {
   tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error), message_id = id, "Personal list operation failed");
   UiText::new(id)
-}
-
-fn nonempty(value: String) -> Option<String> {
-  let value = value.trim().to_owned();
-  (!value.is_empty()).then_some(value)
 }
 
 fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
@@ -1625,24 +1367,17 @@ mod tests {
       },
       ..Surface::default()
     };
-    surface.mutations.insert("last".to_owned(), 9);
     let session = state.kernel.request_gate.current_session();
-    drop(settle_favorite_mutation(
+    drop(apply_user_data_update(
       &mut surface,
       &mut state.kernel,
       &runtime,
-      FavoriteMutationSettlement {
-        session,
-        operation: 9,
-        scope: scope.clone(),
+      &VideoUserDataUpdate {
         item_id: "last".to_owned(),
+        played: false,
         favorite: false,
-        result: Ok(VideoUserDataUpdate {
-          item_id: "last".to_owned(),
-          played: false,
-          favorite: false,
-        }),
       },
+      Action::Favorite(false),
     ));
     assert_eq!(surface.favorites.offset, 0);
     let generation = surface.favorites_generation;
@@ -1677,19 +1412,8 @@ mod tests {
 
     leave_view(&mut surface);
     let scope = active_scope(&state.kernel).expect("active scope");
-    drop(settle_watchlist_mutation(
-      &mut surface,
-      &mut state.kernel,
-      &runtime,
-      WatchlistMutationSettlement {
-        session,
-        operation: 44,
-        scope: scope.clone(),
-        item_id: "late".to_owned(),
-        result: Err("write failed".to_owned()),
-      },
-    ));
-    assert!(state.kernel.active_toast.is_some());
+    mutation_failed(&mut surface, UiText::new("lists-watchlist-update-error"));
+    assert!(surface.mutation_error.is_some());
     drop(load_membership_for_scope(
       &mut surface,
       &mut state.kernel,
@@ -1734,6 +1458,156 @@ mod tests {
     clamp_watchlist_offset(&mut surface);
 
     assert_eq!(surface.watchlist.offset, 0);
+  }
+
+  #[test]
+  fn confirmation_supersedes_reads_across_lists_in_any_completion_order() {
+    let mut state = connected_state();
+    let runtime = Runtime::default();
+    let scope = active_scope(&state.kernel).expect("scope");
+    let session = state.kernel.request_gate.current_session();
+    let mut surface = Surface {
+      scope: Some(scope.clone()),
+      watchlist_records: vec![record("one")],
+      ..Surface::default()
+    };
+    drop(load_watchlist_metadata(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      scope.clone(),
+    ));
+    let stale_generation = surface.watchlist_generation;
+    drop(apply_user_data_update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      &VideoUserDataUpdate {
+        item_id: "one".to_owned(),
+        favorite: true,
+        played: true,
+      },
+      Action::Favorite(true),
+    ));
+    let current_generation = surface.watchlist_generation;
+    let mut confirmed = item("one", "Current");
+    confirmed.favorite = true;
+    confirmed.played = true;
+    let favorites_generation = surface.favorites_generation;
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::FavoritesLoaded {
+        session,
+        generation: favorites_generation,
+        scope: scope.clone(),
+        result: Ok(FavoritesPage {
+          items: vec![confirmed.clone()],
+          start_index: 0,
+          total_record_count: 1,
+          limit: PAGE_SIZE as i32,
+          has_more: false,
+        }),
+      },
+    ));
+    // A fresh response on one list must not make an older response on another safe.
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::WatchlistMetadataLoaded {
+        session,
+        generation: stale_generation,
+        scope: scope.clone(),
+        result: Ok(vec![item("one", "Stale")]),
+      },
+    ));
+    assert!(surface.watchlist.entries[0].item.is_none());
+    assert!(surface.watchlist.loading);
+    drop(update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      PersonalListsMessage::WatchlistMetadataLoaded {
+        session,
+        generation: current_generation,
+        scope,
+        result: Ok(vec![confirmed]),
+      },
+    ));
+    let loaded = surface.watchlist.entries[0]
+      .item
+      .as_ref()
+      .expect("metadata");
+    assert_eq!(loaded.name, "Current");
+    assert!(loaded.favorite && loaded.played);
+    assert!(!surface.watchlist.loading);
+  }
+
+  #[test]
+  fn unplayed_write_removes_the_item_and_clamps_history() {
+    let mut state = connected_state();
+    let runtime = Runtime::default();
+    let mut surface = Surface {
+      scope: Some(active_scope(&state.kernel).expect("scope")),
+      history: ListPage {
+        entries: vec![entry_from_item(item("watched", "Watched"))],
+        total: PAGE_SIZE + 1,
+        offset: PAGE_SIZE,
+        ..ListPage::default()
+      },
+      ..Surface::default()
+    };
+
+    drop(apply_user_data_update(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      &VideoUserDataUpdate {
+        item_id: "watched".to_owned(),
+        played: false,
+        favorite: false,
+      },
+      Action::Played(false),
+    ));
+
+    assert!(surface.history.entries.is_empty());
+    assert_eq!(surface.history.total, PAGE_SIZE);
+    assert_eq!(surface.history.offset, 0);
+    assert!(surface.history.loading);
+  }
+
+  #[test]
+  fn watchlist_snapshot_applies_without_initialized_surface_scope() {
+    let mut state = connected_state();
+    let runtime = Runtime::default();
+    let mut surface = Surface::default();
+    let scope = active_scope(&state.kernel).expect("scope");
+
+    drop(apply_watchlist_snapshot(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      &scope,
+      7,
+      vec![record("one")],
+    ));
+
+    assert!(surface.watchlist_ids.contains("one"));
+    assert_eq!(surface.store_revision, 7);
+    assert_eq!(surface.scope.as_ref(), Some(&scope));
+
+    // A stale revision never overwrites newer membership.
+    drop(apply_watchlist_snapshot(
+      &mut surface,
+      &mut state.kernel,
+      &runtime,
+      &scope,
+      3,
+      Vec::new(),
+    ));
+    assert!(surface.watchlist_ids.contains("one"));
   }
 
   fn connected_state() -> crate::app::state::State {

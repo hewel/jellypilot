@@ -328,7 +328,7 @@ impl BrowseModel {
     }
 
     /// Applies confirmed flags immediately, then reloads membership/order from the server.
-    /// Any refresh begun before the write is cancelled so it cannot restore stale flags.
+    /// Reads that may contain the item are cancelled so they cannot restore stale flags.
     pub fn apply_user_data_update(
         &mut self,
         update: &jellypilot_media_server::VideoUserDataUpdate,
@@ -341,7 +341,15 @@ impl BrowseModel {
                 found = true;
             }
         }
-        if !found && !self.committed.preferences.favorites_only {
+        if !found
+            && !self.committed.preferences.favorites_only
+            && matches!(
+                self.committed.preferences.played_filter,
+                VideoLibraryPlayedFilter::All
+            )
+            && self.committed.pending.is_empty()
+            && self.refresh.is_none()
+        {
             return Ok(Vec::new());
         }
         let mut effects = self
@@ -1102,6 +1110,49 @@ mod tests {
         assert!(!visible_items[0].item.as_ref().unwrap().favorite);
         settle(&mut model, &current, 0, 0);
         assert!(matches!(model.view(), LibraryBrowseView::Empty));
+    }
+
+    #[test]
+    fn confirmation_supersedes_an_initial_page_that_has_not_arrived() {
+        let mut model = BrowseModel::default();
+        let stale = request(
+            model
+                .configure(BrowseSource::Library {
+                    session: session(),
+                    shortcut: shortcut(),
+                })
+                .unwrap(),
+        );
+        let current = request(
+            model
+                .apply_user_data_update(&jellypilot_media_server::VideoUserDataUpdate {
+                    item_id: "item-0".to_owned(),
+                    favorite: true,
+                    played: false,
+                })
+                .unwrap(),
+        );
+        settle(&mut model, &stale, 1, 1);
+        assert!(matches!(model.view(), LibraryBrowseView::Loading));
+        let mut records = items(0, 1);
+        records[0].favorite = true;
+        model
+            .settle(BrowsePageSettlement {
+                source_id: current.source_id,
+                token: current.token,
+                result: Ok(BrowsePagePayload {
+                    start_index: current.start_index,
+                    limit: current.limit,
+                    total_record_count: 1,
+                    has_more: false,
+                    items: records,
+                }),
+            })
+            .unwrap();
+        let LibraryBrowseView::Ready { visible_items, .. } = model.view() else {
+            panic!("the post-confirmation page should be visible");
+        };
+        assert!(visible_items[0].item.as_ref().unwrap().favorite);
     }
 
     #[test]

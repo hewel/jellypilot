@@ -1824,6 +1824,7 @@ mod tests {
     let settings = SettingsStore::for_test(path.clone());
     let login = LoginState::from_settings(settings.snapshot());
     let kernel = Kernel {
+      item_actions: Default::default(),
       locale: crate::i18n::Localizer::default(),
       settings,
       auth_store: jellypilot_auth::AuthStore::default(),

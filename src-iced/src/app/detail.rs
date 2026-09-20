@@ -2,6 +2,7 @@
 //! season episode paging, user-data actions, and the detail artwork pipeline.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::i18n::UiText;
@@ -15,7 +16,6 @@ use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RequestGate};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoSeasonEpisodesPage, VideoUserDataAction, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest,
 };
 
 use super::artwork::{ImageCollection, ImageSpec};
@@ -26,7 +26,7 @@ use super::state::{DetailState, TrackMenu, UserDataActionKind};
 const DETAIL_FAILURE: &str = "detail-load-error";
 const SEASON_FAILURE: &str = "detail-season-error";
 const SIMILAR_FAILURE: &str = "detail-similar-error";
-const USER_DATA_FAILURE: &str = "detail-user-data-error";
+pub(crate) const USER_DATA_FAILURE: &str = "detail-user-data-error";
 
 pub(crate) const DETAIL_LOGO_KEY: &str = "detail-logo";
 pub(crate) const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
@@ -45,9 +45,27 @@ pub struct Surface {
   /// detail item: (detail item id, originating season number). Consumed by the
   /// next load; a mismatched or stale request is dropped, never applied.
   pub(crate) pending_season: Option<(String, i32)>,
-  pub(crate) collection_change: Option<super::collections::Change>,
-  pub(crate) pending_user_data: HashMap<String, jellypilot_core::request_gate::DetailAuxToken>,
+  /// Item the current detail view presents; set by `start_load`/`restore`.
+  view_item_id: Option<String>,
+  /// Identity of the current detail view instance, minted from a process-wide
+  /// counter so a recreated surface can never collide with a pending write's
+  /// recorded origin.
+  view_generation: u64,
   refresh_token: Option<DetailToken>,
+}
+
+/// Process-wide detail view identity source: pending writes outlive a Detail
+/// surface (app-mode switches drop and recreate `FullUi`), so generations must
+/// never restart at zero.
+static NEXT_VIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_view_generation() -> u64 {
+  NEXT_VIEW_GENERATION
+    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+      value.checked_add(1)
+    })
+    .expect("detail view identity exhausted")
+    + 1
 }
 /// Updates Detail content and its locally owned images.
 pub fn update(
@@ -59,9 +77,7 @@ pub fn update(
   match message {
     // Handled entirely by the top-level router: navigation writes the shared
     // destination stack and drives the other surfaces' leave/enter hooks.
-    DetailMessage::Back | DetailMessage::WatchlistToggled | DetailMessage::OpenSeries => {
-      Task::none()
-    }
+    DetailMessage::Back | DetailMessage::OpenSeries => Task::none(),
     DetailMessage::Retry => start_load(surface, kernel, detail_item_id),
     DetailMessage::RetryNeighbors => start_followup(surface, kernel, false),
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
@@ -102,12 +118,6 @@ pub fn update(
     DetailMessage::TrackMenuDismissed => {
       surface.track_menu_open = None;
       Task::none()
-    }
-    DetailMessage::FavoriteToggled => {
-      start_user_data_update(surface, kernel, UserDataActionKind::Favorite)
-    }
-    DetailMessage::PlayedToggled => {
-      start_user_data_update(surface, kernel, UserDataActionKind::Played)
     }
     DetailMessage::Loaded { token, result } => {
       if surface.refresh_token == Some(token) {
@@ -159,35 +169,6 @@ pub fn update(
       };
       prepare_artwork(surface)
     }
-    DetailMessage::UserDataUpdated { token, result } => {
-      if !kernel.request_gate.is_current_session(token.session())
-        || surface.pending_user_data.get(token.item_id()) != Some(&token)
-      {
-        return Task::none();
-      }
-      surface.pending_user_data.remove(token.item_id());
-      let result = result.and_then(|update| {
-        if update.item_id == token.item_id() {
-          Ok(update)
-        } else {
-          Err("User-data response targeted another item".to_owned())
-        }
-      });
-      // A server write survives navigation; only Detail presentation is view-scoped.
-      if let Ok(update) = &result {
-        surface.collection_change = Some(super::collections::Change::Confirmed(update.clone()));
-      }
-      let failed = result.is_err();
-      let settled =
-        settle_user_data_update(&mut surface.data, &mut kernel.request_gate, token, result);
-      if failed && settled.is_none() {
-        return kernel.show_toast(
-          super::state::NoticeLevel::Error,
-          UiText::new(USER_DATA_FAILURE),
-        );
-      }
-      Task::none()
-    }
     DetailMessage::ArtworkLoaded(completion) => {
       surface
         .artwork
@@ -206,6 +187,8 @@ pub fn start_load(
 ) -> Task<Message> {
   surface.season_menu_open = false;
   surface.track_menu_open = None;
+  surface.view_generation = next_view_generation();
+  surface.view_item_id = item_id.map(str::to_owned);
   let Some(item_id) = item_id else {
     return Task::none();
   };
@@ -254,7 +237,8 @@ pub(crate) fn restore(
   data: DetailState,
 ) -> Task<Message> {
   surface.data = data;
-  surface.data.user_data_busy = None;
+  surface.view_generation = next_view_generation();
+  surface.view_item_id = Some(item_id.to_owned());
   surface.refresh_token = None;
   kernel
     .request_gate
@@ -308,7 +292,7 @@ fn settle_load(
 }
 
 pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str) -> Task<Message> {
-  if surface.data.user_data_busy.is_some()
+  if kernel.item_actions.pending(item_id).is_some()
     || matches!(
       surface.data.season_episodes,
       jellypilot_core::LoadState::Loading
@@ -610,53 +594,27 @@ fn settle_season_load(
   true
 }
 
-fn start_user_data_update(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
+/// Resolves the current detail content's user-data flags into the server write
+/// a `kind` intent requests; `None` while no content is ready.
+pub(crate) fn action_target(
+  surface: &Surface,
   kind: UserDataActionKind,
-) -> Task<Message> {
-  if surface.data.user_data_busy.is_some() {
-    return Task::none();
-  }
-  let Some((item_id, played, favorite)) = detail_user_data(&surface.data.content) else {
-    return Task::none();
-  };
-  if surface.pending_user_data.contains_key(&item_id) {
-    return Task::none();
-  }
+) -> Option<(String, VideoUserDataAction)> {
+  let (item_id, played, favorite) = detail_user_data(&surface.data.content)?;
   let action = match kind {
     UserDataActionKind::Favorite if favorite => VideoUserDataAction::Unfavorite,
     UserDataActionKind::Favorite => VideoUserDataAction::Favorite,
     UserDataActionKind::Played if played => VideoUserDataAction::MarkUnplayed,
     UserDataActionKind::Played => VideoUserDataAction::MarkPlayed,
   };
-  let Some(token) = kernel
-    .request_gate
-    .begin_detail_aux(DetailAuxKind::UserData)
-  else {
-    return Task::none();
-  };
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.user_data_error = Some(UiText::new(USER_DATA_FAILURE));
-    return Task::none();
-  };
-  surface.data.user_data_busy = Some(kind);
-  surface
-    .pending_user_data
-    .insert(item_id.clone(), token.clone());
-  cancel_refresh(surface, kernel);
-  surface.data.user_data_error = None;
-  let request = VideoUserDataUpdateRequest { item_id, action };
-  Task::perform(
-    async move {
-      client
-        .library()
-        .update_user_data(request)
-        .await
-        .map_err(|error| error.to_string())
-    },
-    move |result| Message::Detail(DetailMessage::UserDataUpdated { token, result }),
-  )
+  Some((item_id, action))
+}
+
+/// Identity of the current detail view instance; bumped on every load start,
+/// restore, and leave so a write's origin can never alias a later view of the
+/// same item.
+pub(crate) fn view_generation(surface: &Surface) -> u64 {
+  surface.view_generation
 }
 
 /// A confirmed write must not be overwritten by an older metadata refresh.
@@ -666,27 +624,83 @@ pub(crate) fn cancel_refresh(surface: &mut Surface, kernel: &mut Kernel) {
   }
 }
 
-fn settle_user_data_update(
-  detail: &mut DetailState,
-  gate: &mut RequestGate,
-  token: jellypilot_core::request_gate::DetailAuxToken,
-  result: Result<VideoUserDataUpdate, String>,
-) -> Option<Option<VideoUserDataUpdate>> {
-  if !gate.finish_detail_aux(token) {
-    return None;
+/// Prepares the surface for an admitted write on `item_id`: an in-flight
+/// refresh of the presented item is cancelled (its response predates the
+/// write) and the current inline error clears.
+pub(crate) fn prepare_mutation(surface: &mut Surface, kernel: &mut Kernel, item_id: &str) {
+  if surface.view_item_id.as_deref() == Some(item_id) {
+    cancel_refresh(surface, kernel);
   }
-  detail.user_data_busy = None;
-  if let Err(error) = &result {
-    tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail user data update failed");
+  surface.data.user_data_error = None;
+}
+
+/// Updates live projections and supersedes pending reads that could contain
+/// pre-write flags. Navigation snapshots are updated by their shell owner.
+pub(crate) fn apply_confirmed(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  update: &VideoUserDataUpdate,
+  refresh: bool,
+) -> Task<Message> {
+  let was_refreshing = surface.refresh_token.is_some();
+  cancel_refresh(surface, kernel);
+  apply_snapshot_update(&mut surface.data, update);
+  if let Some(item) = surface.items.get_mut(&update.item_id) {
+    overlay_item(item, update);
   }
-  match result {
-    Ok(update) if apply_user_data_update(&mut detail.content, &update) => {
-      detail.user_data_error = None;
-      Some(Some(update))
+  let Some(current_id) = surface.view_item_id.clone() else {
+    return Task::none();
+  };
+  if matches!(surface.data.content, jellypilot_core::LoadState::Loading) {
+    return start_load(surface, kernel, Some(&current_id));
+  }
+  let followup = start_followup(surface, kernel, true);
+  let reload = if was_refreshing || (refresh && current_id == update.item_id) {
+    self::refresh(surface, kernel, &current_id)
+  } else {
+    Task::none()
+  };
+  Task::batch([followup, reload])
+}
+
+/// Marks the inline error of a failed write that originated from this view.
+/// Returns `false` when the origin view is gone or superseded so the caller
+/// can fall back to a toast.
+pub(crate) fn mutation_failed(surface: &mut Surface, item_id: &str, generation: u64) -> bool {
+  let current = surface.view_generation == generation
+    && detail_user_data(&surface.data.content).is_some_and(|(id, _, _)| id == item_id);
+  if !current {
+    return false;
+  }
+  surface.data.user_data_error = Some(UiText::new(USER_DATA_FAILURE));
+  true
+}
+
+fn overlay_item(item: &mut VideoLibraryItem, update: &VideoUserDataUpdate) {
+  if item.id == update.item_id {
+    item.played = update.played;
+    item.favorite = update.favorite;
+  }
+}
+
+/// Patches a live or saved Detail projection without retaining mutation state.
+pub(crate) fn apply_snapshot_update(data: &mut DetailState, update: &VideoUserDataUpdate) {
+  apply_user_data_update(&mut data.content, update);
+  if let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &mut data.content {
+    if let Some(next) = &mut show.next_episode {
+      overlay_item(next, update);
     }
-    Ok(_) | Err(_) => {
-      detail.user_data_error = Some(UiText::new(USER_DATA_FAILURE));
-      Some(None)
+  }
+  if let jellypilot_core::LoadState::Ready(page) = &mut data.season_episodes {
+    for item in &mut page.episodes {
+      overlay_item(item, update);
+    }
+  }
+  for state in [&mut data.season_neighbors, &mut data.similar_items] {
+    if let jellypilot_core::LoadState::Ready(items) = state {
+      for item in items {
+        overlay_item(item, update);
+      }
     }
   }
 }
@@ -816,9 +830,13 @@ pub(crate) fn episode_image_spec(
 }
 
 /// Leaving Detail revokes only its own images and invalidates metadata work.
+/// The view generation advances so a write that outlives this view can never
+/// deliver its failure to the next view of the same item.
 pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
   surface.season_menu_open = false;
   surface.track_menu_open = None;
+  surface.view_generation = next_view_generation();
+  surface.view_item_id = None;
   kernel.request_gate.navigate();
   surface.artwork.clear();
   surface.data.clear();
@@ -840,6 +858,7 @@ mod tests {
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
     let kernel = Kernel {
+      item_actions: Default::default(),
       settings,
       locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
@@ -1013,74 +1032,107 @@ mod tests {
     ));
   }
 
-  #[test]
-  fn user_data_transition_waits_for_confirmation_and_preserves_data_on_failure() {
-    let mut detail = DetailState {
-      content: jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item(
-        "item-1",
-      )))),
-      user_data_busy: Some(UserDataActionKind::Favorite),
-      ..DetailState::default()
-    };
-    let mut gate = RequestGate::default();
-    gate.set_detail_item(Some("item-1".to_owned()));
-    let stale = gate
-      .begin_detail_aux(DetailAuxKind::UserData)
-      .expect("detail item should permit user-data update");
-    let success = gate
-      .begin_detail_aux(DetailAuxKind::UserData)
-      .expect("detail item should permit user-data update");
-
-    assert!(settle_user_data_update(
-      &mut detail,
-      &mut gate,
-      stale,
-      Ok(VideoUserDataUpdate {
-        item_id: "item-1".to_owned(),
-        played: true,
-        favorite: true,
-      }),
+  fn test_scope() -> jellypilot_core::watchlist::ProfileScope {
+    jellypilot_core::watchlist::ProfileScope::new(
+      jellypilot_media_server::MediaServerProvider::Jellyfin,
+      "https://media.example.test",
+      "user-1",
     )
-    .is_none());
-    assert_eq!(detail.user_data_busy, Some(UserDataActionKind::Favorite));
+    .expect("valid test scope")
+  }
 
-    let applied = settle_user_data_update(
-      &mut detail,
-      &mut gate,
-      success,
-      Ok(VideoUserDataUpdate {
-        item_id: "item-1".to_owned(),
-        played: false,
-        favorite: true,
-      }),
+  fn admit_write(
+    kernel: &mut Kernel,
+    item_id: &str,
+    action: jellypilot_core::item_actions::Action,
+  ) -> jellypilot_core::item_actions::Receipt {
+    let session = kernel.request_gate.current_session();
+    kernel.item_actions.set_scope(session, Some(test_scope()));
+    kernel
+      .item_actions
+      .begin(item_id, action)
+      .expect("write admission")
+  }
+
+  fn confirmed_update(item_id: &str, played: bool, favorite: bool) -> VideoUserDataUpdate {
+    VideoUserDataUpdate {
+      item_id: item_id.to_owned(),
+      played,
+      favorite,
+    }
+  }
+
+  #[test]
+  fn confirmed_user_data_updates_every_projection_and_failure_marks_the_inline_error() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface.view_item_id = Some("item-1".to_owned());
+    surface.view_generation = next_view_generation();
+    let generation = surface.view_generation;
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
+    surface
+      .items
+      .insert("item-1".to_owned(), episode("item-1", 1));
+    surface.data.season_neighbors = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
+    surface.data.similar_items = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
+
+    let receipt = admit_write(
+      &mut kernel,
+      "item-1",
+      jellypilot_core::item_actions::Action::Favorite(true),
     );
-    assert!(matches!(applied, Some(Some(_))));
+    prepare_mutation(&mut surface, &mut kernel, "item-1");
+    let settled = kernel.item_actions.settle(
+      &receipt,
+      Ok(jellypilot_core::item_actions::Outcome::Server(
+        confirmed_update("item-1", false, true),
+      )),
+    );
     assert!(matches!(
-      &detail.content,
-      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
-        if item.favorite && !item.played
+      settled,
+      Some(Ok(jellypilot_core::item_actions::Outcome::Server(_)))
     ));
-    assert!(detail.user_data_busy.is_none());
+    drop(apply_confirmed(
+      &mut surface,
+      &mut kernel,
+      &confirmed_update("item-1", false, true),
+      false,
+    ));
 
-    detail.user_data_busy = Some(UserDataActionKind::Played);
-    let failure = gate
-      .begin_detail_aux(DetailAuxKind::UserData)
-      .expect("retry should mint a fresh token");
     assert!(matches!(
-      settle_user_data_update(
-        &mut detail,
-        &mut gate,
-        failure,
-        Err("raw server response".to_owned()),
-      ),
-      Some(None)
-    ));
-    assert!(matches!(
-      &detail.content,
+      &surface.data.content,
       jellypilot_core::LoadState::Ready(DetailContent::Item(item))
         if item.favorite && !item.played
     ));
-    assert!(detail.user_data_error.is_some());
+    assert!(surface.items["item-1"].favorite);
+    assert!(matches!(
+      &surface.data.season_neighbors,
+      jellypilot_core::LoadState::Ready(items) if items[0].favorite
+    ));
+    assert!(matches!(
+      &surface.data.similar_items,
+      jellypilot_core::LoadState::Ready(items) if items[0].favorite
+    ));
+
+    let receipt = admit_write(
+      &mut kernel,
+      "item-1",
+      jellypilot_core::item_actions::Action::Played(true),
+    );
+    let settled = kernel
+      .item_actions
+      .settle(&receipt, Err("raw server response".to_owned()));
+    assert!(matches!(
+      settled,
+      Some(Err(jellypilot_core::item_actions::Failure::Request(_)))
+    ));
+    assert!(mutation_failed(&mut surface, "item-1", generation));
+    assert!(surface.data.user_data_error.is_some());
+    assert!(matches!(
+      &surface.data.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+        if item.favorite && !item.played
+    ));
   }
 
   #[test]
@@ -1105,12 +1157,13 @@ mod tests {
   }
 
   #[test]
-  fn user_data_write_rejects_an_older_refresh_and_blocks_an_overlapping_refresh() {
+  fn a_pending_write_rejects_an_older_refresh_and_blocks_an_overlapping_refresh() {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
+    surface.view_item_id = Some("item-1".to_owned());
     surface
       .items
       .insert("item-1".to_owned(), episode("item-1", 1));
@@ -1118,8 +1171,14 @@ mod tests {
       jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
     let _ = refresh(&mut surface, &mut kernel, "item-1");
     let stale = surface.refresh_token.expect("refresh starts");
-    let _ = start_user_data_update(&mut surface, &mut kernel, UserDataActionKind::Favorite);
-    assert!(surface.data.user_data_busy.is_some());
+
+    let receipt = admit_write(
+      &mut kernel,
+      "item-1",
+      jellypilot_core::item_actions::Action::Favorite(true),
+    );
+    prepare_mutation(&mut surface, &mut kernel, "item-1");
+    assert!(surface.refresh_token.is_none());
     assert!(!settle_load(
       &mut surface.data,
       &mut kernel.request_gate,
@@ -1131,48 +1190,121 @@ mod tests {
     assert!(
       matches!(&surface.data.content, jellypilot_core::LoadState::Ready(DetailContent::Item(item)) if item.id == "item-1")
     );
+
+    let settled = kernel.item_actions.settle(
+      &receipt,
+      Ok(jellypilot_core::item_actions::Outcome::Server(
+        confirmed_update("item-1", false, true),
+      )),
+    );
+    assert!(settled.is_some());
+    drop(apply_confirmed(
+      &mut surface,
+      &mut kernel,
+      &confirmed_update("item-1", false, true),
+      false,
+    ));
+    assert!(matches!(
+      &surface.data.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item)) if item.favorite
+    ));
   }
 
   #[test]
-  fn leaving_detail_rejects_pending_user_data_after_reopening_same_item() {
+  fn a_failed_write_marks_only_the_originating_view() {
     let (mut surface, mut kernel) = test_fixture();
     kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
-    let stale = kernel
-      .request_gate
-      .begin_detail_aux(DetailAuxKind::UserData)
-      .expect("detail item should permit user-data update");
+    surface.view_item_id = Some("item-1".to_owned());
+    surface.view_generation = next_view_generation();
+    let origin_generation = surface.view_generation;
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
 
     leave_view(&mut surface, &mut kernel);
     kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
+    surface.view_item_id = Some("item-1".to_owned());
+    surface.view_generation = next_view_generation();
     surface.data.content =
       jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
-    surface.data.user_data_busy = Some(UserDataActionKind::Favorite);
 
-    let settlement = settle_user_data_update(
-      &mut surface.data,
-      &mut kernel.request_gate,
-      stale,
-      Ok(VideoUserDataUpdate {
-        item_id: "item-1".to_owned(),
-        played: true,
-        favorite: true,
-      }),
-    );
-
-    assert!(settlement.is_none());
+    assert!(!mutation_failed(&mut surface, "item-1", origin_generation));
+    assert!(surface.data.user_data_error.is_none());
     assert!(matches!(
       &surface.data.content,
       jellypilot_core::LoadState::Ready(DetailContent::Item(item))
         if !item.played && !item.favorite
     ));
-    assert_eq!(
-      surface.data.user_data_busy,
-      Some(UserDataActionKind::Favorite)
+
+    // A recreated surface (app-mode switch drops FullUi) can never collide
+    // with a pending write's recorded origin generation.
+    let mut recreated = Surface {
+      view_item_id: Some("item-1".to_owned()),
+      ..Surface::default()
+    };
+    recreated.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
+    assert!(!mutation_failed(
+      &mut recreated,
+      "item-1",
+      origin_generation
+    ));
+    assert!(recreated.data.user_data_error.is_none());
+  }
+
+  #[test]
+  fn a_late_pre_write_load_cannot_overwrite_a_confirmed_update() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface
+      .items
+      .insert("item-1".to_owned(), episode("item-1", 1));
+    drop(start_load(&mut surface, &mut kernel, Some("item-1")));
+    let token = kernel.request_gate.begin_detail();
+    assert!(matches!(
+      surface.data.content,
+      jellypilot_core::LoadState::Loading
+    ));
+
+    // A write admitted from another surface confirms while the load is in
+    // flight; the stale response must not reintroduce the old flags.
+    let receipt = admit_write(
+      &mut kernel,
+      "item-1",
+      jellypilot_core::item_actions::Action::Favorite(true),
     );
+    prepare_mutation(&mut surface, &mut kernel, "item-1");
+    let settled = kernel.item_actions.settle(
+      &receipt,
+      Ok(jellypilot_core::item_actions::Outcome::Server(
+        confirmed_update("item-1", false, true),
+      )),
+    );
+    assert!(settled.is_some());
+    drop(apply_confirmed(
+      &mut surface,
+      &mut kernel,
+      &confirmed_update("item-1", false, true),
+      false,
+    ));
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("item-1"),
+      DetailMessage::Loaded {
+        token,
+        result: Box::new(Ok(DetailContent::Item(Box::new(video_item("item-1"))))),
+      },
+    ));
+
+    assert!(matches!(
+      &surface.data.content,
+      jellypilot_core::LoadState::Loading
+    ));
   }
 
   #[test]

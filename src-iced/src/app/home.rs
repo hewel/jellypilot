@@ -316,6 +316,7 @@ mod tests {
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
     let kernel = Kernel {
+      item_actions: Default::default(),
       settings,
       locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
