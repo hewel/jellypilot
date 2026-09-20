@@ -393,13 +393,15 @@ impl SdkInner {
     /// Cancels every token minted for `epoch` and forgets them.
     #[cfg(any(test, feature = "test-utils"))]
     fn cancel_epoch(&self, epoch: u64) {
-        if let Ok(mut state) = self.state.lock() {
-            if let Some(tokens) = state.tokens.remove(&epoch) {
-                for token in tokens {
-                    if let Some(token) = token.upgrade() {
-                        token.cancel();
-                    }
-                }
+        let tokens = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            state.tokens.remove(&epoch).unwrap_or_default()
+        };
+        for token in tokens {
+            if let Some(token) = token.upgrade() {
+                token.cancel();
             }
         }
     }
@@ -631,21 +633,24 @@ impl SdkInner {
     /// Disconnects the active client, clears the session, advances the epoch,
     /// and cancels every token minted under the ended scope.
     fn end_active_session(&self) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
+        let tokens = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            let old_epoch = state.epoch;
+            state.epoch = state.epoch.saturating_add(1);
+            if let Some(active) = state.active.take() {
+                active.client.login().disconnect();
+            }
+            state.sign_out_cleanup_pending = false;
+            self.item_actions.reset_scope(None);
+            state.tokens.remove(&old_epoch).unwrap_or_default()
         };
-        let old_epoch = state.epoch;
-        state.epoch = state.epoch.saturating_add(1);
-        if let Some(active) = state.active.take() {
-            active.client.login().disconnect();
-        }
-        state.sign_out_cleanup_pending = false;
-        self.item_actions.reset_scope(None);
-        if let Some(tokens) = state.tokens.remove(&old_epoch) {
-            for token in tokens {
-                if let Some(token) = token.upgrade() {
-                    token.cancel();
-                }
+        // Cancellation can synchronously reenter a foreign snapshot reader.
+        // Commit the ended epoch first, then wake it without the SDK lock.
+        for token in tokens {
+            if let Some(token) = token.upgrade() {
+                token.cancel();
             }
         }
     }
@@ -854,12 +859,16 @@ impl Sdk {
 
     /// Cancels every live operation token without ending the profile scope.
     pub fn cancel_scope_operations(&self) {
-        if let Ok(mut state) = self.inner.state.lock() {
-            for (_, tokens) in state.tokens.drain() {
-                for token in tokens {
-                    if let Some(token) = token.upgrade() {
-                        token.cancel();
-                    }
+        let tokens = {
+            let Ok(mut state) = self.inner.state.lock() else {
+                return;
+            };
+            std::mem::take(&mut state.tokens)
+        };
+        for (_, tokens) in tokens {
+            for token in tokens {
+                if let Some(token) = token.upgrade() {
+                    token.cancel();
                 }
             }
         }

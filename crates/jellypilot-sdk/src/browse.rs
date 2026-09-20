@@ -249,7 +249,7 @@ pub struct BrowseSession {
     state: Mutex<SessionState>,
     token: Arc<OperationToken>,
     handle: Handle,
-    changed: watch::Sender<u64>,
+    changed: watch::Sender<()>,
     closed: AtomicBool,
 }
 
@@ -285,7 +285,10 @@ impl BrowseSession {
         let mut changed = self.changed.subscribe();
         loop {
             self.check_active()?;
-            if *changed.borrow_and_update() != after_revision {
+            // Notifications may arrive out of order after writers unlock.
+            // Only committed state decides whether a new snapshot exists.
+            let revision = self.state.lock().map_err(|_| SdkError::Closed)?.revision;
+            if revision != after_revision {
                 return self.snapshot();
             }
             tokio::select! {
@@ -358,19 +361,24 @@ impl BrowseSession {
         operation: impl FnOnce(&mut Browser) -> Result<BrowseWork, LibraryBrowseCoreError>,
     ) -> Result<(), SdkError> {
         self.check_active()?;
-        let work = {
+        let (work, changed) = {
             let mut state = self.state.lock().map_err(|_| SdkError::Closed)?;
             if self.closed.load(Ordering::Acquire) || self.token.is_cancelled() {
                 return Err(SdkError::Cancelled);
             }
             let work = operation(&mut state.browser).map_err(core_error)?;
             let cleared_failure = state.failure.take().is_some();
-            if work.changed || cleared_failure {
+            let changed = work.changed || cleared_failure;
+            if changed {
                 state.revision = state.revision.wrapping_add(1);
-                self.changed.send_replace(state.revision);
             }
-            work
+            (work, changed)
         };
+        if changed {
+            // UniFFI can resume and poll a snapshot waiter inline here.
+            // Never wake foreign continuations while holding session state.
+            self.changed.send_replace(());
+        }
         self.dispatch(work);
         Ok(())
     }
@@ -407,7 +415,8 @@ impl BrowseSession {
         if let Ok(mut state) = self.state.lock() {
             state.failure = Some(error);
             state.revision = state.revision.wrapping_add(1);
-            self.changed.send_replace(state.revision);
+            drop(state);
+            self.changed.send_replace(());
         }
     }
 }
@@ -466,7 +475,7 @@ impl Sdk {
         let work = browser
             .configure(Some(client), source, preferences)
             .map_err(core_error)?;
-        let (changed, _) = watch::channel(1);
+        let (changed, _) = watch::channel(());
         let session = Arc::new(BrowseSession {
             state: Mutex::new(SessionState {
                 browser,
@@ -520,3 +529,7 @@ impl SdkInner {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/browse_notifications.rs"]
+mod notification_tests;

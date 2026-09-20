@@ -221,7 +221,7 @@ impl Sdk {
 
                 let (key, scope, client, session) = candidate.into_parts();
                 client.set_device_name(target_name);
-                let profile = {
+                let (profile, old_tokens) = {
                     // The closed check and the adoption commit share one lock
                     // acquisition: close() cannot slip between them and leave
                     // a live authenticated profile on a closed SDK.
@@ -247,15 +247,16 @@ impl Sdk {
                     let scope = active.scope.clone();
                     state.active = Some(active);
                     inner.item_actions.reset_scope(Some(scope));
-                    if let Some(tokens) = state.tokens.remove(&old_epoch) {
-                        for token in tokens {
-                            if let Some(token) = token.upgrade() {
-                                token.cancel();
-                            }
-                        }
-                    }
-                    profile
+                    let old_tokens = state.tokens.remove(&old_epoch).unwrap_or_default();
+                    (profile, old_tokens)
                 };
+                // Cancellation may resume a foreign scope-bound reader inline.
+                // The committed replacement must be visible without this lock.
+                for token in old_tokens {
+                    if let Some(token) = token.upgrade() {
+                        token.cancel();
+                    }
+                }
 
                 // The swap is committed. Persistence failures from here are
                 // warnings on the committed outcome, not activation errors.
