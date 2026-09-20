@@ -202,7 +202,9 @@ impl Sdk {
                     // during the persistence waits below must not turn the
                     // committed activation into Err(Closed).
                     let profile = SdkInner::active_profile_for(&active);
+                    let scope = active.scope.clone();
                     state.active = Some(active);
+                    inner.item_actions.reset_scope(Some(scope));
                     if let Some(tokens) = state.tokens.remove(&old_epoch) {
                         for token in tokens {
                             if let Some(token) = token.upgrade() {

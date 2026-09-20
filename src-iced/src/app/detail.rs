@@ -1045,7 +1045,7 @@ mod tests {
     kernel: &mut Kernel,
     item_id: &str,
     action: jellypilot_core::item_actions::Action,
-  ) -> jellypilot_core::item_actions::Receipt {
+  ) -> jellypilot_sdk::item_actions::Admission {
     let session = kernel.request_gate.current_session();
     kernel.item_actions.set_scope(session, Some(test_scope()));
     kernel
@@ -1076,22 +1076,7 @@ mod tests {
     surface.data.season_neighbors = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
     surface.data.similar_items = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
 
-    let receipt = admit_write(
-      &mut kernel,
-      "item-1",
-      jellypilot_core::item_actions::Action::Favorite(true),
-    );
     prepare_mutation(&mut surface, &mut kernel, "item-1");
-    let settled = kernel.item_actions.settle(
-      &receipt,
-      Ok(jellypilot_core::item_actions::Outcome::Server(
-        confirmed_update("item-1", false, true),
-      )),
-    );
-    assert!(matches!(
-      settled,
-      Some(Ok(jellypilot_core::item_actions::Outcome::Server(_)))
-    ));
     drop(apply_confirmed(
       &mut surface,
       &mut kernel,
@@ -1114,18 +1099,6 @@ mod tests {
       jellypilot_core::LoadState::Ready(items) if items[0].favorite
     ));
 
-    let receipt = admit_write(
-      &mut kernel,
-      "item-1",
-      jellypilot_core::item_actions::Action::Played(true),
-    );
-    let settled = kernel
-      .item_actions
-      .settle(&receipt, Err("raw server response".to_owned()));
-    assert!(matches!(
-      settled,
-      Some(Err(jellypilot_core::item_actions::Failure::Request(_)))
-    ));
     assert!(mutation_failed(&mut surface, "item-1", generation));
     assert!(surface.data.user_data_error.is_some());
     assert!(matches!(
@@ -1172,7 +1145,7 @@ mod tests {
     let _ = refresh(&mut surface, &mut kernel, "item-1");
     let stale = surface.refresh_token.expect("refresh starts");
 
-    let receipt = admit_write(
+    let admission = admit_write(
       &mut kernel,
       "item-1",
       jellypilot_core::item_actions::Action::Favorite(true),
@@ -1191,13 +1164,7 @@ mod tests {
       matches!(&surface.data.content, jellypilot_core::LoadState::Ready(DetailContent::Item(item)) if item.id == "item-1")
     );
 
-    let settled = kernel.item_actions.settle(
-      &receipt,
-      Ok(jellypilot_core::item_actions::Outcome::Server(
-        confirmed_update("item-1", false, true),
-      )),
-    );
-    assert!(settled.is_some());
+    drop(admission);
     drop(apply_confirmed(
       &mut surface,
       &mut kernel,
@@ -1271,19 +1238,7 @@ mod tests {
 
     // A write admitted from another surface confirms while the load is in
     // flight; the stale response must not reintroduce the old flags.
-    let receipt = admit_write(
-      &mut kernel,
-      "item-1",
-      jellypilot_core::item_actions::Action::Favorite(true),
-    );
     prepare_mutation(&mut surface, &mut kernel, "item-1");
-    let settled = kernel.item_actions.settle(
-      &receipt,
-      Ok(jellypilot_core::item_actions::Outcome::Server(
-        confirmed_update("item-1", false, true),
-      )),
-    );
-    assert!(settled.is_some());
     drop(apply_confirmed(
       &mut surface,
       &mut kernel,

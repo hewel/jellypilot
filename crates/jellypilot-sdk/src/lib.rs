@@ -23,6 +23,7 @@ mod account;
 mod error;
 mod hooks;
 mod image;
+pub mod item_actions;
 mod query;
 mod quick_connect;
 #[cfg(test)]
@@ -228,6 +229,9 @@ struct SdkState {
     /// place so platform teardown and post-deletion cleanup keep their
     /// authentication; the last guard to settle performs the disconnect.
     committed_cleanup: u32,
+    /// Monotonic revision for confirmed Watchlist writes, fencing snapshots
+    /// so an older result can never overwrite newer membership.
+    watchlist_revision: u64,
 }
 
 /// RAII owner of the committed-transaction cleanup boundary.
@@ -280,6 +284,10 @@ pub(crate) struct SdkInner {
     config: SdkConfig,
     hooks: Option<Arc<dyn SdkHooks>>,
     state: Mutex<SdkState>,
+    /// Per-item write admission shared by every frontend entry point. The
+    /// SDK rebinds it on each scope-epoch transition; the executor owns
+    /// admission, execution, confirmation, and delivery acknowledgment.
+    item_actions: item_actions::ItemActions,
     /// Serializes account operations (login, activation, disconnect,
     /// sign-out, credential removal) so a second one fails fast instead of
     /// interleaving with an in-flight handoff. Owned guards let committed
@@ -298,6 +306,32 @@ impl SdkInner {
             return Err(SdkError::Closed);
         }
         Ok(())
+    }
+
+    /// Captures admission under the same lock that changes active scope.
+    fn admit_item(
+        &self,
+        token: &OperationToken,
+        item_id: &str,
+        action: jellypilot_core::item_actions::Action,
+    ) -> Result<item_actions::Admission, SdkError> {
+        let state = self.state.lock().map_err(|_| SdkError::Closed)?;
+        if state.closed {
+            return Err(SdkError::Closed);
+        }
+        if state.epoch != token.epoch {
+            return Err(SdkError::Stale);
+        }
+        if token.is_cancelled() {
+            return Err(SdkError::Cancelled);
+        }
+        if state.active.is_none() {
+            return Err(SdkError::NoActiveProfile);
+        }
+        self.item_actions
+            .begin(item_id, action)
+            .map(item_actions::Admission::immediate)
+            .map_err(SdkError::from)
     }
 
     /// Cancels every token minted for `epoch` and forgets them.
@@ -320,7 +354,7 @@ impl SdkInner {
     /// are serialized by the single lock: a concurrent activation cannot
     /// redirect the operation into the next scope's records. The store does
     /// synchronous filesystem work, so callers must run this off the
-    /// consumer's thread (see [`Sdk::run_watchlist`]).
+    /// consumer's thread (see [`Self::run_watchlist`]).
     fn with_scoped_watchlist<T>(
         &self,
         token: &OperationToken,
@@ -376,6 +410,80 @@ impl SdkInner {
             .as_mut()
             .expect("watchlist store was just initialized");
         operation(store)
+    }
+
+    /// Runs a scoped watchlist mutation under the state lock and returns the
+    /// snapshot revision alongside the operation's result.
+    ///
+    /// Same validation and serialization as [`Self::with_scoped_watchlist`];
+    /// when the operation reports a membership change the shared revision
+    /// advances so a confirmed write's snapshot can never be superseded by an
+    /// older one.
+    fn with_scoped_watchlist_write<T>(
+        &self,
+        token: &OperationToken,
+        operation: impl FnOnce(&mut WatchlistStore, &ProfileScope) -> Result<(bool, T), SdkError>,
+    ) -> Result<(u64, T), SdkError> {
+        let mut state = self.state.lock().map_err(|_| SdkError::Closed)?;
+        if state.closed {
+            return Err(SdkError::Closed);
+        }
+        if state.epoch != token.epoch {
+            return Err(SdkError::Stale);
+        }
+        if token.is_cancelled() {
+            return Err(SdkError::Cancelled);
+        }
+        let scope = state
+            .active
+            .as_ref()
+            .map(|active| active.scope.clone())
+            .ok_or(SdkError::NoActiveProfile)?;
+        if state.watchlist.is_none() {
+            state.watchlist = Some(
+                WatchlistStore::load_in_dir(self.config.storage_dir.clone())
+                    .map_err(|error| SdkError::Storage(error.to_string()))?,
+            );
+        }
+        let store = state
+            .watchlist
+            .as_mut()
+            .expect("watchlist store was just initialized");
+        let (changed, value) = operation(store, &scope)?;
+        if changed {
+            state.watchlist_revision = state.watchlist_revision.wrapping_add(1);
+        }
+        Ok((state.watchlist_revision, value))
+    }
+
+    /// Runs a watchlist operation on the SDK runtime.
+    ///
+    /// The store performs synchronous filesystem work under the state lock;
+    /// dispatching through `spawn_blocking` keeps that I/O off the consumer's
+    /// thread while the lock still serializes token validation, scope
+    /// capture, and the mutation itself.
+    pub(crate) async fn run_watchlist<T>(
+        self: &Arc<Self>,
+        token: Arc<OperationToken>,
+        operation: impl FnOnce(&mut WatchlistStore, &ProfileScope) -> Result<T, SdkError>
+            + Send
+            + 'static,
+    ) -> Result<T, SdkError>
+    where
+        T: Send + 'static,
+    {
+        self.check_open()?;
+        let inner = Arc::clone(self);
+        self.handle
+            .spawn_blocking(move || inner.with_scoped_watchlist(&token, operation))
+            .await
+            .map_err(|join| {
+                if join.is_cancelled() {
+                    SdkError::Closed
+                } else {
+                    SdkError::Request("the watchlist task failed unexpectedly".to_owned())
+                }
+            })?
     }
 
     /// Runs a committed account transaction on an SDK-owned thread.
@@ -470,6 +578,7 @@ impl SdkInner {
         if let Some(active) = state.active.take() {
             active.client.login().disconnect();
         }
+        self.item_actions.reset_scope(None);
         if let Some(tokens) = state.tokens.remove(&old_epoch) {
             for token in tokens {
                 if let Some(token) = token.upgrade() {
@@ -631,7 +740,9 @@ impl Sdk {
                 watchlist: None,
                 closed: false,
                 committed_cleanup: 0,
+                watchlist_revision: 0,
             }),
+            item_actions: item_actions::ItemActions::default(),
             account_op: Arc::new(AsyncMutex::new(())),
             shutdown: CancellationToken::new(),
         })
@@ -697,37 +808,6 @@ impl Sdk {
         self.inner.scope_is_active(scope)
     }
 
-    /// Runs a watchlist operation on the SDK runtime.
-    ///
-    /// The store performs synchronous filesystem work under the state lock;
-    /// dispatching through `spawn_blocking` keeps that I/O off the consumer's
-    /// thread while the lock still serializes token validation, scope
-    /// capture, and the mutation itself.
-    pub(crate) async fn run_watchlist<T>(
-        &self,
-        token: Arc<OperationToken>,
-        operation: impl FnOnce(&mut WatchlistStore, &ProfileScope) -> Result<T, SdkError>
-            + Send
-            + 'static,
-    ) -> Result<T, SdkError>
-    where
-        T: Send + 'static,
-    {
-        self.inner.check_open()?;
-        let inner = Arc::clone(&self.inner);
-        self.inner
-            .handle
-            .spawn_blocking(move || inner.with_scoped_watchlist(&token, operation))
-            .await
-            .map_err(|join| {
-                if join.is_cancelled() {
-                    SdkError::Closed
-                } else {
-                    SdkError::Request("the watchlist task failed unexpectedly".to_owned())
-                }
-            })?
-    }
-
     /// Ends the SDK: rejects new work, cancels live operations and flows,
     /// disconnects the active client, and shuts down the owned runtime when
     /// present. Idempotent.
@@ -751,6 +831,7 @@ impl Sdk {
                     active.client.login().disconnect();
                 }
             }
+            self.inner.item_actions.reset_scope(None);
             std::mem::take(&mut state.tokens)
         };
         for (_, epoch_tokens) in tokens {
@@ -796,11 +877,12 @@ impl Sdk {
             }
             state.active = Some(ActiveSession {
                 key,
-                scope,
+                scope: scope.clone(),
                 _session: jellypilot_auth::SensitiveSavedSession::from_client(&client)
                     .expect("adopted session must be capturable"),
                 client,
             });
+            self.inner.item_actions.reset_scope(Some(scope));
             old_epoch
         };
         self.inner.cancel_epoch(old_epoch);

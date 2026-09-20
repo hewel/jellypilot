@@ -2935,6 +2935,7 @@ dependencies = [
  "jellypilot-media-server",
  "jellypilot-mpv",
  "jellypilot-mpv-host",
+ "jellypilot-sdk",
  "jellypilot-session",
  "jellypilot-ui",
  "serde_json",
@@ -3020,6 +3021,19 @@ dependencies = [
  "wayland-protocols",
  "wgpu",
  "x11rb",
+]
+
+[[package]]
+name = "jellypilot-sdk"
+version = "2.2.2"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "jellypilot-auth",
+ "jellypilot-core",
+ "jellypilot-media-server",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

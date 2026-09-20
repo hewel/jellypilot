@@ -1,10 +1,20 @@
 //! Shared item-write execution and accepted-change propagation; surfaces own projections.
+//!
+//! Admission, request execution, confirmation, and delivery acknowledgment
+//! live in `jellypilot_sdk::item_actions::ItemActions`, the same executor the
+//! SDK exposes to FFI consumers. This module keeps presentation: admission
+//! side effects (mutation prep), queued-result delivery, and toast/inline
+//! error reporting.
 
 use std::sync::Arc;
 
 use iced::Task;
-use jellypilot_core::item_actions::{Action, Failure, Outcome, Receipt};
-use jellypilot_media_server::{VideoLibraryItem, VideoUserDataAction, VideoUserDataUpdateRequest};
+use jellypilot_core::item_actions::{Action, Receipt};
+use jellypilot_media_server::{VideoLibraryItem, VideoUserDataAction};
+use jellypilot_sdk::item_actions::{
+  Admission, ItemActionError, WatchlistSnapshot, WatchlistStorage, WatchlistWrite,
+  WatchlistWriteAction, WriteOutcome,
+};
 
 use super::kernel::Kernel;
 use super::message::Message as AppMessage;
@@ -27,7 +37,7 @@ pub(crate) enum Message {
   Settled {
     receipt: Receipt,
     origin: Origin,
-    result: Result<Outcome, String>,
+    result: Result<WriteOutcome, ItemActionError>,
   },
 }
 
@@ -112,12 +122,7 @@ pub(crate) fn start_server(
   if let Some(task) = blocked(state, origin) {
     return task;
   }
-  let action = match request_action {
-    VideoUserDataAction::Favorite => Action::Favorite(true),
-    VideoUserDataAction::Unfavorite => Action::Favorite(false),
-    VideoUserDataAction::MarkPlayed => Action::Played(true),
-    VideoUserDataAction::MarkUnplayed => Action::Played(false),
-  };
+  let action = jellypilot_sdk::item_actions::server_action(request_action);
   let (Some(client), Ok(scope)) = (
     state.kernel.client.as_ref().map(Arc::clone),
     personal_lists::active_scope(&state.kernel),
@@ -131,29 +136,27 @@ pub(crate) fn start_server(
       &item_id,
       action,
       origin,
-      Failure::Request("No active media-server profile".to_owned()),
+      ItemActionError::Failed(jellypilot_sdk::SdkError::Request(
+        "No active media-server profile".to_owned(),
+      )),
     );
   };
   state
     .kernel
     .item_actions
     .set_scope(state.kernel.request_gate.current_session(), Some(scope));
-  let Some(receipt) = state.kernel.item_actions.begin(&item_id, action) else {
+  let Ok(admission) = state.kernel.item_actions.begin(&item_id, action) else {
     return Task::none();
   };
-  prepare(state, &receipt);
-  let request = VideoUserDataUpdateRequest {
-    item_id: receipt.item_id().to_owned(),
-    action: request_action,
-  };
+  prepare(state, &admission);
+  let receipt = admission.receipt().clone();
+  let executor = state.kernel.item_actions.clone();
   Task::perform(
     async move {
-      client
-        .library()
-        .update_user_data(request)
+      executor
+        .run_server(admission, client)
         .await
-        .map(Outcome::Server)
-        .map_err(|error| error.to_string())
+        .map(WriteOutcome::Server)
     },
     move |result| {
       AppMessage::ItemActions(Message::Settled {
@@ -163,6 +166,27 @@ pub(crate) fn start_server(
       })
     },
   )
+}
+
+/// Watchlist storage adapter over the desktop runtime, which owns the store
+/// and its scope-epoch fencing and carries the admission into its blocking
+/// worker.
+struct StoreWatchlist {
+  worker: personal_lists::Runtime,
+  scope_epoch: u64,
+}
+
+impl WatchlistStorage for StoreWatchlist {
+  async fn apply(
+    &self,
+    admission: Admission,
+    write: WatchlistWrite,
+  ) -> Result<WatchlistSnapshot, ItemActionError> {
+    self
+      .worker
+      .apply_write(admission, write, self.scope_epoch)
+      .await
+  }
 }
 
 fn start_watchlist(
@@ -179,29 +203,36 @@ fn start_watchlist(
   let Some(scope) = personal_lists::current_scope(&full.personal_lists, &state.kernel) else {
     return Task::none();
   };
-  let should_add = item.is_some() && !full.personal_lists.watchlist_ids.contains(item_id.trim());
+  let action = match item {
+    Some(item) if !full.personal_lists.watchlist_ids.contains(item_id.trim()) => {
+      WatchlistWriteAction::Add(Box::new(item))
+    }
+    _ => WatchlistWriteAction::Remove,
+  };
   sync_scope(&mut state.kernel);
-  let Some(receipt) = state
-    .kernel
-    .item_actions
-    .begin(&item_id, Action::Watchlist(should_add))
-  else {
+  let Ok(admission) = state.kernel.item_actions.begin(
+    &item_id,
+    match &action {
+      WatchlistWriteAction::Add(_) => Action::Watchlist(true),
+      WatchlistWriteAction::Remove => Action::Watchlist(false),
+    },
+  ) else {
     return Task::none();
   };
-  prepare(state, &receipt);
-  let worker = state.watchlist.clone();
-  let scope_epoch = worker.scope_epoch(&scope);
+  prepare(state, &admission);
+  let receipt = admission.receipt().clone();
+  let executor = state.kernel.item_actions.clone();
+  let storage = StoreWatchlist {
+    worker: state.watchlist.clone(),
+    scope_epoch: state.watchlist.scope_epoch(&scope),
+  };
+  let write = WatchlistWrite { item_id, action };
   Task::perform(
     async move {
-      let snapshot = match item {
-        Some(item) => {
-          worker
-            .set_membership(scope, item, should_add, scope_epoch)
-            .await
-        }
-        None => worker.remove_item(scope, item_id, scope_epoch).await,
-      };
-      snapshot.map(|(revision, records)| Outcome::Watchlist { revision, records })
+      executor
+        .run_watchlist(admission, storage, write)
+        .await
+        .map(WriteOutcome::Watchlist)
     },
     move |result| {
       AppMessage::ItemActions(Message::Settled {
@@ -213,11 +244,11 @@ fn start_watchlist(
   )
 }
 
-fn prepare(state: &mut State, receipt: &Receipt) {
+fn prepare(state: &mut State, admission: &Admission) {
   if let Some(full) = state.full.as_mut() {
     personal_lists::prepare_mutation(&mut full.personal_lists);
-    if !matches!(receipt.action(), Action::Watchlist(_)) {
-      detail::prepare_mutation(&mut full.detail, &mut state.kernel, receipt.item_id());
+    if !matches!(admission.action(), Action::Watchlist(_)) {
+      detail::prepare_mutation(&mut full.detail, &mut state.kernel, admission.item_id());
     }
   }
 }
@@ -226,12 +257,16 @@ fn settle(
   state: &mut State,
   receipt: Receipt,
   origin: Origin,
-  result: Result<Outcome, String>,
+  result: Result<WriteOutcome, ItemActionError>,
 ) -> Task<AppMessage> {
   sync_scope(&mut state.kernel);
-  let Some(result) = state.kernel.item_actions.settle(&receipt, result) else {
+  // Delivery acknowledgment: the queued completion is applied at most once
+  // and only while it is still the newest settled write for its item under
+  // the current binding, so reordered or stale deliveries cannot overwrite
+  // newer accepted state.
+  if !state.kernel.item_actions.acknowledge(&receipt) {
     return Task::none();
-  };
+  }
   let outcome = match result {
     Ok(outcome) => outcome,
     Err(error) => return report_failure(state, receipt.item_id(), receipt.action(), origin, error),
@@ -241,7 +276,7 @@ fn settle(
     return Task::none();
   };
   match outcome {
-    Outcome::Server(update) => {
+    WriteOutcome::Server(update) => {
       super::shell::apply_user_data_update(&mut state.shell, &update);
       let refresh_detail = !matches!(
         origin,
@@ -260,13 +295,13 @@ fn settle(
         ),
       ])
     }
-    Outcome::Watchlist { revision, records } => personal_lists::apply_watchlist_snapshot(
+    WriteOutcome::Watchlist(snapshot) => personal_lists::apply_watchlist_snapshot(
       &mut full.personal_lists,
       &mut state.kernel,
       &state.watchlist,
       receipt.scope(),
-      revision,
-      records,
+      snapshot.revision,
+      snapshot.records,
     ),
   }
 }
@@ -276,10 +311,13 @@ fn report_failure(
   item_id: &str,
   action: Action,
   origin: Origin,
-  failure: Failure,
+  failure: ItemActionError,
 ) -> Task<AppMessage> {
-  if let Failure::Request(error) = &failure {
+  if let ItemActionError::Failed(jellypilot_sdk::SdkError::Request(error)) = &failure {
     tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error), "Item action failed");
+  }
+  if failure.is_silent() {
+    return Task::none();
   }
   if let Origin::Detail { generation } = origin {
     if state
@@ -293,9 +331,9 @@ fn report_failure(
       .kernel
       .show_toast(NoticeLevel::Error, UiText::new(detail::USER_DATA_FAILURE));
   }
-  let key = match (action, failure) {
-    (Action::Favorite(_), Failure::NotConfirmed) => "lists-favorite-not-updated",
-    (Action::Favorite(_), Failure::Request(_)) => "lists-favorite-update-error",
+  let key = match (action, &failure) {
+    (Action::Favorite(_), ItemActionError::NotConfirmed) => "lists-favorite-not-updated",
+    (Action::Favorite(_), _) => "lists-favorite-update-error",
     (Action::Played(_), _) => detail::USER_DATA_FAILURE,
     (Action::Watchlist(_), _) => "lists-watchlist-update-error",
   };

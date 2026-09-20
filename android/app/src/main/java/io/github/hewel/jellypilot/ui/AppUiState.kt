@@ -24,6 +24,8 @@ internal data class MediaUi(
   val overview: String,
   val favorite: Boolean,
   val played: Boolean,
+  /** A Favorite/Played write for this item is in flight; action controls stay disabled until it settles. */
+  val updating: Boolean = false,
 )
 internal data class LibraryUi(val id: String, val title: String)
 internal data class ProfileUi(val key: String, val name: String, val server: String, val provider: String, val active: Boolean)

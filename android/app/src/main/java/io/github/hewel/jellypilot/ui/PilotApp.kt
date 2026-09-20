@@ -191,12 +191,12 @@ private fun Detail(item: MediaUi, children: List<MediaUi>, model: AppViewModel) 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(item.title, style = MaterialTheme.typography.headlineSmall)
           Text(item.metadata, color = LocalPilotColors.current.metadata)
-          FilledTonalButton(onClick = { model.setFavorite(item.id, !item.favorite) }) {
+          FilledTonalButton(onClick = { model.setFavorite(item.id, !item.favorite) }, enabled = !item.updating) {
             Icon(painterResource(if (item.favorite) R.drawable.ic_heart_filled else R.drawable.ic_heart), null, Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(if (item.favorite) R.string.unfavorite else R.string.favorite))
           }
-          TextButton(onClick = { model.setPlayed(item.id, !item.played) }) { Text(stringResource(if (item.played) R.string.mark_unplayed else R.string.mark_played)) }
+          TextButton(onClick = { model.setPlayed(item.id, !item.played) }, enabled = !item.updating) { Text(stringResource(if (item.played) R.string.mark_unplayed else R.string.mark_played)) }
         }
       }
     }

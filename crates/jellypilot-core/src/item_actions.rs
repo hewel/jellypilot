@@ -97,12 +97,20 @@ struct Operation {
 /// survive only while that pair stays unchanged. Operation sequences never
 /// reset, so a receipt replayed after a scope round trip can never match — let
 /// alone clear — a newer pending write for the same item.
+///
+/// `settled` records the sequence of the newest settled write per item so
+/// [`Coordinator::acknowledge`] can gate result delivery: a queued completion
+/// is delivered at most once and only while it is still the newest settled
+/// write for its item, which keeps an older completion from overwriting a
+/// newer write's accepted state when deliveries are reordered. Entries are
+/// dropped with the binding that produced them.
 #[derive(Debug, Default)]
 pub struct Coordinator {
     session: Option<SessionToken>,
     scope: Option<ProfileScope>,
     sequence: u64,
     pending: HashMap<String, Operation>,
+    settled: HashMap<String, Operation>,
 }
 
 impl Coordinator {
@@ -115,6 +123,7 @@ impl Coordinator {
         self.session = Some(session);
         self.scope = scope;
         self.pending.clear();
+        self.settled.clear();
     }
 
     /// Admits a write for a trimmed, nonempty item id. Returns `None` when
@@ -150,6 +159,64 @@ impl Coordinator {
             .map(|operation| operation.action)
     }
 
+    /// Settled action whose result has not yet been acknowledged.
+    #[must_use]
+    pub fn awaiting_delivery(&self, item_id: &str) -> Option<Action> {
+        self.settled
+            .get(item_id.trim())
+            .map(|operation| operation.action)
+    }
+
+    /// Whether `receipt` was minted under the binding currently in force.
+    ///
+    /// This checks only session and scope identity, not the pending map, so a
+    /// caller can reject a queued result for a write that already settled.
+    #[must_use]
+    pub fn is_current(&self, receipt: &Receipt) -> bool {
+        self.session == Some(receipt.session) && self.scope.as_ref() == Some(&receipt.scope)
+    }
+
+    /// Releases the admission a receipt identifies without reporting a result.
+    ///
+    /// Returns `true` when the receipt still owned a pending write. Use this
+    /// when the underlying work was abandoned before it could produce a
+    /// reportable outcome; a stale, foreign, or already-settled receipt
+    /// changes nothing.
+    pub fn release(&mut self, receipt: &Receipt) -> bool {
+        if !self.is_current(receipt) {
+            return false;
+        }
+        let Some(operation) = self.pending.get(receipt.item_id()) else {
+            return false;
+        };
+        if operation.sequence != receipt.sequence || operation.action != receipt.action {
+            return false;
+        }
+        self.pending.remove(receipt.item_id());
+        true
+    }
+
+    /// Acknowledges delivery of a settled write's result.
+    ///
+    /// Returns `true` exactly once per settled write, and only while the
+    /// receipt still names the newest settled write for its item under the
+    /// current binding. A queued completion that arrives after a newer write
+    /// settled — or a replayed one — is rejected, so consumers applying
+    /// results out of order cannot overwrite newer accepted state.
+    pub fn acknowledge(&mut self, receipt: &Receipt) -> bool {
+        if !self.is_current(receipt)
+            || self
+                .settled
+                .get(receipt.item_id())
+                .map(|operation| operation.sequence)
+                != Some(receipt.sequence)
+        {
+            return false;
+        }
+        self.settled.remove(receipt.item_id());
+        true
+    }
+
     /// Settles the write a receipt identifies.
     ///
     /// `None` means the receipt is stale, foreign, or already settled; the
@@ -170,6 +237,13 @@ impl Coordinator {
             return None;
         }
         self.pending.remove(receipt.item_id());
+        self.settled.insert(
+            receipt.item_id().to_owned(),
+            Operation {
+                action: receipt.action,
+                sequence: receipt.sequence,
+            },
+        );
 
         let result = result.map_err(Failure::Request);
         let confirmed = match (receipt.action, &result) {
@@ -494,5 +568,106 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn release_frees_admission_without_a_result() {
+        let mut coordinator = Coordinator::default();
+        coordinator.set_scope(session(), Some(scope("user-1")));
+        let receipt = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("first write should be admitted");
+
+        assert!(coordinator.release(&receipt));
+        assert_eq!(coordinator.pending("item-1"), None);
+        assert!(!coordinator.release(&receipt));
+        assert!(coordinator.begin("item-1", Action::Played(true)).is_some());
+    }
+
+    #[test]
+    fn release_rejects_stale_receipts() {
+        let mut coordinator = Coordinator::default();
+        coordinator.set_scope(session(), Some(scope("user-1")));
+        let stale = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("first write should be admitted");
+
+        coordinator.set_scope(session(), Some(scope("user-2")));
+        assert!(!coordinator.release(&stale));
+    }
+
+    #[test]
+    fn is_current_tracks_binding_not_pending_state() {
+        let mut coordinator = Coordinator::default();
+        coordinator.set_scope(session(), Some(scope("user-1")));
+        let receipt = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("first write should be admitted");
+
+        assert!(coordinator.is_current(&receipt));
+        assert!(server_update(
+            coordinator.settle(&receipt, Ok(update("item-1", false, true))),
+            "item-1",
+            false,
+            true
+        ));
+        // A settled receipt still identifies the live binding: queued results
+        // stay acceptable while a foreign binding rejects them.
+        assert!(coordinator.is_current(&receipt));
+        coordinator.set_scope(session(), Some(scope("user-2")));
+        assert!(!coordinator.is_current(&receipt));
+    }
+
+    #[test]
+    fn acknowledge_delivers_only_the_newest_settled_write_once() {
+        let mut coordinator = Coordinator::default();
+        coordinator.set_scope(session(), Some(scope("user-1")));
+        let first = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("first write should be admitted");
+        assert!(server_update(
+            coordinator.settle(&first, Ok(update("item-1", false, true))),
+            "item-1",
+            false,
+            true
+        ));
+        let second = coordinator
+            .begin("item-1", Action::Played(true))
+            .expect("settled item should admit a fresh write");
+        assert!(server_update(
+            coordinator.settle(&second, Ok(update("item-1", true, true))),
+            "item-1",
+            true,
+            true
+        ));
+
+        // The older completion arriving after the newer one settled is stale.
+        assert!(!coordinator.acknowledge(&first));
+        assert!(coordinator.acknowledge(&second));
+        // Delivery is acknowledged exactly once: replays are rejected.
+        assert!(!coordinator.acknowledge(&second));
+    }
+
+    #[test]
+    fn acknowledge_rejects_foreign_and_unsettled_receipts() {
+        let mut coordinator = Coordinator::default();
+        coordinator.set_scope(session(), Some(scope("user-1")));
+        let pending = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("first write should be admitted");
+        assert!(!coordinator.acknowledge(&pending));
+
+        coordinator.set_scope(session(), Some(scope("user-2")));
+        let foreign = coordinator
+            .begin("item-1", Action::Favorite(true))
+            .expect("new scope admits a fresh write");
+        assert!(server_update(
+            coordinator.settle(&foreign, Ok(update("item-1", false, true))),
+            "item-1",
+            false,
+            true
+        ));
+        assert!(!coordinator.acknowledge(&pending));
+        assert!(coordinator.acknowledge(&foreign));
     }
 }

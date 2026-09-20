@@ -21,7 +21,7 @@ tokio-util = { version = "0.7.17", features = ["rt"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

@@ -4,15 +4,20 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jellypilot_auth::login::ValidatedProfileCandidate;
 use jellypilot_auth::{AuthStore, CredentialError, SavedProfileKey, SecureCredential};
-use jellypilot_core::watchlist::{ProfileScope, WatchlistStore};
+use jellypilot_core::item_actions::Action;
+use jellypilot_core::watchlist::{ProfileScope, WatchlistRecord, WatchlistStore};
 use jellypilot_media_server::{
     JellyfinClient, MediaServerProvider, SavedSession, VideoLibraryItem,
 };
 
+use crate::item_actions::{
+    Admission, ItemActionError, ItemActions, WatchlistSnapshot, WatchlistStorage, WatchlistWrite,
+    WatchlistWriteAction,
+};
 use crate::{
     ActivationOutcome, ProfileCandidate, QuickConnectListener, QuickConnectOutcome, Sdk, SdkConfig,
     SdkError, SdkHooks,
@@ -1082,4 +1087,543 @@ async fn scope_ref_without_active_profile_is_typed() {
     let token = sdk.new_operation_token().expect("token");
     let error = token.scope_ref().expect_err("no active profile");
     assert_eq!(error, SdkError::NoActiveProfile);
+}
+
+/// Each accepted request waits for its own response, so tests control
+/// mutation ordering without timing the network or sleeping.
+async fn controlled_user_data_server() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<&'static str>>,
+    tokio_util::task::AbortOnDropHandle<()>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mutation server");
+    let address = listener.local_addr().expect("server address");
+    let (requests, received) =
+        tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<&'static str>>();
+    let task = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                connection = listener.accept() => {
+                    let (mut stream, _) = connection.expect("accept request");
+                    let requests = requests.clone();
+                    connections.spawn(async move {
+                        let mut headers = Vec::new();
+                        loop {
+                            let byte = stream.read_u8().await.expect("read request");
+                            headers.push(byte);
+                            if headers.ends_with(b"\r\n\r\n") {
+                                break;
+                            }
+                            assert!(headers.len() < 16_384, "bounded request headers");
+                        }
+                        let (reply, response) = tokio::sync::oneshot::channel();
+                        if requests.send(reply).is_err() {
+                            return;
+                        }
+                        if let Ok(body) = response.await {
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            );
+                            // Cancellation can close the client while the
+                            // controlled server response is still held.
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        }
+                    });
+                }
+                Some(result) = connections.join_next(), if !connections.is_empty() => {
+                    result.expect("mutation response task");
+                }
+            }
+        }
+    });
+    (
+        format!("http://{address}"),
+        received,
+        tokio_util::task::AbortOnDropHandle::new(task),
+    )
+}
+
+async fn next_user_data_request(
+    requests: &mut tokio::sync::mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<&'static str>>,
+) -> tokio::sync::oneshot::Sender<&'static str> {
+    tokio::time::timeout(Duration::from_secs(10), requests.recv())
+        .await
+        .expect("mutation should reach server")
+        .expect("server should remain available")
+}
+
+#[tokio::test]
+async fn item_writes_share_admission_without_blocking_independent_items() {
+    use jellypilot_media_server::VideoUserDataAction;
+
+    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let sdk = Arc::new(sdk);
+    let first = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("first token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-a".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    let first_reply = next_user_data_request(&mut requests).await;
+
+    let conflict = tokio::time::timeout(
+        Duration::from_secs(10),
+        sdk.update_user_data(
+            sdk.new_operation_token().expect("conflicting token"),
+            "movie-a".to_owned(),
+            VideoUserDataAction::MarkPlayed,
+        ),
+    )
+    .await
+    .expect("same-item conflict must fail without waiting for the server");
+    assert_eq!(
+        conflict.expect_err("same item must be busy"),
+        SdkError::OperationInProgress
+    );
+    let local_conflict = tokio::time::timeout(
+        Duration::from_secs(10),
+        sdk.watchlist_add(
+            sdk.new_operation_token().expect("watchlist token"),
+            test_item("movie-a"),
+        ),
+    )
+    .await
+    .expect("local conflict must fail without waiting for the server");
+    assert_eq!(
+        local_conflict.expect_err("local and server writes share admission"),
+        SdkError::OperationInProgress
+    );
+
+    let independent = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("independent token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-b".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("independent request still waiting");
+    let accepted = independent
+        .await
+        .expect("independent task")
+        .expect("confirmed write");
+    assert!(accepted.favorite && accepted.item_id == "movie-b");
+    assert!(!first.is_finished(), "the first write remains in flight");
+
+    first_reply
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("first request still waiting");
+    let accepted = first.await.expect("first task").expect("confirmed write");
+    assert!(accepted.favorite && accepted.item_id == "movie-a");
+}
+
+#[tokio::test]
+async fn unconfirmed_server_write_releases_admission_for_retry() {
+    use jellypilot_media_server::VideoUserDataAction;
+
+    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let sdk = Arc::new(sdk);
+    let rejected = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("first token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-a".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":false,"Played":false}"#)
+        .expect("request still waiting");
+    assert!(
+        matches!(
+            rejected.await.expect("first task"),
+            Err(SdkError::Request(_))
+        ),
+        "a successful response must confirm the requested flag"
+    );
+
+    let retry = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("retry token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-a".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("retry still waiting");
+    assert!(
+        retry
+            .await
+            .expect("retry task")
+            .expect("retry confirmed")
+            .favorite
+    );
+}
+
+#[tokio::test]
+async fn replaced_scope_cannot_accept_a_pending_item_write() {
+    use jellypilot_media_server::VideoUserDataAction;
+
+    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let sdk = Arc::new(sdk);
+    let departed = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("old token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-a".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    let old_reply = next_user_data_request(&mut requests).await;
+    sdk.adopt_test_session(test_session("grace", &server));
+    let _ = old_reply.send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), departed)
+        .await
+        .expect("old write should settle")
+        .expect("old task");
+    assert!(matches!(
+        outcome,
+        Err(SdkError::Cancelled | SdkError::Stale)
+    ));
+
+    let current = {
+        let sdk = Arc::clone(&sdk);
+        let token = sdk.new_operation_token().expect("current token");
+        tokio::spawn(async move {
+            sdk.update_user_data(token, "movie-a".to_owned(), VideoUserDataAction::Favorite)
+                .await
+        })
+    };
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("current request still waiting");
+    assert!(
+        current
+            .await
+            .expect("current task")
+            .expect("current write confirmed")
+            .favorite
+    );
+}
+
+/// Watchlist storage whose real write runs inside `spawn_blocking`: the
+/// entered signal proves the worker started, the release channel parks the
+/// write deterministically, and the finished channel reports the settled
+/// result after the caller's future and runtime are gone.
+struct GatedWatchlist {
+    dir: std::path::PathBuf,
+    entered: std::sync::mpsc::Sender<()>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    finished: std::sync::mpsc::Sender<Result<WatchlistSnapshot, ItemActionError>>,
+}
+
+impl WatchlistStorage for GatedWatchlist {
+    async fn apply(
+        &self,
+        admission: Admission,
+        write: WatchlistWrite,
+    ) -> Result<WatchlistSnapshot, ItemActionError> {
+        let dir = self.dir.clone();
+        let entered = self.entered.clone();
+        let finished = self.finished.clone();
+        let release = self.release.lock().expect("release lock").take();
+        tokio::task::spawn_blocking(move || {
+            let _ = entered.send(());
+            if let Some(release) = release {
+                let _ = release.recv();
+            }
+            let result = WatchlistStore::load_in_dir(dir)
+                .map_err(|error| SdkError::Storage(error.to_string()))
+                .and_then(|mut store| {
+                    let scope = admission.scope().clone();
+                    let changed = match &write.action {
+                        WatchlistWriteAction::Add(item) => {
+                            let added_at_unix_millis = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|duration| duration.as_millis() as u64)
+                                .unwrap_or(0);
+                            let record = WatchlistRecord::from_item(
+                                scope.clone(),
+                                item,
+                                added_at_unix_millis,
+                            )
+                            .map_err(|error| SdkError::InvalidInput(error.to_string()))?;
+                            store
+                                .add(record)
+                                .map_err(|error| SdkError::Storage(error.to_string()))?
+                        }
+                        WatchlistWriteAction::Remove => store
+                            .remove(&scope, &write.item_id)
+                            .map_err(|error| SdkError::Storage(error.to_string()))?,
+                    };
+                    Ok(WatchlistSnapshot {
+                        revision: u64::from(changed),
+                        records: store.records_for(&scope),
+                        changed,
+                    })
+                });
+            let settled = admission.finish_watchlist(result);
+            let _ = finished.send(settled.clone());
+            settled
+        })
+        .await
+        .map_err(|error| {
+            ItemActionError::Failed(if error.is_cancelled() {
+                SdkError::Closed
+            } else {
+                SdkError::Storage("the watchlist task failed unexpectedly".to_owned())
+            })
+        })?
+    }
+}
+
+/// Records whether `apply` ran so a rejected write proves storage was never
+/// touched.
+struct RecordingWatchlist {
+    touched: Arc<AtomicBool>,
+}
+
+impl WatchlistStorage for RecordingWatchlist {
+    async fn apply(
+        &self,
+        admission: Admission,
+        _write: WatchlistWrite,
+    ) -> Result<WatchlistSnapshot, ItemActionError> {
+        self.touched.store(true, Ordering::SeqCst);
+        admission.finish_watchlist(Err(SdkError::Storage("storage must not run".to_owned())))
+    }
+}
+
+#[tokio::test]
+async fn settled_server_write_stays_busy_until_acknowledged() {
+    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let executor = ItemActions::default();
+    executor.reset_scope(Some(
+        ProfileScope::new(MediaServerProvider::Jellyfin, server.as_str(), "ada").expect("scope"),
+    ));
+    let dir = tempfile::tempdir().expect("client storage");
+    let client = Arc::new(JellyfinClient::with_storage_dir(dir.path().to_path_buf()));
+    client
+        .login()
+        .adopt_validated_session(&test_session("ada", &server));
+
+    let admission = executor
+        .begin("movie-a", Action::Favorite(true))
+        .expect("first write admitted");
+    let receipt = admission.receipt().clone();
+    let first = tokio::spawn(executor.run_server(admission, Arc::clone(&client)));
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("first request still waiting");
+    assert!(
+        first
+            .await
+            .expect("first task")
+            .expect("confirmed write")
+            .favorite
+    );
+
+    assert!(
+        matches!(
+            executor.begin("movie-a", Action::Watchlist(true)),
+            Err(ItemActionError::Busy)
+        ),
+        "settled-but-unacknowledged write keeps the item busy"
+    );
+    assert!(
+        matches!(
+            executor.begin("movie-a", Action::Played(true)),
+            Err(ItemActionError::Busy)
+        ),
+        "server and watchlist writes share the busy slot"
+    );
+    assert_eq!(executor.pending("movie-a"), Some(Action::Favorite(true)));
+
+    let second = {
+        let executor = executor.clone();
+        let client = Arc::clone(&client);
+        tokio::spawn(async move {
+            let admission = executor
+                .begin("movie-b", Action::Favorite(true))
+                .expect("independent item admitted");
+            executor.run_server(admission, client).await
+        })
+    };
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":true,"Played":false}"#)
+        .expect("independent request still waiting");
+    assert!(
+        second
+            .await
+            .expect("independent task")
+            .expect("independent write")
+            .favorite
+    );
+
+    assert!(
+        executor.acknowledge(&receipt),
+        "first delivery acknowledged"
+    );
+    let admission = executor
+        .begin("movie-a", Action::Favorite(false))
+        .expect("acknowledgement frees the item");
+    let later = admission.receipt().clone();
+    let second = tokio::spawn(executor.run_server(admission, Arc::clone(&client)));
+    next_user_data_request(&mut requests)
+        .await
+        .send(r#"{"Key":"fixture-item","IsFavorite":false,"Played":false}"#)
+        .expect("second request still waiting");
+    let update = second.await.expect("second task").expect("confirmed write");
+    assert!(!update.favorite && update.item_id == "movie-a");
+
+    assert!(
+        !executor.acknowledge(&receipt),
+        "a replayed acknowledgement must not clear the newer settled write"
+    );
+    assert_eq!(executor.pending("movie-a"), Some(Action::Favorite(false)));
+    assert!(executor.acknowledge(&later), "newest delivery acknowledged");
+    assert_eq!(executor.pending("movie-a"), None);
+}
+
+#[tokio::test]
+async fn detached_watchlist_write_holds_admission_until_storage_finishes() {
+    let dir = tempfile::tempdir().expect("watchlist dir");
+    let scope = ProfileScope::new(
+        MediaServerProvider::Jellyfin,
+        "https://media.example.test",
+        "ada",
+    )
+    .expect("scope");
+    let executor = ItemActions::default();
+    executor.reset_scope(Some(scope.clone()));
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let storage = GatedWatchlist {
+        dir: dir.path().to_path_buf(),
+        entered: entered_tx,
+        release: Mutex::new(Some(release_rx)),
+        finished: finished_tx,
+    };
+
+    let admission = executor
+        .begin("movie-a", Action::Watchlist(true))
+        .expect("watchlist write admitted");
+    let receipt = admission.receipt().clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("write runtime");
+    let waiter = runtime.spawn(executor.run_watchlist(
+        admission,
+        storage,
+        WatchlistWrite {
+            item_id: "movie-a".to_owned(),
+            action: WatchlistWriteAction::Add(Box::new(test_item("movie-a"))),
+        },
+    ));
+    if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(10)) {
+        runtime.shutdown_background();
+        panic!("blocking write should start: {error}");
+    }
+
+    waiter.abort();
+    let aborted = waiter.await;
+    runtime.shutdown_background();
+    assert!(aborted.expect_err("aborted waiter").is_cancelled());
+    assert!(
+        matches!(
+            executor.begin("movie-a", Action::Watchlist(false)),
+            Err(ItemActionError::Busy)
+        ),
+        "a detached blocking write must hold admission until it finishes"
+    );
+
+    release_tx.send(()).expect("release the parked write");
+    let settled = finished_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("detached write should finish")
+        .expect("detached write should settle");
+    assert!(settled.changed);
+    assert!(
+        matches!(
+            executor.begin("movie-a", Action::Watchlist(false)),
+            Err(ItemActionError::Busy)
+        ),
+        "settled-but-unacknowledged write keeps the item busy"
+    );
+    assert!(
+        WatchlistStore::load_in_dir(dir.path().to_path_buf())
+            .expect("watchlist store")
+            .contains(&scope, "movie-a"),
+        "the detached write must reach the real store"
+    );
+    assert!(executor.acknowledge(&receipt), "delivery acknowledged");
+    assert_eq!(executor.pending("movie-a"), None);
+}
+
+#[tokio::test]
+async fn watchlist_write_mismatch_fails_without_touching_storage() {
+    let executor = ItemActions::default();
+    executor.reset_scope(Some(
+        ProfileScope::new(
+            MediaServerProvider::Jellyfin,
+            "https://media.example.test",
+            "ada",
+        )
+        .expect("scope"),
+    ));
+    let touched = Arc::new(AtomicBool::new(false));
+    let storage = RecordingWatchlist {
+        touched: Arc::clone(&touched),
+    };
+
+    let admission = executor
+        .begin("movie-a", Action::Watchlist(true))
+        .expect("watchlist write admitted");
+    let error = executor
+        .run_watchlist(
+            admission,
+            storage,
+            WatchlistWrite {
+                item_id: "movie-a".to_owned(),
+                action: WatchlistWriteAction::Add(Box::new(test_item("movie-b"))),
+            },
+        )
+        .await
+        .expect_err("a mismatched item id must be rejected");
+    assert!(
+        matches!(error, ItemActionError::Failed(SdkError::InvalidInput(_))),
+        "mismatched writes fail as invalid input"
+    );
+    assert!(!touched.load(Ordering::SeqCst), "storage must not run");
+    assert!(
+        executor.begin("movie-a", Action::Watchlist(true)).is_ok(),
+        "a rejected write releases admission"
+    );
 }

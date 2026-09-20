@@ -10,8 +10,8 @@ use jellypilot_media_server::{
     FavoritesPage, FavoritesPageRequest, VideoItemDetail, VideoItemStreams, VideoLibraryItem,
     VideoLibraryPage, VideoLibraryPageRequest, VideoLibraryShortcut, VideoPlaybackTarget,
     VideoSearchPage, VideoSearchRequest, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
-    VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
-    WatchHistoryPage, WatchHistoryPageRequest,
+    VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, WatchHistoryPage,
+    WatchHistoryPageRequest,
 };
 
 use crate::{OperationToken, Sdk, SdkError};
@@ -251,20 +251,29 @@ impl Sdk {
             .await
     }
 
-    /// Favorite/played mutation. The returned state is authoritative only
-    /// after server acceptance; a cancelled or stale result must not be
-    /// applied to visible content.
+    /// Favorite/played mutation admitted through the shared item-action
+    /// executor.
+    ///
+    /// A second write for the same item — server or Watchlist — fails with
+    /// [`SdkError::OperationInProgress`] while one is in flight. The returned
+    /// state is authoritative only after server acceptance; a response that
+    /// does not confirm the requested flag fails, and a cancelled or stale
+    /// result must not be applied to visible content.
     pub async fn update_user_data(
         &self,
         token: Arc<OperationToken>,
         item_id: String,
         action: VideoUserDataAction,
     ) -> Result<VideoUserDataUpdate, SdkError> {
+        let admission =
+            self.inner
+                .admit_item(&token, &item_id, crate::item_actions::server_action(action))?;
+        let inner = Arc::clone(&self.inner);
         self.inner
             .scoped(&token, move |client| async move {
-                client
-                    .library()
-                    .update_user_data(VideoUserDataUpdateRequest { item_id, action })
+                inner
+                    .item_actions
+                    .run_server(admission, client)
                     .await
                     .map_err(SdkError::from)
             })

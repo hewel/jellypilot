@@ -31,7 +31,7 @@ pub enum SdkError {
     NoActiveProfile,
     /// The referenced saved profile does not exist.
     ProfileNotFound,
-    /// Another account operation is already running.
+    /// A conflicting account transition or write for this item is running.
     OperationInProgress,
     /// Platform teardown declined the profile transition.
     HandoffAborted,
@@ -53,7 +53,7 @@ impl fmt::Display for SdkError {
             Self::NoActiveProfile => formatter.write_str("no profile is active"),
             Self::ProfileNotFound => formatter.write_str("the saved profile no longer exists"),
             Self::OperationInProgress => {
-                formatter.write_str("another account operation is already running")
+                formatter.write_str("a conflicting operation is already running")
             }
             Self::HandoffAborted => {
                 formatter.write_str("platform teardown declined the profile transition")

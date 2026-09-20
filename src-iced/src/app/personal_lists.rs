@@ -16,6 +16,10 @@ use jellypilot_media_server::{
   FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataUpdate, WatchHistoryPage,
   WatchHistoryPageRequest,
 };
+use jellypilot_sdk::item_actions::{
+  Admission, ItemActionError, WatchlistSnapshot, WatchlistWrite, WatchlistWriteAction,
+};
+use jellypilot_sdk::SdkError;
 
 use super::artwork::{ImageCollection, ImageCompletion, ImageSpec};
 use super::kernel::Kernel;
@@ -155,80 +159,78 @@ impl Runtime {
       .await
   }
 
-  pub(crate) async fn set_membership(
+  /// Executes one admitted Watchlist write inside the blocking store worker.
+  ///
+  /// The admission moves into the worker itself, so dropping this future
+  /// detaches the write instead of releasing the item early: settlement
+  /// happens inside `finish_watchlist` once the real I/O ends, on success
+  /// or failure. `expected_scope_epoch` is the caller's admission-time
+  /// fence; a superseded write fails without touching membership.
+  pub(crate) async fn apply_write(
     &self,
-    scope: ProfileScope,
-    item: VideoLibraryItem,
-    should_add: bool,
+    admission: Admission,
+    write: WatchlistWrite,
     expected_scope_epoch: u64,
-  ) -> Result<(u64, Vec<WatchlistRecord>), String> {
+  ) -> Result<WatchlistSnapshot, ItemActionError> {
     let runtime = self.clone();
-    self
-      .run_store(move |store| {
-        if !runtime.scope_epoch_is_current(&scope, expected_scope_epoch) {
-          return Err("Watchlist operation was superseded.".to_owned());
-        }
-        let changed = {
-          let watchlist = store
-            .store
-            .as_mut()
-            .expect("store is initialized before operations");
-          if should_add {
-            let elapsed = SystemTime::now()
-              .duration_since(UNIX_EPOCH)
-              .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?;
-            let added_at = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-            let record = WatchlistRecord::from_item(scope.clone(), &item, added_at)
-              .map_err(|error| error.to_string())?;
-            watchlist.add(record).map_err(|error| error.to_string())?
-          } else {
-            watchlist
-              .remove(&scope, &item.id)
-              .map_err(|error| error.to_string())?
-          }
-        };
-        if changed {
-          store.revision = store.revision.wrapping_add(1);
-        }
-        let records = store
-          .store
-          .as_ref()
-          .expect("store is initialized before operations")
-          .records_for(&scope);
-        Ok((store.revision, records))
-      })
-      .await
+    let worker = tokio::task::spawn_blocking(move || {
+      let mut state = runtime
+        .inner
+        .store
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+      let result = runtime
+        .write_locked(&mut state, admission.scope(), write, expected_scope_epoch)
+        .map_err(SdkError::Storage);
+      admission.finish_watchlist(result)
+    });
+    worker.await.map_err(|join| {
+      if join.is_cancelled() {
+        ItemActionError::Failed(SdkError::Closed)
+      } else {
+        ItemActionError::Failed(SdkError::Storage(format!(
+          "Watchlist worker failed: {join}"
+        )))
+      }
+    })?
   }
 
-  pub(crate) async fn remove_item(
+  /// Applies `write` under the store lock: loads the store on first use,
+  /// rejects superseded scope epochs, and advances the revision only when
+  /// membership actually changed.
+  fn write_locked(
     &self,
-    scope: ProfileScope,
-    item_id: String,
+    state: &mut RuntimeStore,
+    scope: &ProfileScope,
+    write: WatchlistWrite,
     expected_scope_epoch: u64,
-  ) -> Result<(u64, Vec<WatchlistRecord>), String> {
-    let runtime = self.clone();
-    self
-      .run_store(move |store| {
-        if !runtime.scope_epoch_is_current(&scope, expected_scope_epoch) {
-          return Err("Watchlist operation was superseded.".to_owned());
-        }
-        let changed = store
-          .store
-          .as_mut()
-          .expect("store is initialized before operations")
-          .remove(&scope, &item_id)
+  ) -> Result<WatchlistSnapshot, String> {
+    let store = loaded_store(&mut state.store)?;
+    if !self.scope_epoch_is_current(scope, expected_scope_epoch) {
+      return Err("Watchlist operation was superseded.".to_owned());
+    }
+    let changed = match write.action {
+      WatchlistWriteAction::Add(item) => {
+        let elapsed = SystemTime::now()
+          .duration_since(UNIX_EPOCH)
+          .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?;
+        let added_at = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        let record = WatchlistRecord::from_item(scope.clone(), &item, added_at)
           .map_err(|error| error.to_string())?;
-        if changed {
-          store.revision = store.revision.wrapping_add(1);
-        }
-        let records = store
-          .store
-          .as_ref()
-          .expect("store is initialized before operations")
-          .records_for(&scope);
-        Ok((store.revision, records))
-      })
-      .await
+        store.add(record).map_err(|error| error.to_string())?
+      }
+      WatchlistWriteAction::Remove => store
+        .remove(scope, &write.item_id)
+        .map_err(|error| error.to_string())?,
+    };
+    if changed {
+      state.revision = state.revision.wrapping_add(1);
+    }
+    Ok(WatchlistSnapshot {
+      revision: state.revision,
+      records: store.records_for(scope),
+      changed,
+    })
   }
 
   async fn run_store<T, F>(&self, operation: F) -> Result<T, String>
@@ -239,9 +241,7 @@ impl Runtime {
     let runtime = Arc::clone(&self.inner);
     tokio::task::spawn_blocking(move || {
       let mut state = runtime.store.lock().unwrap_or_else(PoisonError::into_inner);
-      if state.store.is_none() {
-        state.store = Some(WatchlistStore::load().map_err(|error| error.to_string())?);
-      }
+      loaded_store(&mut state.store)?;
       operation(&mut state)
     })
     .await
@@ -290,6 +290,14 @@ impl Runtime {
       }),
     }
   }
+}
+
+/// Returns the lazily loaded store, reading it from disk on first use.
+fn loaded_store(store: &mut Option<WatchlistStore>) -> Result<&mut WatchlistStore, String> {
+  if store.is_none() {
+    *store = Some(WatchlistStore::load().map_err(|error| error.to_string())?);
+  }
+  Ok(store.as_mut().expect("store loaded above"))
 }
 
 #[derive(Clone)]

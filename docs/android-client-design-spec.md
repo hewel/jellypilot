@@ -79,10 +79,10 @@ A Local Playback Recovery Point is a device-local, Profile-Scope-owned item refe
 
 ## Shared SDK and platform ownership
 
-The following paths now contain the risk bring-up implementation. Desktop adoption of the shared business SDK remains a Gate 2 migration:
+The following paths contain the risk bring-up implementation. Desktop and Android now share User Data Action execution; the remaining shared vertical path is a Gate 2 migration:
 
 ```text
-crates/jellypilot-sdk/       # shared business-operation owner; desktop adoption is pending
+crates/jellypilot-sdk/       # shared business owner; desktop item writes are adopted
 crates/jellypilot-ffi/       # UniFFI conversion and external object/operation lifetime
 android/app/                # Compose, navigation, ViewModels, Android application wiring
 android/core-bridge/        # Kotlin SDK wrapper and generated bindings
@@ -91,6 +91,8 @@ scripts/                    # existing task dispatcher extended with Android bui
 ```
 
 `jellypilot-sdk` orchestrates existing domain modules instead of copying them. It owns account/session state and operation ordering, network tasks, request correlation, cancellation policy, and confirmed content changes. Move reusable business execution out of iced orchestration and desktop-coupled player code along actual consumer paths. Each migrated rule must have one implementation used by both desktop and Android; this does not require desktop to adopt Android foreground-only presentation behavior or use FFI.
+
+User Data Actions use `jellypilot-sdk::item_actions` on desktop and through SDK/UniFFI methods on Android. Favorite, Played, and Watchlist writes share per-item admission; different items remain independent. Token validation and admission are atomic with SDK profile transitions, and server flags are accepted only after confirmation. Desktop keeps an item busy through queued result delivery. Watchlist storage adapters carry admission into the actual blocking write, so cancelling an async waiter cannot release it early. Android writes have their own per-item lifetime instead of occupying the browse/search query slot; pending controls and confirmed-result projections remain presentation concerns.
 
 | Responsibility | Owner |
 | --- | --- |

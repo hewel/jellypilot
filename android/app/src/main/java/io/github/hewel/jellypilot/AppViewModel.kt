@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.job
 
 internal class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val app = application as JellyPilotApplication
@@ -34,6 +35,14 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private var searchText = ""
   private var nextIndex = 0
   private var libraries = emptyList<VideoLibraryShortcut>()
+  /** In-flight Favorite/Played writes keyed by item id; each owns its token and job, independent of the browse query slot. */
+  private val userDataWrites = mutableMapOf<String, PendingWrite>()
+  /** Latest server-confirmed flags per item, used to keep older in-flight reads from republishing pre-write state. */
+  private val confirmedUserData = mutableMapOf<String, ConfirmedUserData>()
+  private var confirmedRevision = 0L
+
+  private class PendingWrite(val token: OperationToken, val job: Job)
+  private class ConfirmedUserData(val revision: Long, val played: Boolean, val favorite: Boolean)
 
   init {
     viewModelScope.launch {
@@ -184,6 +193,8 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   private suspend fun connectionChanged(saved: List<SavedProfile>? = null) {
     cancelQuery()
+    cancelUserDataWrites()
+    confirmedUserData.clear()
     libraries = emptyList()
     searchText = ""
     nextIndex = 0
@@ -200,10 +211,13 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     queryJob = null
   }
 
-  private fun query(debounce: Boolean = false, action: suspend (OperationToken, ProfileScopeRef) -> Unit) {
+  private fun query(debounce: Boolean = false, action: suspend (OperationToken, ProfileScopeRef, Long) -> Unit) {
     cancelQuery()
     if (sdk.activeProfile() == null) return
     val generation = queryGeneration
+    // Reads issued now may carry pre-write flags for items whose writes
+    // confirm later; `base` lets publish sites keep the confirmed values.
+    val base = confirmedRevision
     mutableState.update { it.copy(busy = true, error = null) }
     queryJob = viewModelScope.launch {
       var token: OperationToken? = null
@@ -212,7 +226,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
         val operation = sdk.newOperationToken()
         token = operation
         queryToken = operation
-        action(operation, operation.scopeRef())
+        action(operation, operation.scopeRef(), base)
       } catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) { showError(error) }
       finally {
@@ -232,12 +246,12 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       Destination.Account -> viewModelScope.launch { refreshIdentity() }
       Destination.Search -> search(searchText)
       Destination.Library -> loadLibrary(false)
-      Destination.Home -> query { token, scope ->
+      Destination.Home -> query { token, scope, base ->
         loadLibraries(token)
         val home = sdk.videoHome(token)
         val latest = libraries.firstOrNull()?.let { sdk.libraryLatest(token, it.id) } ?: emptyList()
         currentCoroutineContext().ensureActive()
-        mutableState.update { it.copy(items = (home.continueWatching + home.nextUp + latest).distinctBy { item -> item.id }.map { item -> media(item, scope) }, hasMore = false) }
+        mutableState.update { it.copy(items = (home.continueWatching + home.nextUp + latest).distinctBy { item -> item.id }.map { item -> presented(media(item, scope), base) }, hasMore = false) }
       }
     }
   }
@@ -254,7 +268,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     loadLibrary(false)
   }
 
-  private fun loadLibrary(append: Boolean) = query { token, scope ->
+  private fun loadLibrary(append: Boolean) = query { token, scope, base ->
     if (libraries.isEmpty()) loadLibraries(token)
     val library = libraries.firstOrNull { it.id == state.value.libraryId } ?: return@query
     val kind = when (library.collectionType.lowercase()) {
@@ -265,7 +279,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     val page = sdk.browseVideo(token, VideoLibraryPageRequest(library.id, kind, if (append) nextIndex else 0, 48, VideoLibrarySort.RECENTLY_ADDED, VideoLibrarySortDirection.DESCENDING, VideoLibraryPlayedFilter.ALL, false))
     currentCoroutineContext().ensureActive()
     nextIndex = page.startIndex + page.items.size
-    val items = page.items.map { media(it, scope) }
+    val items = page.items.map { presented(media(it, scope), base) }
     mutableState.update { it.copy(items = (if (append) it.items + items else items).distinctBy { item -> item.id }, hasMore = page.hasMore) }
   }
 
@@ -274,11 +288,11 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     searchPage(false)
   }
 
-  private fun searchPage(append: Boolean) = query(debounce = !append) { token, scope ->
+  private fun searchPage(append: Boolean) = query(debounce = !append) { token, scope, base ->
     val page = sdk.searchVideo(token, VideoSearchRequest(searchText, if (append) nextIndex else 0, 48))
     currentCoroutineContext().ensureActive()
     nextIndex = page.startIndex + page.items.size
-    val items = page.items.map { media(it, scope) }
+    val items = page.items.map { presented(media(it, scope), base) }
     mutableState.update { it.copy(items = (if (append) it.items + items else items).distinctBy { item -> item.id }, hasMore = page.hasMore) }
   }
 
@@ -287,7 +301,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     if (state.value.destination == Destination.Search) searchPage(true) else loadLibrary(true)
   }
 
-  fun showDetail(id: String) = query { token, scope ->
+  fun showDetail(id: String) = query { token, scope, base ->
     val type = (state.value.items + state.value.detailItems).firstOrNull { it.id == id }?.itemType ?: state.value.detail?.takeIf { it.id == id }?.itemType
     val detail = if (type == "Series") {
       val show = sdk.showDetail(token, id)
@@ -297,19 +311,74 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
     }
     currentCoroutineContext().ensureActive()
-    mutableState.update { it.copy(detail = detail, detailItems = emptyList()) }
+    mutableState.update { it.copy(detail = presented(detail, base), detailItems = emptyList()) }
     val related = sdk.similarVideo(token, id)
     currentCoroutineContext().ensureActive()
-    mutableState.update { it.copy(detailItems = related.map { item -> media(item, scope) }) }
+    mutableState.update { it.copy(detailItems = related.map { item -> presented(media(item, scope), base) }) }
   }
 
   fun setFavorite(id: String, favorite: Boolean) { updateUserData(id, if (favorite) VideoUserDataAction.FAVORITE else VideoUserDataAction.UNFAVORITE) }
   fun setPlayed(id: String, played: Boolean) { updateUserData(id, if (played) VideoUserDataAction.MARK_PLAYED else VideoUserDataAction.MARK_UNPLAYED) }
-  private fun updateUserData(id: String, action: VideoUserDataAction) = query { token, _ ->
-    val result = sdk.updateUserData(token, id, action)
-    currentCoroutineContext().ensureActive()
-    fun reconciled(item: MediaUi) = if (item.id == result.itemId) item.copy(played = result.played, favorite = result.favorite) else item
-    mutableState.update { it.copy(items = it.items.map(::reconciled), detail = it.detail?.let(::reconciled), detailItems = it.detailItems.map(::reconciled)) }
+
+  /** Runs one Favorite/Played write per item on its own token, independent of the browse query slot. */
+  private fun updateUserData(id: String, action: VideoUserDataAction) {
+    if (userDataWrites.containsKey(id)) return
+    if (sdk.activeProfile() == null) return
+    val token = try {
+      sdk.newOperationToken()
+    } catch (error: Exception) {
+      showError(error)
+      return
+    }
+    val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+      try {
+        val scope = token.scopeRef()
+        val result = sdk.updateUserData(token, id, action)
+        currentCoroutineContext().ensureActive()
+        // The SDK already rejects stale results; this guards a confirmation
+        // that was queued on this scope before a profile switch ran.
+        if (!sdk.isScopeActive(scope)) return@launch
+        confirmedUserData[id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
+        fun reconciled(item: MediaUi) = if (item.id == result.itemId) item.copy(played = result.played, favorite = result.favorite, updating = false) else item
+        mutableState.update { it.copy(items = it.items.map(::reconciled), detail = it.detail?.let(::reconciled), detailItems = it.detailItems.map(::reconciled)) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally {
+        token.cancel()
+        token.destroy()
+        // Only the job that still owns the pending slot may release it, so a
+        // cancelled write cannot clear a newer write admitted for this item.
+        if (userDataWrites[id]?.job === currentCoroutineContext().job) {
+          userDataWrites.remove(id)
+          setWritePending(id, false)
+        }
+      }
+    }
+    userDataWrites[id] = PendingWrite(token, job)
+    setWritePending(id, true)
+    job.start()
+  }
+
+  private fun cancelUserDataWrites() {
+    val writes = userDataWrites.values.toList()
+    userDataWrites.clear()
+    for (write in writes) {
+      write.token.cancel()
+      write.job.cancel()
+    }
+  }
+
+  private fun setWritePending(id: String, updating: Boolean) {
+    fun marked(item: MediaUi) = if (item.id == id) item.copy(updating = updating) else item
+    mutableState.update { it.copy(items = it.items.map(::marked), detail = it.detail?.let(::marked), detailItems = it.detailItems.map(::marked)) }
+  }
+
+  /** Applies confirmed write results newer than `base` and the live pending flag to a freshly read item. */
+  private fun presented(item: MediaUi, base: Long): MediaUi {
+    val confirmed = confirmedUserData[item.id]?.takeIf { it.revision > base }
+    val overlaid = confirmed?.let { item.copy(played = it.played, favorite = it.favorite) } ?: item
+    val updating = userDataWrites.containsKey(item.id)
+    return if (overlaid.updating == updating) overlaid else overlaid.copy(updating = updating)
   }
 
   private fun media(item: VideoLibraryItem, scope: ProfileScopeRef) = MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
@@ -334,6 +403,8 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     quickSession?.cancel()
     quickSession?.destroy()
     cancelQuery()
+    cancelUserDataWrites()
+    confirmedUserData.clear()
     visibility.close()
     player.stop()
     super.onCleared()

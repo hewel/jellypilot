@@ -31,7 +31,7 @@ pub struct Kernel {
   pub connected_identity: Option<ConnectedIdentity>,
   pub active_profile: Option<SavedProfileKey>,
   pub request_gate: RequestGate,
-  pub(crate) item_actions: jellypilot_core::item_actions::Coordinator,
+  pub(crate) item_actions: jellypilot_sdk::item_actions::ItemActions,
   pub diagnostics: Diagnostics,
   pub notice: Option<UiText>,
   pub active_toast: Option<ToastNotice>,

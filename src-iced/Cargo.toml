@@ -16,6 +16,7 @@ jellypilot-auth = { path = "../crates/jellypilot-auth" }
 jellypilot-core = { path = "../crates/jellypilot-core" }
 jellypilot-media-server = { path = "../crates/jellypilot-media-server" }
 jellypilot-mpv = { path = "../crates/jellypilot-mpv" }
+jellypilot-sdk = { path = "../crates/jellypilot-sdk" }
 jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { workspace = true }
