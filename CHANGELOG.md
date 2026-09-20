@@ -4,6 +4,8 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-09-20
+
 ### Added
 - Added profile-scoped desktop Intro Skipper choices per series, persisted across episodes and restarts, with overrides following the global setting whenever their values match.
 - Added real MPV chapter markers and available chapter names to the embedded timeline, alongside fetched intro/credit ranges; seek hover remains free of preview frames and invented metadata.
@@ -17,15 +19,21 @@ All notable changes to JellyPilot are documented in this file.
 - Centralized desktop playback command execution in the controller and bundled initial tracks with the accepted start result, while keeping track-query failures nonfatal to playback.
 - Unified desktop Favorite, watched-state, and local Watchlist write coordination: same-item controls share one pending state, server responses must confirm the requested flag, and accepted changes survive navigation without stale reads undoing them.
 - Centralized desktop Now Playing seek/volume adjustment state across sliders, wheel input, and repeated keys, preserving release-to-commit, cancellation, and existing feedback behavior.
-- Added automatic complete/minimal embedded-player presentation: leaving controls immediately reveals a read-only edge timeline, which hides after three seconds during playback and remains while paused. Visibility switches without animation so drawing and hit targets change together; the central pause indicator is also instantaneous. Information and manual skip prompts remain independent of hidden controls; human visual acceptance is pending.
+- Added automatic complete/minimal embedded-player presentation: leaving controls immediately reveals a read-only edge timeline, which hides after three seconds during playback and remains while paused. Visibility switches without animation so drawing and hit targets change together; the central pause indicator is also instantaneous. Information and manual skip prompts remain independent of hidden controls.
 - Changed desktop Intro Skipper to Automatic / Manual, migrating legacy Off to Manual. Manual actions last for the current range stay and return after re-entry; automatic attempts remain once per range per playback session, including failures. Android retains its existing contract.
 - Separated display-free and desktop Rust workspaces and added Android preparation, native build, and validation entries to the existing task dispatcher. Desktop business-SDK migration and clean-room Android release acceptance remain later gates.
 - Aligned complete detail-page media information with the main content lane and added narrow-width stacking and long-value wrapping.
 - With an initialized tray, closing either desktop App Mode now destroys its window while retaining the runtime and Full-mode browsing context. Embedded playback pauses before a requested close completes; explicit Play restores the player, while ordinary Show does not resume. External MPV continues, and explicit Quit still shuts down.
 
 ### Fixed
+- Fixed saved-profile handling for v3 storage, preserving profile metadata and unsupported-provider accounts during supported-account writes, maintaining legacy readability, and preventing session-incarnation reuse after sign-out.
 - Prevented outside presses that dismiss embedded playback Information from also activating the underlying video or controls.
 - Prevented detail-page audio and subtitle popovers from stretching into a blank full-height panel during dismissal.
+
+### Known limitations
+- Linux Wayland HDR10 output remains experimental; broader display-chain compatibility and automatic-transition visual acceptance are not established by this release.
+- Windows embedded runtime DLLs remain unsigned and may be blocked by Smart App Control. Windows and macOS continue to default to External MPV Playback.
+- Android remains a separate risk bring-up, not a complete client or a release artifact in this desktop version.
 
 ## [2.2.1] - 2026-09-14
 
@@ -216,7 +224,9 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/hewel/jellypilot/compare/v2.2.1...v2.2.2
+[2.2.1]: https://github.com/hewel/jellypilot/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/hewel/jellypilot/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/hewel/jellypilot/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/hewel/jellypilot/compare/v2.1.0...v2.1.1

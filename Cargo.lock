@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-auth"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-core"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "dirs",
  "icu_locale_core",
@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-ffi"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "async-trait",
  "jellypilot-auth",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-media-server"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "base64",
  "bytes",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "async-channel",
  "dirs",
@@ -1487,7 +1487,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-sdk"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1501,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-session"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "futures-util",
  "jellypilot-media-server",
