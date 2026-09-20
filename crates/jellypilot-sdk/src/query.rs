@@ -191,6 +191,23 @@ impl Sdk {
             .await
     }
 
+    /// The provider's Next Up item and progress, without a client-side fallback.
+    pub async fn next_episode_item(
+        &self,
+        token: Arc<OperationToken>,
+        series_id: String,
+    ) -> Result<Option<VideoLibraryItem>, SdkError> {
+        self.inner
+            .scoped(&token, |client| async move {
+                client
+                    .library()
+                    .next_episode_item(series_id)
+                    .await
+                    .map_err(SdkError::from)
+            })
+            .await
+    }
+
     /// Next playable episode for a series, when the provider exposes one.
     pub async fn next_playable_episode(
         &self,

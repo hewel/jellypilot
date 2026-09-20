@@ -1391,6 +1391,7 @@ mod tests {
       active_profile: None,
       notice: None,
       active_toast: None,
+      undo: crate::app::undo::Runtime::default(),
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),

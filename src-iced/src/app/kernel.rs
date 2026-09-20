@@ -47,6 +47,7 @@ pub struct Kernel {
   pub notice: Option<UiText>,
   pub active_toast: Option<ToastNotice>,
   pub next_toast_id: u64,
+  pub(crate) undo: super::undo::Runtime,
   pub tray: Option<Tray>,
   /// Saved-profile photos have an independent authorization and cache lifecycle.
   pub avatar_adapter: Arc<ArtworkAdapter>,

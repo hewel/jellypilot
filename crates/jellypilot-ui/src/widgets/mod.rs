@@ -14,6 +14,8 @@ pub mod focus_scope;
 pub mod inert;
 pub mod library;
 pub mod motion;
+pub mod notice_interaction;
+pub mod player_bar;
 pub mod poster_card;
 pub mod rounded_image;
 pub mod scrollable;

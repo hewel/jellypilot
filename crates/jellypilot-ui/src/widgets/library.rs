@@ -4,6 +4,15 @@ use iced::widget::{button, container, progress_bar, rule};
 use iced::{Border, Color, Theme};
 
 use crate::tokens::{palette, LANDSCAPE_PROGRESS_TRACK, POSTER_PROGRESS_TRACK, TOKENS};
+use crate::variants::ButtonVariant;
+
+/// Circular filled play action over media artwork; the caller supplies its
+/// 48px target and ControlButton retains the visible keyboard focus ring.
+pub fn card_play(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
+    let mut style = super::button::style(theme, variant, status);
+    style.border.radius = TOKENS.radii.full.into();
+    style
+}
 
 pub fn segment(theme: &Theme, status: button::Status, selected: bool) -> button::Style {
     let colors = palette(theme).colors;

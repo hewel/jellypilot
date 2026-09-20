@@ -2909,6 +2909,7 @@ dependencies = [
 name = "jellypilot-core"
 version = "2.2.2"
 dependencies = [
+ "chrono",
  "dirs",
  "icu_locale_core",
  "jellypilot-media-server",

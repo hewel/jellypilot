@@ -99,3 +99,15 @@ collection-series-watchlist-add = Add this series to watchlist
 collection-movie-watchlist-remove = Remove this movie from watchlist
 collection-movie-watchlist-add = Add this movie to watchlist
 player-toggle-fullscreen = Toggle player fullscreen
+
+lists-removed-favorite = Removed “{ $name }” from Favorites
+lists-removed-watchlist = Removed “{ $name }” from Watchlist
+lists-removed-history = Hidden “{ $name }” from History
+lists-undo = Undo
+lists-retry-undo = Retry undo
+lists-undo-failed = Could not restore. Try again.
+lists-history-update-error = Could not update local watch history. Try again.
+list-playback-no-target = No next episode available
+list-playback-failed = Could not load playback target
+list-playback-no-progress = Progress unavailable
+list-playback-unavailable = Playback unavailable

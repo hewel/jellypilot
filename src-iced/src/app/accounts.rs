@@ -2193,6 +2193,7 @@ mod tests {
       diagnostics: Diagnostics::default(),
       notice: None,
       active_toast: None,
+      undo: crate::app::undo::Runtime::default(),
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(ArtworkAdapter::new()),

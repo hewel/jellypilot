@@ -8,6 +8,7 @@ pub mod embedded_player;
 pub mod home;
 pub(crate) mod item_actions;
 pub mod kernel;
+pub(crate) mod list_playback;
 pub mod login;
 pub mod message;
 pub(crate) mod motion;
@@ -19,6 +20,7 @@ pub mod state;
 mod subscriptions;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod undo;
 mod update;
 mod view;
 

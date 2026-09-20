@@ -96,3 +96,15 @@ collection-series-watchlist-add = 将本剧加入待看
 collection-movie-watchlist-remove = 将本片移出待看
 collection-movie-watchlist-add = 将本片加入待看
 player-toggle-fullscreen = 切换播放器全屏
+
+lists-removed-favorite = 已从收藏移除“{ $name }”
+lists-removed-watchlist = 已从待看移除“{ $name }”
+lists-removed-history = 已从历史隐藏“{ $name }”
+lists-undo = 撤销
+lists-retry-undo = 重试撤销
+lists-undo-failed = 恢复失败，请重试。
+lists-history-update-error = 无法更新本地观看历史，请重试。
+list-playback-no-target = 暂无下一集
+list-playback-failed = 无法加载播放目标
+list-playback-no-progress = 暂无进度信息
+list-playback-unavailable = 暂不可播放

@@ -36,6 +36,14 @@ pub struct DesignTokens {
 )]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SemanticColors {
+    /// Filled primary actions, independent of brand, progress, and selection.
+    pub action: Color,
+    /// Filled primary action on hover.
+    pub actionHover: Color,
+    /// Filled primary action while pressed.
+    pub actionPressed: Color,
+    /// Icon and label content on a filled primary action.
+    pub onAction: Color,
     pub background: Color,
     /// Quiet structural edge for tonal controls, pills, and fields. Dark mode
     /// is translucent white 8% so it holds over imagery; light mode resolves
@@ -73,10 +81,6 @@ pub struct SemanticColors {
     pub outlineVariant: Color,
     pub primary: Color,
     pub primaryContainer: Color,
-    /// Primary fill on hover (supersedes the legacy 10% brightness lift).
-    pub primaryHover: Color,
-    /// Primary fill while pressed.
-    pub primaryPressed: Color,
     pub secondary: Color,
     pub secondaryContainer: Color,
     /// Sidebar docked background, between `surfaceContainerLowest` and
@@ -528,6 +532,10 @@ pub const SETTINGS_MODAL_RADIUS: f32 = 16.0;
 /// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.
 pub const DARK_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
+        action: Color::from_rgb8(0x4f, 0x46, 0xe5),
+        actionHover: Color::from_rgb8(0x5b, 0x55, 0xe7),
+        actionPressed: Color::from_rgb8(0x43, 0x38, 0xca),
+        onAction: Color::WHITE,
         background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
         borderSubtle: Color::from_rgba8(0xff, 0xff, 0xff, 0.08),
         control: Color::from_rgb8(0x1c, 0x1d, 0x22),
@@ -555,8 +563,6 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
         outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
-        primaryHover: Color::from_rgb8(0x78, 0x7d, 0xf8),
-        primaryPressed: Color::from_rgb8(0x55, 0x62, 0xce),
         secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
         secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
         sidebarBg: Color::from_rgb8(0x0f, 0x10, 0x16),
@@ -594,6 +600,10 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
 /// canvas.
 pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
+        action: Color::from_rgb8(0x4f, 0x46, 0xe5),
+        actionHover: Color::from_rgb8(0x5b, 0x55, 0xe7),
+        actionPressed: Color::from_rgb8(0x43, 0x38, 0xca),
+        onAction: Color::WHITE,
         background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
         borderSubtle: Color::from_rgb8(0xe7, 0xec, 0xf3),
         control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
@@ -621,8 +631,6 @@ pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
         outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
-        primaryHover: Color::from_rgb8(0x54, 0x57, 0xe8),
-        primaryPressed: Color::from_rgb8(0x4f, 0x46, 0xe5),
         secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
         secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
         sidebarBg: Color::from_rgb8(0xfa, 0xfa, 0xfa),
@@ -716,8 +724,10 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 44] {
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 46] {
         [
+            ("action", colors.action),
+            ("onAction", colors.onAction),
             ("background", colors.background),
             ("borderSubtle", colors.borderSubtle),
             ("control", colors.control),
@@ -745,8 +755,8 @@ mod tests {
             ("outlineVariant", colors.outlineVariant),
             ("primary", colors.primary),
             ("primaryContainer", colors.primaryContainer),
-            ("primaryHover", colors.primaryHover),
-            ("primaryPressed", colors.primaryPressed),
+            ("actionHover", colors.actionHover),
+            ("actionPressed", colors.actionPressed),
             ("secondary", colors.secondary),
             ("secondaryContainer", colors.secondaryContainer),
             ("sidebarBg", colors.sidebarBg),
@@ -770,6 +780,10 @@ mod tests {
         assert_eq!(
             DARK_PALETTE.colors,
             SemanticColors {
+                action: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                actionHover: Color::from_rgb8(0x5b, 0x55, 0xe7),
+                actionPressed: Color::from_rgb8(0x43, 0x38, 0xca),
+                onAction: Color::WHITE,
                 background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
                 borderSubtle: Color::from_rgba8(0xff, 0xff, 0xff, 0.08),
                 control: Color::from_rgb8(0x1c, 0x1d, 0x22),
@@ -797,8 +811,6 @@ mod tests {
                 outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
-                primaryHover: Color::from_rgb8(0x78, 0x7d, 0xf8),
-                primaryPressed: Color::from_rgb8(0x55, 0x62, 0xce),
                 secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
                 secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
                 sidebarBg: Color::from_rgb8(0x0f, 0x10, 0x16),
@@ -823,6 +835,10 @@ mod tests {
         assert_eq!(
             LIGHT_PALETTE.colors,
             SemanticColors {
+                action: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                actionHover: Color::from_rgb8(0x5b, 0x55, 0xe7),
+                actionPressed: Color::from_rgb8(0x43, 0x38, 0xca),
+                onAction: Color::WHITE,
                 background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
                 borderSubtle: Color::from_rgb8(0xe7, 0xec, 0xf3),
                 control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
@@ -850,8 +866,6 @@ mod tests {
                 outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
-                primaryHover: Color::from_rgb8(0x54, 0x57, 0xe8),
-                primaryPressed: Color::from_rgb8(0x4f, 0x46, 0xe5),
                 secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
                 secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
                 sidebarBg: Color::from_rgb8(0xfa, 0xfa, 0xfa),
@@ -926,6 +940,13 @@ mod tests {
         for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
             let colors = &palette.colors;
             let pairs = [
+                ("filled action", colors.onAction, colors.action),
+                ("hovered filled action", colors.onAction, colors.actionHover),
+                (
+                    "pressed filled action",
+                    colors.onAction,
+                    colors.actionPressed,
+                ),
                 ("control content", colors.onControl, colors.control),
                 (
                     "hovered control content",

@@ -374,7 +374,7 @@ fn control_color(
     }
 
     match variant {
-        ButtonVariant::Primary => colors.onPrimary,
+        ButtonVariant::Primary => colors.onAction,
         ButtonVariant::Secondary => colors.onSecondaryContainer,
         ButtonVariant::TonalActive => colors.onControlHover,
         ButtonVariant::PillActive => colors.secondary,
@@ -572,8 +572,8 @@ mod tests {
         let cases = [
             (
                 ButtonVariant::Primary,
-                palette.colors.onPrimary,
-                palette.colors.onPrimary,
+                palette.colors.onAction,
+                palette.colors.onAction,
             ),
             (
                 ButtonVariant::Secondary,

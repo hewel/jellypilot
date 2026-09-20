@@ -191,9 +191,9 @@ pub fn control(theme: &Theme, variant: ButtonVariant, status: button::Status) ->
     if variant == ButtonVariant::Primary {
         style.border.radius = PANEL_RADIUS.into();
         style.background = Some(Background::Color(match status {
-            button::Status::Active => DARK_PALETTE.colors.primary.scale_alpha(0.8),
-            button::Status::Hovered => DARK_PALETTE.colors.primaryHover.scale_alpha(0.8),
-            button::Status::Pressed => DARK_PALETTE.colors.primaryPressed.scale_alpha(0.8),
+            button::Status::Active => DARK_PALETTE.colors.action.scale_alpha(0.8),
+            button::Status::Hovered => DARK_PALETTE.colors.actionHover.scale_alpha(0.8),
+            button::Status::Pressed => DARK_PALETTE.colors.actionPressed.scale_alpha(0.8),
             button::Status::Disabled => DARK_PALETTE.colors.control,
         }));
     } else {

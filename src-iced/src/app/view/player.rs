@@ -210,7 +210,7 @@ fn bar_content<'a>(state: &'a State, view: BarView<'a>, width: f32) -> Element<'
     .duration_seconds
     .filter(|value| value.is_finite() && *value > 0.0);
   let timeline: Element<'_, Message> = match duration {
-    Some(duration) => seek_row(position, duration),
+    Some(duration) => seek_row(position, duration, true),
     None => text(format_duration(position))
       .size(11)
       .color(state.palette().text.metadata)
@@ -382,15 +382,23 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
 
 /// Position/slider/duration seek row shared by the bar and the compact
 /// full-window player.
-fn seek_row(position: f64, duration: f64) -> Element<'static, Message> {
+fn seek_row(position: f64, duration: f64, docked: bool) -> Element<'static, Message> {
+  let seek = slider(0.0..=duration, position, |value| {
+    Message::Playback(PlaybackMessage::SeekChanged(value))
+  })
+  .on_release(Message::Playback(PlaybackMessage::SeekReleased))
+  .step(1.0)
+  .width(Fill);
+  let seek = if docked {
+    seek
+      .height(40)
+      .style(jellypilot_ui::widgets::player_bar::timeline)
+  } else {
+    seek
+  };
   row![
     text(format_duration(position)).size(11),
-    slider(0.0..=duration, position, |value| {
-      Message::Playback(PlaybackMessage::SeekChanged(value))
-    })
-    .on_release(Message::Playback(PlaybackMessage::SeekReleased))
-    .step(1.0)
-    .width(Fill),
+    seek,
     text(format_duration(duration)).size(11),
   ]
   .spacing(TOKENS.spacing.s2)
@@ -455,7 +463,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
             .width(Fill),
         );
       if let Some(duration) = duration {
-        content = content.push(seek_row(position, duration));
+        content = content.push(seek_row(position, duration, false));
       }
       if let Some(prompt) = intro_prompt(state) {
         content = content.push(prompt);

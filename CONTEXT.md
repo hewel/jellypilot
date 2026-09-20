@@ -4,6 +4,8 @@ JellyPilot is a Jellyfin and Emby companion app that presents itself as a contro
 
 These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md); the [Video Home Hero specification](docs/home-hero-design-spec.md) records the carousel design separately from its implementation status.
 
+The [desktop design synchronization specification](docs/desktop-design-sync-spec.md) records the accepted 2026-09-21 desktop decisions, delivered implementation and automated verification separately from pending human acceptance.
+
 The [UI internationalization specification](docs/i18n-design-spec.md) records UI Language decisions separately from their implementation status.
 
 The [embedded player design contract](docs/design-system.md#embedded-player-synchronization) records the accepted player-state and Intro Skipper revisions separately from their implementation status.
@@ -199,8 +201,11 @@ _Avoid_: Favorites, unwatched filter, cross-device list
 
 **Watch History**:
 The current server user's movies and individual episodes marked played or available to resume, ordered by their latest recorded playback time. It lists each item once, not every playback event, and is independent of device-local Watchlist membership.
-Android can hide a record on this device for its Profile Scope and undo that removal. Hiding changes only local visibility; it does not change Played, server progress, or the underlying server history.
 _Avoid_: Navigation history, per-play event log, viewing plan
+
+**Watch History Removal**:
+Hiding one movie or episode from Watch History on this device for its Profile Scope, without changing Played, server progress, or the underlying server history. Undo restores visibility; desktop hiding otherwise persists across restarts until a new viewing record for that item is observed, rather than ending on repeated reads of the same record.
+_Avoid_: Clear playback progress, mark unplayed, delete media, delete server history
 
 **Featured Item**:
 The media item selected for the Video Home hero, initially prioritizing Continue Watching; selecting it neither starts playback nor removes its direct-play entry from a home row. Its presentation uses the item's Backdrop and Title Logo (the parent series' for episodes), never a portrait poster; playback targets the Featured Item, while Favorites and Watchlist target the parent series for an episode or the movie itself for a movie.

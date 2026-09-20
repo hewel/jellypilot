@@ -40,6 +40,7 @@ pub mod request_gate;
 #[cfg(feature = "portable")]
 pub mod settings;
 pub mod skeleton;
+pub mod undo_notices;
 #[cfg(feature = "portable")]
 pub mod volume_memory;
 #[cfg(feature = "portable")]

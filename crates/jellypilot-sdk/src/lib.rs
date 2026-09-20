@@ -52,7 +52,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 pub use account::{ActivationOutcome, SignOutOutcome};
 pub use error::SdkError;
-pub use history::{HistoryPage, HistoryRemoval};
+pub use history::{DesktopHistoryPage, HistoryPage, HistoryRemoval};
 pub use hooks::SdkHooks;
 pub use image::LibraryImageTarget;
 pub use preferences::{BusinessPreferences, LoginPrefill};

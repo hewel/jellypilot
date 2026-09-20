@@ -26,10 +26,15 @@ use crate::i18n::UiText;
 pub(crate) enum Origin {
   Detail { generation: u64 },
   Other,
+  Undo(u64),
 }
 
 #[derive(Clone)]
 pub(crate) enum Message {
+  SettledFocused {
+    completion: Box<Message>,
+    focus: Option<super::undo::FocusContext>,
+  },
   Detail(UserDataActionKind),
   DetailWatchlist,
   WatchlistToggle(Box<VideoLibraryItem>),
@@ -38,6 +43,7 @@ pub(crate) enum Message {
     receipt: Receipt,
     origin: Origin,
     result: Result<WriteOutcome, ItemActionError>,
+    removed: Option<Box<super::undo::Removal>>,
   },
 }
 
@@ -91,7 +97,54 @@ pub(crate) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       receipt,
       origin,
       result,
-    } => settle(state, receipt, origin, result),
+      removed,
+    } => {
+      sync_scope(&mut state.kernel);
+      let focus = if result.is_ok() && state.kernel.item_actions.is_current(&receipt) {
+        match origin {
+          Origin::Undo(id) => super::undo::restore_focus(state, id),
+          _ => match receipt.action() {
+            Action::Favorite(false) => {
+              super::undo::removal_focus(state, personal_lists::Kind::Favorites, receipt.item_id())
+            }
+            Action::Watchlist(false) => {
+              super::undo::removal_focus(state, personal_lists::Kind::Watchlist, receipt.item_id())
+            }
+            _ => None,
+          },
+        }
+      } else {
+        None
+      };
+      if let Some(focus) = focus {
+        super::undo::capture_focus(focus).map(move |focus| {
+          AppMessage::ItemActions(Message::SettledFocused {
+            completion: Box::new(Message::Settled {
+              receipt: receipt.clone(),
+              origin,
+              result: result.clone(),
+              removed: removed.clone(),
+            }),
+            focus,
+          })
+        })
+      } else {
+        settle(state, receipt, origin, result, removed, None)
+      }
+    }
+    Message::SettledFocused { completion, focus } => {
+      if let Message::Settled {
+        receipt,
+        origin,
+        result,
+        removed,
+      } = *completion
+      {
+        settle(state, receipt, origin, result, removed, focus)
+      } else {
+        Task::none()
+      }
+    }
   }
 }
 
@@ -102,7 +155,7 @@ fn blocked(state: &mut State, origin: Origin) -> Option<Task<AppMessage>> {
   if accounts::content_mutations_blocked(&state.kernel) {
     let key = match origin {
       Origin::Detail { .. } => "shell-account-change-item",
-      Origin::Other => "shell-account-change-lists",
+      Origin::Other | Origin::Undo(_) => "shell-account-change-lists",
     };
     return Some(
       state
@@ -148,6 +201,12 @@ pub(crate) fn start_server(
   let Ok(admission) = state.kernel.item_actions.begin(&item_id, action) else {
     return Task::none();
   };
+  let removed = (action == Action::Favorite(false)).then(|| {
+    Box::new(super::undo::Removal::Favorite {
+      item_id: item_id.clone(),
+      name: item_name(state, &item_id),
+    })
+  });
   prepare(state, &admission);
   let receipt = admission.receipt().clone();
   let executor = state.kernel.item_actions.clone();
@@ -163,6 +222,7 @@ pub(crate) fn start_server(
         receipt,
         origin,
         result,
+        removed,
       })
     },
   )
@@ -222,23 +282,40 @@ fn start_watchlist(
   prepare(state, &admission);
   let receipt = admission.receipt().clone();
   let executor = state.kernel.item_actions.clone();
+  let runtime = state.watchlist.clone();
+  let scope_epoch = runtime.scope_epoch(&scope);
   let storage = StoreWatchlist {
-    worker: state.watchlist.clone(),
-    scope_epoch: state.watchlist.scope_epoch(&scope),
+    worker: runtime.clone(),
+    scope_epoch,
   };
+  let removing = matches!(action, WatchlistWriteAction::Remove);
   let write = WatchlistWrite { item_id, action };
   Task::perform(
     async move {
-      executor
-        .run_watchlist(admission, storage, write)
-        .await
-        .map(WriteOutcome::Watchlist)
+      if removing {
+        match runtime.remove_undoable(admission, scope_epoch).await {
+          Ok((snapshot, record)) => (
+            Ok(WriteOutcome::Watchlist(snapshot)),
+            record.map(|record| Box::new(super::undo::Removal::Watchlist(record))),
+          ),
+          Err(error) => (Err(error), None),
+        }
+      } else {
+        (
+          executor
+            .run_watchlist(admission, storage, write)
+            .await
+            .map(WriteOutcome::Watchlist),
+          None,
+        )
+      }
     },
-    move |result| {
+    move |(result, removed)| {
       AppMessage::ItemActions(Message::Settled {
         receipt,
         origin: Origin::Other,
         result,
+        removed,
       })
     },
   )
@@ -258,6 +335,8 @@ fn settle(
   receipt: Receipt,
   origin: Origin,
   result: Result<WriteOutcome, ItemActionError>,
+  removed: Option<Box<super::undo::Removal>>,
+  focus: Option<super::undo::FocusContext>,
 ) -> Task<AppMessage> {
   sync_scope(&mut state.kernel);
   // Delivery acknowledgment: the queued completion is applied at most once
@@ -267,15 +346,26 @@ fn settle(
   if !state.kernel.item_actions.acknowledge(&receipt) {
     return Task::none();
   }
+  super::undo::item_settled(
+    state,
+    &receipt,
+    origin,
+    &result,
+    removed.map(|removed| *removed),
+  );
+  if result.is_ok() && matches!(receipt.action(), Action::Played(_)) {
+    super::list_playback::invalidate(state);
+  }
   let outcome = match result {
     Ok(outcome) => outcome,
+    Err(_) if matches!(origin, Origin::Undo(_)) => return Task::none(),
     Err(error) => return report_failure(state, receipt.item_id(), receipt.action(), origin, error),
   };
   let Some(full) = state.full.as_mut() else {
     // Writes outlive Full-mode presentation. Restored surfaces load their own data.
     return Task::none();
   };
-  match outcome {
+  let task = match outcome {
     WriteOutcome::Server(update) => {
       super::shell::apply_user_data_update(&mut state.shell, &update);
       let refresh_detail = !matches!(
@@ -303,7 +393,8 @@ fn settle(
       snapshot.revision,
       snapshot.records,
     ),
-  }
+  };
+  Task::batch([task, super::undo::restore_captured_focus(state, focus)])
 }
 
 fn report_failure(
@@ -342,4 +433,35 @@ fn report_failure(
     personal_lists::mutation_failed(&mut full.personal_lists, error.clone());
   }
   state.kernel.show_toast(NoticeLevel::Error, error)
+}
+
+fn item_name(state: &State, item_id: &str) -> String {
+  if let Some(full) = &state.full {
+    if let Some(entry) = full
+      .personal_lists
+      .favorites
+      .entries
+      .iter()
+      .chain(&full.personal_lists.watchlist.entries)
+      .chain(&full.personal_lists.history.entries)
+      .find(|entry| entry.id == item_id)
+    {
+      return entry.name.clone();
+    }
+    if let Some(item) = full.detail.items.get(item_id) {
+      return item.name.clone();
+    }
+    if let jellypilot_core::browse_model::LibraryBrowseView::Ready { visible_items, .. } =
+      &full.browse.view
+    {
+      if let Some(item) = visible_items
+        .iter()
+        .filter_map(|slot| slot.item.as_ref())
+        .find(|item| item.id == item_id)
+      {
+        return item.name.clone();
+      }
+    }
+  }
+  item_id.to_owned()
 }

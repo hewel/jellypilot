@@ -1030,7 +1030,7 @@ where
         if state.is_focus_visible() {
             let colors = crate::tokens::palette(theme).colors;
             style.border.color = if self.variant == ButtonVariant::Primary {
-                colors.secondary
+                colors.onAction
             } else {
                 colors.primary
             };

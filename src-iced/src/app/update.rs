@@ -220,12 +220,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     || state.kernel.client.as_ref().map(std::sync::Arc::as_ptr) != client
   {
     super::item_actions::sync_scope(&mut state.kernel);
+    state.kernel.undo.clear();
   }
   if was_fullscreen && !state.shell.player_fullscreen {
     playback::cancel_slider_drags(&mut state.playback);
   }
   shell::reconcile_refresh(state);
   let collections_task = super::collections::reconcile(state);
+  super::undo::reconcile(state);
+  let list_playback_task = super::list_playback::sync(state);
   let fullscreen_task = shell::reconcile_player_fullscreen(state);
   super::embedded_player::reconcile(state);
   if let Some(full) = state.full.as_mut() {
@@ -248,6 +251,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   Task::batch([
     task,
     collections_task,
+    list_playback_task,
     fullscreen_task,
     state.image_diagnostics.schedule(),
   ])
@@ -265,6 +269,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
     Message::Shell(message) => {
       if matches!(message, super::message::ShellMessage::RefreshCurrent) {
         super::collections::invalidate(state);
+        super::list_playback::invalidate(state);
       }
       let previous_notice = state.kernel.notice.clone();
       let task = shell::update_shell(state, message);
@@ -280,6 +285,8 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       }
     }
     Message::ItemActions(message) => super::item_actions::update(state, message),
+    Message::Undo(message) => super::undo::update(state, message),
+    Message::ListPlayback(message) => super::list_playback::update(state, message),
     Message::PersonalLists(message) => {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
@@ -719,6 +726,9 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       {
         return shell::toggle_player_fullscreen(state);
       }
+      let started_ok = matches!(&message, super::message::PlaybackMessage::ControllerSettled {
+        settlement, ..
+      } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Started(Ok(_))));
       let had_playback = state.playback.view.now_playing.is_some();
       let playback_update = playback::update(
         &mut state.playback,
@@ -726,6 +736,14 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         state.shell.quit_requested,
         message,
       );
+      if started_ok
+        && matches!(
+          playback_update.transition.controller,
+          jellypilot_mpv::playback_session::ControllerAcceptance::Applied { .. }
+        )
+      {
+        super::list_playback::invalidate(state);
+      }
       let return_to_source =
         super::embedded_player::after_playback(state, playback_update.transition.controller);
       let task = playback_update.task;
@@ -878,7 +896,7 @@ fn observe_image(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use crate::app::message::LoginMessage;
   use std::fs;
   use std::path::PathBuf;
@@ -930,7 +948,7 @@ mod tests {
     );
   }
 
-  fn test_state() -> State {
+  pub(crate) fn test_state() -> State {
     let settings = SettingsStore::default();
     let mut request_gate = jellypilot_core::request_gate::RequestGate::default();
     let playback = playback::Surface::new(&mut request_gate);
@@ -957,6 +975,7 @@ mod tests {
         active_profile: None,
         notice: None,
         active_toast: None,
+        undo: crate::app::undo::Runtime::default(),
         next_toast_id: 0,
         tray: None,
         artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
@@ -981,6 +1000,7 @@ mod tests {
         browse: browse::Surface::default(),
         personal_lists: super::super::personal_lists::Surface::default(),
         collections: super::super::collections::Surface::default(),
+        list_playback: super::super::list_playback::Surface::default(),
       }),
       playback,
       shell: shell::Surface::new(false),

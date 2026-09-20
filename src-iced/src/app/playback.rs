@@ -1634,6 +1634,10 @@ fn update_playback(
       if accepted {
         if let Some(playable) = started.as_deref() {
           tasks.push(load_queue_after_start(surface, kernel, playable));
+          tasks.push(super::undo::playback_started(
+            kernel,
+            playable.item_id().to_owned(),
+          ));
         }
         if started_ok {
           // A start queued behind in-flight work captured its intro mode at
@@ -2644,6 +2648,7 @@ mod tests {
       active_profile: None,
       notice: None,
       active_toast: None,
+      undo: crate::app::undo::Runtime::default(),
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),

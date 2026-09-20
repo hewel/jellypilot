@@ -82,7 +82,7 @@ The scale in `tokens.rs` is `none` (0), `sm` (2), `md` (6), `lg` (8), `xl` (12),
 | `sm` (2) | Small inline chrome (toast dismiss button) |
 | `md` (6) | Small controls: compact icon buttons, badges, tooltips |
 | `lg` (8) | Segmented toggles, skeletons, list-view thumbnail artwork |
-| `xl` (12) | Media cards and poster artwork, buttons, fields, popovers, floating player bar |
+| `xl` (12) | Media cards and poster artwork, buttons, fields, popovers |
 | `x2l` (20) | Modal cards (settings, account popover) |
 | `full` | Scrollbars, status dots, toggle switches |
 
@@ -98,10 +98,10 @@ Composite Sidebar and profile rows use `control_button_content` for whole-contro
 - **Secondary** is the borderless tint chip — filled `secondaryContainer` with `onSecondaryContainer` content. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
 - **Tonal** is the quiet action control: `surfaceContainerHigh` fill, `onControl` content, and a 1px `borderSubtle` edge at rest; `controlHover`/`onControlHover` on hover and `surfaceContainer` while pressed.
 - **TonalActive** is the selected/on state of a tonal control: always `controlHover` fill with `onControlHover` content. Toggle call sites use the `TonalActive`/`Tonal` pair.
-- **Primary** holds one primary action per section or state. Its hover/pressed use the `primaryHover`/`primaryPressed` tokens accepted in the 2026-09-09 controls sync, superseding the 10% hover brightness lift.
+- **Primary** holds one primary action per section or state. Its fill uses `action`, `actionHover`, and `actionPressed`, with white `onAction` content. Brand/progress `primary` remains independent.
 - **Text** is the neutral ghost vocabulary: `text.body` content on a transparent background, then `control` fill with `text.heading` content on hover. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows). Indigo accent text marks ONLY the active/selected state. Actions never use Text — they are Tonal or Primary.
 - **Sidebar menu actions** opt into a scoped Tonal/Icon Catalog treatment: transparent at rest, neutral hover/press feedback, and minimum 40px hit height. The copy icon has a 40×40 target. This exception avoids a stack of filled buttons in the Account Popover without changing other Tonal controls.
-- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. Native text-input focus and caret behavior are unchanged. The ring is 2px; Primary controls use `secondary` for contrast with their fill, while other variants use `primary`.
+- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. Native text-input focus and caret behavior are unchanged. The ring is 2px; Primary controls use white `onAction` for contrast with all action fills, while other variants use `primary`.
 
 ## Fields, Badges, Overlays
 
@@ -217,9 +217,9 @@ Human acceptance: review both themes and UI languages; rapidly reverse page, Sid
 
 ### Player Bar
 
-- Floating card, radius `xl`, 1px `border-subtle` edge, margins 12 off the content edges — not docked full-width.
-- Three zones: now-playing (poster 2:3, never square-cropped; title + remaining time; favorite) | transport + integrated progress | icon-only cluster (queue, audio, subtitles, volume, fullscreen). No stop button; labels live in tooltips.
-- Progress: 6px track with native-blurred sampling, times flanking the track, buffered layer, knob + time bubble on hover. Card progress bars share the 6px blurred track.
+- **Docked presentation, reaffirmed 2026-09-21:** the footer Player Bar already docks to the bottom of the main content area at full content width, with zero outer margin, zero outer radius and a top hairline. The Accepted Paper Home Composition below superseded this section's older floating-card target. Retain native commands and responsive reflow; reference alignment follows the [desktop synchronization specification](desktop-design-sync-spec.md#docked-footer). Embedded video chrome and Control-Only remain separate compositions.
+- Three zones: now-playing (poster 2:3, never square-cropped; title + remaining time; favorite) | transport + integrated progress | icon-only cluster (queue, audio, subtitles, volume, fullscreen). The later native Home contract retains Stop and backend-specific Show video; reference controls do not remove those actions. Labels live in tooltips.
+- Progress: the older target was a 6px track with native-blurred sampling, flanking times, buffering and a hover knob/time bubble. Current Library and Detail contracts already use scoped 4px card tracks. The [2026-09-21 synchronization specification](desktop-design-sync-spec.md#reference-derived-presentation-details) defines the implemented 4px resting / 6px hovered footer track and 40px interaction region; it preserves seeking and real media information.
 - Intro/outro media segments on the track: 9% white wash plus a 2px tick at each skip boundary. No amber fills, no always-visible skip buttons; the skip affordance appears only while the playhead is inside a segment.
 - Queue/audio/subtitle popovers: radius `xl`, `surfaceContainer` fill, 1px `border-subtle`, no header titles, selected row = `primaryContainer` + `secondary` check, max-height with scroll fade + thin scrollbar. Volume slider is permanent (no expand animation).
 
@@ -296,9 +296,10 @@ Human acceptance: check all eight sections in both themes; wide, short, and 480p
 
 ### Buttons and States
 
-- Primary: implemented `primaryHover` (`#787df8` dark / `#5457e8` light) and `primaryPressed` (`#5562ce` dark / light `secondary` `#4f46e5`) in `tokens.rs`, replacing the 10% hover brightness lift.
+- **2026-09-21 implemented; human visual acceptance pending:** desktop filled primary actions use shared tokens/Catalogs for the Paper action palette: `#4F46E5` default, `#5B55E7` hover, `#4338CA` pressed in both themes. Keep brand/progress primary, switch tracks, selected-state colors and other roles independent; see [shared action-palette synchronization](desktop-design-sync-spec.md#shared-filled-action-palette).
+- The filled-action roles are `action`, `actionHover`, `actionPressed`, and `onAction`; `primary` continues to own brand/progress/switch treatment.
 - Disabled: `control` fill with `text.muted` content, non-interactive — supersedes the legacy 50% alpha scaling, for buttons and fields alike.
-- Pressed has a distinct fill (Primary → `primaryPressed`; Tonal → `surfaceContainer`; glass → white/18%). Custom ControlButton styles also supply the actual icon and label colors.
+- Pressed has a distinct fill (Primary → `actionPressed`; Tonal → `surfaceContainer`; glass → white/18%). Custom ControlButton styles also supply the actual icon and label colors.
 - State transitions remain instantaneous. The Paper 175ms easing treatment is explicitly excluded from this implementation.
 
 ### Tonal (Paper Secondary Button)
@@ -329,7 +330,7 @@ Human acceptance: check all eight sections in both themes; wide, short, and 480p
 
 ### Delivery and Verification
 
-- New palette roles: `primaryHover`, `primaryPressed`, `borderSubtle`, `imageOutline`, and `sidebarBg`. Light `borderSubtle` preserves the code palette's `outlineVariant` value (`#e7ecf3`), rather than silently recoloring the existing role to Paper's different value.
+- Palette roles: `action`, `actionHover`, `actionPressed`, `onAction`, `borderSubtle`, `imageOutline`, and `sidebarBg`. Light `borderSubtle` preserves the code palette's `outlineVariant` value (`#e7ecf3`), rather than silently recoloring the existing role to Paper's different value.
 - `sidebarBg` applies only to the full/compact shell Sidebar. Other `Block` consumers retain `surfaceContainerLowest`. `imageOutline` is available as a token; applying artwork outlines belongs to the separate artwork/card scope.
 - Scoped Sidebar menu actions remain borderless at rest; their Catalog radii survive unless a caller explicitly uses `.radius(...)`.
 - Post-review verification: `bun run check` and `bun run task rust test iced` passed. Workspace Rust tests passed before the review fixes; the final fixes were rechecked in the affected iced group. No application visual acceptance is claimed.
@@ -354,13 +355,18 @@ References: [Library Grid TK-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2
 and [Personal Lists 7XI-0](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/7XI-0).
 These measurements supersede the older generic browse geometry. Human visual acceptance remains pending.
 
-- Library uses 36px desktop side insets and 28px top spacing, with a 36px/40px heading, wrapping 32px filters, real result count and keyboard-operable Grid/List segments.
-- At 1148px inner width, Grid shows six approximately 175×262 posters, 20px column gaps, 50px title/metadata areas and 24px row gaps. Sparse paging, loading placeholders and image visibility use the same measured cell geometry.
-- List uses a 35px header and 81px rows with 40×60 artwork, 8px thumbnail corners, and aligned index/title/year/rating/progress/favorite lanes. Narrow rows reflow metadata without losing detail or favorite actions.
+- Library uses 36px desktop side insets and 28px top spacing, with a 36px/40px heading, 40px minimum filter targets, real result count and keyboard-operable Grid/List segments. The first toolbar row groups viewing state and independent Favorites; the second places count left and sort/presentation controls right.
+- At 1148px inner width, Grid shows six approximately 175×262 posters, 20px column gaps, 74px title/metadata areas and 24px row gaps. Sparse paging, loading placeholders and image visibility use the same measured cell geometry.
+- List uses a 35px header and 81px rows with 40×60 artwork, 8px thumbnail corners, and aligned index/title/year/rating/resume/favorite lanes. The wide resume lane is 220px and pairs the resolved episode identity/remaining time with an inline play/resume action. Narrow rows reflow metadata without losing actions.
 - Grid and List retain the same query, sorting and filters, but keep independent in-memory scroll positions through navigation. Confirmed collection changes update visible flags immediately and refresh server-side membership/order without accepting pre-write deliveries.
 - Favorite, watched-state, and local Watchlist writes share one pending slot per item across Detail, Library, Personal Lists, Hero, and Now Playing. All same-item write controls disable together; other items remain independently actionable. Flags and local membership change only after confirmation, never optimistically. Server success must return the requested item and flag; Watchlist storage remains independent of server Favorites.
 - Pending writes survive navigation and App Mode changes. Accepted flags update live projections and saved Detail pages; pending reads are superseded before they can restore older flags. Detail failures stay inline only while the originating view is current, otherwise use the existing error Toast. Detail also shows the existing Updating indicator during a pending Watchlist write.
-- Personal Lists shows Watchlist, Favorites, then Watch History. Its header has 40px top/36px side spacing; the first section starts after 32px, subsequent sections after 40px. Watchlist/History use four approximately 272×153 landscape cards plus 50px copy areas; Favorites uses six posters. Narrow overviews scroll shelves horizontally; View all pages reflow.
+- Personal Lists shows Watchlist, Favorites, then Watch History. Its header has 40px top/36px side spacing; the title uses 36px/40px, sections use 20px/28px, section separation is 28px and title-to-content spacing is 14px. Counts belong to each section. Watchlist/History use four approximately 272×153 landscape cards plus 74px copy areas; Favorites uses six posters. Narrow overviews scroll shelves horizontally; View all pages reflow.
+- Library and Personal Lists expose independent 48px circular play and 40px collection actions on artwork hover/keyboard focus. Outside controls, cards open Detail. Each control owns its tooltip; episode identity and time remain separate from flexible titles.
+- Series playback/progress describes only the real native Next Up target. Loading, no target, failed lookup with retry, unavailable media and no resume progress remain distinct; no first-episode fallback is synthesized.
+- Successful Favorites, Watchlist and local History removals provide independent Undo notices in the content area above the docked footer. At most three are visible, fewer in short windows. Each receives eight seconds of actual presentation, paused by its own hover/focus/pending Undo; overflow waits FIFO. Failed Undo retains retry, ordinary navigation keeps receipts, and committed scope changes or exit retire them.
+- History hiding persists locally per Profile Scope. A strictly newer comparable server last-played observation or successful new local Playback Session restores visibility. Display visible History counts only when known, and retain server cursors for pagination. See [the desktop specification](desktop-design-sync-spec.md) and ADR 0046.
+- Footer seeking uses a 4px resting rail, 6px hover/drag rail and 40px hit area; the bar remains docked and retains native controls and narrow-window reflow.
 - Personal Lists shelves reserve a separate 16px bottom gutter below the full card copy area for the floating horizontal scrollbar; card dimensions do not include this gutter.
 - Artwork has a 1px `imageOutline`. New card progress strips are 4px: poster strips use a white-18% frosted track, landscape strips white-24%, with `primary` progress. Home retains its existing 6px treatment through the same native full-frame masking primitive.
 - Rating badges stay artwork-local in both themes: dark-background 65% scrim, 8px corners, light secondary digits and dark-palette `onWarningContainer` stars. Keyboard focus remains separate from pointer hover.

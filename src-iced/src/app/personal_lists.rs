@@ -13,8 +13,7 @@ use jellypilot_core::request_gate::SessionToken;
 use jellypilot_core::watchlist::{ProfileScope, WatchlistRecord, WatchlistStore};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
-  FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataUpdate, WatchHistoryPage,
-  WatchHistoryPageRequest,
+  FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataUpdate,
 };
 use jellypilot_sdk::item_actions::{
   Admission, ItemActionError, WatchlistSnapshot, WatchlistWrite, WatchlistWriteAction,
@@ -65,6 +64,10 @@ pub struct ListEntry {
 pub struct ListPage {
   pub entries: Vec<ListEntry>,
   pub total: usize,
+  /// Exact visible count; History may remain unknown after local filtering.
+  pub known_total: Option<usize>,
+  pub next_offset: Option<usize>,
+  pub previous_offsets: Vec<usize>,
   pub loading: bool,
   pub error: Option<UiText>,
   pub offset: usize,
@@ -195,6 +198,94 @@ impl Runtime {
     })?
   }
 
+  /// Removal and its exact restoration record share the serialized write boundary.
+  pub(crate) async fn remove_undoable(
+    &self,
+    admission: Admission,
+    expected_scope_epoch: u64,
+  ) -> Result<(WatchlistSnapshot, Option<WatchlistRecord>), ItemActionError> {
+    let runtime = self.clone();
+    tokio::task::spawn_blocking(move || {
+      let mut state = runtime
+        .inner
+        .store
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+      let result = (|| {
+        let store = loaded_store(&mut state.store).map_err(SdkError::Storage)?;
+        if !runtime.scope_epoch_is_current(admission.scope(), expected_scope_epoch) {
+          return Err(SdkError::Stale);
+        }
+        let removed = store
+          .remove_items(admission.scope(), &[admission.item_id().to_owned()])
+          .map_err(|error| SdkError::Storage(error.to_string()))?;
+        let records = store.records_for(admission.scope());
+        let changed = !removed.is_empty();
+        if changed {
+          state.revision = state.revision.wrapping_add(1);
+        }
+        Ok((
+          WatchlistSnapshot {
+            revision: state.revision,
+            records,
+            changed,
+          },
+          removed.into_iter().next(),
+        ))
+      })();
+      match result {
+        Ok((snapshot, record)) => admission
+          .finish_watchlist(Ok(snapshot))
+          .map(|snapshot| (snapshot, record)),
+        Err(error) => admission
+          .finish_watchlist(Err(error))
+          .map(|snapshot| (snapshot, None)),
+      }
+    })
+    .await
+    .map_err(|error| ItemActionError::Failed(SdkError::Storage(error.to_string())))?
+  }
+
+  pub(crate) async fn restore_removed(
+    &self,
+    admission: Admission,
+    record: WatchlistRecord,
+    expected_scope_epoch: u64,
+  ) -> Result<WatchlistSnapshot, ItemActionError> {
+    let runtime = self.clone();
+    tokio::task::spawn_blocking(move || {
+      let mut state = runtime
+        .inner
+        .store
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+      let result = (|| {
+        let store = loaded_store(&mut state.store).map_err(SdkError::Storage)?;
+        if !runtime.scope_epoch_is_current(admission.scope(), expected_scope_epoch)
+          || record.scope() != admission.scope()
+          || record.item_id() != admission.item_id()
+        {
+          return Err(SdkError::Stale);
+        }
+        let changed = store
+          .restore_items(&[record])
+          .map_err(|error| SdkError::Storage(error.to_string()))?;
+        let records = store.records_for(admission.scope());
+        if changed {
+          state.revision = state.revision.wrapping_add(1);
+        }
+        Ok(WatchlistSnapshot {
+          revision: state.revision,
+          records,
+          changed,
+        })
+      })();
+      admission.finish_watchlist(result)
+    })
+    .await
+    .map_err(|error| ItemActionError::Failed(SdkError::Storage(error.to_string())))?
+  }
+
   /// Applies `write` under the store lock: loads the store on first use,
   /// rejects superseded scope epochs, and advances the revision only when
   /// membership actually changed.
@@ -315,7 +406,7 @@ pub enum PersonalListsMessage {
     session: SessionToken,
     generation: u64,
     scope: ProfileScope,
-    result: Result<WatchHistoryPage, String>,
+    result: Result<jellypilot_sdk::DesktopHistoryPage, String>,
   },
   MembershipLoaded {
     session: SessionToken,
@@ -358,6 +449,7 @@ pub fn start(
           page.entries.clear();
         }
         page.offset = 0;
+        page.previous_offsets.clear();
       }
       Task::batch([
         load_favorites(surface, kernel, runtime, scope.clone()),
@@ -491,13 +583,17 @@ pub fn update(
       surface.history_generation = 0;
       match result {
         Ok(page) => {
-          if apply_server_page(
-            &mut surface.history,
-            page.start_index,
-            page.total_record_count,
-            page.items,
-          ) {
-            return load_history(surface, kernel, runtime, scope);
+          surface.history.known_total = page.total_record_count.map(|total| total.max(0) as usize);
+          surface.history.next_offset = page
+            .has_more
+            .then_some(page.next_start_index.max(0) as usize);
+          surface.history.entries = page.items.into_iter().map(entry_from_item).collect();
+          surface.history.error = None;
+          if surface.history.entries.is_empty() && !page.has_more {
+            if let Some(previous) = surface.history.previous_offsets.pop() {
+              surface.history.offset = previous;
+              return load_history(surface, kernel, runtime, scope);
+            }
           }
         }
         Err(error) => surface.history.error = Some(list_failure("lists-history-error", &error)),
@@ -668,20 +764,20 @@ fn load_history(
   surface.history.loading = true;
   surface.history.error = None;
   let session = kernel.request_gate.current_session();
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.history.loading = false;
-    surface.history.error = Some(UiText::new("lists-session-error"));
-    return Task::none();
+  let sdk = Arc::clone(&kernel.sdk);
+  let token = match sdk.new_operation_token() {
+    Ok(token) => token,
+    Err(error) => {
+      surface.history.loading = false;
+      surface.history.error = Some(list_failure("lists-history-error", &error.to_string()));
+      return Task::none();
+    }
   };
   let start_index = i32::try_from(surface.history.offset).unwrap_or(i32::MAX);
   Task::perform(
     async move {
-      client
-        .library()
-        .history(WatchHistoryPageRequest {
-          start_index,
-          limit: PAGE_SIZE as i32,
-        })
+      sdk
+        .desktop_watch_history(token, start_index, PAGE_SIZE as i32)
         .await
         .map_err(|error| error.to_string())
     },
@@ -787,7 +883,20 @@ fn change_page(
   if page.loading {
     return Task::none();
   }
-  let new_offset = if forward {
+  let new_offset = if kind == Kind::History {
+    if forward {
+      let Some(next) = page.next_offset else {
+        return Task::none();
+      };
+      page.previous_offsets.push(page.offset);
+      next
+    } else {
+      let Some(previous) = page.previous_offsets.pop() else {
+        return Task::none();
+      };
+      previous
+    }
+  } else if forward {
     let candidate = page.offset.saturating_add(PAGE_SIZE);
     if candidate >= page.total {
       return Task::none();
@@ -843,7 +952,10 @@ pub(crate) fn apply_user_data_update(
   }
   match action {
     Action::Favorite(false) => remove_entry(&mut surface.favorites, item_id),
-    Action::Played(false) => remove_entry(&mut surface.history, item_id),
+    Action::Played(false) => {
+      surface.history.entries.retain(|entry| entry.id != item_id);
+      surface.history.known_total = None;
+    }
     _ => {}
   }
   let favorites = if surface.favorites.loading || matches!(action, Action::Favorite(_)) {
@@ -885,6 +997,22 @@ pub(crate) fn apply_watchlist_snapshot(
     return Task::none();
   }
   load_watchlist_metadata(surface, kernel, runtime, scope.clone())
+}
+
+pub(crate) fn history_changed(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  runtime: &Runtime,
+  hidden_item: Option<&str>,
+) -> Task<Message> {
+  if let Some(item_id) = hidden_item {
+    surface.history.entries.retain(|entry| entry.id != item_id);
+  }
+  surface.history.known_total = None;
+  let Some(scope) = current_scope(surface, kernel) else {
+    return Task::none();
+  };
+  load_history(surface, kernel, runtime, scope)
 }
 
 /// Records the inline error for a rejected or failed mutation. Toast reporting
@@ -949,11 +1077,13 @@ fn apply_server_page(
     target.entries.clear();
     target.offset = ((total - 1) / PAGE_SIZE) * PAGE_SIZE;
     target.total = total;
+    target.known_total = Some(total);
     target.error = None;
     return target.offset != offset;
   }
   target.offset = if total == 0 { 0 } else { offset };
   target.total = total;
+  target.known_total = Some(total);
   target.entries = items.into_iter().map(entry_from_item).collect();
   target.error = None;
   false
@@ -998,6 +1128,7 @@ fn rebuild_watchlist_page(surface: &mut Surface) {
     .collect::<HashMap<_, _>>();
   let offset = surface.watchlist.offset;
   surface.watchlist.total = surface.watchlist_records.len();
+  surface.watchlist.known_total = Some(surface.watchlist.total);
   surface.watchlist.entries = surface
     .watchlist_records
     .iter()
@@ -1554,15 +1685,16 @@ mod tests {
   }
 
   #[test]
-  fn unplayed_write_removes_the_item_and_clamps_history() {
+  fn unplayed_write_removes_the_item_and_refreshes_history_cursor() {
     let mut state = connected_state();
     let runtime = Runtime::default();
     let mut surface = Surface {
       scope: Some(active_scope(&state.kernel).expect("scope")),
       history: ListPage {
         entries: vec![entry_from_item(item("watched", "Watched"))],
-        total: PAGE_SIZE + 1,
+        known_total: Some(PAGE_SIZE + 1),
         offset: PAGE_SIZE,
+        previous_offsets: vec![0],
         ..ListPage::default()
       },
       ..Surface::default()
@@ -1581,8 +1713,8 @@ mod tests {
     ));
 
     assert!(surface.history.entries.is_empty());
-    assert_eq!(surface.history.total, PAGE_SIZE);
-    assert_eq!(surface.history.offset, 0);
+    assert_eq!(surface.history.offset, PAGE_SIZE);
+    assert_eq!(surface.history.previous_offsets, vec![0]);
     assert!(surface.history.loading);
   }
 
@@ -1678,10 +1810,11 @@ mod tests {
           session,
           generation,
           scope,
-          result: Ok(WatchHistoryPage {
+          result: Ok(jellypilot_sdk::DesktopHistoryPage {
             items: vec![item("stale", "Stale")],
-            total_record_count: 1,
+            total_record_count: Some(1),
             start_index: 0,
+            next_start_index: 1,
             limit: PAGE_SIZE as i32,
             has_more: false,
           }),
@@ -1716,10 +1849,11 @@ mod tests {
         session,
         generation,
         scope: scope.clone(),
-        result: Ok(WatchHistoryPage {
+        result: Ok(jellypilot_sdk::DesktopHistoryPage {
           items: vec![watched],
-          total_record_count: 25,
+          total_record_count: Some(25),
           start_index: 0,
+          next_start_index: 24,
           limit: 24,
           has_more: true,
         }),
@@ -1752,10 +1886,11 @@ mod tests {
         session,
         generation,
         scope: scope.clone(),
-        result: Ok(WatchHistoryPage {
+        result: Ok(jellypilot_sdk::DesktopHistoryPage {
           items: Vec::new(),
-          total_record_count: 24,
+          total_record_count: Some(24),
           start_index: 24,
+          next_start_index: 24,
           limit: 24,
           has_more: false,
         }),
@@ -1777,7 +1912,7 @@ mod tests {
     ));
     assert!(!surface.history.loading);
     assert!(surface.history.error.is_some());
-    assert_eq!(surface.history.total, 24);
+    assert_eq!(surface.history.known_total, Some(24));
   }
 
   #[test]

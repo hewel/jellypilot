@@ -3600,6 +3600,64 @@ impl<'a> JellyfinLibrary<'a> {
     Ok(filter_similar_video_items(items, &item_id))
   }
 
+  /// The provider's actual Next Up item, including episode identity and resume data.
+  /// An empty response remains empty; no client-side episode fallback is applied.
+  pub async fn next_episode_item(
+    &self,
+    series_id: String,
+  ) -> Result<Option<VideoLibraryItem>, JellyfinError> {
+    let series_id = series_id.trim().to_string();
+    if series_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Series id is required for show playback".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    if self.client.provider() == MediaServerProvider::Emby {
+      let user_id = self.client.user_id()?;
+      return Ok(
+        emby_next_up_items(self.client, &server_url, &user_id, Some(&series_id), 1)
+          .await?
+          .into_iter()
+          .next(),
+      );
+    }
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    Ok(
+      jellyfin_api::apis::show_api::get_next_up(
+        &configuration,
+        jellyfin_api::apis::show_api::GetNextUpParams {
+          user_id: Some(user_id),
+          start_index: Some(0),
+          limit: Some(1),
+          fields: Some(video_home_fields()),
+          series_id: Some(series_id),
+          parent_id: None,
+          enable_images: Some(true),
+          image_type_limit: Some(1),
+          enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+          enable_user_data: Some(true),
+          next_up_date_cutoff: None,
+          enable_total_record_count: Some(false),
+          enable_resumable: Some(true),
+          enable_rewatching: Some(false),
+        },
+      )
+      .await
+      .map_err(|err| JellyfinClient::openapi_error("Video show playback target", err))?
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .find_map(|item| map_video_library_item(&server_url, item)),
+    )
+  }
+
   pub async fn next_playable_episode(
     &self,
     series_id: String,
@@ -10936,6 +10994,63 @@ mod tests {
       .expect("audio context should load");
     assert_eq!(second.original_language.as_deref(), Some("en"));
     assert_eq!(requests.lock().len(), 4);
+  }
+
+  #[tokio::test]
+  async fn next_episode_item_preserves_provider_episode_identity_and_resume_without_fallback() {
+    for emby in [false, true] {
+      for empty in [false, true] {
+        let response = if empty {
+          r#"{"Items":[],"TotalRecordCount":0}"#
+        } else {
+          r#"{"Items":[{"Id":"00000000000000000000000000000062","Name":"Actual Next Episode","Type":"Episode","SeriesId":"00000000000000000000000000000060","SeriesName":"The Show","ParentIndexNumber":2,"IndexNumber":7,"RunTimeTicks":18000000000,"UserData":{"Key":"fixture-item","PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#
+        };
+        let (server_url, requests) =
+          serve_route_responses_with_requests(vec![("GET /Shows/NextUp?", "200 OK", response)])
+            .await;
+        let client = JellyfinClient::new();
+        if emby {
+          connect_test_client_as_emby(&client, server_url);
+        } else {
+          connect_test_client(&client, server_url);
+        }
+        let target = client
+          .library()
+          .next_episode_item("00000000000000000000000000000060".to_owned())
+          .await
+          .expect("Next Up query");
+        if empty {
+          assert!(
+            target.is_none(),
+            "an empty native Next Up must not become a first episode"
+          );
+        } else {
+          let target = target.expect("server episode");
+          assert_eq!(
+            (
+              target.id.as_str(),
+              target.season_number,
+              target.episode_number
+            ),
+            ("00000000000000000000000000000062", Some(2), Some(7))
+          );
+          assert_eq!(
+            (target.resume_position_seconds, target.runtime_seconds),
+            (Some(30.0), Some(1800.0))
+          );
+        }
+        let requests = requests.lock();
+        assert_eq!(
+          requests.len(),
+          1,
+          "card enrichment must not fetch show, seasons, or a fallback episode"
+        );
+        let request = requests[0].to_lowercase();
+        assert!(request.contains("seriesid=00000000000000000000000000000060"));
+        assert!(request.contains("enableresumable=true"));
+        assert!(request.contains("enablerewatching=false"));
+      }
+    }
   }
 
   #[tokio::test]

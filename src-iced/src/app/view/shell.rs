@@ -105,9 +105,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     });
   // The sidebar docks full-height so its bottom (Settings, user) never moves
   // when the player bar appears; the bar docks under the content region only.
-  let mut right = Column::new()
-    .spacing(0.0)
-    .push(container(content).width(Fill).height(Fill));
+  let mut right = Column::new().spacing(0.0).push(
+    container(stack![content, super::undo_notice::view(state)])
+      .width(Fill)
+      .height(Fill),
+  );
   // The docked bar is a player-control surface: it collapses over the surface
   // duration so the content above reclaims its slot as it exits. When playback
   // stops, the retained snapshot keeps drawing the real bar through the exit.

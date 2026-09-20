@@ -32,6 +32,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     Subscription::run_with(state.kernel.sdk_handoff.clone(), account_handoff_stream),
   ];
   subscriptions.push(super::embedded_player::subscription(state));
+  if !state.kernel.undo.notices.is_empty() {
+    subscriptions.push(
+      time::every(Duration::from_millis(100)).map(|_| Message::Undo(super::undo::Message::Tick)),
+    );
+  }
   if cfg!(target_os = "linux") && crate::embedded::enabled() {
     subscriptions.push(
       Subscription::run(crate::embedded::hdr_events)

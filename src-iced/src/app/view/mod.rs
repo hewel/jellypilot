@@ -14,6 +14,7 @@ mod player_info;
 pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;
+mod undo_notice;
 
 use crate::i18n::Localizer;
 use iced::widget::{button, container, row, stack, text};

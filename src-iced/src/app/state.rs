@@ -612,6 +612,7 @@ pub fn diagnostic_matches(
 
 #[derive(Default)]
 pub struct FullUi {
+  pub list_playback: super::list_playback::Surface,
   pub personal_lists: crate::app::personal_lists::Surface,
   pub collections: crate::app::collections::Surface,
   pub home: crate::app::home::Surface,
@@ -694,6 +695,7 @@ impl State {
 
         notice: None,
         active_toast: None,
+        undo: crate::app::undo::Runtime::default(),
         next_toast_id: 0,
         tray: None,
         artwork_adapter,

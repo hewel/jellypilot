@@ -195,3 +195,197 @@ async fn a_pending_history_page_cannot_reintroduce_an_item_hidden_during_the_req
     let (result, ()) = tokio::join!(pending, server);
     assert!(matches!(result, Err(SdkError::Stale)));
 }
+
+#[tokio::test]
+async fn desktop_history_reappears_for_newer_server_observation_without_changing_android_reads() {
+    let (url, mut requests, _server) = controlled_http_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &url));
+    let removal = sdk
+        .hide_desktop_history_item(
+            sdk.new_operation_token().unwrap(),
+            item_id(1),
+            Some("2026-09-23T12:00:00Z".to_owned()),
+        )
+        .await
+        .unwrap();
+    let (android, ()) = tokio::join!(
+        async {
+            sdk.watch_history(sdk.new_operation_token().unwrap(), 0, 2)
+                .await
+                .unwrap()
+        },
+        answer_reads(&mut requests, 4)
+    );
+    assert_eq!(
+        android
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>(),
+        [item_id(2), item_id(3)]
+    );
+    let (desktop, ()) = tokio::join!(
+        async {
+            sdk.desktop_watch_history(sdk.new_operation_token().unwrap(), 0, 2)
+                .await
+                .unwrap()
+        },
+        answer_reads(&mut requests, 2)
+    );
+    assert_eq!(
+        desktop
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>(),
+        [item_id(1), item_id(2)]
+    );
+    assert_eq!(desktop.total_record_count, Some(4));
+    assert!(
+        !removal.undo().await.unwrap(),
+        "server reappearance already consumed the hidden membership"
+    );
+}
+
+#[tokio::test]
+async fn desktop_partial_history_omits_unknown_total_and_retains_the_server_cursor() {
+    let (url, mut requests, _server) = controlled_http_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &url));
+    sdk.hide_desktop_history_item(
+        sdk.new_operation_token().unwrap(),
+        item_id(1),
+        Some("2026-09-24T12:00:00Z".to_owned()),
+    )
+    .await
+    .unwrap();
+    // This stale stored ID must not be subtracted from the server count.
+    sdk.hide_history_item(sdk.new_operation_token().unwrap(), item_id(99))
+        .await
+        .unwrap();
+    let (first, ()) = tokio::join!(
+        async {
+            sdk.desktop_watch_history(sdk.new_operation_token().unwrap(), 0, 2)
+                .await
+                .unwrap()
+        },
+        answer_reads(&mut requests, 4)
+    );
+    assert_eq!(first.total_record_count, None);
+    assert_eq!(first.next_start_index, 3);
+    assert!(first.has_more);
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>(),
+        [item_id(2), item_id(3)]
+    );
+    assert!(
+        requests.try_recv().is_err(),
+        "counting must not scan beyond the requested page"
+    );
+    let (last, ()) = tokio::join!(
+        async {
+            sdk.desktop_watch_history(
+                sdk.new_operation_token().unwrap(),
+                first.next_start_index,
+                2,
+            )
+            .await
+            .unwrap()
+        },
+        answer_reads(&mut requests, 2)
+    );
+    assert_eq!(last.total_record_count, None);
+    assert_eq!(last.next_start_index, 4);
+    assert!(!last.has_more);
+    let (complete, ()) = tokio::join!(
+        async {
+            sdk.desktop_watch_history(sdk.new_operation_token().unwrap(), 0, 10)
+                .await
+                .unwrap()
+        },
+        answer_reads(&mut requests, 2)
+    );
+    assert_eq!(complete.total_record_count, Some(3));
+}
+
+#[tokio::test]
+async fn playback_reappearance_and_later_removal_retire_old_undo_without_crossing_scope() {
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", "https://media.example.test"));
+    let token = sdk.new_operation_token().unwrap();
+    let old = sdk
+        .hide_desktop_history_item(Arc::clone(&token), item_id(1), None)
+        .await
+        .unwrap();
+    assert!(sdk
+        .restore_desktop_history_for_playback(Arc::clone(&token), item_id(1))
+        .await
+        .unwrap());
+    let current = sdk
+        .hide_desktop_history_item(Arc::clone(&token), item_id(1), None)
+        .await
+        .unwrap();
+    assert!(!old.undo().await.unwrap());
+    sdk.inner.state.lock().unwrap().handoff_in_progress = true;
+    assert_eq!(current.undo().await, Err(SdkError::OperationInProgress));
+    assert_eq!(
+        sdk.restore_desktop_history_for_playback(Arc::clone(&token), item_id(1))
+            .await,
+        Err(SdkError::OperationInProgress)
+    );
+    sdk.inner.state.lock().unwrap().handoff_in_progress = false;
+    assert!(
+        current.undo().await.unwrap(),
+        "cancelled handoff retains the removal receipt"
+    );
+    sdk.adopt_test_session(test_session("grace", "https://media.example.test"));
+    sdk.hide_desktop_history_item(sdk.new_operation_token().unwrap(), item_id(1), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        sdk.restore_desktop_history_for_playback(token, item_id(1))
+            .await,
+        Err(SdkError::Stale)
+    );
+}
+
+#[tokio::test]
+async fn desktop_server_observation_cannot_commit_across_a_new_hide_or_profile_switch() {
+    for switch_profile in [false, true] {
+        let (url, mut requests, _server) = controlled_http_server().await;
+        let (sdk, _dir) = test_sdk();
+        sdk.adopt_test_session(test_session("ada", &url));
+        sdk.hide_desktop_history_item(
+            sdk.new_operation_token().unwrap(),
+            item_id(1),
+            Some("2026-09-20T12:00:00Z".to_owned()),
+        )
+        .await
+        .unwrap();
+        let pending = sdk.desktop_watch_history(sdk.new_operation_token().unwrap(), 0, 2);
+        let server = async {
+            let request = next_request(&mut requests).await;
+            if switch_profile {
+                sdk.adopt_test_session(test_session("grace", &url));
+            } else {
+                sdk.hide_desktop_history_item(sdk.new_operation_token().unwrap(), item_id(2), None)
+                    .await
+                    .unwrap();
+            }
+            answer(request);
+            if !switch_profile {
+                answer(next_request(&mut requests).await);
+            }
+        };
+        let (result, ()) = tokio::join!(pending, server);
+        assert!(matches!(
+            result,
+            Err(SdkError::Stale) | Err(SdkError::Cancelled)
+        ));
+    }
+}

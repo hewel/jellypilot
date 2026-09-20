@@ -65,12 +65,13 @@ const fn blend(progress: f32) -> ThemePalette {
     let b = LIGHT_PALETTE;
     ThemePalette {
         colors: colors!(SemanticColors, a.colors, b.colors, progress;
+            action, actionHover, actionPressed, onAction,
             background, borderSubtle, control, controlHover, error, errorContainer,
             favorite, imageOutline, onBackground, onControl, onControlHover,
             onError, onErrorContainer, onPrimary, onPrimaryContainer, onSecondary,
             onSecondaryContainer, onSurface, onSurfaceVariant, onTertiary,
             onTertiaryContainer, onWarning, onWarningContainer, outline,
-            outlineVariant, primary, primaryContainer, primaryHover, primaryPressed,
+            outlineVariant, primary, primaryContainer,
             secondary, secondaryContainer, sidebarBg, surface, surfaceContainer,
             surfaceContainerHigh, surfaceContainerHighest, surfaceContainerLow,
             surfaceContainerLowest, surfaceTint, surfaceVariant, tertiary,

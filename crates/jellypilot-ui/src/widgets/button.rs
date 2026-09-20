@@ -41,8 +41,8 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
 
     match variant {
         ButtonVariant::Primary => {
-            background = Some(colors.primary);
-            text_color = colors.onPrimary;
+            background = Some(colors.action);
+            text_color = colors.onAction;
         }
         ButtonVariant::Secondary => {
             background = Some(colors.secondaryContainer);
@@ -74,7 +74,7 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         button::Status::Active => {}
         button::Status::Hovered => match variant {
             ButtonVariant::Primary => {
-                background = Some(colors.primaryHover);
+                background = Some(colors.actionHover);
             }
             ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => {
                 background = Some(colors.controlHover);
@@ -88,7 +88,7 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         },
         button::Status::Pressed => match variant {
             ButtonVariant::Primary => {
-                background = Some(colors.primaryPressed);
+                background = Some(colors.actionPressed);
             }
             ButtonVariant::Tonal | ButtonVariant::Icon | ButtonVariant::Pill => {
                 background = Some(colors.surfaceContainer);
@@ -124,8 +124,8 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
 
 /// Translucent Hero fills over the native Backdrop blur.
 ///
-/// * Primary keeps its solid accent fill (`primary` / `primaryHover` /
-///   `primaryPressed`).
+/// * Primary keeps its solid accent fill (`action` / `actionHover` /
+///   `actionPressed`).
 /// * Non-primary variants use a borderless 10% tint, lifted to 24% on hover
 ///   and 18% when pressed. Dark mode uses white; light mode uses on-surface
 ///   ink to stay legible over its light fade. Keyboard focus is separate.
@@ -257,23 +257,23 @@ mod tests {
         let colors = DARK_PALETTE.colors;
 
         let active = super::style(&theme, ButtonVariant::Primary, Status::Active);
-        assert_eq!(active.background, Some(Background::Color(colors.primary)));
-        assert_eq!(active.text_color, colors.onPrimary);
+        assert_eq!(active.background, Some(Background::Color(colors.action)));
+        assert_eq!(active.text_color, colors.onAction);
         assert_eq!(active.border.width, 0.0);
 
         let hovered = super::style(&theme, ButtonVariant::Primary, Status::Hovered);
         assert_eq!(
             hovered.background,
-            Some(Background::Color(colors.primaryHover))
+            Some(Background::Color(colors.actionHover))
         );
-        assert_eq!(hovered.text_color, colors.onPrimary);
+        assert_eq!(hovered.text_color, colors.onAction);
 
         let pressed = super::style(&theme, ButtonVariant::Primary, Status::Pressed);
         assert_eq!(
             pressed.background,
-            Some(Background::Color(colors.primaryPressed))
+            Some(Background::Color(colors.actionPressed))
         );
-        assert_eq!(pressed.text_color, colors.onPrimary);
+        assert_eq!(pressed.text_color, colors.onAction);
     }
 
     #[test]

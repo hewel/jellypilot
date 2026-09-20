@@ -2,22 +2,28 @@ use super::image_observer::{observe_grid_viewport, observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageStatus};
 use crate::app::artwork::{ImageCell, ImageSpec};
 use crate::app::browse::ViewMode;
+use crate::app::list_playback::Target;
+use crate::app::message::PlaybackMessage;
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{Destination, State};
-use crate::app::{accounts, collections};
+use crate::app::{accounts, collections, list_playback};
 use crate::i18n::media::{item_caption, media_type};
 use crate::i18n::Localizer;
 use iced::widget::{
-  column, container, progress_bar, row, scrollable, space, stack, text, Column, Row,
+  column, container, hover, progress_bar, row, scrollable, space, stack, text, Column, Row,
 };
 use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
+use jellypilot_core::cards::{episode_card_code, is_episode_item};
 use jellypilot_core::diagnostics::sanitize_message;
+use jellypilot_core::home_hero::has_resume_position;
 use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
+use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
@@ -58,10 +64,10 @@ pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
     .max(1.0)
 }
 
-pub(crate) const CARD_COPY_HEIGHT: f32 = 50.0;
+pub(crate) const CARD_COPY_HEIGHT: f32 = 74.0;
 pub(crate) const GRID_COLUMN_GAP: f32 = TOKENS.spacing.s5;
 const LIST_ROW_HEIGHT: f32 = 81.0;
-const NARROW_LIST_ROW_HEIGHT: f32 = 112.0;
+const NARROW_LIST_ROW_HEIGHT: f32 = 132.0;
 const LIST_COLUMNS_MIN_WIDTH: f32 = 860.0;
 
 pub(crate) fn browse_metrics(available_width: f32, mode: ViewMode) -> ArtworkGridMetrics {
@@ -158,6 +164,57 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   let filters = browse
     .filters
     .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
+  let favorites = control_button(
+    Some(if filters.favorites_only() {
+      Icon::HeartFilled
+    } else {
+      Icon::Heart
+    }),
+    Some(state.t("browse-favorites")),
+    if filters.favorites_only() {
+      ButtonVariant::PillActive
+    } else {
+      ButtonVariant::Pill
+    },
+  )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s2)
+  .padding([8, 12])
+  .min_height(40.0)
+  .label_size(12.0)
+  .on_press(Message::Browse(BrowseMessage::FavoritesToggled));
+  row![
+    played_option(
+      Icon::CircleDot,
+      state.t("browse-all"),
+      VideoLibraryPlayedFilter::All,
+      filters.played_filter()
+    ),
+    played_option(
+      Icon::CircleCheck,
+      state.t("browse-played"),
+      VideoLibraryPlayedFilter::Played,
+      filters.played_filter()
+    ),
+    played_option(
+      Icon::Circle,
+      state.t("browse-unplayed"),
+      VideoLibraryPlayedFilter::Unplayed,
+      filters.played_filter()
+    ),
+    favorites,
+  ]
+  .spacing(TOKENS.spacing.s2_5)
+  .align_y(Alignment::Center)
+  .wrap()
+  .into()
+}
+
+fn sort_control(state: &State) -> Element<'_, Message> {
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  let filters = browse
+    .filters
+    .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
   let sort_trigger = control_button(
     Some(Icon::ChevronDown),
     Some(sort_label(state.kernel.locale, filters.sort())),
@@ -166,7 +223,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s2)
   .padding([8, 12])
-  .min_height(32.0)
+  .min_height(40.0)
   .label_size(12.0)
   .trailing_icon(true)
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled));
@@ -207,51 +264,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     },
     Message::Browse(BrowseMessage::SortMenuDismissed),
   );
-  let favorites = control_button(
-    Some(if filters.favorites_only() {
-      Icon::HeartFilled
-    } else {
-      Icon::Heart
-    }),
-    Some(state.t("browse-favorites")),
-    if filters.favorites_only() {
-      ButtonVariant::PillActive
-    } else {
-      ButtonVariant::Pill
-    },
-  )
-  .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s2)
-  .padding([8, 12])
-  .min_height(32.0)
-  .label_size(12.0)
-  .on_press(Message::Browse(BrowseMessage::FavoritesToggled));
-  row![
-    sort,
-    played_option(
-      Icon::CircleDot,
-      state.t("browse-all"),
-      VideoLibraryPlayedFilter::All,
-      filters.played_filter()
-    ),
-    played_option(
-      Icon::CircleCheck,
-      state.t("browse-played"),
-      VideoLibraryPlayedFilter::Played,
-      filters.played_filter()
-    ),
-    played_option(
-      Icon::Circle,
-      state.t("browse-unplayed"),
-      VideoLibraryPlayedFilter::Unplayed,
-      filters.played_filter()
-    ),
-    favorites,
-  ]
-  .spacing(TOKENS.spacing.s2_5)
-  .align_y(Alignment::Center)
-  .wrap()
-  .into()
+  sort
 }
 
 fn presentation_bar(state: &State) -> Element<'_, Message> {
@@ -271,16 +284,23 @@ fn presentation_bar(state: &State) -> Element<'_, Message> {
     mode_button(state, ViewMode::List, Icon::List, "browse-list"),
   ]
   .spacing(TOKENS.spacing.s0_5);
-  row![
+  let mut controls = row![
     text(count).size(12).color(state.palette().text.metadata),
-    space::horizontal(),
-    container(segments)
-      .padding(TOKENS.spacing.s0_5)
-      .style(library::segments),
-  ]
-  .align_y(Alignment::Center)
-  .width(Fill)
-  .into()
+    space::horizontal()
+  ];
+  if matches!(state.shell.destination, Destination::Library { .. }) {
+    controls = controls.push(sort_control(state));
+  }
+  controls
+    .push(
+      container(segments)
+        .padding(TOKENS.spacing.s0_5)
+        .style(library::segments),
+    )
+    .spacing(TOKENS.spacing.s3)
+    .align_y(Alignment::Center)
+    .width(Fill)
+    .into()
 }
 
 fn mode_button<'a>(
@@ -301,8 +321,8 @@ fn mode_button<'a>(
   )
   .icon_size(IconSize::Xs)
   .padding([5, 6])
-  .width(26.into())
-  .min_height(24.0)
+  .width(40.into())
+  .min_height(40.0)
   .style(|theme, variant, status| {
     library::segment(theme, status, variant == ButtonVariant::Secondary)
   })
@@ -334,7 +354,7 @@ fn played_option(
     .icon_size(IconSize::Sm)
     .spacing(7.0)
     .padding([8, 12])
-    .min_height(32.0)
+    .min_height(40.0)
     .label_size(12.0)
     .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
     .into()
@@ -615,13 +635,201 @@ fn skeleton_cell<'a>(
     bottom: 0.0,
     left: 0.0,
   })
-  .width(Fill);
+  .width(Fill)
+  .height(CARD_COPY_HEIGHT);
 
   column![poster, copy].width(Fill).into()
 }
 
 const POSTER_FRAME_WIDTH: f32 = 160.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
+
+pub(crate) fn play_button<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  circular: bool,
+  control_id: String,
+) -> Element<'a, Message> {
+  let target = list_playback::target(state, item);
+  let (icon, label, action) = match target {
+    Target::Ready(target) => {
+      let label = state.t(if target.played {
+        "detail-replay"
+      } else if has_resume_position(target) {
+        "detail-resume"
+      } else {
+        "detail-play"
+      });
+      let enabled = state.playback.view.engine_available
+        && !state.shell.quit_requested
+        && !accounts::content_mutations_blocked(&state.kernel);
+      let action = enabled.then(|| {
+        Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Start {
+          item: Playable::Library(target.clone()),
+          position: if has_resume_position(target) {
+            PlaybackStartPosition::Resume
+          } else {
+            PlaybackStartPosition::Beginning
+          },
+          intro: state.kernel.intro_availability(),
+          selection: Box::default(),
+        })))
+      });
+      (
+        if target.played {
+          Icon::Refresh
+        } else {
+          Icon::Play
+        },
+        label,
+        action,
+      )
+    }
+    Target::Failed(_) => (
+      Icon::Refresh,
+      state.t("lists-retry"),
+      Some(Message::ListPlayback(list_playback::Message::Retry(
+        item.id.clone(),
+      ))),
+    ),
+    Target::Loading => (Icon::Play, state.t("common-loading"), None),
+    Target::NoNextUp => (Icon::Play, state.t("list-playback-no-target"), None),
+    Target::Unavailable => (Icon::Play, state.t("list-playback-unavailable"), None),
+  };
+  let tooltip = match target {
+    Target::Failed(error) => format!("{}: {error}", state.t("list-playback-failed")),
+    Target::Ready(target) => format!("{label}: {}", target.name),
+    _ => label.clone(),
+  };
+  let mut control = control_button(
+    Some(icon),
+    (!circular).then_some(label),
+    if circular {
+      ButtonVariant::Primary
+    } else {
+      ButtonVariant::Text
+    },
+  )
+  .icon_size(IconSize::Sm)
+  .label_size(12.0)
+  .padding(if circular { 12 } else { 6 })
+  .min_height(if circular { 48.0 } else { 40.0 })
+  .id(iced::widget::Id::from(control_id))
+  .on_press_maybe(action);
+  if circular {
+    control = control.width(48.into()).style(library::card_play);
+  }
+  focus_tooltip(control, tooltip, TooltipOptions::default())
+}
+
+pub(crate) fn resolved_progress(state: &State, item: &VideoLibraryItem) -> Option<f32> {
+  match list_playback::target(state, item) {
+    Target::Ready(target) => item_progress(target),
+    _ => None,
+  }
+}
+
+pub(crate) fn remaining_caption(state: &State, item: &VideoLibraryItem) -> Option<String> {
+  let runtime = item
+    .runtime_seconds
+    .filter(|value| value.is_finite() && *value > 0.0)?;
+  let position = item
+    .resume_position_seconds
+    .filter(|value| value.is_finite() && *value > 0.0)?;
+  (!item.played && runtime > position).then(|| {
+    state.format(
+      "detail-remaining",
+      &[(
+        "duration",
+        state.kernel.locale.duration(runtime - position).into(),
+      )],
+    )
+  })
+}
+
+fn playback_caption(state: &State, item: &VideoLibraryItem) -> String {
+  match list_playback::target(state, item) {
+    Target::Ready(target) => {
+      let time = remaining_caption(state, target).unwrap_or_else(|| {
+        state.t(if target.played {
+          "browse-played"
+        } else {
+          "list-playback-no-progress"
+        })
+      });
+      match episode_card_code(target) {
+        Some(code) => format!("{code} · {time}"),
+        None => time,
+      }
+    }
+    Target::Loading => state.t("common-loading"),
+    Target::NoNextUp => state.t("list-playback-no-target"),
+    Target::Failed(_) => state.t("list-playback-failed"),
+    Target::Unavailable => state.t("list-playback-unavailable"),
+  }
+}
+
+fn card_copy<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Message> {
+  let episode = is_episode_item(item);
+  let title = if episode {
+    item.series_name.as_deref().unwrap_or(&item.name)
+  } else {
+    &item.name
+  };
+  let mut copy = column![ellipsis_text(title)
+    .font(HEADING_FONT)
+    .size(14)
+    .line_height(iced::Pixels(18.0))
+    .color(state.palette().text.secondary)]
+  .spacing(TOKENS.spacing.s1)
+  .width(Fill);
+  if episode {
+    copy = copy.push(
+      row![
+        text(
+          episode_card_code(item)
+            .unwrap_or_else(|| media_type(state.kernel.locale, &item.item_type))
+        )
+        .size(12)
+        .line_height(iced::Pixels(16.0))
+        .color(state.palette().text.metadata),
+        ellipsis_text(&item.name)
+          .size(12)
+          .line_height(iced::Pixels(16.0))
+          .color(state.palette().text.metadata),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .width(Fill),
+    );
+    let activity = remaining_caption(state, item).unwrap_or_else(|| {
+      item.last_played_date.as_deref().map_or_else(
+        || state.t("list-playback-no-progress"),
+        |stamp| crate::i18n::media::history_timestamp(state.kernel.locale, Some(stamp)),
+      )
+    });
+    copy = copy.push(
+      text(activity)
+        .size(12)
+        .line_height(iced::Pixels(16.0))
+        .color(state.palette().text.metadata),
+    );
+  } else {
+    copy = copy.push(
+      ellipsis_text(item_caption(state.kernel.locale, item))
+        .size(12)
+        .line_height(iced::Pixels(16.0))
+        .color(state.palette().text.metadata),
+    );
+  }
+  container(copy)
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s2,
+      ..iced::Padding::ZERO
+    })
+    .height(CARD_COPY_HEIGHT)
+    .width(Fill)
+    .into()
+}
 
 fn video_card<'a>(
   state: &'a State,
@@ -630,7 +838,6 @@ fn video_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let palette = state.palette();
   let artwork_height = card_artwork_height(cell_width);
   let card = control_button_content(
     move |_| {
@@ -643,23 +850,7 @@ fn video_card<'a>(
           skeleton_phase,
           reduced_motion,
         ),
-        column![
-          ellipsis_text(&item.name)
-            .font(HEADING_FONT)
-            .size(14)
-            .line_height(iced::Pixels(18.0))
-            .color(palette.text.secondary),
-          ellipsis_text(item_caption(state.kernel.locale, item))
-            .size(12)
-            .line_height(iced::Pixels(16.0))
-            .color(palette.text.metadata),
-        ]
-        .spacing(TOKENS.spacing.s2)
-        .padding(iced::Padding {
-          top: TOKENS.spacing.s2,
-          ..iced::Padding::ZERO
-        })
-        .width(Fill),
+        card_copy(state, item),
       )
       .width(Fill)
       .into()
@@ -670,9 +861,7 @@ fn video_card<'a>(
   .width(Fill)
   .style(jellypilot_ui::widgets::button::media_artwork)
   .on_press(Message::OpenDetail(Box::new(item.clone())));
-  let mut overlay = Column::new()
-    .push(row![space::horizontal(), favorite_button(state, item)])
-    .push(space::vertical());
+  let mut overlay = Column::new().push(space::vertical());
   if let Some(rating) = item.community_rating.filter(|rating| rating.is_finite()) {
     overlay = overlay.push(
       container(
@@ -701,7 +890,7 @@ fn video_card<'a>(
       .height(artwork_height),
   ];
   if let Some(progress) =
-    item_progress(item).filter(|progress| *progress > 0.0 && *progress < 100.0)
+    resolved_progress(state, item).filter(|progress| *progress > 0.0 && *progress < 100.0)
   {
     card = card.push(
       container(ArtworkProgress::new(
@@ -725,7 +914,25 @@ fn video_card<'a>(
       .align_y(Alignment::End),
     );
   }
-  focus_tooltip(card, item.name.clone(), TooltipOptions::default())
+  let actions = stack![
+    container(play_button(
+      state,
+      item,
+      true,
+      format!("browse-card-play-{}", item.id)
+    ))
+    .center_x(Fill)
+    .center_y(Fill),
+    container(favorite_button(state, item))
+      .padding(TOKENS.spacing.s2)
+      .width(Fill)
+      .height(Fill)
+      .align_x(Alignment::End)
+      .align_y(Alignment::Start),
+  ]
+  .width(Fill)
+  .height(artwork_height);
+  hover(card, actions)
 }
 
 fn item_artwork<'a>(
@@ -799,6 +1006,10 @@ fn favorite_button<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<
   .width(40.into())
   .min_height(40.0)
   .style(|theme, _, status| library::row(theme, status))
+  .id(iced::widget::Id::from(format!(
+    "browse-favorite-{}",
+    item.id
+  )))
   .on_press_maybe(action);
   focus_tooltip(
     control,
@@ -828,25 +1039,25 @@ fn item_progress(item: &VideoLibraryItem) -> Option<f32> {
   }
 }
 
-fn progress_caption(state: &State, item: &VideoLibraryItem) -> String {
-  if item.played {
-    state.t("browse-played")
-  } else if let Some(progress) = item_progress(item).filter(|progress| *progress > 0.0) {
-    state.format(
-      "browse-progress-percent",
-      &[("percent", f64::from(progress.round()).into())],
-    )
-  } else {
-    state.t("browse-unplayed")
+fn row_progress<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  narrow: bool,
+) -> Element<'a, Message> {
+  let metadata = text(playback_caption(state, item))
+    .size(12)
+    .color(state.palette().text.metadata);
+  let play = play_button(state, item, false, format!("browse-row-play-{}", item.id));
+  if narrow {
+    return row![metadata, space::horizontal(), play]
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center)
+      .width(Fill)
+      .into();
   }
-}
-
-fn row_progress<'a>(state: &'a State, item: &VideoLibraryItem) -> Element<'a, Message> {
-  let mut content = Row::new()
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center);
+  let mut content = column![metadata].spacing(0).width(220);
   if let Some(progress) =
-    item_progress(item).filter(|progress| *progress > 0.0 && *progress < 100.0)
+    resolved_progress(state, item).filter(|value| *value > 0.0 && *value < 100.0)
   {
     content = content.push(
       progress_bar(0.0..=100.0, progress)
@@ -855,18 +1066,7 @@ fn row_progress<'a>(state: &'a State, item: &VideoLibraryItem) -> Element<'a, Me
         .style(library::progress),
     );
   }
-  content
-    .push(
-      text(progress_caption(state, item))
-        .size(12)
-        .color(if item.played {
-          state.palette().colors.tertiary
-        } else {
-          state.palette().text.metadata
-        }),
-    )
-    .width(170)
-    .into()
+  content.push(play).into()
 }
 
 fn list_heading(state: &State) -> Element<'_, Message> {
@@ -887,7 +1087,7 @@ fn list_heading(state: &State) -> Element<'_, Message> {
     label("browse-column-title", Fill),
     label("browse-column-year", 90.into()),
     label("browse-column-rating", 90.into()),
-    label("browse-column-progress", 170.into()),
+    label("browse-column-progress", 220.into()),
     space::horizontal().width(40),
   ]
   .spacing(TOKENS.spacing.s4)
@@ -943,11 +1143,7 @@ fn row_contents<'a>(
           .color(palette.colors.warning),
       );
     }
-    copy = copy.push(metadata).push(
-      text(progress_caption(state, item))
-        .size(12)
-        .color(palette.text.metadata),
-    );
+    copy = copy.push(metadata);
   }
   let poster = container(item_artwork(
     state,
@@ -987,8 +1183,7 @@ fn row_contents<'a>(
           .size(12)
           .color(palette.colors.warning)
           .width(90),
-      )
-      .push(row_progress(state, item));
+      );
   }
   main.into()
 }
@@ -1005,20 +1200,29 @@ fn video_row<'a>(
     ButtonVariant::Text,
   )
   .padding([10, 0])
-  .min_height(height - 1.0)
+  .min_height(if width < LIST_COLUMNS_MIN_WIDTH {
+    height - 41.0
+  } else {
+    height - 1.0
+  })
   .width(Fill)
   .style(|theme, _, status| library::row(theme, status))
   .on_press(Message::OpenDetail(Box::new(item.clone())));
   let open = focus_tooltip(open, item.name.clone(), TooltipOptions::default());
-  let row = container(
-    row![open, favorite_button(state, item)]
-      .spacing(TOKENS.spacing.s4)
-      .align_y(Alignment::Center),
-  )
-  .padding([0, 12])
-  .width(Fill);
+  let narrow = width < LIST_COLUMNS_MIN_WIDTH;
+  let mut main = row![open]
+    .spacing(TOKENS.spacing.s4)
+    .align_y(Alignment::Center);
+  if !narrow {
+    main = main.push(row_progress(state, item, false));
+  }
+  main = main.push(favorite_button(state, item));
+  let mut content = Column::new().push(main);
+  if narrow {
+    content = content.push(row_progress(state, item, true));
+  }
   column![
-    row,
+    container(content).padding([0, 12]).width(Fill),
     iced::widget::rule::horizontal(1).style(library::divider)
   ]
   .into()
