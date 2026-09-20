@@ -36,10 +36,37 @@ foreground/background behavior, and Keystore storage. Synthetic media is generat
 using host FFmpeg. A translated emulator pass is useful lifecycle evidence, but is not hardware
 decoding, physical audio, HDR, or 16 KB-page runtime evidence.
 
+`AppStartupTest` launches the real `MainActivity` composition in both light and dark modes, checks
+that the Home navigation is available, and repeats after Activity recreation. It changes only
+the test process's AppCompat mode, not the device's system setting. Playback tests that replace
+the Activity content with a test Surface do not cover this theme, font, and app-shell boundary.
+For startup/theme changes, run it explicitly:
+
+```bash
+ANDROID_SERIAL=<device> android/gradlew -p android :app:connectedDebugAndroidTest --no-daemon \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.github.hewel.jellypilot.AppStartupTest
+```
+
 The development APK is `android/app/build/outputs/apk/debug/app-debug.apk`. It includes native
 symbols and is larger than a distribution build. A controlled release additionally requires its
 own signing identity, install/upgrade validation, and the delivery evidence in the
 [Android design specification](android-client-design-spec.md).
+
+`PlayerOrientationTest` exercises the real player composition and libmpv while entering landscape,
+then verifies background pause, Activity recreation, and restoration of the browsing orientation
+on exit. It also verifies status/navigation bars are hidden in the player and its independent
+Dialog window, remain hidden after returning/recreating, and reappear when playback closes.
+Use a phone-sized emulator/device that honors orientation requests for this regression.
+`PlayerTimelineInteractionTest` checks that incoming playback positions cannot replace an active
+drag preview, a completed drag/accessible seek commits once, and unknown durations disable seek.
+`PlayerPanelInteractionTest` covers live track selection, subtitle Off, queue navigation/paging,
+volume semantics, and scrolling lists with 200% text. These tests do not establish visual fidelity.
+`BrowserContinuationTest` opens an isolated synthetic library through the real UniFFI bindings,
+registers `nextSnapshot` on `Main.immediate`, then changes the displayed range synchronously.
+It checks that repeated range changes return and deliver the matching snapshot instead of
+deadlocking during an inline continuation. It never uses the app's saved server or credentials.
+`RemoteTargetLifecycleTest` uses a synthetic HTTP/WebSocket peer to verify repeated background
+cleanup and reconnect, failed registration, and replacement while an older registration is pending.
 
 ## Human acceptance after implementation
 
@@ -63,7 +90,12 @@ test account whose Favorites and Played flags can be changed deliberately.
    a transient action disappear while it is being used.
 6. Background and return, lock/unlock, rotate, resize/split-screen, interrupt audio focus and
    unplug a headset. Returning to eligibility must stay paused. Explicit player exit ends the
-   session; a playback interruption preserves its local recovery point.
+   session; a playback interruption preserves its local recovery point. On phones, entering the
+   player switches to landscape, rotation retains playback, and exit restores the prior orientation
+   policy. Verify both landscape directions and the device's rotation-lock behavior.
+   Status and gesture/navigation bars should disappear during playback, including while track
+   panels are open; an edge swipe should reveal them temporarily. Compare the bottom controls,
+   thin timeline, minimal pause indicator and inset track panels with the Mobile player design.
 7. Reclaim the process during playback, reopen, and explicitly restore the local position as a
    new session. Check this separately from server Continue Watching. Send remote start/control
    commands while visible, backgrounded, locked and switching accounts; stale commands must not

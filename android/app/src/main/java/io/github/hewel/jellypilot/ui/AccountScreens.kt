@@ -232,18 +232,23 @@ private fun <T> ChoiceSetting(title: String, choices: List<T>, selected: T, labe
 }
 
 @Composable
-internal fun SignInSheet(state: AppUiState, model: AppViewModel) {
+internal fun SignInSheet(
+  state: AppUiState,
+  onDismiss: () -> Unit,
+  onSignIn: (Boolean, String, String, String, Boolean) -> Unit,
+  onQuickConnect: (String, Boolean) -> Unit,
+) {
   var server by rememberSaveable(state.loginServer) { mutableStateOf(state.loginServer) }
   var username by rememberSaveable(state.loginUsername) { mutableStateOf(state.loginUsername) }
   // Passwords stay out of SavedInstanceState and are cleared after submission.
   var password by remember { mutableStateOf("") }
   var jellyfin by rememberSaveable(state.loginJellyfin) { mutableStateOf(state.loginJellyfin) }
   var rememberAccount by rememberSaveable(state.loginRemember) { mutableStateOf(state.loginRemember) }
-  ModalBottomSheet(onDismissRequest = model::cancelLogin) {
+  ModalBottomSheet(onDismissRequest = onDismiss) {
     Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.sign_in), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
-        IconButton(onClick = model::cancelLogin) { PilotIcon(R.drawable.ic_x, stringResource(R.string.close)) }
+        IconButton(onClick = onDismiss) { PilotIcon(R.drawable.ic_x, stringResource(R.string.close)) }
       }
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(jellyfin, { jellyfin = true }, enabled = !state.loginBusy, label = { Text("Jellyfin") })
@@ -259,9 +264,9 @@ internal fun SignInSheet(state: AppUiState, model: AppViewModel) {
       state.quickConnectCode?.let { code -> Text(code, style = MaterialTheme.typography.displaySmall); Text(stringResource(R.string.quick_connect_explanation)) }
       state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
       if (state.loginBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-      Button(onClick = { model.signIn(jellyfin, server, username, password, rememberAccount); password = "" }, enabled = !state.loginBusy && server.isNotBlank() && username.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.sign_in)) }
-      if (jellyfin) FilledTonalButton(onClick = { model.quickConnect(server, rememberAccount) }, enabled = !state.loginBusy && server.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.quick_connect)) }
-      TextButton(onClick = model::cancelLogin, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.cancel)) }
+      Button(onClick = { onSignIn(jellyfin, server, username, password, rememberAccount); password = "" }, enabled = !state.loginBusy && server.isNotBlank() && username.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.sign_in)) }
+      if (jellyfin) FilledTonalButton(onClick = { onQuickConnect(server, rememberAccount) }, enabled = !state.loginBusy && server.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.quick_connect)) }
+      TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.cancel)) }
     }
   }
 }

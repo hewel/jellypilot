@@ -10,7 +10,7 @@
   <string name="server_url">Server URL</string>
   <string name="server_hint">https://media.example.com</string>
   <string name="username">Username</string>
-  <string name="password">Password</string>
+  <string name="password">Password (optional)</string>
   <string name="provider">Server type</string>
   <string name="remember_account">Remember this account</string>
   <string name="quick_connect">Quick Connect</string>
@@ -78,7 +78,7 @@
   <string name="subtitle_for_next_load">The selected subtitle will be included in the next media load.</string>
   <string name="sdk_authentication_failed">The server could not validate this account. Check the address and credentials.</string>
   <string name="sdk_storage_failed">Unable to read or update protected account storage.</string>
-  <string name="sdk_invalid_input">Check the server address and required fields.</string>
+  <string name="sdk_invalid_input">Check the server URL (including http:// or https://) and username. The password can be left empty.</string>
   <string name="sdk_handoff_failed">The current player did not finish stopping. The previous account remains active.</string>
   <string name="sdk_request_failed">The operation could not be completed. Check the connection and try again.</string>
   <string name="player_audio_focus_denied">Audio focus is unavailable. Keep the app visible and try playing again.</string>
@@ -222,4 +222,18 @@
   <string name="watchlist_cleanup_pending">Local watchlist cleanup is incomplete for a signed-out account.</string>
   <string name="remove_history">Hide from watch history</string>
   <string name="history_removed">Removed from history. Playback progress kept.</string>
+  <plurals name="player_audio_track_count">
+    <item quantity="one">%1$d audio track</item>
+    <item quantity="other">%1$d audio tracks</item>
+  </plurals>
+  <plurals name="player_subtitle_track_count">
+    <item quantity="one">%1$d subtitle track</item>
+    <item quantity="other">%1$d subtitle tracks</item>
+  </plurals>
+  <plurals name="player_tracks_remaining">
+    <item quantity="one">%1$d more track below</item>
+    <item quantity="other">%1$d more tracks below</item>
+  </plurals>
+  <string name="player_track_number">Track %1$d</string>
+  <string name="player_subtitles_off_description">Do not display subtitles</string>
 </resources>

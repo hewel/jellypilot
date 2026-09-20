@@ -3,8 +3,6 @@ package io.github.hewel.jellypilot
 import io.github.hewel.jellypilot.ffi.*
 import io.github.hewel.jellypilot.player.ExternalSubtitle as NativeSubtitle
 import io.github.hewel.jellypilot.player.*
-import io.github.hewel.jellypilot.ui.ArtworkUi
-import io.github.hewel.jellypilot.ui.MediaUi
 import io.github.hewel.jellypilot.ui.PlaybackUi
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -45,8 +43,6 @@ internal class MediaPlaybackCoordinator(
   private val transitions = Mutex()
   @Volatile private var current: Playing? = null
   @Volatile private var preparing: OperationToken? = null
-  private var remote: RemoteTarget? = null
-  private var remoteToken: OperationToken? = null
   private var remoteJob: Job? = null
   @Volatile private var remoteEpoch = 0L
   private var undoSequence = 0L
@@ -409,7 +405,10 @@ internal class MediaPlaybackCoordinator(
       entry.seasonNumber = detail.seasonNumber
       entry.previousId = entry.session.adjacent(false)
       entry.nextId = entry.session.adjacent(true)
-      publish(entry) { copy(episodeLabel = detail.seriesName, canPrevious = entry.previousId != null, canNext = entry.nextId != null, queueHasMore = true) }
+      val episode = CatalogPresentation(entry.profile, emptySet()).item(detail)
+      publish(entry) { copy(title = detail.seriesName?.takeIf { it.isNotBlank() } ?: entry.plan.title,
+        episodeLabel = listOfNotNull(episode.episodeCode, detail.name).joinToString(" · "),
+        canPrevious = entry.previousId != null, canNext = entry.nextId != null, queueHasMore = true) }
       loadQueue(entry)
     } catch (_: Exception) { if (current === entry) fail() }
     finally { token.cancel(); token.destroy() }
@@ -425,7 +424,8 @@ internal class MediaPlaybackCoordinator(
       val page = sdk.seasonEpisodesPage(token, VideoSeasonEpisodesPageRequest(series, null, entry.seasonNumber, entry.queueOffset, 60))
       if (current !== entry || entry.finishing) return
       entry.queueOffset = page.nextStartIndex
-      val items = page.episodes.map { item -> MediaUi(item.id, item.name, item.itemType, "", item.artworkImageId?.let { ArtworkUi(it, entry.profile) }, item.overview.orEmpty(), item.favorite, item.played) }
+      val presentation = CatalogPresentation(entry.profile, emptySet())
+      val items = page.episodes.map { presentation.library(it).copy(metadata = "") }
       publish(entry) { copy(queue = (queue + items).distinctBy { it.id }, queueHasMore = page.hasMore, queueLoading = false) }
     } catch (_: Exception) { if (current === entry) fail() }
     finally { token.cancel(); token.destroy(); publish(entry) { copy(queueLoading = false) } }
@@ -463,41 +463,50 @@ internal class MediaPlaybackCoordinator(
 
   private fun closeRemote() {
     ++remoteEpoch
-    remote?.stop()
-    remoteToken?.cancel()
-    remoteJob?.cancel()
+    val job = remoteJob
     remoteJob = null
-    remote = null
-    remoteToken = null
+    // Cancellation can synchronously run the coroutine's finally through UniFFI callbacks.
+    // Only that coroutine owns its SDK handles; detach our job before entering its cleanup.
+    job?.cancel()
   }
 
   private fun openRemote() {
     if (closed || !eligible.get() || sdk.activeProfile()?.capabilities?.remoteControl != true || sdk.contentMutationsBlocked()) return
     val epoch = ++remoteEpoch
-    remoteJob = scope.launch {
+    val job = scope.launch(start = CoroutineStart.LAZY) {
+      val commandLifetime = Any()
+      var commandsValid = true
       var target: RemoteTarget? = null
       var token: OperationToken? = null
       try {
         token = sdk.newOperationToken()
-        remoteToken = token
         target = sdk.openRemoteTarget(token)
         if (epoch != remoteEpoch || !eligible.get()) return@launch
-        remote = target
         while (isActive && epoch == remoteEpoch) {
           val event = target.nextEvent()
           if (event.state == RemoteTargetState.CLOSED) break
           val command = event.command ?: continue
           val issuingTarget = target
-          val isCurrent = { eligible.get() && epoch == remoteEpoch && runCatching { issuingTarget.isCommandCurrent(event.generation) }.getOrDefault(false) }
+          val isCurrent = { synchronized(commandLifetime) {
+            commandsValid && eligible.get() && epoch == remoteEpoch && issuingTarget.isCommandCurrent(event.generation)
+          } }
           if (isCurrent()) remoteCommand(command, isCurrent)
         }
       } catch (_: CancellationException) { }
       catch (_: Exception) { if (epoch == remoteEpoch && eligible.get()) fail() }
       finally {
+        // Revoke captured command guards before disposing handles. An older connection's
+        // completion must not clear a replacement published during cancellation.
+        if (epoch == remoteEpoch) { ++remoteEpoch; remoteJob = null }
+        // Native workers recheck command admission off the main thread. Drain any check already
+        // using the handle, then make subsequent checks return before disposing it below.
+        synchronized(commandLifetime) { commandsValid = false }
         target?.stop(); target?.destroy(); token?.cancel(); token?.destroy()
-        if (epoch == remoteEpoch) { remote = null; remoteToken = null; remoteJob = null }
       }
     }
+    // Publish before execution so immediate failure/completion cannot leave a completed job here.
+    remoteJob = job
+    job.start()
   }
 
   private fun remoteCommand(command: RemoteCommand, stillCurrent: () -> Boolean) {

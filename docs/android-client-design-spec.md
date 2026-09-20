@@ -43,6 +43,28 @@ The supplied Mobile page contains phone Home, Library, Series detail, landscape 
 
 Phone and tablet layouts adapt to available window size. Navigation, back behavior, touch targets, text input, accessibility, loading/error states, and state restoration use Android-appropriate behavior. Pixel dimensions, hover behavior, desktop navigation stacks, and desktop paging/prefetch constants are not portable product requirements. Kotlin ViewModels may retain presentation state; they do not independently decide paging admission or stale-result validity.
 
+Entering the player requests sensor landscape, allowing either landscape direction; leaving restores
+the Activity's previous orientation policy. Rotation and window-size changes update the Compose
+layout without restarting the Activity or interrupting playback. Actual backgrounding and locking
+still pause playback. The player remains adaptive when Android ignores orientation requests in
+multi-window or on [large screens](https://developer.android.com/develop/adaptive-apps/guides/app-orientation-aspect-ratio-resizability).
+
+Playback uses immersive system bars, including track-selection windows: status and navigation
+bars are hidden, edge swipes reveal transient bars, and leaving playback restores browsing bars.
+The Mobile player follows the [landscape control reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/627-0):
+top title and session-skip capsule, bottom metadata/remaining time, a 4 dp timeline with a 14 dp
+thumb, then volume / 56 dp transport / queue-audio-subtitle-video groups. Narrow windows wrap
+the control groups instead of shrinking their 48 dp Android touch targets. Previous/next episode
+actions remain available in the queue. Minimal is the initial state; playing and paused share
+the edge progress line, with a 72 dp pause indicator when paused. No synthetic chapter markers
+are drawn when the player has no chapter data.
+
+Landscape selection panels use a 340 dp surface, 16 dp outside margins and corner radius, a
+fixed heading/close control, and scrolling track rows. Typography expands with system font size.
+The cinema-only roles in `PilotTheme.kt` use flat translucency without video backdrop blur;
+Material slider input/semantics are retained with custom track/thumb visuals. Human acceptance
+owns fidelity to the reference, subtitle output and actual display-cutout/gesture behavior.
+
 A prototype entry is not automatic feature authorization. In particular, the current “快捷键” entry must not become a dead settings item: the implemented Android settings navigation must omit or revise it to match the standard-input-only decision. Likewise “MPV” does not authorize arbitrary configuration. Missing prototype pages do not silently remove inherited business capabilities. Paper itself was not modified in this design session; final visual acceptance is human-owned.
 
 ### Mobile design integration checkpoint — 2026-09-21

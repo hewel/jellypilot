@@ -67,6 +67,29 @@ private val DarkPilot = PilotColors(Color(0xFFD4D4D8), Color(0xFFA1A1AA), Color(
 private val LightPilot = PilotColors(Color(0xFF475569), Color(0xFF64748B), Color(0xFFF1F5F9), Color(0xFFE11D48))
 internal val LocalPilotColors = staticCompositionLocalOf { LightPilot }
 
+// Cinema-only roles from Paper Mobile. Flat translucency avoids blurring the video Surface.
+internal object PilotPlayerTokens {
+  val foreground = Color.White
+  val secondary = Color.White.copy(alpha = 0.85f)
+  val metadata = Color.White.copy(alpha = 0.6f)
+  val timecode = Color.White.copy(alpha = 0.7f)
+  val disabled = Color.White.copy(alpha = 0.3f)
+  val rail = Color.White.copy(alpha = 0.18f)
+  val minimalRail = Color.White.copy(alpha = 0.22f)
+  val border = Color.White.copy(alpha = 0.15f)
+  val chip = Color.Black.copy(alpha = 0.6f)
+  val notice = Color.Black.copy(alpha = 0.85f)
+  val backdrop = Color.Black.copy(alpha = 0.5f)
+  val back = Color(0xFF0A0B0E).copy(alpha = 0.4f)
+  val play = DarkColors.primary.copy(alpha = 0.65f)
+  val topScrim = Color(0xFF0A0B0E).copy(alpha = 0.65f)
+  val bottomScrim = listOf(0f to Color.Transparent, 0.35f to Color.Black.copy(alpha = 0.22f),
+    0.65f to Color.Black.copy(alpha = 0.55f), 1f to Color.Black.copy(alpha = 0.82f))
+  val minimalScrim = Color.Black.copy(alpha = 0.533f)
+  val trackHeight = 4.dp
+  val touchTarget = 48.dp
+}
+
 @Composable
 internal fun PilotTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
   val assets = LocalContext.current.applicationContext.assets

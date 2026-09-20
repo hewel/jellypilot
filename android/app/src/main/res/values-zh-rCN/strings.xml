@@ -10,7 +10,7 @@
   <string name="server_url">服务器地址</string>
   <string name="server_hint">https://media.example.com</string>
   <string name="username">用户名</string>
-  <string name="password">密码</string>
+  <string name="password">密码（可留空）</string>
   <string name="provider">服务器类型</string>
   <string name="remember_account">记住此账户</string>
   <string name="quick_connect">Quick Connect</string>
@@ -77,7 +77,7 @@
   <string name="subtitle_for_next_load">下次加载媒体时将同时加载所选字幕。</string>
   <string name="sdk_authentication_failed">服务器无法验证此账户，请检查地址和登录凭据。</string>
   <string name="sdk_storage_failed">无法读取或更新受保护的账户存储。</string>
-  <string name="sdk_invalid_input">请检查服务器地址和必填项。</string>
+  <string name="sdk_invalid_input">请检查服务器地址（需以 http:// 或 https:// 开头）和用户名，密码可留空。</string>
   <string name="sdk_handoff_failed">当前播放器未完成停止，原账户仍保持连接。</string>
   <string name="sdk_request_failed">操作未能完成，请检查连接后重试。</string>
   <string name="player_audio_focus_denied">当前无法获得音频焦点，请保持应用可见后重新播放。</string>
@@ -219,4 +219,15 @@
   <string name="watchlist_cleanup_pending">已退出账户的本机待看列表尚未清理完成。</string>
   <string name="remove_history">移除此条观看历史</string>
   <string name="history_removed">已移除此条观看历史，播放进度已保留。</string>
+  <plurals name="player_audio_track_count">
+    <item quantity="other">%1$d 条音轨</item>
+  </plurals>
+  <plurals name="player_subtitle_track_count">
+    <item quantity="other">%1$d 条字幕</item>
+  </plurals>
+  <plurals name="player_tracks_remaining">
+    <item quantity="other">下方还有 %1$d 条轨道</item>
+  </plurals>
+  <string name="player_track_number">轨道 %1$d</string>
+  <string name="player_subtitles_off_description">不显示字幕</string>
 </resources>

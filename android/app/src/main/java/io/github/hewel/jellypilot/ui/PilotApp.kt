@@ -98,7 +98,7 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
           }
         }
       }
-      if (state.showSignIn) SignInSheet(state, model)
+      if (state.showSignIn) SignInSheet(state, model::cancelLogin, model::signIn, model::quickConnect)
     }
   }
 }
