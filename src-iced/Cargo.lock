@@ -2920,6 +2920,7 @@ dependencies = [
 name = "jellypilot-iced"
 version = "2.2.2"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "fluent-syntax",

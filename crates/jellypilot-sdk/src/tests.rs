@@ -4,6 +4,7 @@
 
 mod browse;
 
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -521,29 +522,99 @@ async fn failed_secure_deletion_preserves_active_scope() {
         "failed deletion must keep the active profile"
     );
     assert!(sdk
-        .watchlist_contains(token, "movie-1".to_owned())
+        .watchlist_contains(token.clone(), "movie-1".to_owned())
         .await
         .expect("watchlist stays readable"));
+    assert!(!sdk.content_mutations_blocked());
+    sdk.watchlist_add(token, test_item("movie-2"))
+        .await
+        .expect("failed deletion must reopen write admission");
 }
 
 #[tokio::test]
-async fn panicking_sign_out_hook_still_completes_committed_cleanup() {
-    struct PanickingHook;
+async fn account_handoff_drains_physical_playback_and_revokes_queued_admission() {
+    use futures_util::FutureExt;
+
+    let credential = Arc::new(MemoryCredential::default());
+    let (sdk, _dir) = test_sdk_with(None, credential.clone());
+    let session = test_session("user", "https://example.test");
+    let (key, _) = sdk
+        .inner
+        .store
+        .save_session(jellypilot_auth::SensitiveSavedSession::from_saved_session(
+            session.clone(),
+        ))
+        .await
+        .unwrap();
+    sdk.adopt_test_session(session);
+    credential.fail_delete.store(true, Ordering::SeqCst);
+    let (delete_entered, mut deletion) = tokio::sync::oneshot::channel();
+    *credential.delete_entered.lock().unwrap() = Some(delete_entered);
+
+    let running = sdk.playback_admission().unwrap();
+    let queued = sdk.playback_admission().unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let mut playback = Box::pin(running.run(async { released.await.unwrap() }));
+    assert!(playback.as_mut().now_or_never().is_none());
+    let mut sign_out = Box::pin(sdk.sign_out(key.as_str().to_owned(), false));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !sdk.content_mutations_blocked() {
+            tokio::select! {
+                _ = &mut sign_out => panic!("deletion must wait for admitted physical playback"),
+                () = tokio::task::yield_now() => {},
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        deletion.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    );
+    assert!(!queued.is_current());
+    release.send(()).unwrap();
+    playback.await.unwrap();
+    assert!(sign_out.await.is_err());
+    deletion.await.unwrap();
+    assert!(!sdk.content_mutations_blocked());
+    assert!(sdk.active_client().unwrap().login().is_connected());
+    assert_eq!(
+        queued
+            .run(async { panic!("revoked queued playback must never execute") })
+            .await,
+        Err::<(), _>(SdkError::OperationInProgress)
+    );
+    assert!(sdk
+        .playback_admission()
+        .unwrap()
+        .run(async {})
+        .await
+        .is_ok());
+}
+
+#[tokio::test]
+async fn panicking_sign_out_hook_retains_authentication_until_retry() {
+    struct PanickingHook(AtomicBool);
     #[async_trait::async_trait]
     impl SdkHooks for PanickingHook {
         async fn before_profile_handoff(&self) -> bool {
-            panic!("platform teardown failed");
+            if self.0.load(Ordering::SeqCst) {
+                panic!("platform teardown failed");
+            }
+            true
         }
     }
 
-    let (sdk, dir) = test_sdk_with_hooks(Some(Arc::new(PanickingHook)));
+    let hooks = Arc::new(PanickingHook(AtomicBool::new(true)));
+    let (sdk, dir) = test_sdk_with_hooks(Some(hooks.clone()));
     let candidate = test_candidate("ada", "https://media.example.test", dir.path());
     let activation = sdk
         .activate_candidate(candidate, true)
         .await
         .expect("activate");
     let token = sdk.new_operation_token().expect("token");
-    sdk.watchlist_add(token, test_item("movie-1"))
+    let original_scope = token.scope_ref().expect("active scope");
+    sdk.watchlist_add(token.clone(), test_item("movie-1"))
         .await
         .expect("add");
 
@@ -554,7 +625,55 @@ async fn panicking_sign_out_hook_still_completes_committed_cleanup() {
     assert_eq!(outcome.teardown_error, Some(SdkError::HandoffAborted));
     assert!(outcome.watchlist_error.is_none());
     assert!(outcome.remaining.is_empty());
-    assert!(sdk.active_profile().is_none());
+    assert!(sdk.active_profile().is_some());
+    assert!(sdk.sign_out_cleanup_pending());
+    assert!(sdk.content_mutations_blocked());
+    let image_id = jellypilot_media_server::image_id_for_url(
+        MediaServerProvider::Jellyfin,
+        "https://media.example.test",
+        "https://media.example.test/Items/1/Images/Primary".to_owned(),
+        jellypilot_media_server::ImageRefKind::Artwork,
+    )
+    .expect("valid image reference");
+    sdk.image_target(&original_scope, image_id, None)
+        .expect("retained authentication remains usable for cleanup");
+    assert_eq!(
+        sdk.watchlist_add(token.clone(), test_item("movie-2"))
+            .await
+            .expect_err("cleanup must block new local writes"),
+        SdkError::OperationInProgress
+    );
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            sdk.update_user_data(
+                token,
+                "movie-1".to_owned(),
+                jellypilot_media_server::VideoUserDataAction::Favorite,
+            ),
+        )
+        .await
+        .expect("blocked write must not issue HTTP")
+        .expect_err("cleanup must block new server writes"),
+        SdkError::OperationInProgress
+    );
+    assert_eq!(
+        sdk.activate_candidate(
+            test_candidate("grace", "https://media.example.test", dir.path()),
+            false,
+        )
+        .await
+        .expect_err("another profile cannot bypass outstanding cleanup"),
+        SdkError::OperationInProgress
+    );
+    assert_eq!(
+        sdk.disconnect()
+            .await
+            .expect_err("failed retry retains auth"),
+        SdkError::HandoffAborted
+    );
+    assert!(sdk.is_scope_active(&original_scope));
+    assert!(sdk.content_mutations_blocked());
     let scope = ProfileScope::new(
         MediaServerProvider::Jellyfin,
         "https://media.example.test",
@@ -563,6 +682,87 @@ async fn panicking_sign_out_hook_still_completes_committed_cleanup() {
     .expect("scope");
     let watchlist = WatchlistStore::load_in_dir(dir.path().to_path_buf()).expect("watchlist");
     assert!(watchlist.records_for(&scope).is_empty());
+
+    hooks.0.store(false, Ordering::SeqCst);
+    sdk.disconnect().await.expect("successful cleanup retry");
+    assert!(sdk.active_profile().is_none());
+    assert!(!sdk.is_scope_active(&original_scope));
+    assert!(!sdk.sign_out_cleanup_pending());
+    assert!(!sdk.content_mutations_blocked());
+}
+
+#[test]
+fn queued_watchlist_write_cannot_recreate_signed_out_membership() {
+    struct FailedTeardown;
+    #[async_trait::async_trait]
+    impl SdkHooks for FailedTeardown {
+        async fn before_profile_handoff(&self) -> bool {
+            false
+        }
+    }
+
+    // One occupied blocking worker holds the admitted write before its
+    // physical mutation; committed account work runs on its separate owner.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .expect("controlled runtime");
+    runtime.block_on(async {
+        let dir = tempfile::tempdir().expect("SDK storage");
+        let sdk = Sdk::with_handle(
+            SdkConfig {
+                storage_dir: dir.path().to_path_buf(),
+                device_name: "queued-write-test".to_owned(),
+            },
+            AuthStore::with_credential(Arc::new(MemoryCredential::default())),
+            Some(Arc::new(FailedTeardown)),
+            runtime.handle().clone(),
+        );
+        let activation = sdk
+            .activate_candidate(
+                test_candidate("ada", "https://media.example.test", dir.path()),
+                true,
+            )
+            .await
+            .expect("activate");
+        let token = sdk.new_operation_token().expect("scope");
+        sdk.watchlist_add(token.clone(), test_item("movie-1"))
+            .await
+            .expect("initial membership");
+
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let blocker = runtime.handle().spawn_blocking(move || {
+            let _ = entered.send(());
+            let _ = release_rx.recv();
+        });
+        entered_rx.await.expect("blocking worker occupied");
+        let mut write = Box::pin(sdk.watchlist_add(token.clone(), test_item("movie-2")));
+        std::future::poll_fn(|context| {
+            assert!(write.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+
+        let outcome = sdk
+            .sign_out(activation.profile.key, true)
+            .await
+            .expect("committed Sign Out");
+        assert_eq!(outcome.teardown_error, Some(SdkError::HandoffAborted));
+        assert!(outcome.watchlist_error.is_none());
+        release.send(()).expect("release queued storage work");
+        blocker.await.expect("blocking worker settles");
+        assert!(
+            write.await.is_err(),
+            "queued write must not recreate deleted records"
+        );
+        assert!(sdk
+            .watchlist_items(token)
+            .await
+            .expect("retained cleanup scope remains readable")
+            .is_empty());
+    });
 }
 
 #[tokio::test]
@@ -692,6 +892,148 @@ async fn sign_out_reports_watchlist_failure_after_commit() {
         outcome.watchlist_error
     );
     assert!(sdk.active_profile().is_none());
+    assert_eq!(
+        sdk.activate_candidate(
+            test_candidate("ada", "https://media.example.test", dir.path()),
+            false,
+        )
+        .await
+        .expect_err("re-login cannot race an old Watchlist cleanup"),
+        SdkError::OperationInProgress
+    );
+    assert!(matches!(
+        sdk.retry_watchlist_cleanup(key.as_str().to_owned()).await,
+        Err(SdkError::Storage(_))
+    ));
+    std::fs::remove_dir(&watchlist_path).expect("remove fixture obstruction");
+    sdk.retry_watchlist_cleanup(key.as_str().to_owned())
+        .await
+        .expect("retry uses retained cleanup obligation");
+    sdk.activate_candidate(
+        test_candidate("ada", "https://media.example.test", dir.path()),
+        false,
+    )
+    .await
+    .expect("successful cleanup permits re-login");
+    let token = sdk.new_operation_token().expect("new scope");
+    assert!(!sdk
+        .watchlist_contains(token.clone(), "movie-1".to_owned())
+        .await
+        .expect("cleanup deleted the old records"));
+    sdk.watchlist_add(token.clone(), test_item("movie-2"))
+        .await
+        .expect("new scope can add records");
+    sdk.retry_watchlist_cleanup(key.as_str().to_owned())
+        .await
+        .expect("late duplicate retry is idempotent");
+    assert!(sdk
+        .watchlist_contains(token, "movie-2".to_owned())
+        .await
+        .expect("completed cleanup must not erase later additions"));
+}
+
+#[tokio::test]
+async fn delegated_watchlist_cleanup_retries_in_its_real_store_after_waiter_drop() {
+    struct StorageHook {
+        store: Mutex<WatchlistStore>,
+        fail: AtomicBool,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        completed: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl SdkHooks for StorageHook {
+        async fn before_profile_handoff(&self) -> bool {
+            true
+        }
+
+        async fn remove_watchlist(&self, scope: &ProfileScope) -> Option<Result<(), String>> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Some(Err("adapter storage unavailable".to_owned()));
+            }
+            self.entered.notify_one();
+            self.release.notified().await;
+            let result = self
+                .store
+                .lock()
+                .expect("adapter store")
+                .remove_scope(scope)
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            self.completed.notify_one();
+            Some(result)
+        }
+    }
+
+    let storage_dir = tempfile::tempdir().expect("platform storage");
+    let selected = ProfileScope::new(
+        MediaServerProvider::Jellyfin,
+        "https://media.example.test",
+        "ada",
+    )
+    .expect("selected scope");
+    let other = ProfileScope::new(
+        MediaServerProvider::Jellyfin,
+        "https://media.example.test",
+        "grace",
+    )
+    .expect("other scope");
+    let mut store =
+        WatchlistStore::load_in_dir(storage_dir.path().to_path_buf()).expect("platform store");
+    for scope in [&selected, &other] {
+        store
+            .add(
+                WatchlistRecord::from_item(scope.clone(), &test_item("movie-1"), 1)
+                    .expect("record"),
+            )
+            .expect("store record");
+    }
+    let hooks = Arc::new(StorageHook {
+        store: Mutex::new(store),
+        fail: AtomicBool::new(true),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        completed: tokio::sync::Notify::new(),
+    });
+    let (sdk, sdk_dir) = test_sdk_with_hooks(Some(hooks.clone()));
+    let activation = sdk
+        .activate_candidate(
+            test_candidate("ada", "https://media.example.test", sdk_dir.path()),
+            true,
+        )
+        .await
+        .expect("activate");
+    let key = activation.profile.key;
+    let outcome = sdk
+        .sign_out(key.clone(), true)
+        .await
+        .expect("committed deletion");
+    assert!(outcome.remaining.is_empty());
+    assert!(matches!(
+        outcome.watchlist_error,
+        Some(SdkError::Storage(_))
+    ));
+    assert!(hooks
+        .store
+        .lock()
+        .expect("store")
+        .contains(&selected, "movie-1"));
+
+    hooks.fail.store(false, Ordering::SeqCst);
+    let mut retry = Box::pin(sdk.retry_watchlist_cleanup(key));
+    tokio::select! {
+        _ = &mut retry => panic!("retry must wait in its platform storage adapter"),
+        _ = hooks.entered.notified() => {}
+    }
+    drop(retry);
+    hooks.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), hooks.completed.notified())
+        .await
+        .expect("committed storage cleanup survives the dropped waiter");
+    let persisted = WatchlistStore::load_in_dir(storage_dir.path().to_path_buf())
+        .expect("persisted platform store");
+    assert!(!persisted.contains(&selected, "movie-1"));
+    assert!(persisted.contains(&other, "movie-1"));
 }
 
 #[tokio::test]
@@ -750,6 +1092,17 @@ async fn close_during_committed_deletion_preserves_teardown() {
         _ = &mut sign_out => panic!("sign-out should wait in credential deletion"),
         result = entered_rx => result.expect("deletion must start"),
     }
+    assert!(sdk.content_mutations_blocked());
+    assert_eq!(
+        sdk.watchlist_add(
+            sdk.new_operation_token()
+                .expect("cleanup scope remains active"),
+            test_item("movie-1"),
+        )
+        .await
+        .expect_err("deletion in progress must already block writes"),
+        SdkError::OperationInProgress
+    );
 
     sdk.close();
     release_tx.send(()).expect("release deletion");

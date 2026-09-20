@@ -767,7 +767,7 @@ fn item_artwork<'a>(
 fn favorite_button<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Message> {
   let enabled = state.kernel.client.is_some()
     && !state.shell.quit_requested
-    && !accounts::content_mutations_blocked(&state.accounts)
+    && !accounts::content_mutations_blocked(&state.kernel)
     && !super::super::item_actions::busy(&state.kernel, &item.id);
   let action = enabled.then(|| {
     Message::Collections(collections::CollectionMessage::Favorite {

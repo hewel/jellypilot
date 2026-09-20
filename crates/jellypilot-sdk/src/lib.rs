@@ -7,10 +7,10 @@
 //! Android reaches it through `jellypilot-ffi`.
 //!
 //! Lifetime rules:
-//! - One active profile scope at a time. Activating a candidate, disconnect,
-//!   and sign-out advance the scope epoch, which cancels every live
-//!   [`OperationToken`] from the previous scope and makes their late results
-//!   stale.
+//! - One active profile scope at a time. Successful activation and completed
+//!   disconnection advance the scope epoch and cancel its operation tokens.
+//!   Failed Sign Out teardown retains authentication for cleanup, but cannot
+//!   admit new content writes or playback.
 //! - Account operations are serialized; a second concurrent account
 //!   operation fails with [`SdkError::OperationInProgress`].
 //! - Cancelling an operation never claims a server mutation was rolled back;
@@ -42,7 +42,7 @@ use jellypilot_auth::{AuthStore, SecureCredential};
 use jellypilot_core::watchlist::{ProfileScope, WatchlistStore};
 use jellypilot_media_server::JellyfinClient;
 use tokio::runtime::Handle;
-use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -88,7 +88,9 @@ pub struct ProfileCandidate {
 }
 
 impl ProfileCandidate {
-    fn new(candidate: jellypilot_auth::login::ValidatedProfileCandidate) -> Self {
+    /// Wraps isolated authentication from a native login adapter without
+    /// adopting it. The SDK still owns teardown, activation and persistence.
+    pub fn new(candidate: jellypilot_auth::login::ValidatedProfileCandidate) -> Self {
         Self {
             key: candidate.key().as_str().to_owned(),
             provider: candidate.scope().provider(),
@@ -221,6 +223,7 @@ struct ActiveSession {
 
 struct SdkState {
     epoch: u64,
+    playback_generation: u64,
     active: Option<ActiveSession>,
     tokens: HashMap<u64, Vec<Weak<CancellationToken>>>,
     browsers: Vec<Weak<browse::BrowseSession>>,
@@ -234,6 +237,43 @@ struct SdkState {
     /// Monotonic revision for confirmed Watchlist writes, fencing snapshots
     /// so an older result can never overwrite newer membership.
     watchlist_revision: u64,
+    handoff_in_progress: bool,
+    sign_out_cleanup_pending: bool,
+    pending_watchlist_cleanup: HashMap<jellypilot_auth::SavedProfileKey, ProfileScope>,
+}
+
+/// Admission for one native playback command. A profile transition permanently
+/// revokes queued admissions, including when credential deletion later fails.
+#[derive(Clone)]
+pub struct PlaybackAdmission {
+    inner: Arc<SdkInner>,
+    generation: u64,
+}
+
+impl PlaybackAdmission {
+    /// Whether this admission still precedes any account transition.
+    pub fn is_current(&self) -> bool {
+        self.inner.state.lock().is_ok_and(|state| {
+            !state.closed
+                && !state.handoff_in_progress
+                && !state.sign_out_cleanup_pending
+                && state.playback_generation == self.generation
+        })
+    }
+
+    /// Runs physical start/resume work only while its admission is current.
+    ///
+    /// Once polled, admitted work finishes before account teardown or protected
+    /// credential deletion begins. This avoids cancelling a partially loaded
+    /// player. Callers must keep the full physical operation inside this future;
+    /// cleanup operations must run independently of playback admission.
+    pub async fn run<T>(&self, operation: impl Future<Output = T>) -> Result<T, SdkError> {
+        let _execution = self.inner.playback_execution.read().await;
+        if !self.is_current() {
+            return Err(SdkError::OperationInProgress);
+        }
+        Ok(operation.await)
+    }
 }
 
 /// RAII owner of the committed-transaction cleanup boundary.
@@ -276,6 +316,7 @@ impl Drop for CommittedCleanup {
             if let Some(active) = state.active.take() {
                 active.client.login().disconnect();
             }
+            state.sign_out_cleanup_pending = false;
         }
     }
 }
@@ -295,6 +336,7 @@ pub(crate) struct SdkInner {
     /// interleaving with an in-flight handoff. Owned guards let committed
     /// transactions carry the permit into SDK-owned execution.
     account_op: Arc<AsyncMutex<()>>,
+    playback_execution: RwLock<()>,
     /// Cancelled by [`Sdk::close`]. Flows that outlive their spawn site —
     /// Quick Connect sessions — derive child tokens from it so close
     /// terminates them even when the runtime is embedder-owned.
@@ -329,6 +371,9 @@ impl SdkInner {
         }
         if state.active.is_none() {
             return Err(SdkError::NoActiveProfile);
+        }
+        if state.handoff_in_progress || state.sign_out_cleanup_pending {
+            return Err(SdkError::OperationInProgress);
         }
         self.item_actions
             .begin(item_id, action)
@@ -434,6 +479,11 @@ impl SdkInner {
         }
         if token.is_cancelled() {
             return Err(SdkError::Cancelled);
+        }
+        // Admission can precede a queued blocking worker. A retained cleanup
+        // scope must not let that worker recreate records after Sign Out.
+        if state.handoff_in_progress || state.sign_out_cleanup_pending {
+            return Err(SdkError::OperationInProgress);
         }
         let scope = state
             .active
@@ -579,6 +629,7 @@ impl SdkInner {
         if let Some(active) = state.active.take() {
             active.client.login().disconnect();
         }
+        state.sign_out_cleanup_pending = false;
         self.item_actions.reset_scope(None);
         if let Some(tokens) = state.tokens.remove(&old_epoch) {
             for token in tokens {
@@ -736,6 +787,7 @@ impl Sdk {
             hooks,
             state: Mutex::new(SdkState {
                 epoch: 0,
+                playback_generation: 0,
                 active: None,
                 tokens: HashMap::new(),
                 browsers: Vec::new(),
@@ -743,9 +795,13 @@ impl Sdk {
                 closed: false,
                 committed_cleanup: 0,
                 watchlist_revision: 0,
+                handoff_in_progress: false,
+                sign_out_cleanup_pending: false,
+                pending_watchlist_cleanup: HashMap::new(),
             }),
             item_actions: item_actions::ItemActions::default(),
             account_op: Arc::new(AsyncMutex::new(())),
+            playback_execution: RwLock::new(()),
             shutdown: CancellationToken::new(),
         })
     }
@@ -801,6 +857,53 @@ impl Sdk {
         self.inner.active_profile()
     }
 
+    /// Authenticated client projection for native read and teardown adapters.
+    ///
+    /// The SDK owns its login lifetime; adapters must not adopt or disconnect
+    /// it independently. New playback and direct native writes must honor
+    /// [`Self::content_mutations_blocked`].
+    pub fn active_client(&self) -> Option<Arc<JellyfinClient>> {
+        let state = self.inner.state.lock().ok()?;
+        state
+            .active
+            .as_ref()
+            .map(|active| Arc::clone(&active.client))
+    }
+
+    /// Whether a profile transition forbids new playback and content writes.
+    /// Existing cleanup may continue using the retained authenticated client.
+    pub fn content_mutations_blocked(&self) -> bool {
+        self.inner.state.lock().map_or(true, |state| {
+            state.closed || state.handoff_in_progress || state.sign_out_cleanup_pending
+        })
+    }
+
+    /// Captures revocable admission for a native physical start or resume.
+    /// Use [`PlaybackAdmission::run`] after acquiring the platform controller;
+    /// merely checking [`Self::content_mutations_blocked`] cannot fence awaits.
+    pub fn playback_admission(&self) -> Result<PlaybackAdmission, SdkError> {
+        let state = self.inner.state.lock().map_err(|_| SdkError::Closed)?;
+        if state.closed {
+            return Err(SdkError::Closed);
+        }
+        if state.handoff_in_progress || state.sign_out_cleanup_pending {
+            return Err(SdkError::OperationInProgress);
+        }
+        Ok(PlaybackAdmission {
+            inner: Arc::clone(&self.inner),
+            generation: state.playback_generation,
+        })
+    }
+
+    /// Protected credentials are gone, but authenticated teardown is not yet
+    /// complete. [`Self::disconnect`] retries it without repeating deletion.
+    pub fn sign_out_cleanup_pending(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .is_ok_and(|state| state.sign_out_cleanup_pending)
+    }
+
     /// Whether `scope` still identifies the live profile scope.
     ///
     /// Consumers holding a [`ProfileScopeRef`] from
@@ -819,6 +922,9 @@ impl Sdk {
     /// obligation until it settles; its [`CommittedCleanup`] guard performs
     /// the disconnect afterward, so closing never abandons teardown halfway
     /// and never blocks waiting on a hook that may itself call `close`.
+    /// Close is terminal: after in-flight cleanup settles it releases even
+    /// authentication retained for a failed cleanup, because retries can no
+    /// longer be issued against this SDK.
     pub fn close(&self) {
         let tokens = {
             let Ok(mut state) = self.inner.state.lock() else {
@@ -832,6 +938,7 @@ impl Sdk {
                 if let Some(active) = state.active.take() {
                     active.client.login().disconnect();
                 }
+                state.sign_out_cleanup_pending = false;
             }
             self.inner.item_actions.reset_scope(None);
             std::mem::take(&mut state.tokens)

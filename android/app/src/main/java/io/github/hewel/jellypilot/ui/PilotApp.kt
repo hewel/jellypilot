@@ -324,6 +324,14 @@ private fun Accounts(state: AppUiState, model: AppViewModel) {
       state.activeName?.let { Text(stringResource(R.string.connected_as, it), style = MaterialTheme.typography.titleMedium) }
       Button(onClick = model::addAccount) { Text(stringResource(R.string.add_account)) }
     }
+    if (state.signOutCleanupPending) item {
+      Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(stringResource(R.string.sdk_sign_out_cleanup_pending), color = MaterialTheme.colorScheme.onErrorContainer)
+          FilledTonalButton(onClick = model::retryCleanup, enabled = !state.loginBusy) { Text(stringResource(R.string.retry_cleanup)) }
+        }
+      }
+    }
     item { Text(stringResource(R.string.saved_accounts), style = MaterialTheme.typography.titleLarge) }
     if (state.profiles.isEmpty()) item { Text(stringResource(R.string.no_saved_accounts), color = LocalPilotColors.current.metadata) }
     items(state.profiles, key = { it.key }) { profile ->

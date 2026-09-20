@@ -120,7 +120,6 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
     &mut state.accounts,
     &mut state.login.flow,
     &mut state.kernel,
-    &state.watchlist,
     accounts::RuntimeFacts {
       quit_requested: state.shell.quit_requested,
       playback_active: state.playback.view.lifecycle.playback_active,
@@ -152,8 +151,18 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
     Some(accounts::Effect::Activated) => {
       shell::reset_connected_content(state);
       tasks.push(activate_connection(state));
+      tasks.push(login::load_saved_profiles(&state.login.flow, &state.kernel).map(Message::Login));
     }
     Some(accounts::Effect::Disconnected) => shell::reset_connected_content(state),
+    Some(accounts::Effect::MembershipInvalidated) => {
+      if let Some(full) = state.full.as_mut() {
+        tasks.push(super::personal_lists::load_membership(
+          &mut full.personal_lists,
+          &mut state.kernel,
+          &state.watchlist,
+        ));
+      }
+    }
     None => {}
   }
   if let Some(error) = accounts::view(state)
@@ -682,7 +691,9 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       Task::batch(tasks)
     }
     Message::Playback(message) => {
-      if accounts::handoff_generation(&state.accounts).is_some()
+      if state.kernel.sdk.content_mutations_blocked()
+        && !matches!(&message, super::message::PlaybackMessage::Intent(intent)
+          if matches!(intent.as_ref(), PlaybackIntent::Tick))
         && matches!(
           &message,
           super::message::PlaybackMessage::Intent(_)
@@ -779,7 +790,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       ])
     }
     Message::Tray(action) => {
-      if accounts::handoff_generation(&state.accounts).is_some() {
+      if state.kernel.sdk.content_mutations_blocked() {
         return Task::none();
       }
       let player_visible = super::embedded_player::active(state);
@@ -874,7 +885,7 @@ mod tests {
   use std::sync::Arc;
   use std::time::Instant;
 
-  use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey};
+  use jellypilot_auth::{AuthStorageError, SavedProfileKey};
   use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::intro_skipper::IntroSkipMode;
@@ -925,6 +936,8 @@ mod tests {
     let playback = playback::Surface::new(&mut request_gate);
     let settings_view = crate::app::state::SettingsState::from_settings(settings.snapshot());
     let login_flow = LoginState::from_settings(settings.snapshot());
+    let auth_store = crate::app::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
       system_theme: iced::theme::Mode::None,
       motion: Default::default(),
@@ -934,7 +947,9 @@ mod tests {
         settings,
         locale: Localizer::default(),
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
-        auth_store: AuthStore::default(),
+        auth_store,
+        sdk,
+        sdk_handoff,
         request_gate,
         client: None,
         connection: ConnectionPhase::SignedOut,
@@ -950,7 +965,11 @@ mod tests {
       },
       login: crate::app::login::Surface {
         flow: login_flow,
-        quick_connect_task: None,
+        password_task: None,
+        request_seq: 0,
+        activation_pending: false,
+        quick_connect_session: None,
+        qc_seq: 0,
       },
       settings: crate::app::settings::Surface {
         view: settings_view,
@@ -2538,14 +2557,16 @@ mod tests {
     );
   }
 
-  #[test]
-  fn account_disconnect_waits_for_both_cleanup_settlements() {
+  #[tokio::test]
+  async fn account_disconnect_waits_for_both_cleanup_settlements_while_hidden() {
+    use iced::advanced::subscription::into_recipes;
+    use iced::futures::{stream, FutureExt, StreamExt};
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
     let mut state = test_state();
-    state.kernel.connection = ConnectionPhase::Connected;
-    let client = Arc::new(JellyfinClient::new());
-    client
-      .login()
-      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+    state.shell.window_id = None;
+    state.shell.images_visible = false;
+    state.kernel.sdk.adopt_test_session(jellypilot_media_server::SavedSession {
         provider: MediaServerProvider::Jellyfin,
         server_url: "https://example.test".to_owned(),
         user_id: "user".to_owned(),
@@ -2554,15 +2575,42 @@ mod tests {
         server_name: None,
         device_id: None,
       });
-    state.kernel.client = Some(client);
+    let profile = state.kernel.sdk.active_profile().unwrap();
+    accounts::sync_activated(&mut state.kernel, &profile);
+    let client = state.kernel.client.clone().unwrap();
 
-    drop(update(
+    let task = update(
       &mut state,
       Message::Account(accounts::Message::Disconnect),
-    ));
-    let generation = accounts::handoff_generation(&state.accounts).expect("handoff started");
+    );
+    let mut operation = iced_runtime::task::into_stream(task).expect("SDK operation task");
+    let mut events = stream::select_all(
+      into_recipes(super::super::subscriptions::subscription(&state))
+        .into_iter()
+        .map(|recipe| recipe.stream(Box::pin(stream::pending()))),
+    );
+    let hook = loop {
+      tokio::select! {
+        action = operation.next() => panic!("account operation completed before teardown: {action:?}"),
+        event = events.next() => if let Some(message @ Message::Account(accounts::Message::HandoffRequested(_))) = event {
+          break message;
+        },
+      }
+    };
+    let mut cleanup = iced_runtime::task::into_stream(update(&mut state, hook)).unwrap();
+    let mut playback_receipt = None;
+    let mut remote_receipt = None;
+    while playback_receipt.is_none() || remote_receipt.is_none() {
+      match cleanup.next().await.expect("both physical teardown receipts") {
+        iced_runtime::Action::Output(message @ Message::Account(accounts::Message::PlaybackHandoffSettled { .. })) => playback_receipt = Some(message),
+        iced_runtime::Action::Output(message @ Message::Account(accounts::Message::RemoteHandoffSettled { .. })) => remote_receipt = Some(message),
+        iced_runtime::Action::Output(message) => drop(update(&mut state, message)),
+        _ => {},
+      }
+    }
     assert_eq!(state.kernel.connection, ConnectionPhase::Connected);
-    assert!(state.kernel.client.is_some());
+    assert!(Arc::ptr_eq(state.kernel.client.as_ref().unwrap(), &client));
+    assert!(state.kernel.sdk.content_mutations_blocked());
     drop(update(
       &mut state,
       Message::ItemActions(super::super::item_actions::Message::WatchlistToggle(
@@ -2574,20 +2622,23 @@ mod tests {
       state.kernel.active_toast.as_ref().map(|toast| toast.level),
       Some(NoticeLevel::Warning)
     ));
-    drop(update(
-      &mut state,
-      Message::Account(accounts::Message::PlaybackHandoffSettled {
-        generation,
-        result: Ok(()),
-      }),
-    ));
+    drop(update(&mut state, playback_receipt.unwrap()));
     assert_eq!(state.kernel.connection, ConnectionPhase::Connected);
-    drop(update(
-      &mut state,
-      Message::Account(accounts::Message::RemoteHandoffSettled { generation }),
-    ));
+    assert!(state.kernel.sdk.active_profile().is_some());
+    assert!(operation.next().now_or_never().is_none());
+    drop(update(&mut state, remote_receipt.unwrap()));
+    loop {
+      if let iced_runtime::Action::Output(message) = operation.next().await.expect("SDK completion") {
+        let finished = matches!(message, Message::Account(accounts::Message::DisconnectFinished { .. }));
+        drop(update(&mut state, message));
+        if finished { break; }
+      }
+    }
     assert!(state.kernel.connection == ConnectionPhase::SignedOut);
     assert!(state.kernel.client.is_none());
+    assert!(state.kernel.sdk.active_profile().is_none());
+    assert!(!client.login().connection_state().connected);
+    }).await.expect("account handoff must settle without a visible window");
   }
 
   #[tokio::test]
@@ -2792,7 +2843,7 @@ mod tests {
       &mut state,
       Message::Login(LoginMessage::ProfilesLoaded {
         revision,
-        result: Err(AuthStorageError::Corrupt),
+        result: Err(AuthStorageError::Corrupt.into()),
       }),
     ));
 
@@ -3519,7 +3570,6 @@ mod tests {
           &mut state.accounts,
           &mut state.login.flow,
           &mut state.kernel,
-          &state.watchlist,
           accounts::RuntimeFacts {
             quit_requested: false,
             playback_active: true,

@@ -145,7 +145,11 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     execute {
       try {
         val directory = File(application.cacheDir, "mpv").apply { mkdirs() }
-        val created = MpvPlayerHost(application, PlayerHostConfig(directory.path, exportTrustRoots(directory).path))
+        // Visibility pauses explicitly; account admission must not pause the
+        // current session before protected credential deletion succeeds.
+        val created = MpvPlayerHost(application, PlayerHostConfig(
+          directory.path, exportTrustRoots(directory).path, pauseWhenIneligible = false,
+        ))
         created.setAdmissionEligible(false)
         created.addListener(listener)
         synchronized(surfaceLock) { host = created }
@@ -175,7 +179,6 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
 
   fun setHandoffBlocked(blocked: Boolean) = synchronized(policyLock) {
     handoff.set(blocked)
-    if (blocked) pause()
     updateAdmissionLocked()
   }
 
@@ -324,6 +327,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     mutableReady.value = false
     opening.get()?.cancel()
     host?.setAdmissionEligible(false)
+    host?.pause()
     detach()
     main.post { mediaSession?.release(); media3?.release(); mediaSession = null; media3 = null }
     executor.execute {

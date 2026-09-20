@@ -79,8 +79,15 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     mutableState.update { it.copy(showPlayer = false, busy = false) }
   }
   fun dismissError() { mutableState.update { it.copy(error = null) } }
-  fun addAccount() { mutableState.update { it.copy(showSignIn = true, error = null) } }
+  fun addAccount() {
+    if (rejectWhileCleanupPending()) return
+    mutableState.update { it.copy(showSignIn = true, error = null) }
+  }
   fun openPlayer() {
+    if (sdk.contentMutationsBlocked()) {
+      if (sdk.signOutCleanupPending()) showCleanupPending()
+      return
+    }
     suspendBrowser()
     cancelQuery()
     mutableState.update { it.copy(showPlayer = true, busy = false) }
@@ -119,23 +126,54 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     mutableState.update { it.copy(loginBusy = loginJob != null, quickConnectCode = null, showSignIn = false) }
   }
 
+  /** Explains why playback and writes stay blocked until sign-out cleanup is retried. */
+  private fun showCleanupPending() {
+    mutableState.update { it.copy(error = app.getString(R.string.sdk_sign_out_cleanup_pending)) }
+  }
+
+  /** New account transitions cannot bypass a pending sign-out cleanup; the SDK also rejects them. */
+  private fun rejectWhileCleanupPending(): Boolean {
+    if (!sdk.signOutCleanupPending()) return false
+    showCleanupPending()
+    return true
+  }
+
   fun signIn(jellyfin: Boolean, server: String, username: String, password: String, remember: Boolean) {
+    if (rejectWhileCleanupPending()) return
     accountOperation {
       val candidate = sdk.passwordLogin(if (jellyfin) Provider.JELLYFIN else Provider.EMBY, server, username, password)
       activateCandidate(candidate, remember)
     }
   }
 
-  fun activate(key: String) { accountOperation { activateCandidate(sdk.restoreSavedProfile(key), true) } }
-  fun disconnect() { accountOperation { withContext(NonCancellable) { sdk.disconnect(); connectionChanged() } } }
+  fun activate(key: String) {
+    if (rejectWhileCleanupPending()) return
+    accountOperation { activateCandidate(sdk.restoreSavedProfile(key), true) }
+  }
+  fun disconnect() {
+    accountOperation {
+      withContext(NonCancellable) {
+        player.setHandoffBlocked(true)
+        sdk.disconnect()
+        connectionChanged()
+      }
+    }
+  }
+  /** Explicit retry of a failed sign-out teardown; `disconnect` performs the SDK cleanup retry. */
+  fun retryCleanup() = disconnect()
   fun signOut(key: String) {
     accountOperation {
       withContext(NonCancellable) {
         val activeBefore = sdk.activeProfile()?.key
+        // Media-session commands bypass this ViewModel. Block the native
+        // player before deletion starts, not only when the teardown hook runs.
+        if (activeBefore == key) player.setHandoffBlocked(true)
         val outcome = sdk.signOut(key, false)
-        if (activeBefore == key) connectionChanged(outcome.remaining) else refreshIdentity(outcome.remaining)
+        // A failed teardown keeps the session connected for a cleanup retry:
+        // only the saved-profile list changes, never the connection reset.
+        if (activeBefore == key && outcome.teardownError == null) connectionChanged(outcome.remaining) else refreshIdentity(outcome.remaining)
         val warnings = listOfNotNull(
-          outcome.teardownError?.let { app.getString(R.string.sdk_signed_out_cleanup_failed) },
+          outcome.teardownError?.let { app.getString(R.string.sdk_sign_out_cleanup_pending) },
           outcome.watchlistError?.let { app.getString(R.string.sdk_watchlist_delete_failed) },
         )
         if (warnings.isNotEmpty()) mutableState.update { it.copy(error = warnings.joinToString("\n")) }
@@ -146,6 +184,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private suspend fun activateCandidate(candidate: ProfileCandidate, remember: Boolean) = withContext(NonCancellable) {
     var activated = false
     try {
+      player.setHandoffBlocked(true)
       val outcome = sdk.activateCandidate(candidate, remember)
       activated = true
       connectionChanged()
@@ -168,16 +207,19 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) { showError(error) }
       finally {
-        player.setHandoffBlocked(false)
+        // A failed sign-out teardown leaves the SDK mutation block in place
+        // for the cleanup retry; only a settled operation may unblock.
+        player.setHandoffBlocked(sdk.contentMutationsBlocked())
         loginJob = null
-        mutableState.update { it.copy(loginBusy = false) }
+        val cleanupPending = sdk.signOutCleanupPending()
+        mutableState.update { it.copy(loginBusy = false, signOutCleanupPending = cleanupPending) }
       }
     }
     loginJob?.start()
   }
 
   fun quickConnect(server: String, remember: Boolean) {
-    if (state.value.loginBusy) return
+    if (state.value.loginBusy || rejectWhileCleanupPending()) return
     val generation = ++authGeneration
     mutableState.update { it.copy(loginBusy = true, error = null) }
     try {
@@ -213,7 +255,8 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   private suspend fun refreshIdentity(saved: List<SavedProfile>? = null) {
     val active = sdk.activeProfile()
-    mutableState.update { it.copy(activeName = active?.userName) }
+    val cleanupPending = sdk.signOutCleanupPending()
+    mutableState.update { it.copy(activeName = active?.userName, signOutCleanupPending = cleanupPending) }
     try {
       val profiles = (saved ?: sdk.savedProfiles().profiles).map { profile ->
         ProfileUi(profile.key, profile.title, profile.serverUrl, if (profile.provider == Provider.JELLYFIN) "Jellyfin" else "Emby", profile.key == active?.key)
@@ -525,6 +568,10 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   /** Runs one Favorite/Played write per item on its own token, independent of the browse query slot. */
   private fun updateUserData(id: String, action: VideoUserDataAction) {
     if (userDataWrites.containsKey(id)) return
+    if (sdk.contentMutationsBlocked()) {
+      if (sdk.signOutCleanupPending()) showCleanupPending()
+      return
+    }
     if (sdk.activeProfile() == null) return
     val token = try {
       sdk.newOperationToken()

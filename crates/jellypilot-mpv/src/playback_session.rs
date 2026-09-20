@@ -90,6 +90,10 @@ pub enum PlaybackEvent {
 
 #[derive(Clone)]
 pub enum ControllerSettlement {
+  /// A queued start or resume lost admission before touching the player.
+  /// Retire its receipt without changing the observed playback or reporting
+  /// an engine failure; cleanup and other queued work may still settle.
+  AdmissionRejected,
   Started(Result<PlaybackStartOutcome, PlaybackError>),
   Controlled(Result<PlaybackOutcome, PlaybackError>),
   Stopped(Result<PlaybackStopOutcome, PlaybackError>),
@@ -392,6 +396,7 @@ pub struct PlaybackSession {
   /// automatic adjacent/end-file advancement stays parked until an explicit
   /// play intent lifts it (ADR 0043).
   suspended: bool,
+  playback_admitted: bool,
   /// The session-owned intro prompt text is on the controller's OSD; only a
   /// dedicated clear may retire it so unrelated feedback is never clobbered.
   prompt_osd: bool,
@@ -421,6 +426,7 @@ impl Default for PlaybackSession {
       cleanup_pending: false,
       quitting: false,
       suspended: false,
+      playback_admitted: true,
       prompt_osd: false,
       replacing: false,
       replacement_generation: 0,
@@ -448,6 +454,22 @@ impl PlaybackSession {
       self.replacing = false;
     }
     step
+  }
+
+  /// Revokes queued starts, resumes, and automatic advancement without
+  /// pausing the current player. Reopening admission never replays revoked
+  /// commands. Already dispatched work must also check admission at execution.
+  pub fn set_playback_admitted(&mut self, admitted: bool) {
+    self.playback_admitted = admitted;
+    if !admitted {
+      self.pending.retain(|pending| {
+        !matches!(
+          pending.command,
+          ControllerCommand::Start { .. } | ControllerCommand::SetPaused(false)
+        )
+      });
+      self.desired_paused = None;
+    }
   }
 
   pub fn view(&self) -> SessionView {
@@ -509,6 +531,9 @@ impl PlaybackSession {
         | PlaybackIntent::TogglePaused
         | PlaybackIntent::SetPaused(false)
     ) {
+      if !self.playback_admitted {
+        return PlaybackStep::ignored();
+      }
       self.suspended = false;
     }
     match intent {
@@ -799,6 +824,13 @@ impl PlaybackSession {
     now: Instant,
   ) -> PlaybackStep {
     match (operation, settlement) {
+      (
+        ControllerOperation::Start { .. } | ControllerOperation::Controlled,
+        ControllerSettlement::AdmissionRejected,
+      ) => {
+        self.desired_paused = None;
+        PlaybackStep::ignored()
+      }
       (ControllerOperation::Start { intro, .. }, ControllerSettlement::Started(result)) => {
         PlaybackStep::applied(self.finish_start(result, intro))
       }
@@ -934,7 +966,7 @@ impl PlaybackSession {
         self.set_warning_notice(warnings);
         // Automatic follow-on work stays parked while the session is
         // suspended; only explicit play intents resume it.
-        if self.suspended {
+        if self.suspended || !self.playback_admitted {
           return Vec::new();
         }
         if let Some(direction) = adjacent_direction_from_client_messages(client_messages) {
@@ -955,7 +987,10 @@ impl PlaybackSession {
         // dispatching the same start a manual Next press would. A suspended
         // session never advances on its own: the ended item is retired and
         // the next one waits for an explicit play intent.
-        if !self.suspended && self.adjacent.item(AdjacentDirection::Next).is_some() {
+        if self.playback_admitted
+          && !self.suspended
+          && self.adjacent.item(AdjacentDirection::Next).is_some()
+        {
           return self.play_adjacent(AdjacentDirection::Next).effects;
         }
         self.clear_playback_context();

@@ -492,7 +492,7 @@ fn card_action<'a>(
     Kind::History => return None,
   };
   let busy = item_actions::busy(&state.kernel, &entry.id);
-  let disabled = busy || crate::app::accounts::content_mutations_blocked(&state.accounts);
+  let disabled = busy || crate::app::accounts::content_mutations_blocked(&state.kernel);
   let control = control_button(Some(icon), None, ButtonVariant::Tonal)
     .icon_size(IconSize::Sm)
     .padding(12)

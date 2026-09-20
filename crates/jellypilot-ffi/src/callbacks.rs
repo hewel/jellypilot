@@ -25,8 +25,12 @@ pub trait SecureCredentialStore: Send + Sync {
 /// Platform teardown seam for profile transitions.
 ///
 /// Invoked while the previous profile is still active, before the SDK
-/// commits a new scope. Returning `false` aborts the transition and keeps
-/// the previous profile active (ADR 0033 ordering). This is where the app
+/// commits a new scope. For activation and disconnect, returning `false`
+/// aborts the transition and keeps the previous profile active (ADR 0033
+/// ordering). Sign-out has already deleted protected credentials: `false`
+/// is reported as `SignOutOutcome.teardown_error`, the session stays
+/// connected for a `disconnect` cleanup retry, and new playback and content
+/// writes remain blocked until that retry succeeds. This is where the app
 /// finishes playback and remote teardown.
 #[uniffi::export(foreign, async_runtime = "tokio")]
 #[async_trait::async_trait]

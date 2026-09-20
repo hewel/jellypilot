@@ -99,7 +99,7 @@ fn blocked(state: &mut State, origin: Origin) -> Option<Task<AppMessage>> {
   if state.shell.quit_requested {
     return Some(Task::none());
   }
-  if accounts::content_mutations_blocked(&state.accounts) {
+  if accounts::content_mutations_blocked(&state.kernel) {
     let key = match origin {
       Origin::Detail { .. } => "shell-account-change-item",
       Origin::Other => "shell-account-change-lists",

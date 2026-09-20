@@ -11,7 +11,10 @@
 //! cleanup halfway. Committed outcomes are reported as structured results —
 //! never as errors that imply the committed step was rolled back.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+
+use futures_util::FutureExt;
 
 use jellypilot_auth::login::{validate_saved_profile_in, ValidatedProfileCandidate};
 use jellypilot_auth::{
@@ -28,7 +31,7 @@ use crate::{ActiveProfile, ProfileCandidate, Sdk, SdkError, SdkInner};
 /// is the live active profile even when `persistence_warning` is set. The
 /// warning means the session or the startup-restore selection could not be
 /// persisted; the activation itself is not undone.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ActivationOutcome {
     /// The newly active profile.
     pub profile: ActiveProfile,
@@ -41,13 +44,14 @@ pub struct ActivationOutcome {
 /// The credential deletion is committed before this value is produced.
 /// `teardown_error` and `watchlist_error` report post-commit cleanup that
 /// failed independently; neither implies the deletion was rolled back.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SignOutOutcome {
     /// Saved profiles remaining after the deletion.
     pub remaining: Vec<SavedProfileSummary>,
     /// Startup-restore selection after the deletion, when one remains.
     pub last_activated_key: Option<SavedProfileKey>,
-    /// Platform teardown failure recorded after the committed deletion.
+    /// Teardown failure; authentication remains available for cleanup retry,
+    /// while new playback and content writes are blocked.
     pub teardown_error: Option<SdkError>,
     /// Watchlist cleanup failure recorded after the committed deletion.
     pub watchlist_error: Option<SdkError>,
@@ -63,6 +67,40 @@ pub struct ProfileRemovalOutcome {
     pub remaining: Vec<SavedProfileSummary>,
     /// Startup-restore selection after the deletion, when one remains.
     pub last_activated_key: Option<SavedProfileKey>,
+}
+
+/// Keeps new playback and writes out of an active-profile transition while
+/// the committed worker owns teardown, including dropped caller futures.
+struct AccountHandoff {
+    inner: Arc<SdkInner>,
+}
+
+impl AccountHandoff {
+    async fn begin(inner: &Arc<SdkInner>) -> Result<Self, SdkError> {
+        {
+            let mut state = inner.state.lock().map_err(|_| SdkError::Closed)?;
+            if state.closed {
+                return Err(SdkError::Closed);
+            }
+            state.handoff_in_progress = true;
+            state.playback_generation = state.playback_generation.wrapping_add(1);
+        }
+        let handoff = Self {
+            inner: Arc::clone(inner),
+        };
+        // A physical start may already be halfway through a load. Drain it
+        // before deletion/teardown; queued admissions remain permanently stale.
+        drop(inner.playback_execution.write().await);
+        Ok(handoff)
+    }
+}
+
+impl Drop for AccountHandoff {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.handoff_in_progress = false;
+        }
+    }
 }
 
 impl Sdk {
@@ -169,6 +207,16 @@ impl Sdk {
             .try_lock_owned()
             .map_err(|_| SdkError::OperationInProgress)?;
         let candidate = candidate.take()?;
+        {
+            let state = self.inner.state.lock().map_err(|_| SdkError::Closed)?;
+            if state.sign_out_cleanup_pending
+                || state
+                    .pending_watchlist_cleanup
+                    .contains_key(candidate.key())
+            {
+                return Err(SdkError::OperationInProgress);
+            }
+        }
         let inner = Arc::clone(&self.inner);
         let receiver = self.inner.spawn_committed(move || {
             let inner = inner;
@@ -176,6 +224,7 @@ impl Sdk {
                 let _permit = permit;
                 // A transaction beginning after close must not adopt.
                 inner.check_open()?;
+                let _handoff = AccountHandoff::begin(&inner).await?;
                 inner.run_handoff_hook().await?;
 
                 let (key, scope, client, session) = candidate.into_parts();
@@ -261,6 +310,10 @@ impl Sdk {
     /// Idempotent when no profile is active. Once the teardown hook starts,
     /// the transaction continues on an SDK-owned thread even if the returned
     /// future is dropped.
+    ///
+    /// Also retries incomplete Sign Out teardown without deleting credentials
+    /// again. Failed retry preserves authentication and the write/playback
+    /// block; only successful teardown ends the scope.
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         self.inner.check_open()?;
         let permit = self
@@ -285,6 +338,7 @@ impl Sdk {
             async move {
                 let _permit = permit;
                 inner.check_open()?;
+                let _handoff = AccountHandoff::begin(&inner).await?;
                 inner.run_handoff_hook().await?;
                 inner.end_active_session();
                 Ok(())
@@ -306,6 +360,8 @@ impl Sdk {
     /// never ran: it continues on an SDK-owned thread even if the returned
     /// future is dropped or the SDK is closed, and post-commit failures are
     /// reported on [`SignOutOutcome`] rather than as rollback errors.
+    /// A teardown failure retains the active authenticated session and blocks
+    /// new playback and content writes until [`Self::disconnect`] succeeds.
     pub async fn sign_out(
         &self,
         key: String,
@@ -351,6 +407,12 @@ impl Sdk {
                     .active
                     .as_ref()
                     .is_some_and(|active| active.key == key);
+                let _handoff = if is_active {
+                    Some(AccountHandoff::begin(&inner).await?)
+                } else {
+                    None
+                };
+                let cleanup_key = delete_watchlist.then(|| key.clone());
 
                 // Irreversible step: delete the protected credentials while
                 // the in-memory session is still available for teardown.
@@ -360,29 +422,26 @@ impl Sdk {
                     .await
                     .map_err(SdkError::from)?;
 
-                // Post-commit: platform teardown keeps the in-memory session
-                // long enough to report and stop playback, then the session
-                // ends. A declined or failed teardown is recorded, not
-                // treated as a rollback of the deletion.
+                // Deletion cannot roll back. Keep authentication and admission
+                // blocked until the host confirms successful cleanup.
                 let mut teardown_error = None;
                 if is_active {
-                    if let Err(error) = inner.run_handoff_hook().await {
-                        teardown_error = Some(error);
+                    inner
+                        .state
+                        .lock()
+                        .map_err(|_| SdkError::Closed)?
+                        .sign_out_cleanup_pending = true;
+                    match inner.run_handoff_hook().await {
+                        Ok(()) => inner.end_active_session(),
+                        Err(error) => teardown_error = Some(error),
                     }
-                    inner.end_active_session();
                 }
 
-                let mut watchlist_error = None;
-                if delete_watchlist {
-                    if let Err(error) = inner.with_committed_watchlist(|store| {
-                        store
-                            .remove_scope(&scope)
-                            .map_err(|error| SdkError::Storage(error.to_string()))?;
-                        Ok(())
-                    }) {
-                        watchlist_error = Some(error);
-                    }
-                }
+                let watchlist_error = if let Some(key) = cleanup_key {
+                    inner.cleanup_watchlist(key, scope).await.err()
+                } else {
+                    None
+                };
 
                 Ok(SignOutOutcome {
                     remaining,
@@ -464,9 +523,83 @@ impl Sdk {
             .map_err(|_| SdkError::Request("the removal task failed unexpectedly".to_owned()))?
     }
 
+    /// Retries a previously failed, opted-in Sign Out Watchlist deletion.
+    ///
+    /// Uses the same storage adapter and committed lifetime as Sign Out,
+    /// without touching credentials or the active session. Idempotent when
+    /// no failed cleanup remains.
+    pub async fn retry_watchlist_cleanup(&self, key: String) -> Result<(), SdkError> {
+        self.inner.check_open()?;
+        let permit = self
+            .inner
+            .account_op
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| SdkError::OperationInProgress)?;
+        let key = SavedProfileKey::from_raw(key);
+        let scope = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| SdkError::Closed)?
+            .pending_watchlist_cleanup
+            .get(&key)
+            .cloned();
+        let Some(scope) = scope else {
+            return Ok(());
+        };
+        let inner = Arc::clone(&self.inner);
+        let receiver = self.inner.spawn_committed(move || async move {
+            let _permit = permit;
+            inner.check_open()?;
+            inner.cleanup_watchlist(key, scope).await
+        })?;
+        receiver.await.map_err(|_| {
+            SdkError::Request("the Watchlist cleanup task failed unexpectedly".to_owned())
+        })?
+    }
+
     fn new_client(&self) -> JellyfinClient {
         let client = JellyfinClient::with_storage_dir(self.inner.config.storage_dir.clone());
         client.set_device_name(self.inner.config.device_name.clone());
         client
+    }
+}
+
+impl SdkInner {
+    async fn cleanup_watchlist(
+        &self,
+        key: SavedProfileKey,
+        scope: jellypilot_core::watchlist::ProfileScope,
+    ) -> Result<(), SdkError> {
+        let result = self.remove_profile_watchlist(&scope).await;
+        let mut state = self.state.lock().map_err(|_| SdkError::Closed)?;
+        if result.is_ok() {
+            state.pending_watchlist_cleanup.remove(&key);
+        } else {
+            state.pending_watchlist_cleanup.insert(key, scope);
+        }
+        result
+    }
+
+    async fn remove_profile_watchlist(
+        &self,
+        scope: &jellypilot_core::watchlist::ProfileScope,
+    ) -> Result<(), SdkError> {
+        if let Some(hooks) = &self.hooks {
+            let delegated = AssertUnwindSafe(async { hooks.remove_watchlist(scope).await })
+                .catch_unwind()
+                .await
+                .map_err(|_| SdkError::Storage("platform Watchlist cleanup failed".to_owned()))?;
+            if let Some(result) = delegated {
+                return result.map_err(SdkError::Storage);
+            }
+        }
+        self.with_committed_watchlist(|store| {
+            store
+                .remove_scope(scope)
+                .map_err(|error| SdkError::Storage(error.to_string()))?;
+            Ok(())
+        })
     }
 }

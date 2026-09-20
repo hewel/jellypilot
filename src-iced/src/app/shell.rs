@@ -440,7 +440,7 @@ pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
   }
   if !state.playback.session.can_toggle_fullscreen()
     || state.shell.quit_requested
-    || super::accounts::content_mutations_blocked(&state.accounts)
+    || super::accounts::content_mutations_blocked(&state.kernel)
   {
     return Task::none();
   }
@@ -458,7 +458,7 @@ pub(crate) fn reconcile_player_fullscreen(state: &mut State) -> Task<Message> {
   }
   if !state.shell.images_visible
     || state.shell.quit_requested
-    || super::accounts::content_mutations_blocked(&state.accounts)
+    || super::accounts::content_mutations_blocked(&state.kernel)
     || (state.playback.view.now_playing.is_none() && !state.playback.view.busy)
   {
     exit_player_fullscreen(state)
@@ -1182,7 +1182,6 @@ mod tests {
   use std::time::Duration;
 
   use jellypilot_auth::login::ConnectionPhase;
-  use jellypilot_auth::AuthStore;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
@@ -1375,12 +1374,16 @@ mod tests {
   }
 
   fn test_fixture() -> (Surface, Kernel) {
+    let auth_store = crate::app::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     let kernel = Kernel {
       item_actions: Default::default(),
       settings: SettingsStore::default(),
       locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
-      auth_store: AuthStore::default(),
+      auth_store,
+      sdk,
+      sdk_handoff,
       request_gate: RequestGate::default(),
       client: None,
       connection: ConnectionPhase::SignedOut,

@@ -163,7 +163,8 @@ pub struct SignOutOutcome {
     pub remaining: Vec<SavedProfile>,
     /// Startup-restore selection after the deletion, when one remains.
     pub last_activated_key: Option<String>,
-    /// Platform teardown failure recorded after the committed deletion.
+    /// Teardown failure after committed deletion. Authentication remains
+    /// connected for a `disconnect` cleanup retry; playback and writes stay blocked.
     pub teardown_error: Option<crate::SdkError>,
     /// Watchlist cleanup failure recorded after the committed deletion.
     pub watchlist_error: Option<crate::SdkError>,

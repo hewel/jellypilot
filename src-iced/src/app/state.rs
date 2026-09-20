@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
-use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
+use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary};
 use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::config::{
   AppMode, IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind, ThemeMode,
@@ -26,7 +26,7 @@ use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 use jellypilot_ui::tokens::ThemePalette;
 use zeroize::Zeroizing;
 
-use super::kernel::Kernel;
+use super::kernel::{self, Kernel};
 use crate::i18n::{FluentValue, Localizer, UiText};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,12 +145,14 @@ pub struct ConnectedIdentity {
 }
 
 impl ConnectedIdentity {
-  pub fn from_session(session: &SensitiveSavedSession) -> Self {
+  /// Projects the SDK's committed active profile into the presentation
+  /// identity shown across surfaces.
+  pub fn from_profile(profile: &jellypilot_sdk::ActiveProfile) -> Self {
     Self {
-      user_name: session.user_name.clone(),
-      provider: session.provider,
-      server_url: session.server_url.clone(),
-      server_name: session.server_name.clone(),
+      user_name: profile.user_name.clone(),
+      provider: profile.provider,
+      server_url: profile.server_url.clone(),
+      server_name: profile.server_name.clone(),
     }
   }
 }
@@ -668,6 +670,9 @@ impl State {
       disk_cache,
     ));
     let locale = Localizer::resolve(settings.snapshot().ui_language());
+    let watchlist = crate::app::personal_lists::Runtime::default();
+    let auth_store = AuthStore::default();
+    let (sdk, sdk_handoff) = kernel::account_runtime(&auth_store, &watchlist);
 
     let mut state = Self {
       image_diagnostics: Default::default(),
@@ -678,7 +683,9 @@ impl State {
         settings,
         locale,
         diagnostics,
-        auth_store: AuthStore::default(),
+        auth_store,
+        sdk,
+        sdk_handoff,
         request_gate,
         client: None,
         connection: ConnectionPhase::SignedOut,
@@ -695,7 +702,11 @@ impl State {
       },
       login: crate::app::login::Surface {
         flow: login,
-        quick_connect_task: None,
+        password_task: None,
+        request_seq: 0,
+        activation_pending: false,
+        quick_connect_session: None,
+        qc_seq: 0,
       },
       settings: crate::app::settings::Surface {
         view: settings_view,
@@ -704,7 +715,7 @@ impl State {
       full: full_ui,
       playback,
       shell: crate::app::shell::Surface::new(smoke),
-      watchlist: crate::app::personal_lists::Runtime::default(),
+      watchlist,
       accounts: crate::app::accounts::Surface::new(),
     };
     // Control-Only boots straight into the full-window Now Playing root; the

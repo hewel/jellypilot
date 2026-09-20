@@ -150,6 +150,7 @@ pub struct Surface {
   pub controller: Option<PlaybackControllerHandle>,
   controller_configuration: Arc<ControllerConfiguration>,
   pub session: PlaybackSession,
+  account_admission: Option<jellypilot_sdk::PlaybackAdmission>,
   pub view: SessionView,
   pub playable: Option<Playable>,
   pub adjacent_playables: [Option<Playable>; 2],
@@ -193,6 +194,7 @@ impl Surface {
       artwork_enabled: true,
       view: session.view(),
       session,
+      account_admission: None,
       playable: None,
       adjacent_playables: [None, None],
       queue: QueueState::Unavailable,
@@ -227,6 +229,7 @@ pub fn update(
   quit_requested: bool,
   message: PlaybackMessage,
 ) -> PlaybackUpdate {
+  sync_account_admission(surface, kernel);
   tracing::debug!(
     message = playback_message_name(&message),
     "playback message"
@@ -520,6 +523,7 @@ fn handle_remote(
   message: RemoteMessage,
   player_visible: bool,
 ) -> Task<Message> {
+  sync_account_admission(surface, kernel);
   match message {
     RemoteMessage::Completed(completion) => {
       let update = surface.remote.update(
@@ -545,6 +549,9 @@ fn handle_remote(
       // A close or quit that landed after the command was admitted supersedes
       // the in-flight resolution: the item never starts while the
       // presentation is held or the session is shutting down.
+      if kernel.sdk.content_mutations_blocked() {
+        return Task::none();
+      }
       if quit_requested || surface.presentation_hold.load(Ordering::Acquire) {
         kernel.diagnostics.record(
           DiagnosticLevel::Info,
@@ -692,6 +699,10 @@ fn handle_remote_command(
   command: JellyfinCommand,
   player_visible: bool,
 ) -> Task<Message> {
+  sync_account_admission(surface, kernel);
+  if kernel.sdk.content_mutations_blocked() {
+    return Task::none();
+  }
   let Some(action) = remote_command_action(command, &surface.view) else {
     return Task::none();
   };
@@ -819,6 +830,10 @@ pub(crate) fn update_tray(
   action: TrayAction,
   player_visible: bool,
 ) -> Task<Message> {
+  sync_account_admission(surface, kernel);
+  if kernel.sdk.content_mutations_blocked() {
+    return Task::none();
+  }
   // ADR 0043: an explicit play command needs a visible embedded player. The
   // presentation hold covers the closed window; for embedded playback a
   // hidden player page (e.g. Home) defers the same way so Now Playing is
@@ -1742,6 +1757,7 @@ pub(crate) fn apply_playback_input(
   quit_requested: bool,
   input: PlaybackInput,
 ) -> PlaybackUpdate {
+  sync_account_admission(surface, kernel);
   // Every start resolves its effective intro mode here — after the per-series
   // preferences are bound — so library, remote, queue, and adjacent starts all
   // honor the active profile's choices rather than a stale dispatch-time value.
@@ -1783,6 +1799,27 @@ fn finish_playback_step(
   } else {
     Task::batch([task, artwork_task])
   }
+}
+
+fn sync_account_admission(surface: &mut Surface, kernel: &mut Kernel) {
+  if surface
+    .account_admission
+    .as_ref()
+    .is_some_and(|admission| !admission.is_current())
+  {
+    // The entire transition may have settled between UI turns. Its generation
+    // still revokes session-queued play intents before admission reopens.
+    surface.session.set_playback_admitted(false);
+    surface.pending_play = None;
+    kernel.request_gate.begin_remote_play();
+    surface.account_admission = None;
+  }
+  if surface.account_admission.is_none() {
+    surface.account_admission = kernel.sdk.playback_admission().ok();
+  }
+  surface
+    .session
+    .set_playback_admitted(surface.account_admission.is_some());
 }
 
 pub(crate) fn cancel_slider_drags(surface: &mut Surface) {
@@ -2045,7 +2082,12 @@ pub(crate) fn window_opened(
   kernel: &mut Kernel,
   quit_requested: bool,
 ) -> Option<Task<Message>> {
+  sync_account_admission(surface, kernel);
   surface.presentation_hold.store(false, Ordering::Release);
+  if kernel.sdk.content_mutations_blocked() {
+    surface.pending_play = None;
+    return None;
+  }
   match surface.pending_play.take()? {
     PendingPlay::Remote(remote, action) => {
       // A remote session that restarted while the command was deferred can no
@@ -2155,7 +2197,9 @@ fn execute_playback_effect(
   adjacent_play: Option<RemotePlayToken>,
 ) -> Task<Message> {
   match effect {
-    PlaybackEffect::Controller(id, command) => execute_controller_command(surface, id, command),
+    PlaybackEffect::Controller(id, command) => {
+      execute_controller_command(surface, kernel, id, command)
+    }
     PlaybackEffect::LookupAdjacent(id, direction) => {
       let Some(play) = adjacent_play else {
         return Task::none();
@@ -2234,12 +2278,27 @@ fn execute_playback_effect(
 
 fn execute_controller_command(
   surface: &Surface,
+  kernel: &Kernel,
   id: EffectId,
   command: ControllerCommand,
 ) -> Task<Message> {
   let started = match &command {
     ControllerCommand::Start { item, .. } => Some(rich_playable(&surface.adjacent_playables, item)),
     _ => None,
+  };
+  let requires_admission = matches!(
+    command,
+    ControllerCommand::Start { .. } | ControllerCommand::SetPaused(false)
+  );
+  let admission = requires_admission
+    .then(|| kernel.sdk.playback_admission())
+    .transpose();
+  let Ok(admission) = admission else {
+    return Task::done(Message::Playback(PlaybackMessage::ControllerSettled {
+      id,
+      settlement: Box::new(ControllerSettlement::AdmissionRejected),
+      started: None,
+    }));
   };
   // Capture the presentation lease before the async block: the command keeps
   // the lease it was admitted under even when a close later replaces the
@@ -2259,7 +2318,14 @@ fn execute_controller_command(
       // The controller binds this command's own lease before executing: a
       // revoked lease stays revoked for this command even when a newer
       // admission already minted a fresh one.
-      controller.execute(command, lease).await
+      let execution = controller.execute(command, lease);
+      match admission {
+        Some(admission) => admission
+          .run(execution)
+          .await
+          .unwrap_or(ControllerSettlement::AdmissionRejected),
+        None => execution.await,
+      }
     },
     move |settlement| {
       Message::Playback(PlaybackMessage::ControllerSettled {
@@ -2403,7 +2469,6 @@ mod tests {
   use std::sync::Arc;
   use std::time::Instant;
 
-  use jellypilot_auth::AuthStore;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::intro_skipper::IntroSkipMode;
@@ -2562,12 +2627,16 @@ mod tests {
     let settings = SettingsStore::default();
     let mut request_gate = RequestGate::default();
     let surface = Surface::new(&mut request_gate);
+    let auth_store = crate::app::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     let kernel = Kernel {
       item_actions: Default::default(),
       locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),
-      auth_store: AuthStore::default(),
+      auth_store,
+      sdk,
+      sdk_handoff,
       request_gate,
       client: None,
       connection: ConnectionPhase::SignedOut,
@@ -4546,6 +4615,344 @@ mod tests {
       command: command.to_owned(),
       seek_position_ticks: None,
     })
+  }
+
+  #[tokio::test]
+  async fn account_handoff_blocks_remote_and_deferred_play_without_pausing() {
+    use iced::futures::{FutureExt, StreamExt};
+
+    let (mut surface, mut kernel) = active_playback_fixture();
+    surface.artwork_enabled = false;
+    sync_account_admission(&mut surface, &mut kernel);
+    kernel
+      .sdk
+      .adopt_test_session(jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://example.test".to_owned(),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    let sdk = Arc::clone(&kernel.sdk);
+    let operation = sdk.disconnect();
+    tokio::pin!(operation);
+    let hook = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      tokio::select! {
+        _ = &mut operation => panic!("disconnect must wait for physical teardown"),
+        request = async { kernel.sdk_handoff.receiver.lock().await.recv().await } => request.unwrap(),
+      }
+    }).await.unwrap();
+
+    assert!(kernel.sdk.content_mutations_blocked());
+    assert!(!surface.view.now_playing.as_ref().unwrap().paused);
+    let remote = surface.remote.token();
+    let token = kernel.request_gate.begin_remote_play();
+    let task = handle_remote_command(
+      &mut surface,
+      &mut kernel,
+      false,
+      remote,
+      play_request(),
+      false,
+    );
+    assert!(iced_runtime::task::into_stream(task).is_none());
+    assert!(!play_pending(&surface));
+    assert!(!kernel.request_gate.is_current_remote_play(token));
+
+    surface.pending_play = Some(PendingPlay::Resume);
+    assert!(window_opened(&mut surface, &mut kernel, false).is_none());
+    assert!(!play_pending(&surface));
+    let result = apply_playback_input(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
+    );
+    if let Some(mut actions) = iced_runtime::task::into_stream(result.task) {
+      assert!(
+        actions.next().await.is_none(),
+        "blocked playback must emit no controller work"
+      );
+    }
+    assert!(!surface.view.now_playing.as_ref().unwrap().paused);
+    assert!(operation.as_mut().now_or_never().is_none());
+
+    hook.resolve(false);
+    assert!(operation.await.is_err());
+    assert!(!kernel.sdk.content_mutations_blocked());
+    assert!(!surface.view.now_playing.as_ref().unwrap().paused);
+  }
+
+  #[tokio::test]
+  async fn credential_deletion_fences_queued_and_automatic_playback() {
+    use iced::futures::{FutureExt, StreamExt};
+    use jellypilot_auth::{AuthStore, CredentialError, SecureCredential, SensitiveSavedSession};
+    use std::sync::{mpsc, Mutex};
+
+    struct Credential {
+      secret: Mutex<Option<Vec<u8>>>,
+      entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+      release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl SecureCredential for Credential {
+      fn read(&self) -> Result<Vec<u8>, CredentialError> {
+        self
+          .secret
+          .lock()
+          .unwrap()
+          .clone()
+          .ok_or(CredentialError::Missing)
+      }
+      fn write(&self, secret: &[u8]) -> Result<(), CredentialError> {
+        *self.secret.lock().unwrap() = Some(secret.to_vec());
+        Ok(())
+      }
+      fn delete(&self) -> Result<(), CredentialError> {
+        self
+          .entered
+          .lock()
+          .unwrap()
+          .take()
+          .unwrap()
+          .send(())
+          .unwrap();
+        let _ = self.release.lock().unwrap().recv();
+        Err(CredentialError::WriteFailed)
+      }
+    }
+
+    for scenario in [
+      "queued-start",
+      "queued-resume",
+      "eof",
+      "dispatched-start",
+      "queued-reopened",
+      "mutex-reopened",
+      "remote-reopened",
+      "deferred-reopened",
+    ] {
+      let (mut surface, mut kernel, auxiliary) = active_playback_fixture_with_auxiliary();
+      surface.artwork_enabled = false;
+      for effect in auxiliary {
+        if let PlaybackEffect::LookupAdjacent(id, AdjacentDirection::Next) = effect {
+          drop(surface.session.handle(
+            PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+              id,
+              direction: AdjacentDirection::Next,
+              result: Ok(Some(media_item("episode-2"))),
+            })),
+            Instant::now(),
+          ));
+        }
+      }
+      let start = || PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-2", 1)),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      };
+      let (id, command) = controller_effect(
+        surface
+          .session
+          .handle(
+            PlaybackInput::Intent(Box::new(
+              if matches!(scenario, "dispatched-start" | "mutex-reopened") {
+                start()
+              } else {
+                PlaybackIntent::Tick
+              },
+            )),
+            Instant::now(),
+          )
+          .effects,
+      );
+      let queued = match scenario {
+        "queued-start" | "queued-reopened" => Some(start()),
+        "queued-resume" => Some(PlaybackIntent::SetPaused(false)),
+        _ => None,
+      };
+      if let Some(intent) = queued {
+        assert!(surface
+          .session
+          .handle(PlaybackInput::Intent(Box::new(intent)), Instant::now())
+          .effects
+          .is_empty());
+      }
+
+      let (entered, entered_rx) = tokio::sync::oneshot::channel();
+      let (release, release_rx) = mpsc::channel();
+      let store = AuthStore::with_credential(Arc::new(Credential {
+        secret: Mutex::new(None),
+        entered: Mutex::new(Some(entered)),
+        release: Mutex::new(release_rx),
+      }));
+      let (sdk, channel) = crate::app::kernel::test_account_runtime(&store);
+      kernel.sdk = sdk;
+      kernel.sdk_handoff = channel;
+      let session = jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://example.test".to_owned(),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      };
+      store
+        .save_session(SensitiveSavedSession::from_saved_session(session.clone()))
+        .await
+        .unwrap();
+      kernel.sdk.adopt_test_session(session);
+      let profile = kernel.sdk.active_profile().unwrap();
+      accounts::sync_activated(&mut kernel, &profile);
+      sync_account_admission(&mut surface, &mut kernel);
+      let previous_play = kernel.request_gate.begin_remote_play();
+      if scenario == "deferred-reopened" {
+        surface.pending_play = Some(PendingPlay::Resume);
+      }
+      let waiting = if scenario == "mutex-reopened" {
+        let controller = Arc::new(tokio::sync::Mutex::new(PlaybackController::from_mpv(
+          kernel.client.as_ref().unwrap().clone(),
+          jellypilot_mpv::MpvClient::new(Some("/unused-mpv".into())),
+          Vec::new(),
+        )));
+        surface.controller = Some(controller.clone());
+        let lock = controller.lock_owned().await;
+        let task = execute_controller_command(&surface, &kernel, id, command.clone());
+        let mut messages = iced_runtime::task::into_stream(task).unwrap();
+        assert!(
+          messages.next().now_or_never().is_none(),
+          "command waits for the controller"
+        );
+        Some((lock, messages))
+      } else {
+        None
+      };
+      let sdk = Arc::clone(&kernel.sdk);
+      let operation = tokio::spawn(async move { sdk.sign_out(profile.key, false).await });
+      tokio::time::timeout(std::time::Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+      assert!(kernel.sdk.content_mutations_blocked());
+      let completion = async move {
+        release.send(()).unwrap();
+        assert!(operation.await.unwrap().is_err());
+      };
+      let mut completion = Some(completion);
+      if matches!(
+        scenario,
+        "queued-reopened" | "mutex-reopened" | "remote-reopened" | "deferred-reopened"
+      ) {
+        completion.take().unwrap().await;
+        assert!(!kernel.sdk.content_mutations_blocked());
+      }
+
+      if scenario == "remote-reopened" {
+        let remote = surface.remote.token();
+        let task = handle_remote(
+          &mut surface,
+          &mut kernel,
+          false,
+          RemoteMessage::PlayResolved {
+            remote,
+            play: previous_play,
+            result: Box::new(Ok(Playable::Library(episode("episode-2", 1)))),
+            start_position_ticks: None,
+            selection: PlaybackSelection::default(),
+          },
+          true,
+        );
+        assert!(iced_runtime::task::into_stream(task).is_none());
+        assert!(!kernel.request_gate.is_current_remote_play(previous_play));
+      }
+      if scenario == "deferred-reopened" {
+        assert!(window_opened(&mut surface, &mut kernel, false).is_none());
+        assert!(!play_pending(&surface));
+      }
+
+      let message = if matches!(scenario, "dispatched-start" | "mutex-reopened") {
+        let mut messages = if let Some((lock, messages)) = waiting {
+          drop(lock);
+          messages
+        } else {
+          iced_runtime::task::into_stream(execute_controller_command(
+            &surface, &kernel, id, command,
+          ))
+          .unwrap()
+        };
+        let Some(iced_runtime::Action::Output(Message::Playback(message))) = messages.next().await
+        else {
+          panic!("rejected command must settle its receipt");
+        };
+        assert!(
+          matches!(&message, PlaybackMessage::ControllerSettled { settlement, .. }
+          if matches!(settlement.as_ref(), ControllerSettlement::AdmissionRejected))
+        );
+        message
+      } else {
+        PlaybackMessage::ControllerSettled {
+          id,
+          settlement: Box::new(ControllerSettlement::Refreshed {
+            outcome: PlaybackRefreshOutcome {
+              snapshot: playback_snapshot(12.0),
+              state: if scenario == "eof" {
+                PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile)
+              } else {
+                PlaybackRefreshState::Active
+              },
+              warnings: Vec::new(),
+            },
+            client_messages: Vec::new(),
+          }),
+          started: None,
+        }
+      };
+      let result = update(&mut surface, &mut kernel, false, message);
+      if let Some(mut actions) = iced_runtime::task::into_stream(result.task) {
+        assert!(
+          actions.next().await.is_none(),
+          "{scenario}: no start or unpause reaches the controller"
+        );
+      }
+      assert!(surface.view.lifecycle.settled);
+      assert!(surface.view.notice.is_none());
+      if scenario == "eof" {
+        assert!(surface.view.now_playing.is_none());
+      } else {
+        let current = surface.view.now_playing.as_ref().unwrap();
+        assert_eq!(current.item.item_id, "episode-1");
+        assert!(
+          !current.paused,
+          "admission must not physically pause the current item"
+        );
+      }
+      if let Some(completion) = completion {
+        completion.await;
+      }
+      assert!(!kernel.sdk.content_mutations_blocked());
+      assert!(kernel.client.as_ref().unwrap().login().is_connected());
+      assert!(kernel.sdk_handoff.receiver.lock().await.try_recv().is_err());
+      let resumed = update(
+        &mut surface,
+        &mut kernel,
+        false,
+        PlaybackMessage::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
+      );
+      if let Some(mut actions) = iced_runtime::task::into_stream(resumed.task) {
+        assert!(
+          actions.next().await.is_none(),
+          "revoked playback is never replayed after failed deletion"
+        );
+      }
+    }
   }
 
   #[test]

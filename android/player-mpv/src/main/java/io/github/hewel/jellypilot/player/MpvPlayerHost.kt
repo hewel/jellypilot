@@ -172,10 +172,12 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       if (released) return@enqueue
       val wasEligible = current.admissionEligible
       if (!eligible && current.playWhenReady) {
-        // Losing admission always drops queued play intent — including intent
-        // parked while paused or still loading — so FILE_LOADED never
-        // unpauses into an ineligible state.
-        mutate { copy(playWhenReady = false) }
+        // Queued starts are revoked synchronously above. Admission-only policy
+        // must still describe an already-loaded, non-ending session as playing.
+        val ongoingPlayback = !config.pauseWhenIneligible &&
+          (current.status == PlayerStatus.READY || current.status == PlayerStatus.BUFFERING) &&
+          active?.let { it.fileLoaded && !it.endQueued } == true
+        if (!ongoingPlayback) mutate { copy(playWhenReady = false) }
       }
       mutate { copy(admissionEligible = eligible) }
       if (wasEligible && !eligible && config.pauseWhenIneligible) {

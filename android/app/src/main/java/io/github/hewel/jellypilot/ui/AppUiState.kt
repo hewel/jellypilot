@@ -79,4 +79,6 @@ internal data class AppUiState(
   val showPlayer: Boolean = false,
   /** Raw search field text; mirrors the retained SDK query so a recreated field never shows stale or empty input. */
   val searchQuery: String = "",
+  /** SDK sign-out deleted the saved credentials but teardown failed; the session stays connected for a cleanup retry and new playback/writes stay blocked. */
+  val signOutCleanupPending: Boolean = false,
 )

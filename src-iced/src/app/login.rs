@@ -1,41 +1,41 @@
 //! Login surface (ADR 0029): provider/server/credential form state, Quick
 //! Connect, password authentication, and saved-profile restore.
+//!
+//! Authentication itself is owned by the shared [`jellypilot_sdk::Sdk`]:
+//! password, Quick Connect, and saved-profile validation all produce an SDK
+//! [`ProfileCandidate`], and [`Sdk::activate_candidate`] performs the single
+//! committed adoption. This module keeps only form state, presentation, and
+//! the message plumbing between the SDK and the UI loop.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use iced::futures::SinkExt;
 use iced::Task;
-use jellypilot_auth::login::{
-  can_start_login, provider_key, quick_connect_workflow, validate_server_url, ConnectionPhase,
-  LoginError, LoginEvent, ValidatedProfileCandidate, QUICK_CONNECT_POLL_INTERVAL,
-  QUICK_CONNECT_TIMEOUT,
-};
-use jellypilot_auth::AuthStore;
+use jellypilot_auth::login::{can_start_login, provider_key, validate_server_url, ConnectionPhase};
+use jellypilot_auth::SavedProfileKey;
 use jellypilot_core::config::{LoginPrefill, Settings};
-use jellypilot_core::request_gate::{RequestGate, SessionToken};
-use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider};
-use zeroize::{Zeroize, Zeroizing};
+use jellypilot_media_server::MediaServerProvider;
+use jellypilot_sdk::{
+  ProfileCandidate, QuickConnectListener, QuickConnectOutcome, QuickConnectSession, Sdk, SdkError,
+};
+use zeroize::Zeroizing;
 
+use super::accounts;
 use super::kernel::Kernel;
 use super::message::{
-  LoginMessage, Message, PasswordSubmission, ProtectedSavedSession, SensitiveSessionPayload,
+  LoginMessage, Message, PasswordSubmission, ProtectedCandidate, ProtectedOutcome,
+  QuickConnectEvent,
 };
-use super::state::{ConnectedIdentity, LoginMethod, LoginState, QuickConnectState};
+use super::state::{LoginMethod, LoginState, QuickConnectState};
 use crate::i18n::UiText;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 
-pub(crate) fn error_text(error: &LoginError) -> UiText {
+/// Maps an SDK failure to the closest localized login error.
+pub(crate) fn sdk_error_text(error: &SdkError) -> UiText {
   UiText::new(match error {
-    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::Unavailable) => {
-      "login-storage-unavailable"
-    }
-    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::Corrupt) => "login-storage-corrupt",
-    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::ProfileNotFound) => {
-      "login-profile-missing"
-    }
-    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::WriteFailed) => {
-      "login-storage-write-failed"
-    }
-    LoginError::Request(_) => "login-request-failed",
+    SdkError::ProfileNotFound => "login-profile-missing",
+    SdkError::Storage(_) => "login-storage-unavailable",
+    _ => "login-request-failed",
   })
 }
 
@@ -49,25 +49,36 @@ fn invalid_server_text(provider: MediaServerProvider) -> UiText {
   )
 }
 
-/// Login surface slice: the credential form flow plus the abort handle for an
-/// in-flight Quick Connect stream.
+/// Login surface slice: the credential form flow plus the live SDK Quick
+/// Connect session and its event generation.
 pub struct Surface {
   pub flow: LoginState,
-  pub quick_connect_task: Option<iced::task::Handle>,
+  pub password_task: Option<iced::task::Handle>,
+  /// Password and restore completions retain their request identity even after
+  /// their task has queued a message and can no longer be cancelled.
+  pub request_seq: u64,
+  /// Activation cannot be replaced once its committed SDK task is admitted.
+  pub activation_pending: bool,
+  pub quick_connect_session: Option<Arc<QuickConnectSession>>,
+  /// Monotonic session counter; events carry the sequence they belong to so
+  /// a late terminal outcome can never settle a newer session.
+  pub qc_seq: u64,
 }
 
 /// Login form used while another media-server session remains active.
 ///
-/// Its request gate and cancellation handle are intentionally independent of
-/// [`Kernel`]. A successful request yields a validated candidate; adopting it
-/// remains the account coordinator's responsibility.
+/// A successful request yields a validated SDK candidate; adopting it remains
+/// the account coordinator's responsibility. Cancellation drops in-flight
+/// futures and cancels the SDK Quick Connect session; late events are fenced
+/// by the surface instance and per-method request sequences.
 pub struct CandidateSurface {
   pub flow: LoginState,
   pub password_busy: bool,
   instance: u64,
-  request_gate: RequestGate,
-  quick_connect_task: Option<iced::task::Handle>,
+  quick_connect_session: Option<Arc<QuickConnectSession>>,
+  qc_seq: u64,
   password_task: Option<iced::task::Handle>,
+  password_seq: u64,
 }
 
 impl CandidateSurface {
@@ -79,15 +90,16 @@ impl CandidateSurface {
       flow,
       password_busy: false,
       instance,
-      request_gate: RequestGate::default(),
-      quick_connect_task: None,
+      quick_connect_session: None,
+      qc_seq: 0,
       password_task: None,
+      password_seq: 0,
     }
   }
 
   pub fn busy(&self) -> bool {
     self.password_busy
-      || self.quick_connect_task.is_some()
+      || self.quick_connect_session.is_some()
       || matches!(
         self.flow.quick_connect,
         QuickConnectState::Requesting
@@ -97,11 +109,14 @@ impl CandidateSurface {
   }
 
   pub fn cancel(&mut self) {
-    cancel_candidate_quick_connect(self);
+    self.qc_seq = self.qc_seq.wrapping_add(1);
+    self.password_seq = self.password_seq.wrapping_add(1);
+    if let Some(session) = self.quick_connect_session.take() {
+      session.cancel();
+    }
     if let Some(handle) = self.password_task.take() {
       handle.abort();
     }
-    self.request_gate.disconnect();
     self.password_busy = false;
     self.flow.password.clear();
     self.flow.reset_quick_connect();
@@ -119,21 +134,21 @@ pub enum CandidateMessage {
   QuickConnectSubmitted,
   QuickConnectCancelled,
   PasswordSubmitted,
-  WorkflowEvent {
+  QuickConnectEvent {
     instance: u64,
-    event: LoginEvent,
+    session: u64,
+    event: QuickConnectEvent,
   },
   PasswordFinished {
     instance: u64,
-    session: SessionToken,
-    client: Arc<JellyfinClient>,
-    result: Result<(), LoginError>,
+    request: u64,
+    result: Result<ProtectedCandidate, SdkError>,
     submission: PasswordSubmission,
   },
 }
 
 pub struct CandidateCompletion {
-  pub candidate: ValidatedProfileCandidate,
+  pub candidate: ProfileCandidate,
   pub submission: Option<PasswordSubmission>,
 }
 
@@ -151,12 +166,56 @@ impl CandidateUpdate {
   }
 }
 
+/// Forwards SDK Quick Connect callbacks into the UI event stream.
+struct UiQuickConnectListener {
+  sender: tokio::sync::mpsc::UnboundedSender<QuickConnectEvent>,
+}
+
+impl QuickConnectListener for UiQuickConnectListener {
+  fn on_code(&self, code: String) {
+    let _ = self.sender.send(QuickConnectEvent::Code(code));
+  }
+
+  fn on_approving(&self) {
+    let _ = self.sender.send(QuickConnectEvent::Approving);
+  }
+
+  fn on_completed(&self, outcome: QuickConnectOutcome) {
+    let _ = self
+      .sender
+      .send(QuickConnectEvent::Completed(ProtectedOutcome::new(outcome)));
+  }
+}
+
+/// Starts an SDK Quick Connect session and returns its handle plus the task
+/// draining listener events into `map`ped messages. The drain ends when the
+/// SDK drops the listener after the terminal outcome.
+fn start_sdk_quick_connect(
+  sdk: &Sdk,
+  provider: MediaServerProvider,
+  server_url: String,
+  map: impl Fn(QuickConnectEvent) -> CandidateMessage + Send + 'static,
+) -> Result<(Arc<QuickConnectSession>, Task<CandidateMessage>), SdkError> {
+  let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+  let listener: Arc<dyn QuickConnectListener> = Arc::new(UiQuickConnectListener { sender });
+  let session = sdk.start_quick_connect(provider, server_url, listener)?;
+  let stream = iced::stream::channel(8, async move |mut output| {
+    while let Some(event) = receiver.recv().await {
+      if output.send(map(event)).await.is_err() {
+        break;
+      }
+    }
+  });
+  Ok((session, Task::run(stream, std::convert::identity)))
+}
+
 /// Reduces one isolated add-account authentication event.
 ///
 /// The returned completion owns the validated candidate but does not replace
 /// the live [`Kernel`] client. Callers may discard it safely on cancellation.
 pub fn update_candidate(
   surface: &mut CandidateSurface,
+  sdk: &Arc<Sdk>,
   message: CandidateMessage,
 ) -> CandidateUpdate {
   match message {
@@ -202,37 +261,45 @@ pub fn update_candidate(
       }
       CandidateUpdate::none()
     }
-    CandidateMessage::QuickConnectSubmitted => start_candidate_quick_connect(surface),
+    CandidateMessage::QuickConnectSubmitted => start_candidate_quick_connect(surface, sdk),
     CandidateMessage::QuickConnectCancelled => {
       surface.cancel();
       surface.flow.error = None;
       CandidateUpdate::none()
     }
-    CandidateMessage::PasswordSubmitted => start_candidate_password_login(surface),
-    CandidateMessage::WorkflowEvent { instance, event } => {
-      if instance != surface.instance {
+    CandidateMessage::PasswordSubmitted => start_candidate_password_login(surface, sdk),
+    CandidateMessage::QuickConnectEvent {
+      instance,
+      session,
+      event,
+    } => {
+      if instance != surface.instance || session != surface.qc_seq {
         return CandidateUpdate::none();
       }
-      handle_candidate_workflow_event(surface, event)
+      handle_candidate_qc_event(surface, event)
     }
     CandidateMessage::PasswordFinished {
       instance,
-      session,
-      client,
+      request,
       result,
       submission,
     } => {
-      if instance != surface.instance || !surface.request_gate.finish_login(session) {
+      if instance != surface.instance
+        || request != surface.password_seq
+        || surface.password_task.take().is_none()
+      {
         return CandidateUpdate::none();
       }
-      surface.password_task = None;
       surface.password_busy = false;
-      finish_candidate_authentication(surface, client, result, Some(submission))
+      finish_candidate_authentication(surface, result, Some(submission))
     }
   }
 }
 
-fn start_candidate_quick_connect(surface: &mut CandidateSurface) -> CandidateUpdate {
+fn start_candidate_quick_connect(
+  surface: &mut CandidateSurface,
+  sdk: &Arc<Sdk>,
+) -> CandidateUpdate {
   if surface.busy() {
     return CandidateUpdate::none();
   }
@@ -248,41 +315,39 @@ fn start_candidate_quick_connect(surface: &mut CandidateSurface) -> CandidateUpd
     }
   };
   surface.flow.server_url = server_url.clone();
-  cancel_candidate_quick_connect(surface);
-  let session = surface.request_gate.begin_login();
-  surface.flow.quick_connect = QuickConnectState::Requesting;
-  surface.flow.error = None;
-  let client = Arc::new(JellyfinClient::new());
+  if let Some(session) = surface.quick_connect_session.take() {
+    session.cancel();
+  }
+  surface.qc_seq = surface.qc_seq.wrapping_add(1);
+  let qc_seq = surface.qc_seq;
   let instance = surface.instance;
-  let stream = iced::stream::channel(16, async move |sender| {
-    let sender = Arc::new(Mutex::new(sender));
-    quick_connect_workflow(
-      client,
-      server_url,
-      session,
-      move |event| {
-        sender
-          .lock()
-          .is_ok_and(|mut sender| sender.try_send(event).is_ok())
-      },
-      QUICK_CONNECT_POLL_INTERVAL,
-      QUICK_CONNECT_TIMEOUT,
-    )
-    .await;
-  });
-  let (task, handle) = Task::run(stream, move |event| CandidateMessage::WorkflowEvent {
-    instance,
-    event,
-  })
-  .abortable();
-  surface.quick_connect_task = Some(handle);
-  CandidateUpdate {
-    task,
-    completion: None,
+  match start_sdk_quick_connect(sdk, surface.flow.provider, server_url, move |event| {
+    CandidateMessage::QuickConnectEvent {
+      instance,
+      session: qc_seq,
+      event,
+    }
+  }) {
+    Ok((session, task)) => {
+      surface.quick_connect_session = Some(session);
+      surface.flow.quick_connect = QuickConnectState::Requesting;
+      surface.flow.error = None;
+      CandidateUpdate {
+        task,
+        completion: None,
+      }
+    }
+    Err(error) => {
+      surface.flow.error = Some(sdk_error_text(&error));
+      CandidateUpdate::none()
+    }
   }
 }
 
-fn start_candidate_password_login(surface: &mut CandidateSurface) -> CandidateUpdate {
+fn start_candidate_password_login(
+  surface: &mut CandidateSurface,
+  sdk: &Arc<Sdk>,
+) -> CandidateUpdate {
   if surface.busy() {
     return CandidateUpdate::none();
   }
@@ -300,38 +365,25 @@ fn start_candidate_password_login(surface: &mut CandidateSurface) -> CandidateUp
     return CandidateUpdate::none();
   }
 
-  let session = surface.request_gate.begin_login();
   let instance = surface.instance;
+  surface.password_seq = surface.password_seq.wrapping_add(1);
+  let request = surface.password_seq;
   surface.password_busy = true;
   surface.flow.error = None;
-  let client = Arc::new(JellyfinClient::new());
-  let command_client = Arc::clone(&client);
   let submission = candidate_password_submission(surface, server_url.clone(), username.clone());
-  let credentials = AuthStore::protect_credentials(Credentials {
-    provider: surface.flow.provider,
-    server_url,
-    username,
-    password: std::mem::take(&mut *surface.flow.password),
-  });
+  let password = std::mem::take(&mut *surface.flow.password);
+  let sdk = Arc::clone(sdk);
+  let provider = surface.flow.provider;
   let task = Task::perform(
     async move {
-      let result = async {
-        let mut response = command_client
-          .login()
-          .authenticate(&credentials)
-          .await
-          .map_err(|_| LoginError::Request("Password authentication failed.".to_owned()))?;
-        response.access_token.zeroize();
-        Ok(())
-      }
-      .await;
-      (client, result)
+      sdk
+        .password_login(provider, server_url, username, password)
+        .await
     },
-    move |(client, result)| CandidateMessage::PasswordFinished {
+    move |result| CandidateMessage::PasswordFinished {
       instance,
-      session,
-      client,
-      result,
+      request,
+      result: result.map(ProtectedCandidate::new),
       submission,
     },
   );
@@ -355,45 +407,44 @@ fn candidate_password_submission(
   }
 }
 
-fn handle_candidate_workflow_event(
+fn handle_candidate_qc_event(
   surface: &mut CandidateSurface,
-  event: LoginEvent,
+  event: QuickConnectEvent,
 ) -> CandidateUpdate {
   match event {
-    LoginEvent::QuickConnectCode { session, code } => {
-      if surface.request_gate.is_current_login(session) {
-        surface.flow.quick_connect = QuickConnectState::Waiting(code);
-      }
+    QuickConnectEvent::Code(code) => {
+      surface.flow.quick_connect = QuickConnectState::Waiting(code);
       CandidateUpdate::none()
     }
-    LoginEvent::QuickConnectApproving { session } => {
-      if surface.request_gate.is_current_login(session) {
-        surface.flow.quick_connect = QuickConnectState::Approving;
-      }
+    QuickConnectEvent::Approving => {
+      surface.flow.quick_connect = QuickConnectState::Approving;
       CandidateUpdate::none()
     }
-    LoginEvent::Login {
-      session,
-      client,
-      result,
-    } => {
-      if !surface.request_gate.finish_login(session) {
-        return CandidateUpdate::none();
+    QuickConnectEvent::Completed(outcome) => {
+      surface.qc_seq = surface.qc_seq.wrapping_add(1);
+      surface.quick_connect_session = None;
+      match outcome.take() {
+        Some(QuickConnectOutcome::Success(candidate)) => {
+          finish_candidate_authentication(surface, Ok(ProtectedCandidate::new(*candidate)), None)
+        }
+        Some(QuickConnectOutcome::Failed(error)) => {
+          finish_candidate_authentication(surface, Err(error), None)
+        }
+        Some(QuickConnectOutcome::Cancelled) | None => {
+          surface.flow.reset_quick_connect();
+          CandidateUpdate::none()
+        }
       }
-      surface.quick_connect_task = None;
-      finish_candidate_authentication(surface, client, result, None)
     }
-    LoginEvent::SavedProfiles(_) | LoginEvent::SavedSessionStored { .. } => CandidateUpdate::none(),
   }
 }
 
 fn finish_candidate_authentication(
   surface: &mut CandidateSurface,
-  client: Arc<JellyfinClient>,
-  result: Result<(), LoginError>,
+  result: Result<ProtectedCandidate, SdkError>,
   submission: Option<PasswordSubmission>,
 ) -> CandidateUpdate {
-  match result.and_then(|()| ValidatedProfileCandidate::from_authenticated_client(client)) {
+  match result.and_then(|candidate| candidate.take().ok_or(SdkError::Cancelled)) {
     Ok(candidate) => {
       surface.flow.password.clear();
       surface.flow.reset_quick_connect();
@@ -407,16 +458,10 @@ fn finish_candidate_authentication(
       }
     }
     Err(error) => {
-      surface.flow.error = Some(error_text(&error));
+      surface.flow.error = Some(sdk_error_text(&error));
       surface.flow.quick_connect = QuickConnectState::Failed;
       CandidateUpdate::none()
     }
-  }
-}
-
-fn cancel_candidate_quick_connect(surface: &mut CandidateSurface) {
-  if let Some(handle) = surface.quick_connect_task.take() {
-    handle.abort();
   }
 }
 
@@ -496,11 +541,8 @@ fn update_login(
       }
     }
     LoginMessage::QuickConnectCancelled => {
-      cancel_quick_connect(surface);
-      kernel.connection = ConnectionPhase::SignedOut;
-      surface.flow.reset_quick_connect();
+      interrupt_quick_connect(surface, kernel);
       surface.flow.error = None;
-      kernel.request_gate.disconnect();
       Task::none()
     }
     LoginMessage::PasswordSubmitted => {
@@ -511,10 +553,10 @@ fn update_login(
       }
     }
     LoginMessage::ProfilesLoaded { revision, result } => {
-      surface.flow.profiles_loading = false;
       if revision != surface.flow.profiles_revision {
         return Task::none();
       }
+      surface.flow.profiles_loading = false;
       match result {
         Ok(snapshot) => {
           let selected = snapshot.last_successfully_activated().cloned();
@@ -530,84 +572,37 @@ fn update_login(
           kernel.diagnostics.record(
             DiagnosticLevel::Error,
             DiagnosticCategory::Auth,
-            LoginError::AuthStorage(error).to_string(),
+            error.to_string(),
           );
-          surface.flow.error = Some(error_text(&LoginError::AuthStorage(error)));
+          surface.flow.error = Some(sdk_error_text(&error));
         }
       }
       Task::none()
     }
-    LoginMessage::WorkflowEvent(event) => handle_workflow_event(surface, kernel, can_login, event),
+    LoginMessage::QuickConnectEvent { session, event } => {
+      if session != surface.qc_seq {
+        return Task::none();
+      }
+      handle_qc_event(surface, kernel, event)
+    }
     LoginMessage::PasswordFinished {
-      session,
-      client,
+      request,
       result,
       submission,
     } => {
-      if !kernel.request_gate.finish_login(session) {
+      if request != surface.request_seq || surface.password_task.take().is_none() {
         return Task::none();
       }
       match result {
-        Ok(saved_session) => {
-          let Some(saved_session) = saved_session.take() else {
-            return Task::none();
-          };
-          complete_authentication(
-            surface,
-            kernel,
-            session,
-            client,
-            saved_session,
-            Some(submission),
-          )
+        Ok(candidate) => {
+          persist_password_submission(kernel, submission);
+          begin_activation(surface, kernel, candidate)
         }
         Err(error) => {
           fail_password_login(surface, kernel, &error);
           Task::none()
         }
       }
-    }
-    LoginMessage::SavedSessionStored { session, result } => {
-      let current = kernel.request_gate.is_current_session(session);
-      match result {
-        Ok((key, profiles)) => {
-          surface.flow.profiles_revision = surface.flow.profiles_revision.wrapping_add(1);
-          surface.flow.profiles = profiles;
-          if current {
-            kernel.active_profile = Some(key.clone());
-            return record_successful_activation(kernel, session, key);
-          }
-        }
-        Err(error) if current => {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Error,
-            DiagnosticCategory::Auth,
-            LoginError::AuthStorage(error).to_string(),
-          );
-          kernel.notice = Some(error_text(&LoginError::AuthStorage(error)));
-        }
-        Err(_) => {}
-      }
-      Task::none()
-    }
-    LoginMessage::ActivationRecorded {
-      session,
-      key,
-      result,
-    } => {
-      if kernel.request_gate.is_current_session(session)
-        && kernel.active_profile.as_ref() == Some(&key)
-      {
-        if let Err(error) = result {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Error,
-            DiagnosticCategory::Auth,
-            format!("Connected, but the startup account selection could not be saved: {error}."),
-          );
-          kernel.notice = Some(UiText::new("account-activation-save-failed"));
-        }
-      }
-      Task::none()
     }
     LoginMessage::RestoreProfile(key) => {
       if playback_allows_login(surface, can_login) {
@@ -617,52 +612,27 @@ fn update_login(
       }
     }
     LoginMessage::RestoreFinished {
-      session,
+      request,
       key,
       result,
     } => {
-      if !kernel.request_gate.finish_login(session) {
+      // Only the tracked restore may settle; a stale completion for another
+      // key must not clear the in-flight busy marker.
+      if request != surface.request_seq || surface.flow.busy_profile.as_ref() != Some(&key) {
         return Task::none();
       }
-      if surface.flow.busy_profile.as_ref() == Some(&key) {
-        surface.flow.busy_profile = None;
-      }
+      surface.request_seq = surface.request_seq.wrapping_add(1);
       match result {
-        Ok(saved_session) => {
-          let Some(saved_session) = saved_session.take() else {
-            return Task::none();
-          };
-          let client = Arc::new(JellyfinClient::new());
-          client.login().adopt_validated_session(&saved_session);
-          kernel.connection = ConnectionPhase::Connected;
-          kernel.connected_identity = Some(ConnectedIdentity::from_session(&saved_session));
-          kernel.client = Some(client);
-          kernel.active_profile = Some(key.clone());
-          surface.flow.error = None;
-          return record_successful_activation(kernel, session, key);
+        Ok(candidate) => begin_activation(surface, kernel, candidate),
+        Err(error) => {
+          surface.flow.busy_profile = None;
+          fail_restore(surface, kernel, &error);
+          Task::none()
         }
-        Err(error) => fail_restore(surface, kernel, &error),
       }
-      Task::none()
     }
+    LoginMessage::ActivationFinished { result } => finish_activation(surface, kernel, result),
   }
-}
-
-fn record_successful_activation(
-  kernel: &Kernel,
-  session: SessionToken,
-  key: jellypilot_auth::SavedProfileKey,
-) -> Task<LoginMessage> {
-  let store = kernel.auth_store.clone();
-  let completion_key = key.clone();
-  Task::perform(
-    async move { store.record_successful_activation(key).await },
-    move |result| LoginMessage::ActivationRecorded {
-      session,
-      key: completion_key,
-      result,
-    },
-  )
 }
 
 fn should_auto_login(flow: &mut LoginState, kernel: &Kernel, has_profiles: bool) -> bool {
@@ -684,17 +654,28 @@ fn playback_allows_login(surface: &mut Surface, can_login: bool) -> bool {
   }
 }
 
-pub fn load_saved_profiles(surface: &Surface, kernel: &Kernel) -> Task<LoginMessage> {
-  let store = kernel.auth_store.clone();
-  let revision = surface.flow.profiles_revision;
-  Task::perform(
-    async move { store.load_profiles_snapshot().await },
-    move |result| LoginMessage::ProfilesLoaded { revision, result },
-  )
+pub fn load_saved_profiles(flow: &LoginState, kernel: &Kernel) -> Task<LoginMessage> {
+  let sdk = Arc::clone(&kernel.sdk);
+  let revision = flow.profiles_revision;
+  Task::perform(async move { sdk.saved_profiles().await }, move |result| {
+    LoginMessage::ProfilesLoaded { revision, result }
+  })
+}
+
+/// Admission shared by form controls and the reducer. Authentication keeps its
+/// request identity until settlement; another saved profile must wait for it.
+pub fn can_start_authentication(surface: &Surface, kernel: &Kernel) -> bool {
+  can_start_login(kernel.connection)
+    && !surface.activation_pending
+    && surface.password_task.is_none()
+    && surface.flow.busy_profile.is_none()
+    && surface.quick_connect_session.is_none()
+    && !kernel.sdk.content_mutations_blocked()
+    && kernel.sdk.active_profile().is_none()
 }
 
 fn start_quick_connect(surface: &mut Surface, kernel: &mut Kernel) -> Task<LoginMessage> {
-  if !can_start_login(kernel.connection) {
+  if !can_start_authentication(surface, kernel) {
     return Task::none();
   }
   if surface.flow.provider != MediaServerProvider::Jellyfin {
@@ -713,35 +694,47 @@ fn start_quick_connect(surface: &mut Surface, kernel: &mut Kernel) -> Task<Login
   };
   surface.flow.server_url = server_url.clone();
 
-  cancel_quick_connect(surface);
-  let session = kernel.request_gate.begin_login();
-  kernel.connection = ConnectionPhase::Connecting;
-  surface.flow.quick_connect = QuickConnectState::Requesting;
-  surface.flow.error = None;
-  let client = Arc::new(JellyfinClient::new());
-  let stream = iced::stream::channel(16, async move |sender| {
-    let sender = Arc::new(Mutex::new(sender));
-    quick_connect_workflow(
-      client,
-      server_url,
-      session,
-      move |event| {
-        sender
-          .lock()
-          .is_ok_and(|mut sender| sender.try_send(event).is_ok())
-      },
-      QUICK_CONNECT_POLL_INTERVAL,
-      QUICK_CONNECT_TIMEOUT,
-    )
-    .await;
-  });
-  let (task, handle) = Task::run(stream, LoginMessage::WorkflowEvent).abortable();
-  surface.quick_connect_task = Some(handle);
-  task
+  if let Some(session) = surface.quick_connect_session.take() {
+    session.cancel();
+  }
+  surface.qc_seq = surface.qc_seq.wrapping_add(1);
+  let qc_seq = surface.qc_seq;
+  match start_sdk_quick_connect(
+    &kernel.sdk,
+    surface.flow.provider,
+    server_url,
+    move |event| CandidateMessage::QuickConnectEvent {
+      instance: 0,
+      session: qc_seq,
+      event,
+    },
+  ) {
+    Ok((session, task)) => {
+      surface.quick_connect_session = Some(session);
+      kernel.connection = ConnectionPhase::Connecting;
+      surface.flow.quick_connect = QuickConnectState::Requesting;
+      surface.flow.error = None;
+      task.map(|message| match message {
+        CandidateMessage::QuickConnectEvent { session, event, .. } => {
+          LoginMessage::QuickConnectEvent { session, event }
+        }
+        _ => unreachable!("quick connect drain only emits QuickConnectEvent"),
+      })
+    }
+    Err(error) => {
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Auth,
+        "Could not start or activate this sign-in. Try again.",
+      );
+      surface.flow.error = Some(sdk_error_text(&error));
+      Task::none()
+    }
+  }
 }
 
 fn start_password_login(surface: &mut Surface, kernel: &mut Kernel) -> Task<LoginMessage> {
-  if !can_start_login(kernel.connection) {
+  if !can_start_authentication(surface, kernel) {
     return Task::none();
   }
   let server_url = match validate_server_url(&surface.flow.server_url, surface.flow.provider) {
@@ -766,42 +759,30 @@ fn start_password_login(surface: &mut Surface, kernel: &mut Kernel) -> Task<Logi
     return Task::none();
   }
 
-  cancel_quick_connect(surface);
-  let session = kernel.request_gate.begin_login();
+  interrupt_quick_connect(surface, kernel);
+  invalidate_pending_authentication(surface);
+  let request = surface.request_seq;
   kernel.connection = ConnectionPhase::Connecting;
   surface.flow.error = None;
-  let client = Arc::new(JellyfinClient::new());
-  let command_client = Arc::clone(&client);
   let submission = password_submission(surface, server_url.clone(), username.clone());
-  let credentials = AuthStore::protect_credentials(Credentials {
-    provider: surface.flow.provider,
-    server_url,
-    username,
-    password: std::mem::take(&mut *surface.flow.password),
-  });
-  Task::perform(
+  let password = std::mem::take(&mut *surface.flow.password);
+  let sdk = Arc::clone(&kernel.sdk);
+  let provider = surface.flow.provider;
+  let task = Task::perform(
     async move {
-      let result = async {
-        let mut response = command_client
-          .login()
-          .authenticate(&credentials)
-          .await
-          .map_err(|_| LoginError::Request("Password authentication failed.".to_owned()))?;
-        response.access_token.zeroize();
-        jellypilot_auth::SensitiveSavedSession::from_client(&command_client)
-          .map(ProtectedSavedSession::new)
-          .ok_or_else(|| LoginError::Request("Password authentication failed.".to_owned()))
-      }
-      .await;
-      (client, result)
+      sdk
+        .password_login(provider, server_url, username, password)
+        .await
     },
-    move |(client, result)| LoginMessage::PasswordFinished {
-      session,
-      client,
-      result,
+    move |result| LoginMessage::PasswordFinished {
+      request,
+      result: result.map(ProtectedCandidate::new),
       submission,
     },
-  )
+  );
+  let (task, handle) = task.abortable();
+  surface.password_task = Some(handle);
+  task
 }
 
 fn password_submission(
@@ -816,100 +797,123 @@ fn password_submission(
   }
 }
 
-fn handle_workflow_event(
+fn handle_qc_event(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  can_login: bool,
-  event: LoginEvent,
+  event: QuickConnectEvent,
 ) -> Task<LoginMessage> {
   match event {
-    LoginEvent::QuickConnectCode { session, code } => {
-      if kernel.request_gate.is_current_login(session) {
-        surface.flow.quick_connect = QuickConnectState::Waiting(code);
-      }
+    QuickConnectEvent::Code(code) => {
+      surface.flow.quick_connect = QuickConnectState::Waiting(code);
       Task::none()
     }
-    LoginEvent::QuickConnectApproving { session } => {
-      if kernel.request_gate.is_current_login(session) {
-        surface.flow.quick_connect = QuickConnectState::Approving;
-      }
+    QuickConnectEvent::Approving => {
+      surface.flow.quick_connect = QuickConnectState::Approving;
       Task::none()
     }
-    LoginEvent::Login {
-      session,
-      client,
-      result,
-    } => {
-      if !kernel.request_gate.finish_login(session) {
-        return Task::none();
-      }
-      surface.quick_connect_task = None;
-      match result {
-        Ok(()) => match jellypilot_auth::SensitiveSavedSession::from_client(&client) {
-          Some(saved_session) => {
-            complete_authentication(surface, kernel, session, client, saved_session, None)
-          }
-          None => {
-            fail_login(
-              surface,
-              kernel,
-              LoginError::Request("Quick Connect returned no session.".to_owned()),
-            );
-            Task::none()
-          }
-        },
-        Err(error) => {
-          fail_login(surface, kernel, error);
+    QuickConnectEvent::Completed(outcome) => {
+      surface.qc_seq = surface.qc_seq.wrapping_add(1);
+      surface.quick_connect_session = None;
+      match outcome.take() {
+        Some(QuickConnectOutcome::Success(candidate)) => {
+          begin_activation(surface, kernel, ProtectedCandidate::new(*candidate))
+        }
+        Some(QuickConnectOutcome::Failed(error)) => {
+          kernel.connection = ConnectionPhase::Failed;
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Auth,
+            "Quick Connect failed. Try signing in again.",
+          );
+          surface.flow.error = Some(sdk_error_text(&error));
           surface.flow.quick_connect = QuickConnectState::Failed;
+          Task::none()
+        }
+        Some(QuickConnectOutcome::Cancelled) | None => {
+          surface.flow.reset_quick_connect();
+          if kernel.connection == ConnectionPhase::Connecting {
+            kernel.connection = ConnectionPhase::SignedOut;
+          }
           Task::none()
         }
       }
     }
-    LoginEvent::SavedProfiles(result) => update_login(
-      surface,
-      kernel,
-      can_login,
-      LoginMessage::ProfilesLoaded {
-        revision: surface.flow.profiles_revision,
-        result,
-      },
-    ),
-    LoginEvent::SavedSessionStored { session, result } => update_login(
-      surface,
-      kernel,
-      can_login,
-      LoginMessage::SavedSessionStored { session, result },
-    ),
   }
 }
 
-fn complete_authentication(
+/// Hands a validated candidate to the SDK for the single committed adoption.
+///
+/// The SDK owns teardown ordering, the client swap, session persistence, and
+/// startup-restore recording; this surface only projects the outcome.
+fn begin_activation(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  session: jellypilot_core::request_gate::SessionToken,
-  client: Arc<JellyfinClient>,
-  saved_session: SensitiveSessionPayload,
-  submission: Option<PasswordSubmission>,
+  candidate: ProtectedCandidate,
 ) -> Task<LoginMessage> {
-  let identity = ConnectedIdentity::from_session(&saved_session);
-  let active_profile = jellypilot_auth::SavedProfileKey::for_session(&saved_session);
-  if let Some(submission) = submission {
-    persist_password_submission(kernel, submission);
+  if surface.activation_pending {
+    return Task::none();
   }
-
-  kernel.connection = ConnectionPhase::Connected;
-  kernel.connected_identity = Some(identity);
-  kernel.client = Some(client);
-  kernel.active_profile = Some(active_profile);
+  let Some(candidate) = candidate.take() else {
+    return Task::none();
+  };
+  surface.activation_pending = true;
+  kernel.connection = ConnectionPhase::Connecting;
   surface.flow.password.clear();
-  surface.flow.error = None;
   surface.flow.reset_quick_connect();
-  let store = kernel.auth_store.clone();
-
+  surface.flow.error = None;
+  let sdk = Arc::clone(&kernel.sdk);
   Task::perform(
-    async move { store.save_session(saved_session).await },
-    move |result| LoginMessage::SavedSessionStored { session, result },
+    async move { sdk.activate_candidate(candidate, true).await },
+    move |result| LoginMessage::ActivationFinished { result },
   )
+}
+
+fn finish_activation(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  result: Result<jellypilot_sdk::ActivationOutcome, SdkError>,
+) -> Task<LoginMessage> {
+  if !std::mem::take(&mut surface.activation_pending) {
+    return Task::none();
+  }
+  match result {
+    Ok(outcome) => {
+      accounts::sync_activated(kernel, &outcome.profile);
+      surface.flow.busy_profile = None;
+      if let Some(warning) = outcome.persistence_warning {
+        kernel.diagnostics.record(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Auth,
+          format!("Connected, but the login could not be persisted: {warning}."),
+        );
+        kernel.notice = Some(UiText::new("account-session-save-failed"));
+      }
+      // The SDK persisted the session itself; refresh the saved-profile list
+      // so the new/updated entry appears without a restart.
+      surface.flow.profiles_revision = surface.flow.profiles_revision.wrapping_add(1);
+      surface.flow.profiles_loading = true;
+      load_saved_profiles(&surface.flow, kernel)
+    }
+    Err(SdkError::HandoffAborted) => {
+      // Reversible teardown was abandoned; no profile was adopted.
+      surface.flow.busy_profile = None;
+      if kernel.client.is_none() {
+        kernel.connection = ConnectionPhase::SignedOut;
+      }
+      Task::none()
+    }
+    Err(error) => {
+      surface.flow.busy_profile = None;
+      kernel.connection = ConnectionPhase::Failed;
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Auth,
+        "Could not start or activate this sign-in. Try again.",
+      );
+      surface.flow.error = Some(sdk_error_text(&error));
+      Task::none()
+    }
+  }
 }
 
 pub(crate) fn persist_password_submission(kernel: &mut Kernel, submission: PasswordSubmission) {
@@ -934,67 +938,53 @@ pub(crate) fn persist_password_submission(kernel: &mut Kernel, submission: Passw
 fn start_restore(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  key: jellypilot_auth::SavedProfileKey,
+  key: SavedProfileKey,
 ) -> Task<LoginMessage> {
+  if !can_start_authentication(surface, kernel) {
+    return Task::none();
+  }
   interrupt_quick_connect(surface, kernel);
-  let session = kernel.request_gate.begin_login();
+  invalidate_pending_authentication(surface);
+  let request = surface.request_seq;
   kernel.connection = ConnectionPhase::Connecting;
   surface.flow.busy_profile = Some(key.clone());
   surface.flow.error = None;
-  let store = kernel.auth_store.clone();
+  let sdk = Arc::clone(&kernel.sdk);
+  let request_key = key.as_str().to_owned();
   Task::perform(
-    async move {
-      let result = async {
-        let sensitive = store.load_session(key.clone()).await?;
-        let candidate = JellyfinClient::for_saved_profile(&sensitive);
-        candidate
-          .login()
-          .restore_session(&sensitive)
-          .await
-          .map_err(|_| LoginError::Request("Saved sign-in validation failed.".to_owned()))?;
-        jellypilot_auth::SensitiveSavedSession::from_client(&candidate)
-          .map(ProtectedSavedSession::new)
-          .ok_or_else(|| LoginError::Request("Saved sign-in validation failed.".to_owned()))
-      }
-      .await;
-      (key, result)
-    },
-    move |(key, result)| LoginMessage::RestoreFinished {
-      session,
+    async move { sdk.restore_saved_profile(request_key).await },
+    move |result| LoginMessage::RestoreFinished {
+      request,
       key,
-      result,
+      result: result.map(ProtectedCandidate::new),
     },
   )
 }
 
-fn cancel_quick_connect(surface: &mut Surface) {
-  if let Some(handle) = surface.quick_connect_task.take() {
+fn invalidate_pending_authentication(surface: &mut Surface) {
+  surface.request_seq = surface.request_seq.wrapping_add(1);
+  if let Some(handle) = surface.password_task.take() {
     handle.abort();
   }
+  surface.flow.busy_profile = None;
 }
 
 fn interrupt_quick_connect(surface: &mut Surface, kernel: &mut Kernel) {
-  if surface.quick_connect_task.is_some()
+  surface.qc_seq = surface.qc_seq.wrapping_add(1);
+  if surface.quick_connect_session.is_some()
     || !matches!(surface.flow.quick_connect, QuickConnectState::Idle)
   {
-    cancel_quick_connect(surface);
-    kernel.request_gate.disconnect();
-    kernel.connection = ConnectionPhase::SignedOut;
+    if let Some(session) = surface.quick_connect_session.take() {
+      session.cancel();
+    }
+    if kernel.connection == ConnectionPhase::Connecting {
+      kernel.connection = ConnectionPhase::SignedOut;
+    }
     surface.flow.reset_quick_connect();
   }
 }
 
-fn fail_login(surface: &mut Surface, kernel: &mut Kernel, error: LoginError) {
-  kernel.connection = ConnectionPhase::Failed;
-  kernel.diagnostics.record(
-    DiagnosticLevel::Error,
-    DiagnosticCategory::Auth,
-    error.to_string(),
-  );
-  surface.flow.error = Some(error_text(&error));
-}
-
-fn fail_password_login(surface: &mut Surface, kernel: &mut Kernel, _error: &LoginError) {
+fn fail_password_login(surface: &mut Surface, kernel: &mut Kernel, _error: &SdkError) {
   kernel.connection = ConnectionPhase::Failed;
   kernel.diagnostics.record(
     DiagnosticLevel::Error,
@@ -1004,7 +994,7 @@ fn fail_password_login(surface: &mut Surface, kernel: &mut Kernel, _error: &Logi
   surface.flow.error = Some(UiText::new("login-password-failed"));
 }
 
-fn fail_restore(surface: &mut Surface, kernel: &mut Kernel, _error: &LoginError) {
+fn fail_restore(surface: &mut Surface, kernel: &mut Kernel, _error: &SdkError) {
   kernel.connection = ConnectionPhase::Failed;
   kernel.diagnostics.record(
     DiagnosticLevel::Error,
@@ -1018,11 +1008,16 @@ fn fail_restore(surface: &mut Surface, kernel: &mut Kernel, _error: &LoginError)
 mod tests {
   use std::fs;
   use std::path::PathBuf;
+  use std::sync::atomic::{AtomicU64, Ordering};
+  use std::time::Duration;
 
-  use jellypilot_auth::{AuthStorageError, SavedProfileKey};
+  use iced::futures::{executor::block_on, StreamExt};
+  use jellypilot_auth::login::ValidatedProfileCandidate;
+  use jellypilot_auth::SensitiveSavedSession;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
+  use jellypilot_media_server::{JellyfinClient, SavedSession};
 
   use super::*;
 
@@ -1034,36 +1029,33 @@ mod tests {
     }
   }
 
-  fn isolated_settings(name: &str) -> (SettingsStore, TestSettingsFile) {
+  fn test_fixture() -> (Surface, Kernel, TestSettingsFile) {
+    static NEXT_SETTINGS: AtomicU64 = AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-      "jellypilot-iced-settings-{}-{name}.json",
-      std::process::id()
+      "jellypilot-login-test-{}-{}.json",
+      std::process::id(),
+      NEXT_SETTINGS.fetch_add(1, Ordering::Relaxed),
     ));
     let _ = fs::remove_file(&path);
-    (
-      SettingsStore::for_test(path.clone()),
-      TestSettingsFile(path),
-    )
-  }
-
-  fn profile_key(name: &str) -> SavedProfileKey {
-    let server_url = format!("https://{name}.example.test");
-    let user_id = format!("{name}-user-id");
-    SavedProfileKey::for_identity(MediaServerProvider::Jellyfin, &server_url, &user_id)
-  }
-
-  fn test_fixture() -> (Surface, Kernel) {
-    let settings = SettingsStore::default();
+    let settings = SettingsStore::for_test(path.clone());
     let surface = Surface {
       flow: LoginState::from_settings(settings.snapshot()),
-      quick_connect_task: None,
+      password_task: None,
+      request_seq: 0,
+      activation_pending: false,
+      quick_connect_session: None,
+      qc_seq: 0,
     };
+    let auth_store = super::super::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = super::super::kernel::test_account_runtime(&auth_store);
     let kernel = Kernel {
       item_actions: Default::default(),
       locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),
-      auth_store: AuthStore::default(),
+      auth_store,
+      sdk,
+      sdk_handoff,
       request_gate: RequestGate::default(),
       client: None,
       connection: ConnectionPhase::SignedOut,
@@ -1077,404 +1069,775 @@ mod tests {
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       profile_avatars: Default::default(),
     };
-    (surface, kernel)
+    (surface, kernel, TestSettingsFile(path))
   }
 
-  fn auto_login_gate_results(auto_login: bool, has_profiles: bool) -> (bool, bool) {
-    let (mut surface, mut kernel) = test_fixture();
-    let (settings, _settings_file) = isolated_settings("auto-login-gate");
-    kernel.settings = settings;
-    if !auto_login {
-      kernel.settings.set_auto_login(false).unwrap();
+  fn saved_session(name: &str) -> SavedSession {
+    SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: format!("https://{name}.example.test"),
+      access_token: format!("{name}-token"),
+      user_id: format!("{name}-user-id"),
+      user_name: name.to_owned(),
+      server_name: Some(name.to_owned()),
+      device_id: Some("login-test-device".to_owned()),
     }
-    let first = should_auto_login(&mut surface.flow, &kernel, has_profiles);
-    let second = should_auto_login(&mut surface.flow, &kernel, true);
-    (first, second)
+  }
+
+  fn profile_key(name: &str) -> SavedProfileKey {
+    let session = saved_session(name);
+    SavedProfileKey::for_identity(session.provider, &session.server_url, &session.user_id)
+  }
+
+  fn candidate(name: &str) -> ProtectedCandidate {
+    let client = Arc::new(JellyfinClient::new());
+    client.login().adopt_validated_session(&saved_session(name));
+    ProtectedCandidate::new(ProfileCandidate::new(
+      ValidatedProfileCandidate::from_authenticated_client(client)
+        .unwrap_or_else(|_| panic!("authenticated candidate")),
+    ))
+  }
+
+  fn prepare_password(flow: &mut LoginState) {
+    flow.server_url = "https://media.example.test".to_owned();
+    flow.username = "ada".to_owned();
+    flow.password = Zeroizing::new("secret".to_owned());
+  }
+
+  fn submission() -> PasswordSubmission {
+    PasswordSubmission {
+      remember: false,
+      prefill: LoginPrefill::new("https://media.example.test".to_owned(), "ada".to_owned()),
+      provider: MediaServerProvider::Jellyfin,
+    }
+  }
+
+  async fn login_output(task: Task<LoginMessage>) -> LoginMessage {
+    let mut stream = iced_runtime::task::into_stream(task).expect("login emitted work");
+    tokio::time::timeout(Duration::from_secs(5), async {
+      loop {
+        match stream.next().await {
+          Some(iced_runtime::Action::Output(message)) => return message,
+          Some(_) => {}
+          None => panic!("login task finished without an output"),
+        }
+      }
+    })
+    .await
+    .expect("login task settled")
   }
 
   #[test]
-  fn auto_login_boot_gate_fires_once_with_profiles_when_enabled() {
-    assert_eq!(auto_login_gate_results(true, true), (true, false));
+  fn startup_restore_uses_saved_activation_once_and_honors_the_boot_gate() {
+    for (enabled, has_selected, already_attempted, expected_restore) in [
+      (true, true, false, true),
+      (false, true, false, false),
+      (true, false, false, false),
+      (true, true, true, false),
+    ] {
+      let (mut surface, mut kernel, _settings_file) = test_fixture();
+      kernel.settings.set_auto_login(enabled).unwrap();
+      surface.flow.auto_login_attempted = already_attempted;
+      let (key, _) = block_on(kernel.auth_store.save_session(
+        SensitiveSavedSession::from_saved_session(saved_session("startup")),
+      ))
+      .unwrap();
+      if has_selected {
+        block_on(kernel.auth_store.record_successful_activation(key.clone())).unwrap();
+      }
+      for _ in 0..2 {
+        let snapshot = block_on(kernel.sdk.saved_profiles()).unwrap();
+        drop(update_login(
+          &mut surface,
+          &mut kernel,
+          true,
+          LoginMessage::ProfilesLoaded {
+            revision: 0,
+            result: Ok(snapshot),
+          },
+        ));
+      }
+      assert_eq!(
+        surface.flow.busy_profile.as_ref() == Some(&key),
+        expected_restore
+      );
+      assert_eq!(surface.request_seq, u64::from(expected_restore));
+    }
   }
 
   #[test]
-  fn auto_login_boot_gate_does_not_fire_when_disabled_or_profiles_are_empty() {
-    assert_eq!(auto_login_gate_results(false, true), (false, false));
-    assert_eq!(auto_login_gate_results(true, false), (false, false));
-  }
-
-  #[test]
-  fn auto_login_boot_gate_does_not_fire_in_smoke_mode() {
-    let (mut surface, kernel) = test_fixture();
-    surface.flow.auto_login_attempted = true;
-
-    assert!(!should_auto_login(&mut surface.flow, &kernel, true));
-  }
-
-  #[test]
-  fn invalid_server_url_is_rejected_before_a_login_token_is_created() {
-    let (mut surface, mut kernel) = test_fixture();
+  fn invalid_server_is_rejected_before_authentication_starts() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
     surface.flow.server_url = "not a server".to_owned();
-    let session_before = kernel.request_gate.current_session();
-
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
+    for message in [
       LoginMessage::QuickConnectSubmitted,
-    ));
-
-    assert_eq!(kernel.request_gate.current_session(), session_before);
+      LoginMessage::PasswordSubmitted,
+    ] {
+      let task = update_login(&mut surface, &mut kernel, true, message);
+      assert_eq!(task.units(), 0);
+      assert!(surface.flow.error.is_some());
+      assert_eq!(kernel.connection, ConnectionPhase::SignedOut);
+      assert!(surface.password_task.is_none());
+      assert!(surface.quick_connect_session.is_none());
+      assert!(kernel.sdk.active_profile().is_none());
+    }
   }
 
   #[test]
-  fn candidate_authentication_uses_a_private_request_generation() {
-    let (_, kernel) = test_fixture();
-    let kernel_session = kernel.request_gate.current_session();
-    let mut candidate = CandidateSurface::new(kernel.settings.snapshot(), 1);
-    candidate.flow.server_url = "https://candidate.example.test".to_owned();
-    let candidate_session = candidate.request_gate.current_session();
-
+  fn candidate_authentication_does_not_adopt_or_replace_the_active_profile() {
+    let (_, mut kernel, _settings_file) = test_fixture();
+    kernel.sdk.adopt_test_session(saved_session("active"));
+    let active = kernel.sdk.active_profile().unwrap();
+    accounts::sync_activated(&mut kernel, &active);
+    let active_request = kernel.request_gate.current_session();
+    let mut surface = CandidateSurface::new(kernel.settings.snapshot(), 1);
+    prepare_password(&mut surface.flow);
     drop(update_candidate(
-      &mut candidate,
-      CandidateMessage::QuickConnectSubmitted,
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordSubmitted,
     ));
-
-    assert_eq!(kernel.request_gate.current_session(), kernel_session);
-    assert_ne!(candidate.request_gate.current_session(), candidate_session);
-    assert_eq!(candidate.flow.quick_connect, QuickConnectState::Requesting);
-    candidate.cancel();
-  }
-
-  #[test]
-  fn candidate_server_address_is_locked_while_quick_connect_is_busy() {
-    let (_, kernel) = test_fixture();
-    let mut candidate = CandidateSurface::new(kernel.settings.snapshot(), 1);
-    candidate.flow.server_url = "https://candidate.example.test".to_owned();
-    candidate.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
-
-    drop(update_candidate(
-      &mut candidate,
-      CandidateMessage::ServerUrlChanged("https://other.example.test".to_owned()),
-    ));
-
-    assert_eq!(candidate.flow.server_url, "https://candidate.example.test");
-  }
-
-  #[test]
-  fn cancelling_candidate_quick_connect_ignores_late_events() {
-    let (_, kernel) = test_fixture();
-    let mut candidate = CandidateSurface::new(kernel.settings.snapshot(), 1);
-    candidate.flow.server_url = "https://candidate.example.test".to_owned();
-    drop(update_candidate(
-      &mut candidate,
-      CandidateMessage::QuickConnectSubmitted,
-    ));
-    let cancelled_session = candidate.request_gate.current_session();
-
-    drop(update_candidate(
-      &mut candidate,
-      CandidateMessage::QuickConnectCancelled,
-    ));
-    drop(update_candidate(
-      &mut candidate,
-      CandidateMessage::WorkflowEvent {
+    let request = surface.password_seq;
+    let result = update_candidate(
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordFinished {
         instance: 1,
-        event: LoginEvent::QuickConnectCode {
-          session: cancelled_session,
-          code: "LATE12".to_owned(),
-        },
+        request,
+        result: Ok(candidate("candidate")),
+        submission: submission(),
       },
-    ));
+    );
 
-    assert_eq!(candidate.flow.quick_connect, QuickConnectState::Idle);
-    assert!(!candidate.busy());
+    assert_eq!(
+      result.completion.unwrap().candidate.key(),
+      profile_key("candidate").as_str()
+    );
+    assert_eq!(kernel.sdk.active_profile().unwrap().key, active.key);
+    assert_eq!(kernel.request_gate.current_session(), active_request);
+    assert_eq!(
+      kernel.connected_identity.as_ref().unwrap().user_name,
+      "active"
+    );
+  }
+
+  #[test]
+  fn candidate_fields_remain_locked_while_a_quick_connect_code_is_live() {
+    let (_, kernel, _settings_file) = test_fixture();
+    let mut surface = CandidateSurface::new(kernel.settings.snapshot(), 1);
+    prepare_password(&mut surface.flow);
+    surface.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
+    for message in [
+      CandidateMessage::ServerUrlChanged("https://other.example.test".to_owned()),
+      CandidateMessage::UsernameChanged("other".to_owned()),
+      CandidateMessage::ProviderSelected(MediaServerProvider::Emby),
+    ] {
+      drop(update_candidate(&mut surface, &kernel.sdk, message));
+    }
+    assert_eq!(surface.flow.server_url, "https://media.example.test");
+    assert_eq!(surface.flow.username, "ada");
+    assert_eq!(surface.flow.provider, MediaServerProvider::Jellyfin);
+  }
+
+  #[test]
+  fn candidate_cancellation_fences_queued_quick_connect_success() {
+    let (_, kernel, _settings_file) = test_fixture();
+    let mut surface = CandidateSurface::new(kernel.settings.snapshot(), 1);
+    surface.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
+    let session = surface.qc_seq;
+    let late = candidate("late");
+    let outcome =
+      ProtectedOutcome::new(QuickConnectOutcome::Success(Box::new(late.take().unwrap())));
+    surface.cancel();
+    for event in [
+      QuickConnectEvent::Code("LATE12".to_owned()),
+      QuickConnectEvent::Completed(outcome),
+    ] {
+      let result = update_candidate(
+        &mut surface,
+        &kernel.sdk,
+        CandidateMessage::QuickConnectEvent {
+          instance: 1,
+          session,
+          event,
+        },
+      );
+      assert!(result.completion.is_none());
+    }
+    assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
+    assert!(!surface.busy());
+    assert!(kernel.sdk.active_profile().is_none());
+  }
+
+  #[test]
+  fn candidate_password_retry_rejects_completion_queued_before_cancel() {
+    let (_, kernel, _settings_file) = test_fixture();
+    let mut surface = CandidateSurface::new(kernel.settings.snapshot(), 1);
+    prepare_password(&mut surface.flow);
+    drop(update_candidate(
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordSubmitted,
+    ));
+    let old_request = surface.password_seq;
+    surface.cancel();
+    prepare_password(&mut surface.flow);
+    drop(update_candidate(
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordSubmitted,
+    ));
+    let new_request = surface.password_seq;
+    let stale = update_candidate(
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordFinished {
+        instance: 1,
+        request: old_request,
+        result: Ok(candidate("old")),
+        submission: submission(),
+      },
+    );
+    assert!(stale.completion.is_none());
+    assert!(surface.password_busy);
+    assert!(surface.password_task.is_some());
+    let fresh = update_candidate(
+      &mut surface,
+      &kernel.sdk,
+      CandidateMessage::PasswordFinished {
+        instance: 1,
+        request: new_request,
+        result: Ok(candidate("fresh")),
+        submission: submission(),
+      },
+    );
+    assert_eq!(
+      fresh.completion.unwrap().candidate.key(),
+      profile_key("fresh").as_str()
+    );
   }
 
   #[test]
   fn reopened_candidate_rejects_a_prior_instances_password_completion() {
-    let (_, kernel) = test_fixture();
-    let mut prior = CandidateSurface::new(kernel.settings.snapshot(), 1);
-    prior.flow.server_url = "https://prior.example.test".to_owned();
-    prior.flow.username = "prior-user".to_owned();
-    prior.flow.password = Zeroizing::new("prior-password".to_owned());
+    let (_, kernel, _settings_file) = test_fixture();
+    let mut surface = CandidateSurface::new(kernel.settings.snapshot(), 2);
+    prepare_password(&mut surface.flow);
     drop(update_candidate(
-      &mut prior,
+      &mut surface,
+      &kernel.sdk,
       CandidateMessage::PasswordSubmitted,
     ));
-    let prior_session = prior.request_gate.current_session();
-    prior.cancel();
-
-    let mut reopened = CandidateSurface::new(kernel.settings.snapshot(), 2);
-    reopened.flow.server_url = "https://reopened.example.test".to_owned();
-    reopened.flow.username = "reopened-user".to_owned();
-    reopened.flow.password = Zeroizing::new("reopened-password".to_owned());
-    drop(update_candidate(
-      &mut reopened,
-      CandidateMessage::PasswordSubmitted,
-    ));
-    assert_eq!(reopened.request_gate.current_session(), prior_session);
-
-    let stale_session = jellypilot_media_server::SavedSession {
-      provider: MediaServerProvider::Jellyfin,
-      server_url: "https://prior.example.test".to_owned(),
-      access_token: "prior-token".to_owned(),
-      user_id: "prior-user-id".to_owned(),
-      user_name: "prior-user".to_owned(),
-      server_name: Some("Prior server".to_owned()),
-      device_id: Some("prior-device".to_owned()),
-    };
-    let stale_client = Arc::new(JellyfinClient::new());
-    stale_client.login().adopt_validated_session(&stale_session);
-    let update = update_candidate(
-      &mut reopened,
+    let request = surface.password_seq;
+    let result = update_candidate(
+      &mut surface,
+      &kernel.sdk,
       CandidateMessage::PasswordFinished {
         instance: 1,
-        session: prior_session,
-        client: stale_client,
-        result: Ok(()),
-        submission: PasswordSubmission {
-          remember: false,
-          prefill: LoginPrefill::new(
-            "https://prior.example.test".to_owned(),
-            "prior-user".to_owned(),
-          ),
-          provider: MediaServerProvider::Jellyfin,
-        },
+        request,
+        result: Ok(candidate("old")),
+        submission: submission(),
       },
     );
-
-    assert!(update.completion.is_none());
-    assert!(reopened.password_busy);
-    assert_eq!(reopened.flow.username, "reopened-user");
-    reopened.cancel();
+    assert!(result.completion.is_none());
+    assert!(surface.password_busy);
+    assert!(surface.password_task.is_some());
+    surface.cancel();
   }
 
   #[test]
-  fn quick_connect_cancel_and_retry_reset_display_state_and_replace_request() {
-    let (mut surface, mut kernel) = test_fixture();
-    surface.flow.server_url = "https://media.example.test".to_owned();
-    drop(update(
+  fn quick_connect_cancel_and_retry_rejects_old_progress_and_completion() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    surface.flow.server_url = "http://127.0.0.1:1".to_owned();
+    drop(update_login(
       &mut surface,
       &mut kernel,
       true,
       LoginMessage::QuickConnectSubmitted,
     ));
-    let first_session = kernel.request_gate.current_session();
-    surface.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
-
-    drop(update(
+    let stale_session = surface.qc_seq;
+    drop(update_login(
       &mut surface,
       &mut kernel,
       true,
       LoginMessage::QuickConnectCancelled,
     ));
     assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
-
-    drop(update(
+    drop(update_login(
       &mut surface,
       &mut kernel,
       true,
       LoginMessage::QuickConnectSubmitted,
     ));
+    for event in [
+      QuickConnectEvent::Code("OLD123".to_owned()),
+      QuickConnectEvent::Completed(ProtectedOutcome::new(QuickConnectOutcome::Failed(
+        SdkError::Authentication("old failure".to_owned()),
+      ))),
+    ] {
+      drop(update_login(
+        &mut surface,
+        &mut kernel,
+        true,
+        LoginMessage::QuickConnectEvent {
+          session: stale_session,
+          event,
+        },
+      ));
+    }
+    assert!(surface.quick_connect_session.is_some());
+    assert_eq!(kernel.connection, ConnectionPhase::Connecting);
     assert_eq!(surface.flow.quick_connect, QuickConnectState::Requesting);
-    assert_ne!(kernel.request_gate.current_session(), first_session);
+    interrupt_quick_connect(&mut surface, &mut kernel);
   }
 
   #[test]
-  fn remembered_prefill_can_be_applied_and_cleared_without_display_state() {
-    let (mut surface, _) = test_fixture();
-    surface.flow.apply_prefill(Some(LoginPrefill::new(
-      "https://media.example.test".to_owned(),
-      "ada".to_owned(),
-    )));
-    assert_eq!(surface.flow.username, "ada");
-
-    surface.flow.apply_prefill(None);
-    assert!(surface.flow.server_url.is_empty());
-    assert!(surface.flow.username.is_empty());
-    assert!(!surface.flow.remember);
-  }
-
-  #[test]
-  fn selecting_emby_forces_password_and_hides_quick_connect_state() {
-    let (mut surface, mut kernel) = test_fixture();
-    surface.flow.method = LoginMethod::QuickConnect;
+  fn selecting_emby_cancels_quick_connect_and_fences_its_queued_code() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
     surface.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
-
-    drop(update(
+    kernel.connection = ConnectionPhase::Connecting;
+    let session = surface.qc_seq;
+    drop(update_login(
       &mut surface,
       &mut kernel,
       true,
       LoginMessage::ProviderSelected(MediaServerProvider::Emby),
     ));
-
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::QuickConnectEvent {
+        session,
+        event: QuickConnectEvent::Code("LATE12".to_owned()),
+      },
+    ));
     assert_eq!(surface.flow.method, LoginMethod::Password);
     assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
+    assert_eq!(kernel.connection, ConnectionPhase::SignedOut);
   }
 
   #[test]
-  fn stale_quick_connect_completion_does_not_clear_retry_abort_handle() {
-    let (mut surface, mut kernel) = test_fixture();
-    surface.flow.server_url = "https://media.example.test".to_owned();
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::QuickConnectSubmitted,
-    ));
-    let stale_session = kernel.request_gate.current_session();
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::QuickConnectCancelled,
-    ));
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::QuickConnectSubmitted,
-    ));
-
-    drop(handle_workflow_event(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginEvent::Login {
-        session: stale_session,
-        client: Arc::new(JellyfinClient::new()),
-        result: Err(LoginError::Request("stale failure".to_owned())),
-      },
-    ));
-
-    assert!(surface.quick_connect_task.is_some());
-    assert!(kernel.connection == ConnectionPhase::Connecting);
-    assert_eq!(surface.flow.quick_connect, QuickConnectState::Requesting);
-  }
-
-  #[test]
-  fn stale_profile_load_is_rejected_after_session_storage_completes() {
-    let (mut surface, mut kernel) = test_fixture();
-    let session = kernel.request_gate.current_session();
-    let key = profile_key("new");
-
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::SavedSessionStored {
-        session,
-        result: Ok((key.clone(), Vec::new())),
-      },
-    ));
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::ProfilesLoaded {
-        revision: 0,
-        result: Err(AuthStorageError::Corrupt),
-      },
-    ));
-
-    assert_eq!(surface.flow.profiles_revision, 1);
-    assert_eq!(kernel.active_profile.as_ref(), Some(&key));
-    assert!(surface.flow.error.is_none());
-    assert!(!surface.flow.profiles_loading);
-  }
-
-  #[test]
-  fn stale_restore_completion_does_not_clear_new_restore_busy_key() {
-    let (mut surface, mut kernel) = test_fixture();
-    let first_key = profile_key("first");
-    let second_key = profile_key("second");
-    drop(start_restore(&mut surface, &mut kernel, first_key.clone()));
-    let first_session = kernel.request_gate.current_session();
-    drop(start_restore(&mut surface, &mut kernel, second_key.clone()));
-    let second_session = kernel.request_gate.current_session();
-
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::RestoreFinished {
-        session: first_session,
-        key: first_key,
-        result: Err(LoginError::Request("stale failure".to_owned())),
-      },
-    ));
-
-    assert_eq!(kernel.request_gate.current_session(), second_session);
-    assert_eq!(surface.flow.busy_profile.as_ref(), Some(&second_key));
-    assert!(kernel.connection == ConnectionPhase::Connecting);
-    assert!(surface.flow.error.is_none());
-  }
-
-  #[test]
-  fn starting_restore_fully_interrupts_quick_connect_state() {
-    let (mut surface, mut kernel) = test_fixture();
-    surface.flow.server_url = "https://media.example.test".to_owned();
-    drop(start_quick_connect(&mut surface, &mut kernel));
-    surface.flow.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
-    let quick_connect_session = kernel.request_gate.current_session();
-    let key = profile_key("restore");
-
-    drop(start_restore(&mut surface, &mut kernel, key.clone()));
-
-    assert_ne!(kernel.request_gate.current_session(), quick_connect_session);
-    assert!(surface.quick_connect_task.is_none());
-    assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
-    assert_eq!(surface.flow.busy_profile.as_ref(), Some(&key));
-  }
-
-  #[test]
-  fn login_submit_handlers_reject_requests_while_connecting() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.connection = ConnectionPhase::Connecting;
-    surface.flow.server_url = "https://media.example.test".to_owned();
-    surface.flow.username = "ada".to_owned();
-    surface.flow.password = Zeroizing::new("secret".to_owned());
-    let session = kernel.request_gate.current_session();
-
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      true,
-      LoginMessage::QuickConnectSubmitted,
-    ));
-    drop(update(
+  fn restore_cannot_replace_password_even_when_its_success_is_already_queued() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
+    drop(update_login(
       &mut surface,
       &mut kernel,
       true,
       LoginMessage::PasswordSubmitted,
     ));
-
-    assert_eq!(kernel.request_gate.current_session(), session);
-    assert_eq!(surface.flow.password.as_str(), "secret");
-    assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
+    let request = surface.request_seq;
+    let key = profile_key("restore");
+    let restore = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(key),
+    );
+    assert_eq!(restore.units(), 0);
+    assert_eq!(surface.request_seq, request);
+    assert!(surface.password_task.is_some());
+    let task = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordFinished {
+        request,
+        result: Ok(candidate("password")),
+        submission: submission(),
+      },
+    );
+    assert_eq!(task.units(), 1);
+    assert!(surface.activation_pending);
+    assert!(surface.flow.busy_profile.is_none());
+    assert_eq!(kernel.connection, ConnectionPhase::Connecting);
+    assert!(kernel.sdk.active_profile().is_none());
   }
 
   #[test]
-  fn password_completion_persists_submitted_snapshot_after_form_edits() {
-    let (mut surface, mut kernel) = test_fixture();
-    let (settings, _settings_file) = isolated_settings("password-snapshot");
-    kernel.settings = settings;
+  fn password_retry_ignores_a_queued_completion_from_the_settled_request() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordSubmitted,
+    ));
+    let old_request = surface.request_seq;
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordFinished {
+        request: old_request,
+        result: Err(SdkError::Authentication("first failure".to_owned())),
+        submission: submission(),
+      },
+    ));
+    prepare_password(&mut surface.flow);
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordSubmitted,
+    ));
+    let current_request = surface.request_seq;
+    let stale = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordFinished {
+        request: old_request,
+        result: Ok(candidate("old")),
+        submission: submission(),
+      },
+    );
+    assert_eq!(stale.units(), 0);
+    assert_eq!(surface.request_seq, current_request);
+    assert!(surface.password_task.is_some());
+    assert!(!surface.activation_pending);
+    assert_eq!(kernel.connection, ConnectionPhase::Connecting);
+  }
+
+  #[tokio::test]
+  async fn running_sdk_restore_rejects_competing_profile_and_can_still_activate() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+      for (gate, target, body) in [
+        (
+          Some((entered_tx, release_rx)),
+          "/Users/Me",
+          r#"{"Id":"00000000000000000000000000000001","Name":"Ada"}"#,
+        ),
+        (
+          None,
+          "/System/Info/Public",
+          r#"{"ServerName":"Login fixture","Version":"10.10.0","Id":"server-1"}"#,
+        ),
+      ] {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+          let received = socket.read(&mut buffer).await.unwrap();
+          assert_ne!(received, 0, "the authentication request reached the server");
+          request.extend_from_slice(&buffer[..received]);
+        }
+        assert!(String::from_utf8_lossy(&request).starts_with(&format!("GET {target} ")));
+        if let Some((entered, release)) = gate {
+          entered.send(()).unwrap();
+          release.await.unwrap();
+        }
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+          body.len(),
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+      }
+    });
+
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    let mut session = saved_session("first");
+    session.server_url = server_url;
+    session.user_id = "00000000000000000000000000000001".to_owned();
+    let (first_key, _) = kernel
+      .auth_store
+      .save_session(SensitiveSavedSession::from_saved_session(session))
+      .await
+      .unwrap();
+    let task = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(first_key.clone()),
+    );
+    let request = surface.request_seq;
+    let mut stream = iced_runtime::task::into_stream(task).expect("restore task");
+    tokio::time::timeout(Duration::from_secs(5), async {
+      tokio::select! {
+        _ = stream.next() => panic!("restore settled before the held server response"),
+        result = entered_rx => result.expect("SDK holds account admission while validating A"),
+      }
+    })
+    .await
+    .unwrap();
+
+    let competing = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(profile_key("second")),
+    );
+    assert_eq!(competing.units(), 0);
+    assert_eq!(surface.request_seq, request);
+    assert_eq!(surface.flow.busy_profile.as_ref(), Some(&first_key));
+    assert!(!can_start_authentication(&surface, &kernel));
+
+    release_tx.send(()).unwrap();
+    let completion = tokio::time::timeout(Duration::from_secs(5), stream.next())
+      .await
+      .unwrap();
+    let Some(iced_runtime::Action::Output(completion)) = completion else {
+      panic!("restore emits its candidate completion");
+    };
+    let activation = update_login(&mut surface, &mut kernel, true, completion);
+    assert!(surface.activation_pending);
+    let activated = login_output(activation).await;
+    drop(update_login(&mut surface, &mut kernel, true, activated));
+    assert_eq!(kernel.active_profile, Some(first_key.clone()));
+    assert_eq!(kernel.sdk.active_profile().unwrap().key, first_key.as_str());
+    assert!(surface.flow.error.is_none());
+    server.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn sdk_sign_out_handoff_blocks_standalone_authentication_starts() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
+    let session = saved_session("active");
+    let (key, _) = kernel
+      .auth_store
+      .save_session(SensitiveSavedSession::from_saved_session(session.clone()))
+      .await
+      .unwrap();
+    kernel.sdk.adopt_test_session(session);
+    let sdk = Arc::clone(&kernel.sdk);
+    let sign_out = tokio::spawn(async move { sdk.sign_out(key.as_str().to_owned(), false).await });
+    let hook = tokio::time::timeout(Duration::from_secs(5), async {
+      kernel
+        .sdk_handoff
+        .receiver
+        .lock()
+        .await
+        .recv()
+        .await
+        .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(kernel.sdk.content_mutations_blocked());
+    // The native connection projection still says SignedOut; admission must
+    // also consult the SDK while its committed transaction is pending.
+    assert_eq!(kernel.connection, ConnectionPhase::SignedOut);
+    for message in [
+      LoginMessage::PasswordSubmitted,
+      LoginMessage::QuickConnectSubmitted,
+      LoginMessage::RestoreProfile(profile_key("other")),
+    ] {
+      let task = update_login(&mut surface, &mut kernel, true, message);
+      assert_eq!(task.units(), 0);
+      assert!(surface.flow.busy_profile.is_none());
+      assert!(surface.password_task.is_none());
+      assert!(surface.quick_connect_session.is_none());
+    }
+    hook.resolve(true);
+    tokio::time::timeout(Duration::from_secs(5), sign_out)
+      .await
+      .unwrap()
+      .unwrap()
+      .unwrap();
+  }
+
+  #[test]
+  fn stale_restore_does_not_settle_a_new_request_even_for_the_same_profile() {
+    for same_profile in [false, true] {
+      let (mut surface, mut kernel, _settings_file) = test_fixture();
+      let first_key = profile_key("first");
+      let second_key = profile_key(if same_profile { "first" } else { "second" });
+      drop(update_login(
+        &mut surface,
+        &mut kernel,
+        true,
+        LoginMessage::RestoreProfile(first_key.clone()),
+      ));
+      let request = surface.request_seq;
+      drop(update_login(
+        &mut surface,
+        &mut kernel,
+        true,
+        LoginMessage::RestoreFinished {
+          request,
+          key: first_key.clone(),
+          result: Err(SdkError::Authentication("first failure".to_owned())),
+        },
+      ));
+      drop(update_login(
+        &mut surface,
+        &mut kernel,
+        true,
+        LoginMessage::RestoreProfile(second_key.clone()),
+      ));
+      drop(update_login(
+        &mut surface,
+        &mut kernel,
+        true,
+        LoginMessage::RestoreFinished {
+          request,
+          key: first_key,
+          result: Err(SdkError::Authentication("stale failure".to_owned())),
+        },
+      ));
+      assert_eq!(surface.flow.busy_profile.as_ref(), Some(&second_key));
+      assert_eq!(kernel.connection, ConnectionPhase::Connecting);
+      assert!(surface.flow.error.is_none());
+    }
+  }
+
+  #[test]
+  fn restore_waits_for_explicit_quick_connect_cancellation_and_fences_late_success() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    surface.flow.server_url = "http://127.0.0.1:1".to_owned();
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::QuickConnectSubmitted,
+    ));
+    let session = surface.qc_seq;
+    let key = profile_key("restore");
+    let blocked = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(key.clone()),
+    );
+    assert_eq!(blocked.units(), 0);
+    assert!(surface.quick_connect_session.is_some());
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::QuickConnectCancelled,
+    ));
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(key.clone()),
+    ));
+    let stale = candidate("stale").take().unwrap();
+    let task = update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::QuickConnectEvent {
+        session,
+        event: QuickConnectEvent::Completed(ProtectedOutcome::new(QuickConnectOutcome::Success(
+          Box::new(stale),
+        ))),
+      },
+    );
+    assert_eq!(task.units(), 0);
+    assert!(surface.quick_connect_session.is_none());
+    assert_eq!(surface.flow.quick_connect, QuickConnectState::Idle);
+    assert_eq!(surface.flow.busy_profile.as_ref(), Some(&key));
+  }
+
+  #[test]
+  fn login_submissions_and_stale_quick_connect_cancel_do_not_replace_inflight_password() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordSubmitted,
+    ));
+    let request = surface.request_seq;
+    surface.flow.password = Zeroizing::new("new secret".to_owned());
+    for message in [
+      LoginMessage::QuickConnectCancelled,
+      LoginMessage::QuickConnectSubmitted,
+      LoginMessage::PasswordSubmitted,
+    ] {
+      drop(update_login(&mut surface, &mut kernel, true, message));
+    }
+    assert_eq!(surface.request_seq, request);
+    assert_eq!(surface.flow.password.as_str(), "new secret");
+    assert!(surface.password_task.is_some());
+    assert_eq!(kernel.connection, ConnectionPhase::Connecting);
+  }
+
+  #[tokio::test]
+  async fn sdk_activation_refreshes_profiles_and_fences_earlier_snapshots() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    surface.flow.auto_login_attempted = true;
+    let stale_snapshot = kernel.sdk.saved_profiles().await.unwrap();
+    let task = begin_activation(&mut surface, &mut kernel, candidate("new"));
+    // A queued restore must not replace an activation before its lazy task
+    // starts polling and the SDK raises its own handoff admission gate.
+    let request = surface.request_seq;
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::RestoreProfile(profile_key("old")),
+    ));
+    assert_eq!(surface.request_seq, request);
+    assert!(surface.flow.busy_profile.is_none());
+    let completion = login_output(task).await;
+    let refresh = update_login(&mut surface, &mut kernel, true, completion);
+    assert_eq!(kernel.active_profile, Some(profile_key("new")));
+    assert_eq!(
+      kernel.sdk.active_profile().unwrap().key,
+      profile_key("new").as_str()
+    );
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::ProfilesLoaded {
+        revision: 0,
+        result: Ok(stale_snapshot),
+      },
+    ));
+    assert!(surface.flow.profiles_loading);
+    let refreshed = login_output(refresh).await;
+    drop(update_login(&mut surface, &mut kernel, true, refreshed));
+    assert_eq!(surface.flow.profiles.len(), 1);
+    assert_eq!(surface.flow.profiles[0].key, profile_key("new"));
+    assert!(!surface.flow.profiles_loading);
+    assert!(surface.flow.error.is_none());
+  }
+
+  #[test]
+  fn password_completion_persists_submitted_prefill_after_form_edits() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
     surface.flow.remember = true;
-    surface.flow.provider = MediaServerProvider::Jellyfin;
-    let submission = password_submission(
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordSubmitted,
+    ));
+    let request = surface.request_seq;
+    let submitted = password_submission(
       &surface,
       "https://submitted.example.test".to_owned(),
       "submitted-user".to_owned(),
     );
-
     surface.flow.server_url = "https://edited.example.test".to_owned();
     surface.flow.username = "edited-user".to_owned();
     surface.flow.remember = false;
     surface.flow.provider = MediaServerProvider::Emby;
-
-    persist_password_submission(&mut kernel, submission);
-
+    drop(update_login(
+      &mut surface,
+      &mut kernel,
+      true,
+      LoginMessage::PasswordFinished {
+        request,
+        result: Ok(candidate("submitted")),
+        submission: submitted,
+      },
+    ));
     let persisted = kernel.settings.snapshot();
     assert!(persisted.remembers_login_prefill());
     assert_eq!(
@@ -1486,65 +1849,82 @@ mod tests {
   }
 
   #[test]
-  fn authentication_failures_do_not_expose_credentials_in_either_language() {
-    let (mut password_surface, mut password_kernel) = test_fixture();
-    let password_session = password_kernel.request_gate.begin_login();
-    password_kernel.connection = ConnectionPhase::Connecting;
-    let submission = password_submission(
-      &password_surface,
-      "https://media.example.test".to_owned(),
-      "ada".to_owned(),
-    );
-    drop(update(
-      &mut password_surface,
-      &mut password_kernel,
-      true,
-      LoginMessage::PasswordFinished {
-        session: password_session,
-        client: Arc::new(JellyfinClient::new()),
-        result: Err(LoginError::Request(
-          "response included password=secret".to_owned(),
-        )),
-        submission,
-      },
-    ));
-
-    let (mut restore_surface, mut restore_kernel) = test_fixture();
-    let key = profile_key("restore-error");
-    let restore_session = restore_kernel.request_gate.begin_login();
-    restore_kernel.connection = ConnectionPhase::Connecting;
-    restore_surface.flow.busy_profile = Some(key.clone());
-    drop(update(
-      &mut restore_surface,
-      &mut restore_kernel,
-      true,
-      LoginMessage::RestoreFinished {
-        session: restore_session,
-        key,
-        result: Err(LoginError::Request(
-          "response included access_token=secret".to_owned(),
-        )),
-      },
-    ));
-
-    for language in [
-      jellypilot_core::locale::UiLanguage::English,
-      jellypilot_core::locale::UiLanguage::SimplifiedChinese,
-    ] {
-      let locale = crate::i18n::Localizer::new(language);
-      for error in [&password_surface.flow.error, &restore_surface.flow.error] {
-        let rendered = locale.message(error.as_ref().expect("authentication failure"));
-        assert!(!rendered.contains("secret"));
-        assert!(!rendered.contains("access_token"));
-        assert!(!rendered.contains("password="));
+  fn authentication_failures_keep_server_secrets_out_of_localized_ui_and_diagnostics() {
+    for method in ["password", "restore", "quick-connect"] {
+      let (mut surface, mut kernel, _settings_file) = test_fixture();
+      let error = SdkError::Authentication("response echoed credential-sequence-9382".to_owned());
+      let message = match method {
+        "password" => {
+          prepare_password(&mut surface.flow);
+          drop(update_login(
+            &mut surface,
+            &mut kernel,
+            true,
+            LoginMessage::PasswordSubmitted,
+          ));
+          LoginMessage::PasswordFinished {
+            request: surface.request_seq,
+            result: Err(error),
+            submission: submission(),
+          }
+        }
+        "restore" => {
+          let key = profile_key("restore-error");
+          drop(update_login(
+            &mut surface,
+            &mut kernel,
+            true,
+            LoginMessage::RestoreProfile(key.clone()),
+          ));
+          LoginMessage::RestoreFinished {
+            request: surface.request_seq,
+            key,
+            result: Err(error),
+          }
+        }
+        _ => {
+          kernel.connection = ConnectionPhase::Connecting;
+          surface.flow.quick_connect = QuickConnectState::Approving;
+          LoginMessage::QuickConnectEvent {
+            session: surface.qc_seq,
+            event: QuickConnectEvent::Completed(ProtectedOutcome::new(
+              QuickConnectOutcome::Failed(error),
+            )),
+          }
+        }
+      };
+      drop(update_login(&mut surface, &mut kernel, true, message));
+      for language in [
+        jellypilot_core::locale::UiLanguage::English,
+        jellypilot_core::locale::UiLanguage::SimplifiedChinese,
+      ] {
+        let locale = crate::i18n::Localizer::new(language);
+        let rendered = locale.message(surface.flow.error.as_ref().expect("authentication failure"));
+        assert!(!rendered.contains("credential-sequence-9382"));
       }
+      assert!(kernel.diagnostics.rows().len() > 0);
+      assert!(kernel
+        .diagnostics
+        .rows()
+        .all(|row| !row.message.contains("credential-sequence-9382")));
     }
   }
 
   #[test]
-  fn login_is_gated_by_playback_cleanup() {
-    let (mut surface, _) = test_fixture();
-
-    assert!(!playback_allows_login(&mut surface, false));
+  fn playback_cleanup_blocks_every_login_entry_point() {
+    let (mut surface, mut kernel, _settings_file) = test_fixture();
+    prepare_password(&mut surface.flow);
+    for message in [
+      LoginMessage::PasswordSubmitted,
+      LoginMessage::QuickConnectSubmitted,
+      LoginMessage::RestoreProfile(profile_key("restore")),
+    ] {
+      let task = update(&mut surface, &mut kernel, false, message);
+      assert_eq!(task.units(), 0);
+      assert_eq!(kernel.connection, ConnectionPhase::SignedOut);
+      assert!(surface.password_task.is_none());
+      assert!(surface.quick_connect_session.is_none());
+      assert!(surface.flow.error.is_some());
+    }
   }
 }

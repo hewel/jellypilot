@@ -79,10 +79,10 @@ A Local Playback Recovery Point is a device-local, Profile-Scope-owned item refe
 
 ## Shared SDK and platform ownership
 
-The following paths contain the risk bring-up implementation. Desktop and Android now share User Data Action and Library Browser execution; the remaining shared vertical path is a Gate 2 migration:
+The following paths contain the risk bring-up implementation. Desktop and Android now share account lifecycle, User Data Action, and Library Browser execution; shared playback and the real-server vertical path remain Gate 2 work:
 
 ```text
-crates/jellypilot-sdk/       # shared business owner; desktop item writes and browsing are adopted
+crates/jellypilot-sdk/       # shared account, item-write, and browser execution used by both clients
 crates/jellypilot-ffi/       # UniFFI conversion and external object/operation lifetime
 android/app/                # Compose, navigation, ViewModels, Android application wiring
 android/core-bridge/        # Kotlin SDK wrapper and generated bindings
@@ -95,6 +95,14 @@ scripts/                    # existing task dispatcher extended with Android bui
 User Data Actions use `jellypilot-sdk::item_actions` on desktop and through SDK/UniFFI methods on Android. Favorite, Played, and Watchlist writes share per-item admission; different items remain independent. Token validation and admission are atomic with SDK profile transitions, and server flags are accepted only after confirmation. Desktop keeps an item busy through queued result delivery. Watchlist storage adapters carry admission into the actual blocking write, so cancelling an async waiter cannot release it early. Android writes have their own per-item lifetime instead of occupying the browse/search query slot; pending controls and confirmed-result projections remain presentation concerns.
 
 Library Browser execution uses `jellypilot-sdk::browse::Browser` on desktop and scope-bound `BrowseSession` objects through UniFFI on Android. The SDK executes pagination effects, cancels superseded HTTP work, rejects stale deliveries, and reconciles confirmed user-data writes. Platforms provide viewport demand and render bounded sparse windows; they do not append pages or own a second paging queue. Refresh retains usable content until its replacement is ready, and suspension preserves unfinished work for navigation return. Desktop retains geometry and artwork presentation in navigation history; Android retains grid scroll and search text across detail/player navigation. Closing an Android session calls `shutdown()` before releasing its UniFFI handle.
+
+Account lifecycle uses the same SDK for isolated authentication, activation, credential persistence, Startup Auto Login selection, Disconnect, and Sign Out. Native client, identity, and request-gate fields project committed SDK outcomes. Desktop retains its physical playback and remote teardown adapters; an always-active subscription delivers SDK handoff requests, and both teardown receipts must settle before adoption or disconnection. Android keeps its player and lifecycle admission adapter. Neither platform pauses existing playback merely because credential deletion has begun.
+
+Desktop playback commands capture SDK admission before dispatch. Account transitions permanently revoke queued starts/resumes, including across a failed deletion that reopens admission. Already executing physical playback work drains before protected deletion or teardown begins, avoiding cancellation of a partially loaded player. Cleanup commands remain executable while playback admission is closed.
+
+Sign Out securely removes the selected Saved Service Profile first. Failed credential deletion preserves the connection and playback; successful deletion is never rolled back. If subsequent teardown fails, authentication remains connected for cleanup retry while new playback and content writes are blocked. `disconnect()` retries that cleanup without deleting credentials again, and ends the scope only after successful teardown. Signing out an inactive profile preserves the active profile. Watchlist deletion remains separately opt-in, uses the platform's existing store, and reports independent failures with an explicit retry. A profile with pending Watchlist cleanup cannot reactivate until cleanup succeeds. SDK `close()` is terminal: committed work retains authentication until settlement, then authentication is released even when teardown failed.
+
+Automated account/store tests and native startup smoke cover these adapters; they do not establish the real-server playback/reporting flow or device and human visual acceptance required by the later gates.
 
 | Responsibility | Owner |
 | --- | --- |

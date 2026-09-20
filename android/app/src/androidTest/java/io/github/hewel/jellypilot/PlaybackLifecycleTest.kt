@@ -78,6 +78,36 @@ class PlaybackLifecycleTest {
     }
   }
 
+  @Test fun accountHandoffAdmissionPreservesPlaybackUntilTeardown() {
+    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+      lateinit var player: NativePlayback
+      val created = CountDownLatch(1)
+      scenario.onActivity { activity ->
+        player = model(activity).player
+        surface(activity, player, created)
+      }
+      runBlocking { withTimeout(25_000) { player.ready.first { it } } }
+      assertTrue("Surface must be created", created.await(20, TimeUnit.SECONDS))
+      try {
+        player.loadFile(TestMediaProvider.sampleUri, TestMediaProvider.subtitleUri)
+        val playing = await(player) { it.status == PlayerStatus.READY && it.isPlaying && it.positionSeconds > 0.5 }
+        player.setHandoffBlocked(true)
+        val blocked = await(player) { it.generation == playing.generation && !it.admissionEligible }
+        assertTrue("existing playback intent must survive credential deletion", blocked.playWhenReady)
+        assertFalse(blocked.paused)
+        assertFalse("new play requests must be refused", player.play())
+        await(player) { it.generation == playing.generation && it.isPlaying && it.positionSeconds > blocked.positionSeconds }
+        player.setHandoffBlocked(false)
+        await(player) { it.generation == playing.generation && it.admissionEligible && it.playWhenReady }
+        scenario.moveToState(Lifecycle.State.CREATED)
+        await(player) { it.generation == playing.generation && it.paused && !it.playWhenReady && !it.isPlaying }
+      } finally {
+        player.setHandoffBlocked(false)
+        assertTrue("stop must acknowledge native descriptor retirement", runBlocking { player.stopAndWait() })
+      }
+    }
+  }
+
   @Test fun backgroundingCancelsRealProviderOpenWithoutDeferredPlayback() {
     val resolver = InstrumentationRegistry.getInstrumentation().targetContext.contentResolver
     fun fixture(method: String): Boolean = resolver.call(TestMediaProvider.blockedUri, method, null, null)?.getBoolean("result") == true

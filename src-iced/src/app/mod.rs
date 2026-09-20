@@ -61,7 +61,7 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
     playback::suspend_artwork(&mut state.playback);
   }
   let mut tasks = vec![
-    login::load_saved_profiles(&state.login, &state.kernel).map(Message::Login),
+    login::load_saved_profiles(&state.login.flow, &state.kernel).map(Message::Login),
     iced::system::theme().map(Message::SystemThemeDiscovered),
   ];
   if !start_hidden {

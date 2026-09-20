@@ -2485,18 +2485,26 @@ mod tests {
     let settings = SettingsStore::default();
     let login = crate::app::login::Surface {
       flow: LoginState::from_settings(settings.snapshot()),
-      quick_connect_task: None,
+      password_task: None,
+      request_seq: 0,
+      activation_pending: false,
+      quick_connect_session: None,
+      qc_seq: 0,
     };
     let settings_view = SettingsState::from_settings(settings.snapshot());
     let mut request_gate = jellypilot_core::request_gate::RequestGate::default();
     let playback = playback::Surface::new(&mut request_gate);
+    let auth_store = crate::app::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
       kernel: Kernel {
         item_actions: Default::default(),
         settings,
         locale: Localizer::default(),
         diagnostics: Default::default(),
-        auth_store: Default::default(),
+        auth_store,
+        sdk,
+        sdk_handoff,
         request_gate,
         client: None,
         connection: ConnectionPhase::SignedOut,

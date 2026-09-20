@@ -2,11 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use iced::widget::scrollable;
 use iced::window;
-use jellypilot_auth::login::{LoginError, LoginEvent};
-use jellypilot_auth::{
-  AuthStorageError, SavedProfileKey, SavedProfileSummary, SavedProfilesSnapshot,
-  SensitiveSavedSession,
-};
+use jellypilot_auth::{SavedProfileKey, SavedProfilesSnapshot};
+use jellypilot_sdk::{ActivationOutcome, ProfileCandidate, QuickConnectOutcome, SdkError};
+
 use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::{AppMode, IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
@@ -17,8 +15,8 @@ use jellypilot_core::request_gate::{
 use jellypilot_media_server::artwork::{ArtworkError, ArtworkRaster};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
-  JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
-  VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodes, VideoSeasonEpisodesPage,
+  MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem, VideoLibraryPlayedFilter,
+  VideoLibrarySort, VideoSeasonEpisodes, VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection};
 use jellypilot_mpv::playback_session::{
@@ -26,7 +24,6 @@ use jellypilot_mpv::playback_session::{
 };
 use jellypilot_session::JellyfinWebSocketEvent;
 
-use zeroize::Zeroize;
 impl std::fmt::Debug for Message {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
@@ -350,52 +347,66 @@ pub enum RemoteMessage {
   },
 }
 
-pub type SensitiveSessionPayload = SensitiveSavedSession;
+/// A validated profile candidate protected inside a cloneable message.
+///
+/// The candidate is single-use: whichever reducer turn takes it owns the
+/// validated session; clones that arrive later observe `None`.
+#[derive(Clone)]
+pub struct ProtectedCandidate(Arc<Mutex<Option<ProfileCandidate>>>);
 
-struct ProtectedPayloadOwner<T: Zeroize>(Option<T>);
-
-impl<T: Zeroize> Drop for ProtectedPayloadOwner<T> {
-  fn drop(&mut self) {
-    if let Some(payload) = &mut self.0 {
-      payload.zeroize();
-    }
-  }
-}
-
-struct ProtectedPayload<T: Zeroize>(Arc<Mutex<ProtectedPayloadOwner<T>>>);
-
-impl<T: Zeroize> Clone for ProtectedPayload<T> {
-  fn clone(&self) -> Self {
-    Self(Arc::clone(&self.0))
-  }
-}
-
-impl<T: Zeroize> ProtectedPayload<T> {
-  fn new(payload: T) -> Self {
-    Self(Arc::new(Mutex::new(ProtectedPayloadOwner(Some(payload)))))
+impl ProtectedCandidate {
+  pub fn new(candidate: ProfileCandidate) -> Self {
+    Self(Arc::new(Mutex::new(Some(candidate))))
   }
 
-  fn take(&self) -> Option<T> {
+  pub fn take(&self) -> Option<ProfileCandidate> {
     self
       .0
       .lock()
       .unwrap_or_else(|poisoned| poisoned.into_inner())
-      .0
       .take()
   }
 }
 
+impl std::fmt::Debug for ProtectedCandidate {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("ProtectedCandidate([redacted])")
+  }
+}
+
+/// A terminal Quick Connect outcome protected inside a cloneable message.
 #[derive(Clone)]
-pub struct ProtectedSavedSession(ProtectedPayload<SensitiveSessionPayload>);
+pub struct ProtectedOutcome(Arc<Mutex<Option<QuickConnectOutcome>>>);
 
-impl ProtectedSavedSession {
-  pub fn new(session: SensitiveSessionPayload) -> Self {
-    Self(ProtectedPayload::new(session))
+impl ProtectedOutcome {
+  pub fn new(outcome: QuickConnectOutcome) -> Self {
+    Self(Arc::new(Mutex::new(Some(outcome))))
   }
 
-  pub fn take(&self) -> Option<SensitiveSessionPayload> {
-    self.0.take()
+  pub fn take(&self) -> Option<QuickConnectOutcome> {
+    self
+      .0
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .take()
   }
+}
+
+impl std::fmt::Debug for ProtectedOutcome {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("ProtectedOutcome([redacted])")
+  }
+}
+
+/// Quick Connect progress forwarded from the SDK listener to a login surface.
+#[derive(Clone)]
+pub enum QuickConnectEvent {
+  /// The server issued a pairing code to display.
+  Code(String),
+  /// The user approved the code; final authentication is in flight.
+  Approving,
+  /// Terminal outcome; no further events follow for this session.
+  Completed(ProtectedOutcome),
 }
 
 #[derive(Clone)]
@@ -418,56 +429,57 @@ pub enum LoginMessage {
   PasswordSubmitted,
   ProfilesLoaded {
     revision: u64,
-    result: Result<SavedProfilesSnapshot, AuthStorageError>,
+    result: Result<SavedProfilesSnapshot, SdkError>,
   },
-  ActivationRecorded {
-    session: SessionToken,
-    key: SavedProfileKey,
-    result: Result<(), AuthStorageError>,
+  QuickConnectEvent {
+    session: u64,
+    event: QuickConnectEvent,
   },
-  WorkflowEvent(LoginEvent),
   PasswordFinished {
-    session: SessionToken,
-    client: Arc<JellyfinClient>,
-    result: Result<ProtectedSavedSession, LoginError>,
+    request: u64,
+    result: Result<ProtectedCandidate, SdkError>,
     submission: PasswordSubmission,
   },
-  SavedSessionStored {
-    session: SessionToken,
-    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError>,
-  },
   RestoreProfile(SavedProfileKey),
+  /// SDK saved-profile validation finished; `Ok` carries the candidate.
   RestoreFinished {
-    session: SessionToken,
+    request: u64,
     key: SavedProfileKey,
-    result: Result<ProtectedSavedSession, LoginError>,
+    result: Result<ProtectedCandidate, SdkError>,
+  },
+  /// One SDK activation finished: password, Quick Connect, or saved restore.
+  ActivationFinished {
+    result: Result<ActivationOutcome, SdkError>,
   },
 }
 
 #[cfg(test)]
 mod tests {
-  use std::sync::atomic::{AtomicBool, Ordering};
-
   use super::*;
-
-  struct ZeroizeWitness(Arc<AtomicBool>);
-
-  impl Zeroize for ZeroizeWitness {
-    fn zeroize(&mut self) {
-      self.0.store(true, Ordering::Relaxed);
-    }
-  }
+  use jellypilot_media_server::JellyfinClient;
 
   #[test]
-  fn protected_payload_zeroizes_when_the_last_message_copy_is_dropped() {
-    let zeroized = Arc::new(AtomicBool::new(false));
-    let payload = ProtectedPayload::new(ZeroizeWitness(Arc::clone(&zeroized)));
-    let cloned = payload.clone();
+  fn protected_candidate_is_taken_exactly_once() {
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: "https://example.test".to_owned(),
+        access_token: "token".to_owned(),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    let candidate = ProfileCandidate::new(
+      jellypilot_auth::login::ValidatedProfileCandidate::from_authenticated_client(client)
+        .unwrap_or_else(|_| panic!("authenticated client becomes a candidate")),
+    );
+    let protected = ProtectedCandidate::new(candidate);
+    let cloned = protected.clone();
 
-    drop(payload);
-    assert!(!zeroized.load(Ordering::Relaxed));
-    drop(cloned);
-
-    assert!(zeroized.load(Ordering::Relaxed));
+    assert!(protected.take().is_some());
+    assert!(cloned.take().is_none());
   }
 }

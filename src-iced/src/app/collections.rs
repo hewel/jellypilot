@@ -122,7 +122,7 @@ pub(crate) fn controls(state: &State, source: Source) -> Controls {
   });
   let busy = current.is_some_and(|target| super::item_actions::busy(&state.kernel, target.item_id));
   let enabled = !busy
-    && !accounts::content_mutations_blocked(&state.accounts)
+    && !accounts::content_mutations_blocked(&state.kernel)
     && !state.shell.quit_requested
     && state.kernel.client.is_some();
   let favorite_action = item.filter(|_| enabled).map(|item| {
@@ -197,7 +197,7 @@ pub(crate) fn reconcile(state: &mut State) -> Task<Message> {
     .collections
     .entries
     .retain(|id, _| desired.iter().flatten().any(|target| target.item_id == id));
-  if !state.shell.images_visible || accounts::content_mutations_blocked(&state.accounts) {
+  if !state.shell.images_visible || accounts::content_mutations_blocked(&state.kernel) {
     return Task::batch(tasks);
   }
   let Some(client) = state.kernel.client.as_ref() else {

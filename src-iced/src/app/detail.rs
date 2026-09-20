@@ -847,7 +847,6 @@ mod tests {
   use std::sync::Arc;
 
   use jellypilot_auth::login::ConnectionPhase;
-  use jellypilot_auth::AuthStore;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
@@ -857,12 +856,16 @@ mod tests {
 
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
+    let auth_store = crate::app::kernel::test_auth_store();
+    let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     let kernel = Kernel {
       item_actions: Default::default(),
       settings,
       locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
-      auth_store: AuthStore::default(),
+      auth_store,
+      sdk,
+      sdk_handoff,
       request_gate: RequestGate::default(),
       client: None,
       connection: ConnectionPhase::SignedOut,

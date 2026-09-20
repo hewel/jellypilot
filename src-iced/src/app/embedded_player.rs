@@ -247,7 +247,7 @@ pub(super) fn input_blocked(state: &State) -> bool {
     || state.playback.view.lifecycle.replacing
     || state.shell.embedded_player.returning
     || super::accounts::blocking_modal(&state.accounts)
-    || super::accounts::handoff_generation(&state.accounts).is_some()
+    || state.kernel.sdk.content_mutations_blocked()
     || menu_open(state)
 }
 

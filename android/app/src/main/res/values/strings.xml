@@ -80,6 +80,7 @@
   <string name="sdk_request_failed">The operation could not be completed. Check the connection and try again.</string>
   <string name="player_audio_focus_denied">Audio focus is unavailable. Keep the app visible and try playing again.</string>
   <string name="sdk_activated_persistence_failed">The account is now active, but local persistence did not fully succeed. Check the saved account list.</string>
-  <string name="sdk_signed_out_cleanup_failed">Local credentials were deleted, but ending the previous session encountered an error.</string>
+  <string name="sdk_sign_out_cleanup_pending">The saved sign-in was removed, but cleanup could not finish. This account stays connected until cleanup succeeds; new playback and edits are blocked. Retry cleanup to finish signing out.</string>
+  <string name="retry_cleanup">Retry cleanup</string>
   <string name="sdk_watchlist_delete_failed">The account was signed out, but its local watchlist could not be deleted.</string>
 </resources>

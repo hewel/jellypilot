@@ -1,9 +1,10 @@
+use crate::app::login::can_start_authentication;
 use crate::app::message::{LoginMessage, Message};
 use crate::app::shell::profile_action_id;
 use crate::app::state::{LoginMethod, QuickConnectState, State};
 use iced::widget::{column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
-use jellypilot_auth::login::{can_start_login, ConnectionPhase};
+use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
@@ -169,7 +170,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       } else {
         state.t("login-request-code")
       };
-      let can_login = can_start_login(state.kernel.connection);
+      let can_login = can_start_authentication(&state.login, &state.kernel);
       control_button(Some(Icon::QrCode), Some(label), ButtonVariant::Primary)
         .spacing(TOKENS.spacing.s2)
         .padding([8, 16])
@@ -255,7 +256,7 @@ fn password(state: &State) -> Element<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-  let password = if can_start_login(state.kernel.connection) {
+  let password = if can_start_authentication(&state.login, &state.kernel) {
     password.on_submit(Message::Login(LoginMessage::PasswordSubmitted))
   } else {
     password
@@ -268,7 +269,7 @@ fn password(state: &State) -> Element<'_, Message> {
   let remember = control_button(None, Some(remember_label), ButtonVariant::Text)
     .padding([6, 12])
     .on_press(Message::Login(LoginMessage::RememberToggled));
-  let can_login = can_start_login(state.kernel.connection);
+  let can_login = can_start_authentication(&state.login, &state.kernel);
   let submit = control_button(
     Some(Icon::UserCheck),
     Some(if state.kernel.connection == ConnectionPhase::Connecting {
@@ -289,6 +290,7 @@ fn password(state: &State) -> Element<'_, Message> {
 
 fn saved_profiles(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
+  let can_login = can_start_authentication(&state.login, &state.kernel);
   let mut profiles = Column::new().spacing(12).push(
     row![
       icon_with_color(Icon::User, IconSize::Lg, palette.colors.primary),
@@ -313,7 +315,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
       .spacing(TOKENS.spacing.s2)
       .padding([6, 12])
       .on_press_maybe(
-        (!is_busy).then_some(Message::Login(LoginMessage::RestoreProfile(key.clone()))),
+        can_login.then_some(Message::Login(LoginMessage::RestoreProfile(key.clone()))),
       );
     let sign_out = control_button(
       Some(Icon::Trash),
@@ -324,16 +326,9 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     .id(profile_action_id(index, "signout"))
     .spacing(TOKENS.spacing.s1)
     .padding([6, 12])
-    .on_press_maybe(
-      state
-        .login
-        .flow
-        .busy_profile
-        .is_none()
-        .then_some(Message::Account(crate::app::accounts::Message::AskSignOut(
-          key.clone(),
-        ))),
-    );
+    .on_press_maybe(can_login.then_some(Message::Account(
+      crate::app::accounts::Message::AskSignOut(key.clone()),
+    )));
     let profile_content = column![
       row![restore, sign_out]
         .spacing(10)

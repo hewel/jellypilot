@@ -26,7 +26,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
     _ => None,
   });
-  let mut subscriptions = vec![window_events];
+  let mut subscriptions = vec![
+    window_events,
+    // Account operations must finish even while the last window is hidden.
+    Subscription::run_with(state.kernel.sdk_handoff.clone(), account_handoff_stream),
+  ];
   subscriptions.push(super::embedded_player::subscription(state));
   if cfg!(target_os = "linux") && crate::embedded::enabled() {
     subscriptions.push(
@@ -73,7 +77,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         && !state.shell.account_popover_open
         && !state.shell.compact_search_open
         && !super::accounts::blocking_modal(&state.accounts)
-        && super::accounts::handoff_generation(&state.accounts).is_none()
+        && !state.kernel.sdk.content_mutations_blocked()
         && state.playback.view.now_playing.is_some()
       {
         subscriptions.push(
@@ -324,6 +328,24 @@ fn settings_modal_events(
   } else {
     None
   }
+}
+
+fn account_handoff_stream(channel: &super::kernel::HandoffChannel) -> impl Stream<Item = Message> {
+  let channel = channel.clone();
+  iced::stream::channel(1, async move |mut output| loop {
+    let Some(request) = channel.receiver.lock().await.recv().await else {
+      break;
+    };
+    if output
+      .send(Message::Account(
+        super::accounts::Message::HandoffRequested(request),
+      ))
+      .await
+      .is_err()
+    {
+      break;
+    }
+  })
 }
 
 fn remote_event_stream(channel: &EventChannel) -> impl Stream<Item = Message> {
@@ -632,6 +654,9 @@ mod tests {
     use iced::advanced::subscription::into_recipes;
     use iced::futures::stream;
 
+    // Event-only fixtures have no account work; end their otherwise persistent
+    // handoff channel so collection completes when the input events end.
+    state.kernel.sdk_handoff.receiver.lock().await.close();
     stream::select_all(
       into_recipes(subscription(state))
         .into_iter()

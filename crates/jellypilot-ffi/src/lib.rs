@@ -244,7 +244,10 @@ impl JellypilotSdk {
     }
 
     /// Ends the active session without removing saved credentials.
-    /// Distinct from `sign_out`; idempotent when signed out.
+    /// Distinct from `sign_out`; idempotent when signed out. When a previous
+    /// sign-out teardown failed, this retries that pending cleanup with the
+    /// retained session: a failed retry keeps the session and the mutation
+    /// block, a successful one ends the scope.
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         self.sdk.disconnect().await.map_err(SdkError::from)
     }
@@ -253,7 +256,10 @@ impl JellypilotSdk {
     /// when it matches `key` and optionally deletes that profile's
     /// device-local watchlist. The deletion is committed before the outcome
     /// is produced; `teardown_error`/`watchlist_error` report post-commit
-    /// cleanup failures, not a rollback.
+    /// cleanup failures, not a rollback. A `teardown_error` means the active
+    /// session is retained for a `disconnect` cleanup retry: callers must
+    /// not show a signed-out state or re-enable playback while
+    /// `sign_out_cleanup_pending` is true.
     pub async fn sign_out(
         &self,
         key: String,
@@ -263,6 +269,17 @@ impl JellypilotSdk {
             .sign_out(key, delete_watchlist)
             .await
             .map(SignOutOutcome::from)
+            .map_err(SdkError::from)
+    }
+
+    /// Retries a failed opt-in watchlist cleanup recorded by `sign_out`.
+    ///
+    /// Re-runs only the recorded cleanup for `key`'s scope; credentials are
+    /// never deleted again. Idempotent when no failed cleanup remains.
+    pub async fn retry_watchlist_cleanup(&self, key: String) -> Result<(), SdkError> {
+        self.sdk
+            .retry_watchlist_cleanup(key)
+            .await
             .map_err(SdkError::from)
     }
 
@@ -281,6 +298,24 @@ impl JellypilotSdk {
     /// The currently active profile, if any.
     pub fn active_profile(&self) -> Option<ActiveProfile> {
         self.sdk.active_profile().map(ActiveProfile::from)
+    }
+
+    /// Whether new playback and content mutations are currently blocked.
+    ///
+    /// True while an active-profile handoff or credential deletion is in
+    /// flight, after a failed sign-out cleanup until its retry succeeds, and
+    /// once the SDK is closed. Gate native playback entry and direct
+    /// user-data writes on this; the SDK enforces the same admission
+    /// atomically.
+    pub fn content_mutations_blocked(&self) -> bool {
+        self.sdk.content_mutations_blocked()
+    }
+
+    /// Whether sign-out cleanup is still pending: the saved credentials
+    /// were deleted while the active session is retained for a teardown
+    /// retry. `disconnect` performs that retry.
+    pub fn sign_out_cleanup_pending(&self) -> bool {
+        self.sdk.sign_out_cleanup_pending()
     }
 
     /// Mints an operation token bound to the current profile scope.

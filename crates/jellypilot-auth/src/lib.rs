@@ -139,7 +139,7 @@ pub trait SecureCredential: Send + Sync {
     fn delete(&self) -> Result<(), CredentialError>;
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct SavedProfileKey(String);
 impl SavedProfileKey {
     /// Derives the stable secure-storage key for a profile identity.
