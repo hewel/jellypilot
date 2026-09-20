@@ -141,7 +141,7 @@ android {
     minSdk = 26
     targetSdk = 37
     versionCode = providers.gradleProperty("jellypilot.versionCode").orElse("1").get().toInt()
-    versionName = "2.2.1-android-bringup"
+    versionName = "2.2.2-android-preview"
     ndk { abiFilters += "arm64-v8a" }
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -155,6 +155,7 @@ android {
     resources { merges += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
   }
   lint { abortOnError = true; checkReleaseBuilds = true }
+  testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
@@ -168,6 +169,7 @@ dependencies {
   implementation(libs.compose.ui)
   implementation(libs.compose.ui.tooling.preview)
   implementation(libs.activity.compose)
+  implementation(libs.appcompat)
   implementation(libs.lifecycle.runtime.compose)
   implementation(libs.lifecycle.viewmodel.compose)
   implementation(libs.core.ktx)
@@ -176,7 +178,14 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.coil.network.okhttp)
   debugImplementation(libs.compose.ui.tooling)
+  debugImplementation(libs.compose.ui.test.manifest)
+  testImplementation(libs.junit)
+  testImplementation(libs.robolectric)
+  testImplementation(libs.compose.ui.test.junit4)
+  testImplementation(libs.androidx.test.core)
   androidTestImplementation(libs.junit)
+  androidTestImplementation(platform(libs.compose.bom))
+  androidTestImplementation(libs.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.core)
   androidTestImplementation(libs.androidx.test.ext.junit)

@@ -22,11 +22,15 @@
 mod account;
 pub mod browse;
 mod error;
+mod history;
 mod hooks;
 mod image;
 pub mod item_actions;
+pub mod playback;
+mod preferences;
 mod query;
 mod quick_connect;
+pub mod remote;
 #[cfg(test)]
 mod tests;
 mod watchlist;
@@ -48,9 +52,12 @@ use tokio_util::task::AbortOnDropHandle;
 
 pub use account::{ActivationOutcome, SignOutOutcome};
 pub use error::SdkError;
+pub use history::{HistoryPage, HistoryRemoval};
 pub use hooks::SdkHooks;
 pub use image::LibraryImageTarget;
+pub use preferences::{BusinessPreferences, LoginPrefill};
 pub use quick_connect::{QuickConnectListener, QuickConnectOutcome, QuickConnectSession};
+pub use watchlist::WatchlistRemoval;
 
 /// Host-provided configuration for one SDK instance.
 #[derive(Clone, Debug)]
@@ -336,7 +343,10 @@ pub(crate) struct SdkInner {
     /// interleaving with an in-flight handoff. Owned guards let committed
     /// transactions carry the permit into SDK-owned execution.
     account_op: Arc<AsyncMutex<()>>,
+    preferences_gate: Mutex<()>,
+    history_revision: Mutex<u64>,
     playback_execution: RwLock<()>,
+    playback: Mutex<playback::PlaybackRegistry>,
     /// Cancelled by [`Sdk::close`]. Flows that outlive their spawn site —
     /// Quick Connect sessions — derive child tokens from it so close
     /// terminates them even when the runtime is embedder-owned.
@@ -605,14 +615,14 @@ impl SdkInner {
             return Ok(());
         }
         let Some(hooks) = self.hooks.clone() else {
-            return Ok(());
+            return self.clear_playback_for_handoff().await;
         };
         let allowed = AssertUnwindSafe(async move { hooks.before_profile_handoff().await })
             .catch_unwind()
             .await
             .unwrap_or(false);
         if allowed {
-            Ok(())
+            self.clear_playback_for_handoff().await
         } else {
             Err(SdkError::HandoffAborted)
         }
@@ -801,7 +811,10 @@ impl Sdk {
             }),
             item_actions: item_actions::ItemActions::default(),
             account_op: Arc::new(AsyncMutex::new(())),
+            preferences_gate: Mutex::new(()),
+            history_revision: Mutex::new(0),
             playback_execution: RwLock::new(()),
+            playback: Mutex::new(playback::PlaybackRegistry::default()),
             shutdown: CancellationToken::new(),
         })
     }

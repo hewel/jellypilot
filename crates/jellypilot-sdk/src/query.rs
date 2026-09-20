@@ -10,12 +10,39 @@ use jellypilot_media_server::{
     FavoritesPage, FavoritesPageRequest, VideoItemDetail, VideoItemStreams, VideoLibraryItem,
     VideoLibraryShortcut, VideoPlaybackTarget, VideoSeasonEpisodesPage,
     VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate,
-    WatchHistoryPage, WatchHistoryPageRequest,
 };
 
 use crate::{OperationToken, Sdk, SdkError};
 
 impl Sdk {
+    /// Selects Home hero candidates using the same resume, source-priority and
+    /// episode/series identity rules as desktop. Inputs are already fetched rows.
+    pub fn home_featured_items(
+        &self,
+        home: jellypilot_media_server::VideoHome,
+        latest_rows: Vec<Vec<VideoLibraryItem>>,
+    ) -> Vec<VideoLibraryItem> {
+        use jellypilot_core::home_hero::{candidates, HeroSource};
+        use jellypilot_core::LoadState;
+        let continue_watching: LoadState<_, ()> = LoadState::Ready(home.continue_watching);
+        let next_up = LoadState::Ready(home.next_up);
+        let latest: Vec<_> = latest_rows.into_iter().map(LoadState::Ready).collect();
+        candidates(&continue_watching, &next_up, latest.iter())
+            .into_iter()
+            .filter_map(|candidate| {
+                let row = match candidate.source {
+                    HeroSource::ContinueWatching => &continue_watching,
+                    HeroSource::NextUp => &next_up,
+                    HeroSource::Latest(index) => latest.get(index)?,
+                };
+                let LoadState::Ready(items) = row else {
+                    return None;
+                };
+                items.get(candidate.item_index).cloned()
+            })
+            .collect()
+    }
+
     /// Video Home landing rows (Continue Watching, Next Up).
     pub async fn video_home(
         &self,
@@ -73,24 +100,6 @@ impl Sdk {
                 client
                     .library()
                     .favorites(FavoritesPageRequest { start_index, limit })
-                    .await
-                    .map_err(SdkError::from)
-            })
-            .await
-    }
-
-    /// Server Watch History page (played and resumable items).
-    pub async fn watch_history(
-        &self,
-        token: Arc<OperationToken>,
-        start_index: i32,
-        limit: i32,
-    ) -> Result<WatchHistoryPage, SdkError> {
-        self.inner
-            .scoped(&token, move |client| async move {
-                client
-                    .library()
-                    .history(WatchHistoryPageRequest { start_index, limit })
                     .await
                     .map_err(SdkError::from)
             })

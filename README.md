@@ -19,7 +19,7 @@ Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-plat
 
 ---
 
-**Android risk bring-up:** Kotlin/Compose, the Rust bridge, and libmpv modules now live under `android/`. The features and releases described below remain desktop-specific. The user has reported physical-device manual verification passed; Android is not yet a complete client, and the detailed device/HDR matrix remains unrecorded. See the [implementation status, build commands, and evidence](docs/android-client-design-spec.md#bring-up-implementation-and-evidence).
+**Android preview:** The native Kotlin/Compose client under `android/` includes mobile browsing, accounts, personal lists, shared-SDK playback/reporting, remote control and interruption recovery. The releases described below remain desktop-specific. See the [Android implementation and acceptance status](docs/android-client-design-spec.md), plus [automated checks and the device test checklist](docs/android-testing.md). Current physical-device UI/output acceptance and controlled release delivery remain separate from the development APK.
 
 ## 🎥 Demo
 

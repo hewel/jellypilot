@@ -1774,7 +1774,6 @@ impl JellyfinClient {
         start_time_ticks,
         audio_stream_index,
         subtitle_stream_index,
-        true,
       )
       .await
   }
@@ -1791,13 +1790,7 @@ impl JellyfinClient {
     audio_stream_index: Option<i32>,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
     self
-      .request_playback_info(
-        item_id,
-        start_time_ticks,
-        audio_stream_index,
-        Some(-1),
-        false,
-      )
+      .request_playback_info(item_id, start_time_ticks, audio_stream_index, Some(-1))
       .await
   }
 
@@ -1807,7 +1800,6 @@ impl JellyfinClient {
     start_time_ticks: Option<i64>,
     audio_stream_index: Option<i32>,
     subtitle_stream_index: Option<i32>,
-    allow_server_transcoding: bool,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
     let user_id = self.user_id()?;
     let path = format!("/Items/{}/PlaybackInfo", item_id);
@@ -1821,8 +1813,8 @@ impl JellyfinClient {
       subtitle_stream_index,
       enable_direct_play: true,
       enable_direct_stream: true,
-      enable_transcoding: allow_server_transcoding,
-      auto_open_live_stream: allow_server_transcoding,
+      enable_transcoding: false,
+      auto_open_live_stream: false,
     };
 
     self.post(&path, &request).await
@@ -1906,26 +1898,16 @@ impl JellyfinClient {
       )
     };
 
-    if !media_source.supports_direct_play {
-      if media_source.supports_direct_stream {
-        if let Some(path_or_url) = media_source.direct_stream_url.as_deref() {
-          let mut url = session_scoped_url(&server_url, path_or_url)?;
-          // Older Emby responses omit this flag while still returning an authenticated
-          // session-relative URL. Honor an explicit false, otherwise preserve the
-          // established same-origin authenticated direct-stream behavior.
-          if media_source.add_api_key_to_direct_stream_url != Some(false) {
-            append_api_key_if_missing(&mut url, &token, provider);
-          }
-          return Some(url.into());
-        }
-      }
-
-      if media_source.supports_transcoding {
-        if let Some(path_or_url) = media_source.transcoding_url.as_deref() {
-          let mut url = session_scoped_url(&server_url, path_or_url)?;
+    if !media_source.supports_direct_play && media_source.supports_direct_stream {
+      if let Some(path_or_url) = media_source.direct_stream_url.as_deref() {
+        let mut url = session_scoped_url(&server_url, path_or_url)?;
+        // Older Emby responses omit this flag while still returning an authenticated
+        // session-relative URL. Honor an explicit false, otherwise preserve the
+        // established same-origin authenticated direct-stream behavior.
+        if media_source.add_api_key_to_direct_stream_url != Some(false) {
           append_api_key_if_missing(&mut url, &token, provider);
-          return Some(url.into());
         }
+        return Some(url.into());
       }
     }
 
@@ -11991,7 +11973,7 @@ mod tests {
   }
 
   #[test]
-  fn emby_stream_urls_prefer_direct_play_then_provider_fallbacks() {
+  fn emby_stream_urls_use_original_or_direct_stream_and_ignore_transcoding_routes() {
     let client = JellyfinClient::new();
     connect_test_client_as_emby(&client, "http://media.example.test/emby".to_string());
     let direct_play = MediaSource {
@@ -12040,8 +12022,10 @@ mod tests {
     assert_eq!(
       client
         .build_stream_url("movie-1", &transcode)
-        .expect("transcoding URL"),
-      "http://media.example.test/emby/videos/transcoded.m3u8?api_key=emby-token"
+        .expect("original source URL"),
+      client
+        .build_stream_url("movie-1", &direct_play)
+        .expect("same original media")
     );
   }
 

@@ -191,7 +191,10 @@ impl Sdk {
                 let client = Arc::new(jellypilot_media_server::JellyfinClient::with_storage_dir(
                     inner.config.storage_dir.clone(),
                 ));
-                client.set_device_name(inner.config.device_name.clone());
+                match inner.configured_target_name() {
+                    Ok(name) => client.set_device_name(name),
+                    Err(error) => { terminal.record(QuickConnectOutcome::Failed(error)); return; },
+                }
 
                 let mut gate = RequestGate::default();
                 let session_token = gate.begin_login();

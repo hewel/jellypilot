@@ -22,7 +22,7 @@ internal class ArtworkFetcherFactory(private val sdk: () -> JellypilotSdk) : Fet
   override fun create(data: ArtworkUi, options: Options, imageLoader: ImageLoader): Fetcher = object : Fetcher {
     override suspend fun fetch(): FetchResult? {
       val core = sdk()
-      val target = core.imageTarget(data.scope, data.imageId, 384u)
+      val target = core.imageTarget(data.scope, data.imageId, data.requestedWidth.coerceIn(64, 1920).toUInt())
       val headers = NetworkHeaders.Builder()
         .set("Authorization", target.authorization)
         .set("User-Agent", target.userAgent)

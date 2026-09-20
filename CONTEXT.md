@@ -199,6 +199,7 @@ _Avoid_: Favorites, unwatched filter, cross-device list
 
 **Watch History**:
 The current server user's movies and individual episodes marked played or available to resume, ordered by their latest recorded playback time. It lists each item once, not every playback event, and is independent of device-local Watchlist membership.
+Android can hide a record on this device for its Profile Scope and undo that removal. Hiding changes only local visibility; it does not change Played, server progress, or the underlying server history.
 _Avoid_: Navigation history, per-play event log, viewing plan
 
 **Featured Item**:
@@ -218,8 +219,8 @@ The JellyPilot playback feature that skips server-published intro and credit ran
 _Avoid_: Media Segment Skipping, chapter skipping, generic skip markers
 
 **Automatic Intro Skip**:
-JellyPilot advancing playback past an Intro Skipper range without asking the user for confirmation, once the observed playback position is within that range rather than before its start. Automatic Intro Skip is silent Playback Target behavior: each fetched range triggers at most one automatic seek attempt per Playback Session, even if that attempt fails.
-_Avoid_: Skip prompt, countdown, overlay
+JellyPilot advancing playback past an Intro Skipper range without asking the user for confirmation, once the observed playback position is within that range rather than before its start. Each fetched range triggers at most one automatic seek attempt per Playback Session, even if that attempt fails. Desktop automatic skipping is silent; Android offers post-skip Undo, which returns to the prior position and switches that session to Manual.
+_Avoid_: Pre-skip confirmation, countdown
 
 **Manual Intro Skip**:
 JellyPilot advancing playback past an Intro Skipper range only when the user invokes its active skip action, distinct from silent Automatic Intro Skip. In the desktop contract, the prompt remains available throughout the current stay in that range unless dismissed or used, and becomes available again on re-entry.
@@ -231,6 +232,7 @@ _Avoid_: Next episode command, outro button
 
 **Intro Skipper Setting**:
 The global user preference controlling Intro Skipper behavior: the desktop choice is Automatic or Manual, with Automatic as the default. Automatic skips silently; Manual offers a user-invoked skip without automatically advancing playback.
+Android stores its own Automatic, Manual or Off starting preference; the player's automatic-skip toggle changes only the current session and does not create a desktop Series Intro Skipper Preference.
 _Avoid_: Automation, Playback automation, Plugin install state, server setting
 
 **Series Intro Skipper Preference**:

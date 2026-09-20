@@ -14,6 +14,8 @@ data class PlayerTrack(
   val isForced: Boolean,
   val isExternal: Boolean,
   val isSelected: Boolean,
+  /** Index in this MediaLoad's externalSubtitles; source URLs never leave the native host. */
+  val externalSourceIndex: Int? = null,
 )
 
 /**

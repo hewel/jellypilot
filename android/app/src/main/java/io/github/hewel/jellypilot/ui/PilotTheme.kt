@@ -56,15 +56,15 @@ private val LightColors = lightColorScheme(
   surfaceContainerLowest = Color(0xFFFAFAFA), surfaceContainerLow = Color(0xFFF1F5F9),
   surfaceContainer = Color(0xFFE9EDF2), surfaceContainerHigh = Color(0xFFE2E8F0),
   surfaceContainerHighest = Color(0xFFD3DAE4),
-  outline = Color(0xFF94A3B8), outlineVariant = Color(0xFFE7ECF3),
-  error = Color(0xFF4B1119), onError = Color(0xFFFFD9DE),
+  outline = Color(0xFF94A3B8), outlineVariant = Color(0xFFCBD5E1),
+  error = Color(0xFFDC2626), onError = Color.White,
   errorContainer = Color(0xFFFFD9DE), onErrorContainer = Color(0xFF4B1119),
 )
 
 @Immutable
-internal data class PilotColors(val body: Color, val metadata: Color, val sidebar: Color, val favorite: Color)
-private val DarkPilot = PilotColors(Color(0xFFD4D4D8), Color(0xFFA1A1AA), Color(0xFF0F1016), Color(0xFFF87171))
-private val LightPilot = PilotColors(Color(0xFF475569), Color(0xFF64748B), Color(0xFFFAFAFA), Color(0xFFE11D48))
+internal data class PilotColors(val body: Color, val metadata: Color, val sidebar: Color, val favorite: Color, val action: Color = Color(0xFF4F46E5), val playerScrim: Color = Color(0xB3000000), val insetMetadata: Color = body)
+private val DarkPilot = PilotColors(Color(0xFFD4D4D8), Color(0xFFA1A1AA), Color(0xFF0F1016), Color(0xFFF87171), insetMetadata = Color(0xFFA1A1AA))
+private val LightPilot = PilotColors(Color(0xFF475569), Color(0xFF64748B), Color(0xFFF1F5F9), Color(0xFFE11D48))
 internal val LocalPilotColors = staticCompositionLocalOf { LightPilot }
 
 @Composable
@@ -91,7 +91,7 @@ internal fun PilotTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composa
       titleSmall = style(14, 20, FontWeight.SemiBold), bodyLarge = style(16, 24),
       bodyMedium = style(14, 20), bodySmall = style(12, 18),
       labelLarge = style(14, 20, FontWeight.SemiBold), labelMedium = style(12, 16, FontWeight.Medium),
-      labelSmall = style(10, 14, FontWeight.Medium),
+      labelSmall = style(12, 16, FontWeight.Medium),
     )
   }
   CompositionLocalProvider(LocalPilotColors provides if (dark) DarkPilot else LightPilot) {
@@ -100,7 +100,7 @@ internal fun PilotTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composa
       typography = typography,
       shapes = Shapes(
         extraSmall = RoundedCornerShape(6.dp), small = RoundedCornerShape(8.dp),
-        medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(20.dp),
+        medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(16.dp),
         extraLarge = RoundedCornerShape(20.dp),
       ),
       content = content,

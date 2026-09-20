@@ -2,11 +2,9 @@
 //! into playback intents and play actions. Sunk from the iced playback
 //! surface (ADR 0029): display-free and pure so both frontends share it.
 
-use jellypilot_media_server::ticks_to_seconds;
-use jellypilot_session::{
-  remote_index_value, remote_volume_value, GeneralCommand, JellyfinCommand, PlayRequest,
-  PlaystateRequest,
-};
+use jellypilot_session::{GeneralCommand, JellyfinCommand, PlayRequest, PlaystateRequest};
+
+use jellypilot_sdk::remote::{translate_remote_command, RemoteCommand};
 
 use crate::playback::PlaybackSelection;
 use crate::playback_session::{AdjacentDirection, PlaybackIntent, SessionView, TracksView};
@@ -75,42 +73,26 @@ pub fn remote_command_action(
   command: JellyfinCommand,
   playback: &SessionView,
 ) -> Option<RemoteCommandAction> {
-  match command {
-    JellyfinCommand::Play(request) => remote_play_action(request),
-    JellyfinCommand::Playstate(request) => remote_playstate_action(request),
-    JellyfinCommand::GeneralCommand(request) => remote_general_action(
-      request,
-      playback.now_playing.as_ref().map(|playing| playing.muted),
-    ),
-  }
+  project_remote_command(
+    translate_remote_command(command)?,
+    playback.now_playing.as_ref().map(|playing| playing.muted),
+  )
 }
 
 #[must_use]
 pub fn remote_play_action(request: PlayRequest) -> Option<RemoteCommandAction> {
-  Some(RemoteCommandAction::Play {
-    item_id: request.item_ids.first()?.clone(),
-    start_position_ticks: request.start_position_ticks,
-    selection: PlaybackSelection {
-      media_source_id: request.media_source_id,
-      audio_stream_index: request.audio_stream_index,
-      subtitle_stream_index: request.subtitle_stream_index,
-    },
-  })
+  project_remote_command(
+    translate_remote_command(JellyfinCommand::Play(request))?,
+    None,
+  )
 }
 
 #[must_use]
 pub fn remote_playstate_action(request: PlaystateRequest) -> Option<RemoteCommandAction> {
-  let intent = match request.command.as_str() {
-    "Pause" => RemotePlaybackIntent::SetPaused(true),
-    "Unpause" => RemotePlaybackIntent::SetPaused(false),
-    "PlayPause" => RemotePlaybackIntent::TogglePaused,
-    "Seek" => RemotePlaybackIntent::Seek(ticks_to_seconds(request.seek_position_ticks?)),
-    "Stop" => RemotePlaybackIntent::Stop,
-    "NextTrack" => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
-    "PreviousTrack" => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
-    _ => return None,
-  };
-  Some(RemoteCommandAction::Intent(intent))
+  project_remote_command(
+    translate_remote_command(JellyfinCommand::Playstate(request))?,
+    None,
+  )
 }
 
 #[must_use]
@@ -118,20 +100,49 @@ pub fn remote_general_action(
   request: GeneralCommand,
   muted: Option<bool>,
 ) -> Option<RemoteCommandAction> {
-  let arguments = request.arguments.as_ref();
-  let intent = match request.name.as_str() {
-    "SetVolume" => RemotePlaybackIntent::SetVolume(remote_volume_value(
-      arguments.and_then(|arguments| arguments.get("Volume")),
-    )?),
-    "ToggleMute" => RemotePlaybackIntent::SetMuted(!muted?),
-    "SetAudioStreamIndex" => RemotePlaybackIntent::SelectAudioStream(remote_index_value(
-      arguments.and_then(|arguments| arguments.get("Index")),
-    )?),
-    "SetSubtitleStreamIndex" => {
-      let index = remote_index_value(arguments.and_then(|arguments| arguments.get("Index")))?;
-      RemotePlaybackIntent::SelectSubtitleStream((index >= 0).then_some(index))
+  project_remote_command(
+    translate_remote_command(JellyfinCommand::GeneralCommand(request))?,
+    muted,
+  )
+}
+
+fn project_remote_command(
+  command: RemoteCommand,
+  muted: Option<bool>,
+) -> Option<RemoteCommandAction> {
+  let intent = match command {
+    RemoteCommand::Start {
+      item_id,
+      start_position_ticks,
+      media_source_id,
+      audio_stream_index,
+      subtitle_stream_index,
+    } => {
+      return Some(RemoteCommandAction::Play {
+        item_id,
+        start_position_ticks,
+        selection: PlaybackSelection {
+          media_source_id,
+          audio_stream_index,
+          subtitle_stream_index,
+        },
+      });
     }
-    _ => return None,
+    RemoteCommand::Pause => RemotePlaybackIntent::SetPaused(true),
+    RemoteCommand::Resume => RemotePlaybackIntent::SetPaused(false),
+    RemoteCommand::TogglePause => RemotePlaybackIntent::TogglePaused,
+    RemoteCommand::Stop => RemotePlaybackIntent::Stop,
+    RemoteCommand::Seek { seconds } => RemotePlaybackIntent::Seek(seconds),
+    RemoteCommand::Next => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
+    RemoteCommand::Previous => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
+    RemoteCommand::SetVolume { volume } => RemotePlaybackIntent::SetVolume(volume),
+    RemoteCommand::ToggleMute => RemotePlaybackIntent::SetMuted(!muted?),
+    RemoteCommand::SetAudioTrack { index } => {
+      RemotePlaybackIntent::SelectAudioStream(i64::from(index))
+    }
+    RemoteCommand::SetSubtitleTrack { index } => {
+      RemotePlaybackIntent::SelectSubtitleStream((index >= 0).then_some(i64::from(index)))
+    }
   };
   Some(RemoteCommandAction::Intent(intent))
 }

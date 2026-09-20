@@ -26,12 +26,17 @@ import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 
-/** Gate-1 engine host. It deliberately does not create media-server playback/reporting sessions. */
+/** Android resource owner. Media-server policy and reporting belong to the shared SDK. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHandler {
   private val application = context.applicationContext
@@ -39,6 +44,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   private val main = Handler(Looper.getMainLooper())
   private val submissionLock = Any()
   private val closed = AtomicBoolean(false)
+  private val released = CompletableDeferred<Unit>()
   private val admitted = AtomicBoolean(false)
   private val handoff = AtomicBoolean(false)
   private val policyLock = Any()
@@ -65,12 +71,13 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   private val opening = AtomicReference<CancellationSignal?>()
   private val surfaceLock = Any()
   private var surfaceEpoch = 0L
-  @Volatile private var host: PlayerHost? = null
+  @Volatile private var host: MpvPlayerHost? = null
   private var mediaSession: MediaSession? = null
   private var media3: MpvMedia3Player? = null
   private val descriptors = mutableMapOf<Long, List<ParcelFileDescriptor>>()
   private data class StopWaiter(val generations: MutableSet<Long>, val completion: CompletableDeferred<Boolean>)
   private val stopWaiters = mutableListOf<StopWaiter>()
+  private val loadWaiters = mutableMapOf<Long, CompletableDeferred<Long>>()
   private var pendingLoad: Long? = null
   private val mutableSnapshot = MutableStateFlow(PlayerSnapshot(admissionEligible = false))
   val snapshot = mutableSnapshot.asStateFlow()
@@ -78,6 +85,12 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   val ready = mutableReady.asStateFlow()
   private val mutableError = MutableStateFlow<String?>(null)
   val error = mutableError.asStateFlow()
+  private val businessEvents = Channel<PlayerEvent>(Channel.UNLIMITED)
+  /** Lossless, single-consumer lifecycle events; native log traffic never enters this channel. */
+  val events = businessEvents.receiveAsFlow()
+  @Volatile var businessIntent: ((PlayerIntent) -> Boolean)? = null
+  val admissionEligible: Boolean get() = admitted.get() && !handoff.get() && !closed.get()
+  fun message(@androidx.annotation.StringRes id: Int): String = application.localizedString(id)
 
   private fun execute(action: () -> Unit): Boolean = synchronized(submissionLock) {
     if (closed.get()) false else {
@@ -110,6 +123,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   private fun retire(generation: Long) {
+    loadWaiters.remove(generation)?.completeExceptionally(IllegalStateException("Native load did not complete"))
     descriptors.remove(generation)?.forEach { it.close() }
     if (pendingLoad == generation) pendingLoad = null
     stopWaiters.removeAll { waiter ->
@@ -125,9 +139,13 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       if (snapshot.status == PlayerStatus.ENDED) releaseAudioFocus()
     }
     override fun onEvent(event: PlayerEvent) {
+      if (event !is PlayerEvent.LogMessage && !closed.get()) businessEvents.trySend(event)
       execute {
         when (event) {
-          is PlayerEvent.FileLoaded -> if (pendingLoad == event.generation) pendingLoad = null
+          is PlayerEvent.FileLoaded -> {
+            if (pendingLoad == event.generation) pendingLoad = null
+            loadWaiters.remove(event.generation)?.complete(event.generation)
+          }
           is PlayerEvent.PlaybackStopped -> retire(event.generation)
           is PlayerEvent.LoadRejected -> retire(event.generation)
           is PlayerEvent.CommandRejected -> {
@@ -164,9 +182,9 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
           }
         }
       } catch (_: Exception) {
-        mutableError.value = application.getString(R.string.player_initialization_failed)
+        mutableError.value = application.localizedString(R.string.player_initialization_failed)
       } catch (_: LinkageError) {
-        mutableError.value = application.getString(R.string.player_initialization_failed)
+        mutableError.value = application.localizedString(R.string.player_initialization_failed)
       }
     }
   }
@@ -185,15 +203,72 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   fun loadUrl(url: String, subtitle: Uri?) = load(MediaLocator.Remote(url), null, subtitle)
   fun loadFile(uri: Uri, subtitle: Uri?) = load(null, uri, subtitle)
 
+  /** Submits a prepared SDK plan without moving Surface or video ownership across FFI. */
+  suspend fun loadMedia(
+    request: MediaLoad,
+    stillCurrent: () -> Boolean = { true },
+    bindGeneration: (Long) -> Unit = {},
+  ): Long {
+    val epoch = commandEpoch.incrementAndGet()
+    val submitted = CompletableDeferred<Long>()
+    if (!ready.value || !admissionEligible || !stillCurrent()) error("Playback is not currently eligible")
+    bindGeneration(epoch)
+    val queued = execute {
+      if (closed.get() || commandEpoch.get() != epoch || !admissionEligible || !stillCurrent()) {
+        submitted.completeExceptionally(IllegalStateException("Playback admission changed"))
+        return@execute
+      }
+      if (pendingLoad != null) {
+        submitted.completeExceptionally(IllegalStateException("Previous media load has not settled"))
+        return@execute
+      }
+      val current = host
+      if (current == null) {
+        submitted.completeExceptionally(IllegalStateException("Player is unavailable"))
+        return@execute
+      }
+      descriptors[epoch] = emptyList()
+      pendingLoad = epoch
+      loadWaiters[epoch] = submitted
+      mutableError.value = null
+      try {
+        if (withAudioFocus(epoch) {
+          check(stillCurrent()) { "Playback admission changed" }
+          current.load(request.copy(generation = epoch))
+        }) {
+          // The SDK account admission remains held until FileLoaded, not merely load submission.
+        } else {
+          retire(epoch)
+          mutableError.value = application.localizedString(R.string.player_audio_focus_denied)
+          submitted.completeExceptionally(IllegalStateException("Audio focus was denied"))
+        }
+      } catch (_: Exception) {
+        retire(epoch)
+        submitted.completeExceptionally(IllegalStateException("Player rejected the media load"))
+      }
+    }
+    if (!queued) error("Player is closed")
+    return try {
+      val loaded = withTimeout(30_000) { submitted.await() }
+      check(stillCurrent() && admissionEligible) { "Playback admission changed" }
+      loaded
+    }
+    catch (failure: Exception) {
+      // Cancellation must not release an admitted account operation while its load is still opening.
+      retireMedia()
+      throw failure
+    } finally { execute { loadWaiters.remove(epoch) } }
+  }
+
   private fun load(remote: MediaLocator?, uri: Uri?, subtitle: Uri?) {
     val epoch = commandEpoch.incrementAndGet()
     if (!ready.value || !admitted.get() || handoff.get() || closed.get()) {
-      mutableError.value = application.getString(R.string.player_paused_background)
+      mutableError.value = application.localizedString(R.string.player_paused_background)
       return
     }
     execute { if (closed.get() || commandEpoch.get() != epoch) return@execute
     if (pendingLoad != null) {
-      mutableError.value = application.getString(R.string.player_wait_for_load)
+      mutableError.value = application.localizedString(R.string.player_wait_for_load)
       return@execute
     }
     val owned = mutableListOf<ParcelFileDescriptor>()
@@ -218,28 +293,78 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       mutableError.value = null
       if (!withAudioFocus(epoch) { current.load(MediaLoad(source, generation = epoch, externalSubtitles = subtitles)) }) {
         retire(epoch)
-        if (commandEpoch.get() == epoch) mutableError.value = application.getString(R.string.player_audio_focus_denied)
+        if (commandEpoch.get() == epoch) mutableError.value = application.localizedString(R.string.player_audio_focus_denied)
       }
     } catch (_: Exception) {
       descriptors.remove(epoch)
       owned.forEach { runCatching { it.close() } }
       if (pendingLoad == epoch) pendingLoad = null
-      if (commandEpoch.get() == epoch && !closed.get()) mutableError.value = application.getString(R.string.player_open_failed)
+      if (commandEpoch.get() == epoch && !closed.get()) mutableError.value = application.localizedString(R.string.player_open_failed)
       if (descriptors.isEmpty()) releaseAudioFocus()
     } finally {
       opening.compareAndSet(cancellation, null)
     } }
   }
 
-  fun play(): Boolean {
+  fun play(stillCurrent: () -> Boolean = { true }): Boolean {
     val current = host ?: return false
-    if (closed.get() || !admitted.get() || handoff.get()) {
-      mutableError.value = application.getString(R.string.player_paused_background)
+    if (closed.get() || !admitted.get() || handoff.get() || !stillCurrent()) {
+      mutableError.value = application.localizedString(R.string.player_paused_background)
       return false
     }
-    val accepted = withAudioFocus { current.play() }
-    if (!accepted) mutableError.value = application.getString(R.string.player_audio_focus_denied)
+    val accepted = withAudioFocus { if (stillCurrent()) current.play() }
+    if (!accepted) mutableError.value = application.localizedString(R.string.player_audio_focus_denied)
     return accepted
+  }
+  suspend fun resumeMedia(stillCurrent: () -> Boolean): Boolean {
+    val generation = snapshot.value.generation
+    if (!play(stillCurrent)) return false
+    return try {
+      withTimeout(10_000) {
+        val resumed = snapshot.first { !it.paused || it.generation != generation || !stillCurrent() || !admissionEligible || it.error != null }
+        val accepted = resumed.generation == generation && !resumed.paused && stillCurrent() && admissionEligible
+        if (!accepted) settleRevokedResume(generation)
+        accepted
+      }
+    } catch (_: TimeoutCancellationException) { settleRevokedResume(generation); false }
+    catch (cancelled: kotlinx.coroutines.CancellationException) { settleRevokedResume(generation); throw cancelled }
+  }
+  private suspend fun settleRevokedResume(generation: Long) = withContext(NonCancellable) {
+    synchronized(policyLock) {
+      if (snapshot.value.generation != generation) return@withContext
+      pause()
+    }
+    val receipt = CompletableDeferred<Boolean>()
+    val queued = execute { receipt.complete(runCatching { host?.pauseAndConfirm(generation) == true }.getOrDefault(false)) }
+    val acknowledged = queued && kotlinx.coroutines.withTimeoutOrNull(15_000) { receipt.await() } == true
+    if (!acknowledged) retireMedia()
+  }
+  /** Initial preferences settle while paused, before the admitted operation may make audio audible. */
+  suspend fun configureMedia(volume: Int?, audio: Int?, subtitle: Int?, stillCurrent: () -> Boolean): Boolean {
+    val generation = snapshot.value.generation
+    val submitted = synchronized(policyLock) {
+      val current = host
+      if (current == null || !admissionEligible || !stillCurrent()) false else {
+        volume?.let(current::setVolume)
+        audio?.let { current.selectTrack(TrackKind.AUDIO, it) }
+        subtitle?.let { current.selectTrack(TrackKind.SUBTITLE, it) }
+        true
+      }
+    }
+    if (!submitted) return false
+    fun selected(value: PlayerSnapshot, kind: TrackKind, id: Int?): Boolean = when (id) {
+      null -> true
+      PlayerHost.TRACK_ID_NONE -> value.tracks.none { it.kind == kind && it.isSelected }
+      PlayerHost.TRACK_ID_AUTO -> value.tracks.any { it.kind == kind && it.isSelected }
+      else -> value.tracks.any { it.kind == kind && it.mpvId == id && it.isSelected }
+    }
+    return try {
+      val configured = withTimeout(10_000) { snapshot.first {
+        it.generation != generation || !admissionEligible || !stillCurrent() || it.error != null ||
+          ((volume == null || it.volumePercent == volume) && selected(it, TrackKind.AUDIO, audio) && selected(it, TrackKind.SUBTITLE, subtitle))
+      } }
+      configured.generation == generation && configured.error == null && stillCurrent() && admissionEligible
+    } catch (_: TimeoutCancellationException) { false }
   }
   fun pause() {
     synchronized(policyLock) {
@@ -251,6 +376,8 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
   fun seek(seconds: Double) { host?.seekTo(seconds) }
   fun volume(percent: Int) { host?.setVolume(percent) }
+  fun mute(value: Boolean) { host?.setMuted(value) }
+  fun speed(value: Double) { host?.setSpeed(value) }
   fun select(kind: TrackKind, id: Int) { host?.selectTrack(kind, id) }
 
   fun stop() {
@@ -263,6 +390,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   suspend fun stopAndWait(): Boolean {
+    if (closed.get()) { released.await(); return true }
     synchronized(policyLock) {
       commandEpoch.incrementAndGet()
       opening.get()?.cancel()
@@ -280,10 +408,20 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
         current?.stop()
       }
     }
-    if (!queued) return false
+    if (!queued) { released.await(); return true }
     return try { withTimeout(15000) { receipt.await() } }
     catch (_: TimeoutCancellationException) { false }
     finally { execute { stopWaiters.removeAll { it.completion === receipt } } }
+  }
+
+  /** Never releases an SDK admission while native teardown is merely requested or timed out. */
+  suspend fun retireMedia() = withContext(NonCancellable) {
+    if (!stopAndWait()) {
+      // A wedged ordinary stop makes this host unusable. Disposal is the final physical boundary;
+      // a stuck native destroy deliberately keeps account admission closed until process restart.
+      close()
+      released.await()
+    }
   }
 
   fun attach(surface: Surface) {
@@ -302,6 +440,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   override fun onPlayerIntent(intent: PlayerIntent): Boolean {
+    businessIntent?.let { return it(intent) }
     when (intent) {
       PlayerIntent.Play -> return play()
       PlayerIntent.Pause -> pause()
@@ -322,6 +461,8 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   override fun close() {
     if (!synchronized(submissionLock) { closed.compareAndSet(false, true) }) return
     admitted.set(false)
+    businessIntent = null
+    businessEvents.close()
     releaseAudioFocus()
     application.unregisterReceiver(noisyReceiver)
     mutableReady.value = false
@@ -338,6 +479,9 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       descriptors.clear()
       stopWaiters.forEach { it.completion.complete(false) }
       stopWaiters.clear()
+      loadWaiters.values.forEach { it.completeExceptionally(IllegalStateException("Player closed")) }
+      loadWaiters.clear()
+      released.complete(Unit)
       executor.shutdown()
     }
   }

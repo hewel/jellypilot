@@ -1,6 +1,6 @@
 # Android Client Design Specification
 
-_Status: Accepted design, 2026-09-14; risk bring-up implemented and automated checks recorded on 2026-09-15. The user subsequently reported physical-device manual verification passed. The device/sample/HDR matrix is not yet recorded; this is not the finished Android client._
+_Status: Accepted design, 2026-09-14; mobile product implementation added on 2026-09-21. Current validation and pending acceptance are recorded below. The user deferred physical-device testing of this implementation until completion; the earlier bring-up device pass does not validate these new flows._
 
 Architecture: [ADR 0042](adr/0042-native-android-frontend-and-shared-sdk.md). Domain terminology: [CONTEXT.md](../CONTEXT.md). Visual source: [Paper, Media Streamer / Mobile](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/5UF-0). Repository investigation used `22555b4`; the earlier proposal cited `92fba0e3` and is not current implementation evidence.
 
@@ -45,6 +45,51 @@ Phone and tablet layouts adapt to available window size. Navigation, back behavi
 
 A prototype entry is not automatic feature authorization. In particular, the current “快捷键” entry must not become a dead settings item: the implemented Android settings navigation must omit or revise it to match the standard-input-only decision. Likewise “MPV” does not authorize arbitrary configuration. Missing prototype pages do not silently remove inherited business capabilities. Paper itself was not modified in this design session; final visual acceptance is human-owned.
 
+### Mobile design integration checkpoint — 2026-09-21
+
+The user identified the mobile design as substantially settled and approved implementation with
+all recommended choices below. Physical-device testing is deferred until the complete Android
+implementation is ready. These decisions do not claim implementation or visual acceptance.
+
+The current [Paper Mobile page](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0)
+contains 40 interface boards and one interaction guide. Its companion design package defines
+mobile interaction and shared playback/list behavior; historical handoff notes are subordinate to
+those current specifications. Phone navigation is Home / Personal Lists / Library / Account,
+with Search as a tool entry. Tablet and foldable reference boards now live on the separate
+Pad&Duo page. The existing exclusion of fold-posture-specific behavior still applies.
+
+- Dark phone Home, Series detail, and Movie detail use the settled immersive composition.
+  Light Home and Series remain explicitly marked as awaiting that adaptation; Library and
+  Settings are aligned across themes. Derive missing light compositions during implementation
+  from the settled dark structure and existing light tokens, retaining structural theme parity.
+- The first-release capabilities above still include authentication, Watch History, and Restore
+  Local Playback even where the phone canvas has no dedicated board. Extend the established
+  mobile components for these flows without requiring additional Paper designs.
+- The mobile skip specification describes a session-only toggle and automatic-skip undo.
+  [ADR 0045](adr/0045-desktop-series-intro-skipper-preferences.md)'s persisted series preference
+  is explicitly desktop-only; sharing playback execution must not silently import that policy
+  into Android. Integration must preserve the platform's accepted semantics.
+
+At the initial checkpoint, Android Home was a basic poster grid and the independent URL/file
+player did not establish reporting or server resume. The implementation below replaces those
+bring-up surfaces with the mobile product and shared playback path; real-server/device acceptance
+remains a separate result from protocol-fixture and code checks.
+
+The approved test approach combines focused shared-Rust regressions, deterministic protocol
+fixtures for failed/delayed/stale server operations, Compose semantics and restoration tests,
+and existing JNI/Keystore/lifecycle instrumentation. Add a real test-server playback/report/resume
+flow to verify the full boundary. Use controlled clocks for chrome/undo timing, and distinguish
+Activity recreation from actual process-loss recovery. Human review continues to own appearance,
+subtitle rendering, and SDR/HDR output on recorded physical-device/media combinations.
+
+The pre-implementation instrumentation sources contained ten tests: six native-player, three
+lifecycle, and one Keystore test. The nine-test pass recorded below is historical evidence for
+that earlier suite; no tests were rerun for this checkpoint. Android tooling is installed, but
+the existing adb server reported no attached devices during this inspection. Selection of the
+first physical acceptance device and the remaining phone/tablet/output matrix is deferred until
+implementation is complete, at the user's request. Continue automated checks in the meantime;
+report unavailable device-dependent checks separately, without treating them as passed.
+
 ## Playback lifecycle
 
 “Foreground” for Android playback means the app interface is visible and the device is unlocked, not merely that the process exists. A visible split-screen app remains eligible without input focus. Audio focus is a separate system constraint and must be honored.
@@ -79,10 +124,10 @@ A Local Playback Recovery Point is a device-local, Profile-Scope-owned item refe
 
 ## Shared SDK and platform ownership
 
-The following paths contain the risk bring-up implementation. Desktop and Android now share account lifecycle, User Data Action, and Library Browser execution; shared playback and the real-server vertical path remain Gate 2 work:
+Desktop and Android share account lifecycle, User Data Actions, Library Browser execution, playback preparation/report serialization, and remote command translation. Android owns the physical JNI player, eligible-target lifecycle, and Compose presentation:
 
 ```text
-crates/jellypilot-sdk/       # shared account, item-write, and browser execution used by both clients
+crates/jellypilot-sdk/       # shared account, browse, collection, playback and remote semantics
 crates/jellypilot-ffi/       # UniFFI conversion and external object/operation lifetime
 android/app/                # Compose, navigation, ViewModels, Android application wiring
 android/core-bridge/        # Kotlin SDK wrapper and generated bindings
@@ -102,7 +147,7 @@ Desktop playback commands capture SDK admission before dispatch. Account transit
 
 Sign Out securely removes the selected Saved Service Profile first. Failed credential deletion preserves the connection and playback; successful deletion is never rolled back. If subsequent teardown fails, authentication remains connected for cleanup retry while new playback and content writes are blocked. `disconnect()` retries that cleanup without deleting credentials again, and ends the scope only after successful teardown. Signing out an inactive profile preserves the active profile. Watchlist deletion remains separately opt-in, uses the platform's existing store, and reports independent failures with an explicit retry. A profile with pending Watchlist cleanup cannot reactivate until cleanup succeeds. SDK `close()` is terminal: committed work retains authentication until settlement, then authentication is released even when teardown failed.
 
-Automated account/store tests and native startup smoke cover these adapters; they do not establish the real-server playback/reporting flow or device and human visual acceptance required by the later gates.
+Automated account/store/protocol tests and native startup smoke cover these adapters; they do not establish real-server/device or human visual acceptance required by the later gates.
 
 | Responsibility | Owner |
 | --- | --- |
@@ -155,6 +200,52 @@ Pin and reproduce Rust cross-compilation, UniFFI generation, libmpv and transiti
 
 For each gate record pass/fail/unavailable separately. Missing device, sample, or output evidence is not a pass. Desktop changes require the relevant repository gates from [validation policy](agents/validation.md); Android commands and checks must be added as working dispatcher entries during implementation, not invented here. Documentation-only recording does not require an application build.
 
+## Mobile implementation and verification — 2026-09-21
+
+The Android product now includes the four-destination phone shell, adaptive tablet rail,
+immersive Home and details, retained Library/Search state, seasons and episodes, preplay and
+in-player track selection, account and presentation settings, and recovery. Authentication,
+queries, collection mutations, preferences and playback plans use the shared SDK through UniFFI.
+Home uses the existing Featured Item policy and authoritative parent-series action state.
+
+Watchlist batch Undo restores original records and ordering. Favorites accept only confirmed
+server writes, including partial failure. Android History hiding is local to its Profile Scope;
+its paginated SDK query skips hidden records without changing Played or server resume state.
+
+The Android coordinator connects shared playback/reporting to the actual JNI host. Loads start
+paused, confirm initial volume/tracks, then resume within one admitted physical operation.
+Admission survives cancelled FFI waiters until native completion or confirmed disposal. Profile
+transitions revoke queued intents before credential work, while failure before teardown preserves
+ongoing playback. Visibility loss acknowledges pause; Surface changes do not end the session.
+Unexpected native termination preserves recovery, unlike explicit exit or natural completion.
+Remote commands and system media controls use the same session path. Android skip Undo switches
+only that session to Manual.
+
+| Current check | Evidence |
+| --- | --- |
+| `bun run check` | Passed: 27 dispatcher tests and maintained Rust formatting/clippy. |
+| `bun run task rust test` | 1,343 passed, zero failed, one ignored helper invoked by lifecycle tests. |
+| `xvfb-run -a bun run task iced run --smoke` | Passed: desktop startup only. |
+| `bun run task android check` | Passed: five Compose host tests, four player host tests, lint with zero errors and 50 warnings. |
+| `bun run task android build` | Passed: fresh bindings, ARM64 Rust bridge, pinned native dependency pipeline and debug APK assembly. |
+| Android instrumentation | 16 unique cases passed on API 35 Google APIs x86_64 with verified `libndk_translation` ARM64 support: 14 baseline passes, the corrected external-subtitle fixture, and the added full playback flow. The focused reruns replaced two invalid fixture assumptions; no final case is failing or skipped. |
+| Full playback flow | Real HTTP fixture → Rust/UniFFI → Android coordinator → libmpv passed: login, Home/detail queries, native playback, paused seek, track confirmation, start/progress/stop payloads, recovery clearing, and a second start using server resume. This is a protocol fixture, not a deployed Jellyfin/Emby server acceptance result. |
+| APK packaging | Signature verification and 16 KB ZIP alignment passed; all 13 native libraries are ARM64, uncompressed, with at least 16 KB ELF load alignment. This is not a 16 KB-page runtime result. |
+
+Focused independent source review covered native admission/cleanup, profile transitions, stale
+terminal events, cross-profile Undo, partial collection operations and interruption recovery.
+The identified issues were fixed; runtime tests remain separate evidence.
+
+The current artifact is a debug-signed development APK, version `2.2.2-android-preview`, retaining
+native symbols: `android/app/build/outputs/apk/debug/app-debug.apk`, 564,620,403 bytes,
+SHA256 `217213b48adf3bf2ceb75653d63c139d7b9c86df9fcef2003cd19b08c26e4657`.
+The final UI edits also passed `:app:lintDebug`; the APK was rebuilt by the final instrumentation
+run and its signature/alignment rechecked. The temporary emulator was shut down after testing.
+See [Android verification and device acceptance](android-testing.md) for commands
+and the human checklist. The earlier physical-device pass below applies only to risk bring-up.
+Current real-server/device UI, audio, HDR/SDR, process-loss, install/upgrade and controlled-release
+acceptance must be recorded separately; the user requested those physical checks after implementation.
+
 ## Bring-up implementation and evidence
 
 Recorded on 2026-09-15. The Android application contains Compose account/browse/search/detail wiring, a generated UniFFI/JNA bridge, Android Keystore-backed encrypted credentials outside backup storage, scoped artwork requests, and an independent libmpv player with Media3 and Surface ownership. The player probe does **not** create media-server Playback Sessions or reporting/resume flows. Desktop SDK migration, the shared playback vertical path, complete phone/tablet product behavior, and controlled release delivery remain later gates.
@@ -203,7 +294,7 @@ No screenshot, visual judgment, physical-device output, or HDR acceptance was pe
 
 ## Source evidence and recording scope
 
-Existing extraction points include [account handoff](../src-iced/src/app/accounts.rs), [browse operations](../src-iced/src/app/browse.rs), [confirmed collection changes](../src-iced/src/app/collections.rs), [player controller](../crates/jellypilot-mpv/src/playback.rs), [playback state machine](../crates/jellypilot-mpv/src/playback_session.rs), and [remote runtime](../src-iced/src/app/playback/remote.rs). Their presence is reuse evidence, not proof that they already form an Android SDK. [ADR 0033](adr/0033-validate-before-active-profile-handoff.md), [ADR 0038](adr/0038-state-owned-intro-skipper-policy.md), and [ADR 0039](adr/0039-native-media-segments-for-intro-skipper.md) remain relevant contracts.
+Existing extraction points include [account handoff](../src-iced/src/app/accounts.rs), [browse operations](../src-iced/src/app/browse.rs), [confirmed collection changes](../src-iced/src/app/collections.rs), [player controller](../crates/jellypilot-mpv/src/playback.rs), [playback state machine](../crates/jellypilot-mpv/src/playback_session.rs), and [remote runtime](../src-iced/src/app/playback/remote.rs). Playback preparation/reporting and remote command translation now have shared SDK consumers on both platforms; the desktop host and Android JNI owner retain their distinct physical lifecycles. [ADR 0033](adr/0033-validate-before-active-profile-handoff.md), [ADR 0038](adr/0038-state-owned-intro-skipper-policy.md), and [ADR 0039](adr/0039-native-media-segments-for-intro-skipper.md) remain relevant contracts.
 
 Primary references checked during design:
 

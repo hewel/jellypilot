@@ -243,6 +243,22 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       mutate { copy(playWhenReady = false) }
     }
   }
+
+  /** A business admission can be released only after the queued native resume was revoked and paused. */
+  fun pauseAndConfirm(generation: Long): Boolean {
+    var acknowledged = false
+    runBlocking {
+      if (released || current.generation != generation) {
+        acknowledged = true
+      } else {
+        revokePlay()
+        val applied = MpvJni.nativeSetPropertyFlag(handle, "pause", true) >= 0
+        acknowledged = applied && MpvJni.nativeGetPropertyString(handle, "pause") == "yes"
+        if (acknowledged) mutate { copy(paused = true, playWhenReady = false, isPlaying = false) }
+      }
+    }
+    return acknowledged
+  }
   override fun seekTo(positionSeconds: Double) {
     if (ifReleased("seek")) return
     enqueue {
@@ -923,17 +939,22 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         }
         val id = MpvJni.nativeGetPropertyString(handle, "track-list/$i/id")?.toIntOrNull()
           ?: continue
+        val externalSource = MpvJni.nativeGetPropertyString(handle, "track-list/$i/external-filename")
+        val externalIndex = externalSource?.let { source ->
+          active?.request?.externalSubtitles?.indexOfFirst { locatorUrl(it.locator) == source }?.takeIf { it >= 0 }
+        }
         add(
           PlayerTrack(
             mpvId = id,
             kind = kind,
-            title = MpvJni.nativeGetPropertyString(handle, "track-list/$i/title"),
+            title = MpvJni.nativeGetPropertyString(handle, "track-list/$i/title")?.let(::redact),
             language = MpvJni.nativeGetPropertyString(handle, "track-list/$i/lang"),
             codec = MpvJni.nativeGetPropertyString(handle, "track-list/$i/codec"),
             isDefault = MpvJni.nativeGetPropertyString(handle, "track-list/$i/default") == "yes",
             isForced = MpvJni.nativeGetPropertyString(handle, "track-list/$i/forced") == "yes",
             isExternal = MpvJni.nativeGetPropertyString(handle, "track-list/$i/external") == "yes",
             isSelected = MpvJni.nativeGetPropertyString(handle, "track-list/$i/selected") == "yes",
+            externalSourceIndex = externalIndex,
           ),
         )
       }

@@ -3,6 +3,9 @@
 //! regressions use controlled loopback HTTP servers.
 
 mod browse;
+mod history;
+mod playback;
+mod product;
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -83,7 +86,7 @@ impl SecureCredential for MemoryCredential {
     }
 }
 
-fn test_session(user_id: &str, server_url: &str) -> SavedSession {
+pub(super) fn test_session(user_id: &str, server_url: &str) -> SavedSession {
     SavedSession {
         provider: MediaServerProvider::Jellyfin,
         server_url: server_url.to_owned(),
@@ -130,7 +133,7 @@ fn test_item(id: &str) -> VideoLibraryItem {
     }
 }
 
-fn test_sdk() -> (Sdk, tempfile::TempDir) {
+pub(super) fn test_sdk() -> (Sdk, tempfile::TempDir) {
     test_sdk_with(None, Arc::new(MemoryCredential::default()))
 }
 
@@ -1446,6 +1449,7 @@ async fn scope_ref_without_active_profile_is_typed() {
 
 struct HttpRequest<Body> {
     headers: String,
+    body: String,
     reply: tokio::sync::oneshot::Sender<Body>,
     disconnected: tokio::sync::oneshot::Receiver<()>,
 }
@@ -1483,10 +1487,15 @@ async fn controlled_http_server<Body: AsRef<str> + Send + 'static>() -> (
                             }
                             assert!(headers.len() < 16_384, "bounded request headers");
                         }
+                        let headers = String::from_utf8(headers).expect("HTTP headers");
+                        let length = headers.lines().find_map(|line| line.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case("content-length")).map(|(_, length)| length.trim().parse::<usize>().expect("body length"))).unwrap_or(0);
+                        let mut body = vec![0; length];
+                        stream.read_exact(&mut body).await.expect("request body");
                         let (reply, response) = tokio::sync::oneshot::channel();
                         let (disconnected, closed) = tokio::sync::oneshot::channel();
                         if requests.send(HttpRequest {
-                            headers: String::from_utf8(headers).expect("HTTP headers"),
+                            headers,
+                            body: String::from_utf8(body).expect("HTTP body"),
                             reply,
                             disconnected: closed,
                         }).is_err() {

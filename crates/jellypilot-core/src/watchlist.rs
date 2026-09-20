@@ -274,6 +274,62 @@ impl WatchlistStore {
         Ok(true)
     }
 
+    /// Removes one selection atomically and returns the exact records for undo.
+    pub fn remove_items(
+        &mut self,
+        scope: &ProfileScope,
+        item_ids: &[String],
+    ) -> Result<Vec<WatchlistRecord>, WatchlistError> {
+        if item_ids.iter().any(|id| id.trim().is_empty()) {
+            return Err(WatchlistError::InvalidRecord(
+                "watchlist item id is empty".to_owned(),
+            ));
+        }
+        let matches = |record: &WatchlistRecord| {
+            record.scope() == scope && item_ids.iter().any(|id| id.trim() == record.item_id())
+        };
+        let removed: Vec<_> = self
+            .records
+            .iter()
+            .filter(|record| matches(record))
+            .cloned()
+            .collect();
+        if removed.is_empty() {
+            return Ok(removed);
+        }
+        let candidate: Vec<_> = self
+            .records
+            .iter()
+            .filter(|record| !matches(record))
+            .cloned()
+            .collect();
+        save_to(&self.path, &candidate)?;
+        self.records = candidate;
+        Ok(removed)
+    }
+
+    /// Restores removed records atomically, preserving their timestamps and order.
+    /// An item explicitly re-added since removal keeps its newer membership.
+    pub fn restore_items(&mut self, records: &[WatchlistRecord]) -> Result<bool, WatchlistError> {
+        let mut candidate = self.records.clone();
+        for record in records {
+            let record = record.clone().normalized()?;
+            if !candidate
+                .iter()
+                .any(|existing| existing.has_identity(record.scope(), record.item_id()))
+            {
+                candidate.push(record);
+            }
+        }
+        if candidate.len() == self.records.len() {
+            return Ok(false);
+        }
+        sort_records(&mut candidate);
+        save_to(&self.path, &candidate)?;
+        self.records = candidate;
+        Ok(true)
+    }
+
     /// Removes only the selected account's local records.
     pub fn remove_scope(&mut self, scope: &ProfileScope) -> Result<usize, WatchlistError> {
         let mut candidate = self.records.clone();
@@ -401,10 +457,12 @@ fn save_to(path: &Path, records: &[WatchlistRecord]) -> Result<(), WatchlistErro
 }
 
 fn sort_records(records: &mut [WatchlistRecord]) {
+    // The tie-break preserves removal/undo order when writes share a clock tick.
     records.sort_by(|left, right| {
         right
             .added_at_unix_millis()
             .cmp(&left.added_at_unix_millis())
+            .then_with(|| left.item_id().cmp(right.item_id()))
     });
 }
 

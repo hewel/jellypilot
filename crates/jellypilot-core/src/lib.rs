@@ -20,6 +20,8 @@ pub mod config;
 pub mod detail;
 pub mod diagnostics;
 #[cfg(feature = "portable")]
+pub mod history;
+#[cfg(feature = "portable")]
 pub mod home_hero;
 #[cfg(feature = "portable")]
 pub mod image_lifecycle;

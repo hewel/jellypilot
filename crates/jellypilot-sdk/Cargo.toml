@@ -11,11 +11,15 @@ version.workspace = true
 test-utils = []
 
 [dependencies]
+log = "0.4"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
 async-trait = "0.1.89"
 futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 jellypilot-auth = { path = "../jellypilot-auth", default-features = false }
 jellypilot-core = { path = "../jellypilot-core", default-features = false, features = ["portable"] }
 jellypilot-media-server = { path = "../jellypilot-media-server", default-features = false }
+jellypilot-session = { path = "../jellypilot-session" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
 

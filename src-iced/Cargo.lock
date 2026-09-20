@@ -2996,6 +2996,7 @@ dependencies = [
  "dirs",
  "jellypilot-core",
  "jellypilot-media-server",
+ "jellypilot-sdk",
  "jellypilot-session",
  "log",
  "parking_lot",
@@ -3033,6 +3034,10 @@ dependencies = [
  "jellypilot-auth",
  "jellypilot-core",
  "jellypilot-media-server",
+ "jellypilot-session",
+ "log",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]

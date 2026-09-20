@@ -18,11 +18,12 @@ class JellyPilotApplication : Application(), SingletonImageLoader.Factory, ViewM
   override val viewModelStore = ViewModelStore()
   private val playerInstance = lazy { NativePlayback(this) }
   internal val player get() = playerInstance.value
+  @Volatile internal var beforePlaybackHandoff: (suspend () -> Boolean)? = null
   private val sdkInstance = lazy {
     CoreBridge.create(this, Build.MODEL, object : SdkHooks {
       override suspend fun beforeProfileHandoff(): Boolean {
         player.setHandoffBlocked(true)
-        return player.stopAndWait()
+        return beforePlaybackHandoff?.invoke() ?: player.stopAndWait()
       }
     })
   }

@@ -55,6 +55,9 @@ pub struct SignOutOutcome {
     pub teardown_error: Option<SdkError>,
     /// Watchlist cleanup failure recorded after the committed deletion.
     pub watchlist_error: Option<SdkError>,
+    /// Local playback recovery cleanup failed after credential deletion.
+    /// This does not mean an inactive profile became the active connection.
+    pub recovery_error: Option<SdkError>,
 }
 
 /// Keeps new playback and writes out of an active-profile transition while
@@ -130,7 +133,7 @@ impl Sdk {
             username,
             password,
         });
-        let client = self.new_client();
+        let client = self.new_client()?;
         client
             .login()
             .authenticate(&credentials)
@@ -195,6 +198,7 @@ impl Sdk {
             .try_lock_owned()
             .map_err(|_| SdkError::OperationInProgress)?;
         let candidate = candidate.take()?;
+        let target_name = self.inner.configured_target_name()?;
         {
             let state = self.inner.state.lock().map_err(|_| SdkError::Closed)?;
             if state.sign_out_cleanup_pending
@@ -216,6 +220,7 @@ impl Sdk {
                 inner.run_handoff_hook().await?;
 
                 let (key, scope, client, session) = candidate.into_parts();
+                client.set_device_name(target_name);
                 let profile = {
                     // The closed check and the adoption commit share one lock
                     // acquisition: close() cannot slip between them and leave
@@ -401,6 +406,7 @@ impl Sdk {
                     None
                 };
                 let cleanup_key = delete_watchlist.then(|| key.clone());
+                let recovery_key = key.clone();
 
                 // Irreversible step: delete the protected credentials while
                 // the in-memory session is still available for teardown.
@@ -412,6 +418,12 @@ impl Sdk {
 
                 // Deletion cannot roll back. Keep authentication and admission
                 // blocked until the host confirms successful cleanup.
+                let recovery_error = if is_active {
+                    None
+                } else {
+                    let _state = inner.state.lock().map_err(|_| SdkError::Closed)?;
+                    crate::playback::recovery::clear_profile(&inner, recovery_key.as_str()).err()
+                };
                 let mut teardown_error = None;
                 if is_active {
                     inner
@@ -440,6 +452,7 @@ impl Sdk {
                     },
                     teardown_error,
                     watchlist_error,
+                    recovery_error,
                 })
             }
         })?;
@@ -484,10 +497,10 @@ impl Sdk {
         })?
     }
 
-    fn new_client(&self) -> JellyfinClient {
+    fn new_client(&self) -> Result<JellyfinClient, SdkError> {
         let client = JellyfinClient::with_storage_dir(self.inner.config.storage_dir.clone());
-        client.set_device_name(self.inner.config.device_name.clone());
-        client
+        client.set_device_name(self.inner.configured_target_name()?);
+        Ok(client)
     }
 }
 

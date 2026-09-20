@@ -18,14 +18,31 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import io.github.hewel.jellypilot.player.*
 
 internal class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val app = application as JellyPilotApplication
   private val sdk = app.sdk
+  private val platformPreferences = AndroidPreferences(app)
   val player = app.player
-  private val visibility = PlaybackVisibility(application, player::setEligible)
   private val mutableState = MutableStateFlow(AppUiState())
   val state = mutableState.asStateFlow()
+  private val playback = MediaPlaybackCoordinator(
+    sdk, player, viewModelScope,
+    onPlaybackUi = { value ->
+      mutableState.update { it.copy(playbackUi = value, showPlayer = if (value == null) false else it.showPlayer) }
+      if (value == null) resumeBrowser()
+    },
+    onError = { message -> mutableState.update { it.copy(error = message) } },
+    onOpenPlayer = ::openPlayer,
+    onRecoveryChanged = ::refreshRecovery,
+  )
+  private val visibility = PlaybackVisibility(application, playback::setEligible)
+  private val preferenceWrites = Mutex()
+  private var recoveryJob: Job? = null
   private var queryJob: Job? = null
   private var loginJob: Job? = null
   private var queryToken: OperationToken? = null
@@ -43,7 +60,29 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private var browserSuspendEpoch = 0L
   /** Monotonic session generation; published into BrowserUi so the grid keys its viewport per session, not per scope-relative identity. */
   private var browserGeneration = 0L
+  private var browserSequence = 0L
   private var libraries = emptyList<VideoLibraryShortcut>()
+  private var watchlistIds = emptySet<String>()
+  private var searchSource = Destination.Home
+  private data class DetailPage(val item: MediaUi, val children: List<MediaUi>, val seasonId: String?, val hasMore: Boolean, val tracks: DetailTracksUi?)
+  private val details = ArrayDeque<DetailPage>()
+  private data class RetainedBrowser(val session: BrowseSession, val generation: Long, val ui: BrowserUi)
+  private val retainedBrowsers = mutableMapOf<Destination, RetainedBrowser>()
+  private var watchlistEntries = emptyList<WatchlistEntry>()
+  private var watchlistRevision = 0L
+  private var batchWriteIds = emptySet<String>()
+  private data class CollectionUndo(
+    val scope: ProfileScopeRef,
+    val kind: PersonalListKind,
+    val items: List<MediaUi>,
+    val order: List<String>,
+    val watchlist: WatchlistRemoval?,
+  )
+  private var collectionUndo: CollectionUndo? = null
+  private var undoSequence = 0L
+  private var historyOffset = 0
+  private data class HistoryUndo(val scope: ProfileScopeRef, val item: MediaUi, val order: List<String>, val receipt: HistoryRemoval)
+  private var historyUndo: HistoryUndo? = null
   /** In-flight Favorite/Played writes keyed by item id; each owns its token and job, independent of the browse query slot. */
   private val userDataWrites = mutableMapOf<String, PendingWrite>()
   /** Latest server-confirmed flags per item, used to keep older in-flight reads from republishing pre-write state. */
@@ -54,13 +93,22 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private class ConfirmedUserData(val revision: Long, val played: Boolean, val favorite: Boolean)
 
   init {
+    app.beforePlaybackHandoff = playback::beforeHandoff
     viewModelScope.launch {
-      refreshIdentity()
-      if (sdk.activeProfile() != null) refresh()
+      try {
+        val prefill = withContext(Dispatchers.IO) { sdk.loginPrefill() }
+        mutableState.update { it.copy(loginServer = prefill.serverUrl, loginUsername = prefill.username, loginJellyfin = prefill.provider == Provider.JELLYFIN, loginRemember = prefill.remember) }
+        refreshPreferences()
+        val saved = sdk.savedProfiles()
+        refreshIdentity(saved.profiles)
+        if (sdk.activeProfile() != null) { refresh(); refreshRecovery(); playback.profileChanged() }
+        else if (state.value.preferences.startupAutoLogin) saved.lastActivatedKey?.let(::activate)
+      } catch (error: Exception) { showError(error) }
     }
   }
   fun setVisible(visible: Boolean) {
     visibility.setVisible(visible)
+    if (visible) mutableState.update { it.copy(preferences = it.preferences.copy(language = platformPreferences.language())) }
     // This ViewModel is Application-owned: activityFinished() closed the
     // session, so reopening must restore the intended browse query.
     if (visible && browseSession == null && sdk.activeProfile() != null) {
@@ -75,10 +123,12 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     cancelLogin()
     cancelQuery()
     closeBrowserSession()
-    player.stop()
+    closeRetainedBrowsers()
+    playback.stop()
     mutableState.update { it.copy(showPlayer = false, busy = false) }
   }
   fun dismissError() { mutableState.update { it.copy(error = null) } }
+  fun dismissNotice() { mutableState.update { it.copy(notice = null) } }
   fun addAccount() {
     if (rejectWhileCleanupPending()) return
     mutableState.update { it.copy(showSignIn = true, error = null) }
@@ -94,26 +144,36 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
   fun back() {
     if (state.value.showPlayer) {
-      player.stop()
+      playback.stop()
       mutableState.update { it.copy(showPlayer = false) }
       resumeBrowser()
-    } else {
+    } else if (state.value.detail != null) {
       cancelQuery()
-      mutableState.update { it.copy(detail = null, detailItems = emptyList(), busy = false) }
+      val previous = details.removeLastOrNull()
+      mutableState.update { it.copy(detail = previous?.item, detailItems = previous?.children.orEmpty(), selectedSeasonId = previous?.seasonId, episodesHaveMore = previous?.hasMore ?: false, detailTracks = previous?.tracks, busy = false) }
       resumeBrowser()
+    } else if (state.value.destination == Destination.Search) {
+      navigate(searchSource)
+    } else if (state.value.accountPage != AccountPage.Overview) {
+      openAccountPage(AccountPage.Overview)
     }
   }
 
   fun navigate(destination: Destination) {
     if (state.value.destination == destination && state.value.detail == null) return
+    if (destination == Destination.Search && state.value.destination != Destination.Search) searchSource = state.value.destination
     cancelQuery()
-    closeBrowserSession()
+    searchDebounce?.cancel()
+    searchDebounce = null
+    retainBrowser()
+    details.clear()
     mutableState.update { it.copy(destination = destination, detail = null, detailItems = emptyList(), items = emptyList(), browser = BrowserUi(), busy = false) }
     when (destination) {
       Destination.Account -> viewModelScope.launch { refreshIdentity() }
-      Destination.Search -> search(searchText)
-      Destination.Library -> openLibraryQuery()
+      Destination.Search -> if (!restoreBrowser(destination)) search(searchText)
+      Destination.Library -> if (!restoreBrowser(destination)) openLibraryQuery()
       Destination.Home -> refresh()
+      Destination.Lists -> selectList(state.value.selectedList)
     }
   }
 
@@ -128,7 +188,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   /** Explains why playback and writes stay blocked until sign-out cleanup is retried. */
   private fun showCleanupPending() {
-    mutableState.update { it.copy(error = app.getString(R.string.sdk_sign_out_cleanup_pending)) }
+    mutableState.update { it.copy(error = app.localizedString(R.string.sdk_sign_out_cleanup_pending)) }
   }
 
   /** New account transitions cannot bypass a pending sign-out cleanup; the SDK also rejects them. */
@@ -143,6 +203,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     accountOperation {
       val candidate = sdk.passwordLogin(if (jellyfin) Provider.JELLYFIN else Provider.EMBY, server, username, password)
       activateCandidate(candidate, remember)
+      withContext(Dispatchers.IO) { sdk.saveLoginPrefill(server, username, if (jellyfin) Provider.JELLYFIN else Provider.EMBY, remember) }
     }
   }
 
@@ -153,7 +214,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   fun disconnect() {
     accountOperation {
       withContext(NonCancellable) {
-        player.setHandoffBlocked(true)
+        playback.blockForHandoff()
         sdk.disconnect()
         connectionChanged()
       }
@@ -161,36 +222,45 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
   /** Explicit retry of a failed sign-out teardown; `disconnect` performs the SDK cleanup retry. */
   fun retryCleanup() = disconnect()
-  fun signOut(key: String) {
+  fun signOut(key: String, deleteWatchlist: Boolean = false) {
     accountOperation {
       withContext(NonCancellable) {
         val activeBefore = sdk.activeProfile()?.key
         // Media-session commands bypass this ViewModel. Block the native
         // player before deletion starts, not only when the teardown hook runs.
-        if (activeBefore == key) player.setHandoffBlocked(true)
-        val outcome = sdk.signOut(key, false)
+        if (activeBefore == key) playback.blockForHandoff()
+        val outcome = sdk.signOut(key, deleteWatchlist)
         // A failed teardown keeps the session connected for a cleanup retry:
         // only the saved-profile list changes, never the connection reset.
         if (activeBefore == key && outcome.teardownError == null) connectionChanged(outcome.remaining) else refreshIdentity(outcome.remaining)
+        if (outcome.watchlistError != null) mutableState.update { it.copy(watchlistCleanupKeys = (it.watchlistCleanupKeys + key).distinct()) }
         val warnings = listOfNotNull(
-          outcome.teardownError?.let { app.getString(R.string.sdk_sign_out_cleanup_pending) },
-          outcome.watchlistError?.let { app.getString(R.string.sdk_watchlist_delete_failed) },
+          outcome.teardownError?.let { app.localizedString(R.string.sdk_sign_out_cleanup_pending) },
+          outcome.watchlistError?.let { app.localizedString(R.string.sdk_watchlist_delete_failed) },
+          outcome.recoveryError?.let { app.localizedString(R.string.recovery_cleanup_failed) },
         )
         if (warnings.isNotEmpty()) mutableState.update { it.copy(error = warnings.joinToString("\n")) }
       }
     }
   }
 
+  fun retryWatchlistCleanup(key: String) {
+    accountOperation {
+      sdk.retryWatchlistCleanup(key)
+      mutableState.update { it.copy(watchlistCleanupKeys = it.watchlistCleanupKeys - key) }
+    }
+  }
+
   private suspend fun activateCandidate(candidate: ProfileCandidate, remember: Boolean) = withContext(NonCancellable) {
     var activated = false
     try {
-      player.setHandoffBlocked(true)
+      playback.blockForHandoff()
       val outcome = sdk.activateCandidate(candidate, remember)
       activated = true
       connectionChanged()
       mutableState.update { it.copy(showSignIn = false, quickConnectCode = null) }
       if (outcome.persistenceWarning != null) {
-        mutableState.update { it.copy(error = app.getString(R.string.sdk_activated_persistence_failed)) }
+        mutableState.update { it.copy(error = app.localizedString(R.string.sdk_activated_persistence_failed)) }
       }
     } finally {
       if (!activated) candidate.discard()
@@ -210,6 +280,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
         // A failed sign-out teardown leaves the SDK mutation block in place
         // for the cleanup retry; only a settled operation may unblock.
         player.setHandoffBlocked(sdk.contentMutationsBlocked())
+        playback.profileChanged()
         loginJob = null
         val cleanupPending = sdk.signOutCleanupPending()
         mutableState.update { it.copy(loginBusy = false, signOutCleanupPending = cleanupPending) }
@@ -240,7 +311,10 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
             quickSession = null
             mutableState.update { it.copy(loginBusy = false, quickConnectCode = null) }
             when (outcome) {
-              is QuickConnectOutcome.Success -> accountOperation { activateCandidate(outcome.candidate, remember) }
+              is QuickConnectOutcome.Success -> accountOperation {
+                activateCandidate(outcome.candidate, remember)
+                withContext(Dispatchers.IO) { sdk.saveLoginPrefill(server, sdk.activeProfile()?.userName.orEmpty(), Provider.JELLYFIN, remember) }
+              }
               is QuickConnectOutcome.Failed -> showError(outcome.error)
               QuickConnectOutcome.Cancelled -> Unit
             }
@@ -256,12 +330,13 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private suspend fun refreshIdentity(saved: List<SavedProfile>? = null) {
     val active = sdk.activeProfile()
     val cleanupPending = sdk.signOutCleanupPending()
-    mutableState.update { it.copy(activeName = active?.userName, signOutCleanupPending = cleanupPending) }
+    mutableState.update { it.copy(activeName = active?.userName, activeProfileKey = active?.key, signOutCleanupPending = cleanupPending) }
     try {
-      val profiles = (saved ?: sdk.savedProfiles().profiles).map { profile ->
+      val snapshot = sdk.savedProfiles()
+      val profiles = (saved ?: snapshot.profiles).map { profile ->
         ProfileUi(profile.key, profile.title, profile.serverUrl, if (profile.provider == Provider.JELLYFIN) "Jellyfin" else "Emby", profile.key == active?.key)
       }
-      mutableState.update { it.copy(profiles = profiles) }
+      mutableState.update { it.copy(profiles = profiles, selectedProfileKey = snapshot.lastActivatedKey) }
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (error: Exception) { showError(error) }
   }
@@ -269,12 +344,25 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private suspend fun connectionChanged(saved: List<SavedProfile>? = null) {
     cancelQuery()
     closeBrowserSession()
+    closeRetainedBrowsers()
     cancelUserDataWrites()
     confirmedUserData.clear()
     libraries = emptyList()
+    watchlistIds = emptySet()
+    watchlistEntries = emptyList()
+    ++watchlistRevision
+    collectionUndo?.watchlist?.destroy()
+    collectionUndo = null
+    historyUndo?.receipt?.destroy()
+    historyUndo = null
+    historyOffset = 0
+    batchWriteIds = emptySet()
+    details.clear()
     searchText = ""
-    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, items = emptyList(), browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "") }
+    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, activeProfileKey = sdk.activeProfile()?.key, showPlayer = false, playbackUi = null, listBusy = false, listUndo = null, historyBusy = false, historyUndo = null, detailTracks = null, items = emptyList(), featured = emptyList(), homeRows = emptyList(), listItems = emptyList(), historyItems = emptyList(), listCount = 0, favoriteCount = 0, recovery = null, browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "") }
     refreshIdentity(saved)
+    playback.profileChanged()
+    refreshRecovery()
     if (sdk.activeProfile() != null) refresh()
   }
 
@@ -328,11 +416,16 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       showError(error)
       return
     }
-    val generation = ++browserGeneration
+    val generation = ++browserSequence
+    browserGeneration = generation
     browseSession = session
     // A session opened while detail/player is showing starts suspended;
     // back() resumes it when the temporary navigation ends.
     if (state.value.detail != null || state.value.showPlayer) suspendBrowser()
+    collectBrowser(session, generation)
+  }
+
+  private fun collectBrowser(session: BrowseSession, generation: Long) {
     browseCollector = viewModelScope.launch {
       // `base` is captured before each await so a write confirming while the
       // snapshot is in flight still overlays its confirmed flags on publish.
@@ -406,6 +499,36 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     }
   }
 
+  private fun retainBrowser() {
+    val session = browseSession ?: return
+    val destination = state.value.destination
+    if (destination != Destination.Library && destination != Destination.Search) { closeBrowserSession(); return }
+    suspendBrowser()
+    browseCollector?.cancel()
+    browseCollector = null
+    retainedBrowsers.put(destination, RetainedBrowser(session, browserGeneration, state.value.browser))?.session?.let {
+      it.shutdown(); it.destroy()
+    }
+    browseSession = null
+    browserSuspended = false
+  }
+
+  private fun restoreBrowser(destination: Destination): Boolean {
+    val retained = retainedBrowsers.remove(destination) ?: return false
+    browseSession = retained.session
+    browserGeneration = retained.generation
+    browserSuspended = true
+    mutableState.update { it.copy(browser = retained.ui) }
+    resumeBrowser()
+    collectBrowser(retained.session, retained.generation)
+    return true
+  }
+
+  private fun closeRetainedBrowsers() {
+    retainedBrowsers.values.forEach { it.session.shutdown(); it.session.destroy() }
+    retainedBrowsers.clear()
+  }
+
 
   /** Pauses page work while detail/player navigation retains the result set.
    *  Returns the suspend epoch so a failed detail load can tell whether its
@@ -469,12 +592,35 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       Destination.Account -> viewModelScope.launch { refreshIdentity() }
       Destination.Search -> if (browseSession != null) browserCall { it.refresh() } else search(searchText)
       Destination.Library -> if (browseSession != null) browserCall { it.refresh() } else openLibraryQuery()
+      Destination.Lists -> selectList(state.value.selectedList)
       Destination.Home -> query { token, scope, base ->
         loadLibraries(token)
+        refreshWatchlist(token)
         val home = sdk.videoHome(token)
-        val latest = libraries.firstOrNull()?.let { sdk.libraryLatest(token, it.id) } ?: emptyList()
+        val presenter = CatalogPresentation(scope, watchlistIds)
+        val rows = mutableListOf<HomeRowUi>()
+        if (home.continueWatching.isNotEmpty()) rows += HomeRowUi("continue", app.localizedString(R.string.continue_watching), home.continueWatching.map { presented(presenter.library(it), base) }, true)
+        if (home.nextUp.isNotEmpty()) rows += HomeRowUi("next", app.localizedString(R.string.next_up), home.nextUp.map { presented(presenter.library(it), base) }, true)
+        val latest = mutableListOf<List<VideoLibraryItem>>()
+        for (library in libraries) {
+          val items = sdk.libraryLatest(token, library.id)
+          latest.add(items)
+          rows += HomeRowUi(library.id, library.name, items.map { presented(presenter.library(it), base) }, libraryId = library.id)
+        }
+        val candidates = sdk.homeFeaturedItems(home, latest).take(5)
+        val parentIds = candidates.filter { it.itemType == "Episode" }.mapNotNull { it.seriesId }.distinct()
+        val parents = if (parentIds.isEmpty()) emptyMap() else sdk.videoItemsByIds(token, parentIds).associateBy { it.id }
+        val featured = candidates.map { item ->
+          val child = presented(presenter.library(item), base)
+          parents[item.seriesId]?.let { parent ->
+            presented(presenter.library(parent), base).copy(
+              playTargetId = item.id, resumeSeconds = child.resumeSeconds,
+              durationSeconds = child.durationSeconds, episodeCode = child.episodeCode,
+            )
+          } ?: child
+        }
         currentCoroutineContext().ensureActive()
-        mutableState.update { it.copy(items = (home.continueWatching + home.nextUp + latest).distinctBy { item -> item.id }.map { item -> presented(media(item, scope), base) }) }
+        mutableState.update { it.copy(items = rows.flatMap { row -> row.items }.distinctBy { item -> item.id }, homeRows = rows, featured = featured) }
       }
     }
   }
@@ -504,13 +650,21 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       BrowseQuery.Library(
         library,
         BrowsePreferences(
-          sort = VideoLibrarySort.RECENTLY_ADDED,
-          sortDirection = VideoLibrarySortDirection.DESCENDING,
-          playedFilter = VideoLibraryPlayedFilter.ALL,
-          favoritesOnly = false,
+          sort = when (state.value.librarySort) { LibrarySort.DateAdded -> VideoLibrarySort.RECENTLY_ADDED; LibrarySort.Title -> VideoLibrarySort.TITLE; LibrarySort.Year -> VideoLibrarySort.RELEASE_DATE },
+          sortDirection = if (state.value.librarySort == LibrarySort.Title) VideoLibrarySortDirection.ASCENDING else VideoLibrarySortDirection.DESCENDING,
+          playedFilter = when (state.value.libraryPlayed) { PlayedFilter.All -> VideoLibraryPlayedFilter.ALL; PlayedFilter.Played -> VideoLibraryPlayedFilter.PLAYED; PlayedFilter.Unplayed -> VideoLibraryPlayedFilter.UNPLAYED },
+          favoritesOnly = state.value.libraryFavorites,
         ),
       ),
     )
+  }
+  fun setLibraryFilters(played: PlayedFilter, favorites: Boolean) {
+    mutableState.update { it.copy(libraryPlayed = played, libraryFavorites = favorites) }
+    openLibrarySession()
+  }
+  fun setLibrarySort(sort: LibrarySort) {
+    mutableState.update { it.copy(librarySort = sort) }
+    openLibrarySession()
   }
   fun search(value: String) {
     if (state.value.destination != Destination.Search) return
@@ -533,25 +687,36 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   fun showDetail(id: String) {
     val suspendEpoch = suspendBrowser()
+    val previous = state.value.detail?.takeIf { it.id != id }?.let { DetailPage(it, state.value.detailItems, state.value.selectedSeasonId, state.value.episodesHaveMore, state.value.detailTracks) }
     query { token, scope, base ->
       var detailShown = false
       try {
-        val type = (state.value.browser.slots.asSequence().filterNotNull() + state.value.items + state.value.detailItems)
+        val type = (state.value.browser.slots.asSequence().filterNotNull() + state.value.items + state.value.detailItems + state.value.listItems + state.value.historyItems + state.value.featured)
           .firstOrNull { it.id == id }?.itemType
           ?: state.value.detail?.takeIf { it.id == id }?.itemType
+        refreshWatchlist(token)
+        val presenter = CatalogPresentation(scope, watchlistIds)
+        var episodes = emptyList<MediaUi>()
+        var selectedSeason: String? = null
+        var more = false
         val detail = if (type == "Series") {
           val show = sdk.showDetail(token, id)
-          MediaUi(show.id, show.name, "Series", metadata(show.productionYear, "Series"), artwork(show.artworkImageId, scope), show.overview.orEmpty(), show.favorite, show.played)
+          selectedSeason = show.seasons.firstOrNull { it.seasonNumber == show.nextEpisode?.seasonNumber }?.id ?: show.seasons.firstOrNull()?.id
+          val page = sdk.seasonEpisodesPage(token, VideoSeasonEpisodesPageRequest(id, selectedSeason, null, 0, 50))
+          episodes = page.episodes.map { presented(presenter.library(it), base) }
+          more = page.hasMore
+          presenter.show(show)
         } else {
           val item = sdk.itemDetail(token, id)
-          MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
+          presenter.item(item)
         }
         currentCoroutineContext().ensureActive()
-        mutableState.update { it.copy(detail = presented(detail, base), detailItems = emptyList()) }
+        previous?.takeIf { it.item.id != id }?.let(details::addLast)
+        mutableState.update { it.copy(detail = presented(detail, base), detailTracks = null, detailItems = episodes, selectedSeasonId = selectedSeason, episodesHaveMore = more) }
         detailShown = true
         val related = sdk.similarVideo(token, id)
         currentCoroutineContext().ensureActive()
-        mutableState.update { it.copy(detailItems = related.map { item -> presented(media(item, scope), base) }) }
+        mutableState.update { it.copy(detail = it.detail?.copy(related = related.map { item -> presented(presenter.library(item), base) })) }
       } catch (error: Exception) {
         // The retained browser stays suspended only while a detail is actually
         // shown; a failed or fenced load must hand it back to the grid, but
@@ -562,12 +727,481 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     }
   }
 
+  fun openHomeLibrary(id: String) {
+    navigate(Destination.Library)
+    selectLibrary(id)
+  }
+
+  fun loadDetailTracks() {
+    val detail = state.value.detail ?: return
+    val target = detail.playTargetId ?: return
+    val existing = state.value.detailTracks
+    if (existing?.targetId == target && (existing.busy || existing.error == null)) return
+    mutableState.update { it.copy(detailTracks = DetailTracksUi(target, busy = true)) }
+    query { token, _, _ ->
+      try {
+        val streams = sdk.itemStreams(token, target)
+        currentCoroutineContext().ensureActive()
+        if (state.value.detail?.playTargetId != target) return@query
+        fun option(value: VideoPlaybackStreamOption) = DetailTrackUi(value.index, value.label, value.language, value.codec, value.isDefault, value.isExternal)
+        mutableState.update { it.copy(detailTracks = DetailTracksUi(target, streams.audioStreams.map(::option), streams.subtitleStreams.map(::option))) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) {
+        if (state.value.detail?.playTargetId == target) mutableState.update { it.copy(detailTracks = DetailTracksUi(target, error = app.localizedString(R.string.sdk_request_failed))) }
+      }
+    }
+  }
+
+  fun selectDetailAudio(index: Int?) {
+    val tracks = state.value.detailTracks ?: return
+    if (index != null && tracks.audio.none { it.index == index }) return
+    mutableState.update { it.copy(detailTracks = tracks.copy(selectedAudio = index)) }
+  }
+  fun selectDetailSubtitle(index: Int?) {
+    val tracks = state.value.detailTracks ?: return
+    if (index != null && index != -1 && tracks.subtitles.none { it.index == index }) return
+    mutableState.update { it.copy(detailTracks = tracks.copy(selectedSubtitle = index)) }
+  }
+
+  fun playItem(id: String, fromBeginning: Boolean = false) {
+    if (rejectWhileCleanupPending()) return
+    val choice = state.value.detailTracks?.takeIf { it.targetId == id }
+    val selection = choice?.let { PlaybackSelection(null, it.selectedAudio, it.selectedSubtitle) }
+    playback.play(id, fromBeginning, selection)
+  }
+  fun playPlayback() = playback.playPlayback()
+  fun pausePlayback() = playback.pausePlayback()
+  fun seekPlayback(seconds: Double) = playback.seek(seconds)
+  fun setPlaybackVolume(volume: Int) = playback.volume(volume)
+  fun selectPlaybackTrack(kind: TrackKind, index: Int) = playback.selectTrack(kind, index)
+  fun previousEpisode() = playback.previous()
+  fun nextEpisode() = playback.next()
+  fun setSessionAutoSkip(enabled: Boolean) = playback.sessionAutoSkip(enabled)
+  fun skipSegment() = playback.skip()
+  fun undoSkip() = playback.undoSkip()
+  fun dismissSkipUndo() = playback.dismissSkipUndo()
+  fun acknowledgeSkipPrompt(presented: Boolean) = playback.acknowledgeSkipPrompt(presented)
+  fun loadMorePlaybackEpisodes() = playback.loadMoreQueue()
+  fun restoreLocalPlayback() = playback.restoreRecovery()
+
+  private fun refreshRecovery() {
+    recoveryJob?.cancel()
+    if (sdk.activeProfile() == null) {
+      mutableState.update { it.copy(recovery = null) }
+      return
+    }
+    recoveryJob = viewModelScope.launch {
+      var token: OperationToken? = null
+      try {
+        token = sdk.newOperationToken()
+        val recovery = sdk.localPlaybackRecovery(token)
+        currentCoroutineContext().ensureActive()
+        if (sdk.isScopeActive(token.scopeRef())) mutableState.update { it.copy(recovery = recovery?.let { record -> RecoveryUi(record.title, record.positionSeconds, record.itemId) }) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally { token?.cancel(); token?.destroy() }
+    }
+  }
+
+  fun clearLocalRecovery() {
+    recoveryJob?.cancel()
+    recoveryJob = viewModelScope.launch {
+      var token: OperationToken? = null
+      try {
+        token = sdk.newOperationToken()
+        sdk.clearLocalPlaybackRecovery(token)
+        currentCoroutineContext().ensureActive()
+        if (sdk.isScopeActive(token.scopeRef())) mutableState.update { it.copy(recovery = null) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally { token?.cancel(); token?.destroy() }
+    }
+  }
+
+  private suspend fun refreshPreferences() {
+    val business = withContext(Dispatchers.IO) { sdk.businessPreferences() }
+    val presentation = platformPreferences.presentation()
+    mutableState.update { it.copy(preferences = presentation.copy(
+      startupAutoLogin = business.autoLogin,
+      targetName = business.playbackTargetName ?: "JellyPilot Android",
+      autoPlayNext = business.autoPlayNext,
+      introMode = when (business.introMode) {
+        IntroSkipMode.AUTOMATIC -> IntroPreference.Auto
+        IntroSkipMode.MANUAL -> IntroPreference.Manual
+        IntroSkipMode.OFF -> IntroPreference.Off
+      },
+      preferredSubtitleLanguage = business.subtitleLanguages.joinToString(", "),
+      preferOriginalAudio = business.preferOriginalAudio,
+      rememberSeasonVolume = business.rememberSeasonVolume,
+    )) }
+  }
+
+  fun updatePreferences(value: PreferencesUi) {
+    // Capture the user's changed fields, so queued saves cannot undo a different control's edit.
+    val previous = state.value.preferences
+    viewModelScope.launch {
+      preferenceWrites.withLock {
+        try {
+          if (value.theme != previous.theme) platformPreferences.setTheme(value.theme)
+          if (value.reducedMotion != previous.reducedMotion) platformPreferences.setReducedMotion(value.reducedMotion)
+          if (value.language != previous.language) platformPreferences.setLanguage(value.language)
+          withContext(Dispatchers.IO) {
+            if (value.startupAutoLogin != previous.startupAutoLogin) sdk.setAutoLogin(value.startupAutoLogin)
+            if (value.targetName != previous.targetName) sdk.setPlaybackTargetName(value.targetName)
+            if (value.autoPlayNext != previous.autoPlayNext) sdk.setAutoPlayNext(value.autoPlayNext)
+            if (value.preferOriginalAudio != previous.preferOriginalAudio) sdk.setPreferOriginalAudio(value.preferOriginalAudio)
+            if (value.rememberSeasonVolume != previous.rememberSeasonVolume) sdk.setRememberSeasonVolume(value.rememberSeasonVolume)
+            if (value.introMode != previous.introMode) sdk.setIntroMode(when (value.introMode) {
+              IntroPreference.Auto -> IntroSkipMode.AUTOMATIC
+              IntroPreference.Manual -> IntroSkipMode.MANUAL
+              IntroPreference.Off -> IntroSkipMode.OFF
+            })
+            if (value.preferredSubtitleLanguage != previous.preferredSubtitleLanguage) {
+              sdk.setSubtitleLanguages(value.preferredSubtitleLanguage.split(',').map(String::trim).filter(String::isNotBlank))
+            }
+          }
+          if (value.targetName != previous.targetName) playback.profileChanged()
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { showError(error) }
+        finally {
+          try { refreshPreferences() }
+          catch (cancelled: CancellationException) { throw cancelled }
+          catch (error: Exception) { showError(error) }
+        }
+      }
+    }
+  }
+
+  fun clearImageCache() {
+    viewModelScope.launch {
+      try {
+        clearArtworkCache(app)
+        mutableState.update { it.copy(notice = app.localizedString(R.string.cache_cleared)) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+    }
+  }
+
+  fun exportDiagnostics() {
+    viewModelScope.launch {
+      try {
+        val current = player.snapshot.value
+        exportAndroidDiagnostics(app, AndroidDiagnosticState(
+          signedIn = sdk.activeProfile() != null, savedProfiles = state.value.profiles.size,
+          playbackStatus = current.status, playerReady = player.ready.value,
+          recoveryAvailable = state.value.recovery != null, playbackError = player.error.value != null,
+          reportingError = playback.reportingError,
+        ))
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+    }
+  }
+
+  fun selectSeason(id: String) {
+    if (state.value.selectedSeasonId == id) return
+    mutableState.update { it.copy(selectedSeasonId = id, detailItems = emptyList(), episodesHaveMore = true) }
+    loadMoreEpisodes()
+  }
+
+  fun loadMoreEpisodes() {
+    val detail = state.value.detail ?: return
+    if (detail.itemType != "Series" || state.value.busy) return
+    val start = state.value.detailItems.size
+    val season = state.value.selectedSeasonId
+    query { token, scope, base ->
+      val page = sdk.seasonEpisodesPage(token, VideoSeasonEpisodesPageRequest(detail.id, season, null, start, 50))
+      currentCoroutineContext().ensureActive()
+      val items = page.episodes.map { presented(media(it, scope), base) }
+      mutableState.update { it.copy(detailItems = (it.detailItems + items).distinctBy { item -> item.id }, episodesHaveMore = page.hasMore) }
+    }
+  }
+
+  private suspend fun refreshWatchlist(token: OperationToken) {
+    val revision = watchlistRevision
+    val entries = sdk.watchlistItems(token)
+    currentCoroutineContext().ensureActive()
+    if (revision != watchlistRevision) return
+    watchlistIds = entries.map { it.itemId }.toSet()
+    watchlistEntries = entries
+    mutableState.update { it.copy(listCount = entries.size) }
+  }
+
+  fun selectList(kind: PersonalListKind) {
+    mutableState.update { it.copy(selectedList = kind, listItems = emptyList(), listHasMore = false) }
+    loadListPage(reset = true)
+  }
+
+  fun loadMoreList() {
+    if (state.value.listHasMore && !state.value.busy) loadListPage(reset = false)
+  }
+
+  private fun loadListPage(reset: Boolean) {
+    val kind = state.value.selectedList
+    val start = if (reset) 0 else state.value.listItems.size
+    query { token, scope, base ->
+      refreshWatchlist(token)
+      val presenter = CatalogPresentation(scope, watchlistIds)
+      val page: List<MediaUi>
+      val more: Boolean
+      if (kind == PersonalListKind.Watchlist) {
+        val entries = watchlistEntries.drop(start).take(50)
+        val actual = if (entries.isEmpty()) emptyMap() else sdk.videoItemsByIds(token, entries.map { it.itemId }).associateBy { it.id }
+        page = entries.map { actual[it.itemId]?.let(presenter::library) ?: presenter.unavailable(it) }
+        more = start + entries.size < watchlistEntries.size
+      } else {
+        val result = sdk.favorites(token, start, 50)
+        page = result.items.map(presenter::library)
+        more = result.hasMore
+        mutableState.update { it.copy(favoriteCount = result.totalRecordCount) }
+      }
+      currentCoroutineContext().ensureActive()
+      mutableState.update {
+        it.copy(listItems = ((if (reset) emptyList() else it.listItems) + page.map { item -> presented(item, base) }).distinctBy { item -> item.id }, listHasMore = more)
+      }
+    }
+  }
+
+  fun openAccountPage(page: AccountPage) {
+    mutableState.update { it.copy(accountPage = page) }
+    if (page == AccountPage.History) loadHistory(reset = true)
+  }
+  fun loadMoreHistory() {
+    if (state.value.historyHasMore && !state.value.busy) loadHistory(reset = false)
+  }
+  private fun loadHistory(reset: Boolean) {
+    val start = if (reset) 0 else historyOffset
+    query { token, scope, base ->
+      val page = sdk.watchHistory(token, start, 50)
+      currentCoroutineContext().ensureActive()
+      historyOffset = page.nextStartIndex
+      mutableState.update {
+        it.copy(historyItems = ((if (reset) emptyList() else it.historyItems) + page.items.map { item -> presented(media(item, scope), base) }).distinctBy { item -> item.id }, historyHasMore = page.hasMore)
+      }
+    }
+  }
+
+  fun removeHistoryItem(id: String) {
+    if (state.value.historyBusy || state.value.historyUndo?.busy == true || sdk.contentMutationsBlocked()) return
+    val item = state.value.historyItems.firstOrNull { it.id == id } ?: return
+    val order = state.value.historyItems.map { it.id }
+    dismissHistoryUndo()
+    val token = try { sdk.newOperationToken() } catch (error: Exception) { showError(error); return }
+    val scope = token.scopeRef()
+    mutableState.update { it.copy(historyBusy = true) }
+    viewModelScope.launch {
+      var receipt: HistoryRemoval? = null
+      try {
+        receipt = sdk.hideHistoryItem(token, id)
+        currentCoroutineContext().ensureActive()
+        if (!sdk.isScopeActive(scope)) return@launch
+        historyUndo = HistoryUndo(scope, item, order, receipt)
+        receipt = null
+        mutableState.update { it.copy(historyItems = it.historyItems.filterNot { item -> item.id == id }, historyUndo = ListUndoUi(++undoSequence, 1)) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally {
+        receipt?.destroy(); token.cancel(); token.destroy()
+        if (sdk.isScopeActive(scope)) mutableState.update { it.copy(historyBusy = false) }
+      }
+    }
+  }
+
+  fun undoHistoryRemoval() {
+    val undo = historyUndo ?: return
+    if (state.value.historyBusy || state.value.historyUndo?.busy == true || !sdk.isScopeActive(undo.scope)) return
+    mutableState.update { it.copy(historyUndo = it.historyUndo?.copy(busy = true, error = null)) }
+    viewModelScope.launch {
+      var restored = false
+      try {
+        restored = undo.receipt.undo()
+        if (!sdk.isScopeActive(undo.scope) || historyUndo !== undo) return@launch
+        if (restored) mutableState.update { current -> current.copy(historyItems = (current.historyItems + undo.item).distinctBy { it.id }.sortedBy { undo.order.indexOf(it.id).takeIf { index -> index >= 0 } ?: Int.MAX_VALUE }) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (_: Exception) {
+        if (sdk.isScopeActive(undo.scope) && historyUndo === undo) mutableState.update { it.copy(historyUndo = it.historyUndo?.copy(error = app.localizedString(R.string.sdk_request_failed))) }
+      } finally {
+        if (sdk.isScopeActive(undo.scope) && historyUndo === undo) {
+          mutableState.update { it.copy(historyUndo = it.historyUndo?.copy(busy = false)) }
+          if (restored) dismissHistoryUndo()
+        }
+      }
+    }
+  }
+
+  fun dismissHistoryUndo() {
+    if (state.value.historyUndo?.busy == true) return
+    historyUndo?.receipt?.destroy()
+    historyUndo = null
+    mutableState.update { it.copy(historyUndo = null) }
+  }
+
+  fun setWatchlist(id: String, added: Boolean) {
+    if (userDataWrites.containsKey(id) || id in batchWriteIds || sdk.contentMutationsBlocked()) return
+    val token = try { sdk.newOperationToken() } catch (error: Exception) { showError(error); return }
+    val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+      try {
+        val scope = token.scopeRef()
+        if (added) {
+          val item = sdk.videoItemsByIds(token, listOf(id)).firstOrNull { it.id == id }
+            ?: error("Media is unavailable")
+          sdk.watchlistAdd(token, item)
+        } else sdk.watchlistRemove(token, id)
+        currentCoroutineContext().ensureActive()
+        if (!sdk.isScopeActive(scope)) return@launch
+        ++watchlistRevision
+        refreshWatchlist(token)
+        projectAll { item -> if (item.id == id) item.copy(inWatchlist = added) else item }
+        if (!added && state.value.selectedList == PersonalListKind.Watchlist) mutableState.update { it.copy(listItems = it.listItems.filterNot { item -> item.id == id }) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally {
+        token.cancel(); token.destroy()
+        if (userDataWrites[id]?.job === currentCoroutineContext().job) {
+          userDataWrites.remove(id); setWritePending(id, false)
+        }
+      }
+    }
+    userDataWrites[id] = PendingWrite(token, job)
+    setWritePending(id, true)
+    job.start()
+  }
+
+  fun removeListItems(ids: List<String>) {
+    if (state.value.listBusy || state.value.listUndo?.busy == true || ids.isEmpty() || sdk.contentMutationsBlocked()) return
+    val selected = state.value.listItems.filter { it.id in ids }
+    if (selected.isEmpty() || selected.any { it.updating }) return
+    val kind = state.value.selectedList
+    val order = state.value.listItems.map { it.id }
+    dismissListUndo()
+    val token = try { sdk.newOperationToken() } catch (error: Exception) { showError(error); return }
+    batchWriteIds = selected.map { it.id }.toSet()
+    batchWriteIds.forEach { setWritePending(it, true) }
+    mutableState.update { it.copy(listBusy = true) }
+    viewModelScope.launch {
+      val removed = mutableListOf<MediaUi>()
+      var receipt: WatchlistRemoval? = null
+      val scope = token.scopeRef()
+      try {
+        if (kind == PersonalListKind.Watchlist) {
+          receipt = sdk.removeWatchlistItems(token, selected.map { it.id })
+          if (!sdk.isScopeActive(scope)) return@launch
+          val confirmed = receipt.removedEntries().map { it.itemId }.toSet()
+          removed += selected.filter { it.id in confirmed }
+          ++watchlistRevision
+          refreshWatchlist(token)
+        } else {
+          for (item in selected) {
+            val result = sdk.updateUserData(token, item.id, VideoUserDataAction.UNFAVORITE)
+            if (!sdk.isScopeActive(scope)) return@launch
+            confirmedUserData[item.id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
+            projectAll { if (it.id == item.id) it.copy(favorite = result.favorite, played = result.played) else it }
+            removed += item
+          }
+        }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { showError(error) }
+      finally {
+        token.cancel(); token.destroy()
+        if (sdk.isScopeActive(scope)) {
+          val removedIds = removed.map { it.id }.toSet()
+          if (removed.isNotEmpty()) {
+            collectionUndo = CollectionUndo(scope, kind, removed, order, receipt)
+            mutableState.update { it.copy(
+              listItems = if (it.selectedList == kind) it.listItems.filterNot { item -> item.id in removedIds } else it.listItems,
+              favoriteCount = if (kind == PersonalListKind.Favorites) (it.favoriteCount - removed.size).coerceAtLeast(0) else it.favoriteCount,
+              listUndo = ListUndoUi(++undoSequence, removed.size),
+            ) }
+            if (kind == PersonalListKind.Watchlist) projectAll { if (it.id in removedIds) it.copy(inWatchlist = false) else it }
+          } else receipt?.destroy()
+          val pending = batchWriteIds
+          batchWriteIds = emptySet()
+          pending.forEach { setWritePending(it, false) }
+          mutableState.update { it.copy(listBusy = false) }
+        } else receipt?.destroy()
+      }
+    }
+  }
+
+  fun undoListRemoval() {
+    val undo = collectionUndo ?: return
+    if (state.value.listBusy || state.value.listUndo?.busy == true || !sdk.isScopeActive(undo.scope)) return
+    batchWriteIds = undo.items.map { it.id }.toSet()
+    batchWriteIds.forEach { setWritePending(it, true) }
+    mutableState.update { it.copy(listUndo = it.listUndo?.copy(busy = true, error = null)) }
+    viewModelScope.launch {
+      val restored = mutableListOf<MediaUi>()
+      var token: OperationToken? = null
+      try {
+        if (undo.watchlist != null) {
+          if (undo.watchlist.undo()) {
+            if (!sdk.isScopeActive(undo.scope)) return@launch
+            restored += undo.items
+            ++watchlistRevision
+          }
+        } else {
+          token = sdk.newOperationToken()
+          for (item in undo.items) {
+            val result = sdk.updateUserData(token, item.id, VideoUserDataAction.FAVORITE)
+            if (!sdk.isScopeActive(undo.scope)) return@launch
+            confirmedUserData[item.id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
+            restored += item.copy(favorite = result.favorite, played = result.played)
+          }
+        }
+        if (!sdk.isScopeActive(undo.scope)) return@launch
+        if (undo.watchlist != null) {
+          token = sdk.newOperationToken()
+          refreshWatchlist(token)
+        }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (_: Exception) {
+        if (sdk.isScopeActive(undo.scope)) mutableState.update { it.copy(listUndo = it.listUndo?.copy(error = app.localizedString(R.string.sdk_request_failed))) }
+      } finally {
+        token?.cancel(); token?.destroy()
+        if (sdk.isScopeActive(undo.scope) && collectionUndo === undo) {
+          val pending = batchWriteIds
+          batchWriteIds = emptySet()
+          pending.forEach { setWritePending(it, false) }
+          val restoredIds = restored.map { it.id }.toSet()
+          projectAll { item -> if (item.id !in restoredIds) item else if (undo.kind == PersonalListKind.Watchlist) item.copy(inWatchlist = true) else item.copy(favorite = true) }
+          mutableState.update { current ->
+            val combined = if (current.selectedList == undo.kind) (current.listItems + restored).distinctBy { it.id }.sortedBy { item -> undo.order.indexOf(item.id).takeIf { it >= 0 } ?: Int.MAX_VALUE } else current.listItems
+            current.copy(listItems = combined,
+              favoriteCount = if (undo.kind == PersonalListKind.Favorites) current.favoriteCount + restored.size else current.favoriteCount,
+              listUndo = current.listUndo?.copy(busy = false))
+          }
+          val remaining = undo.items.filterNot { it.id in restoredIds }
+          if (remaining.isEmpty()) dismissListUndo() else collectionUndo = undo.copy(items = remaining)
+        }
+      }
+    }
+  }
+
+  fun dismissListUndo() {
+    if (state.value.listUndo?.busy == true) return
+    collectionUndo?.watchlist?.destroy()
+    collectionUndo = null
+    mutableState.update { it.copy(listUndo = null) }
+  }
+
+  private fun projectAll(transform: (MediaUi) -> MediaUi) {
+    fun projected(item: MediaUi): MediaUi = transform(item).let { it.copy(related = it.related.map(transform)) }
+    mutableState.update { state -> state.copy(
+      items = state.items.map(::projected), featured = state.featured.map(::projected),
+      homeRows = state.homeRows.map { it.copy(items = it.items.map(::projected)) },
+      listItems = state.listItems.map(::projected), historyItems = state.historyItems.map(::projected),
+      browser = state.browser.copy(slots = state.browser.slots.map { it?.let(::projected) }),
+      detail = state.detail?.let(::projected), detailItems = state.detailItems.map(::projected),
+    ) }
+    details.indices.forEach { index -> details[index] = details[index].let { it.copy(item = projected(it.item), children = it.children.map(::projected)) } }
+    retainedBrowsers.replaceAll { _, retained -> retained.copy(ui = retained.ui.copy(slots = retained.ui.slots.map { it?.let(::projected) })) }
+  }
+
   fun setFavorite(id: String, favorite: Boolean) { updateUserData(id, if (favorite) VideoUserDataAction.FAVORITE else VideoUserDataAction.UNFAVORITE) }
   fun setPlayed(id: String, played: Boolean) { updateUserData(id, if (played) VideoUserDataAction.MARK_PLAYED else VideoUserDataAction.MARK_UNPLAYED) }
 
   /** Runs one Favorite/Played write per item on its own token, independent of the browse query slot. */
   private fun updateUserData(id: String, action: VideoUserDataAction) {
-    if (userDataWrites.containsKey(id)) return
+    if (userDataWrites.containsKey(id) || id in batchWriteIds) return
     if (sdk.contentMutationsBlocked()) {
       if (sdk.signOutCleanupPending()) showCleanupPending()
       return
@@ -589,13 +1223,9 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
         if (!sdk.isScopeActive(scope)) return@launch
         confirmedUserData[id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
         fun reconciled(item: MediaUi) = if (item.id == result.itemId) item.copy(played = result.played, favorite = result.favorite, updating = false) else item
-        mutableState.update {
-          it.copy(
-            items = it.items.map(::reconciled),
-            browser = it.browser.copy(slots = it.browser.slots.map { slot -> slot?.let(::reconciled) }),
-            detail = it.detail?.let(::reconciled),
-            detailItems = it.detailItems.map(::reconciled),
-          )
+        projectAll(::reconciled)
+        if (state.value.selectedList == PersonalListKind.Favorites && !result.favorite) {
+          mutableState.update { current -> current.copy(listItems = current.listItems.filterNot { it.id == id }) }
         }
       } catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) { showError(error) }
@@ -626,27 +1256,18 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   private fun setWritePending(id: String, updating: Boolean) {
     fun marked(item: MediaUi) = if (item.id == id) item.copy(updating = updating) else item
-    mutableState.update {
-      it.copy(
-        items = it.items.map(::marked),
-        browser = it.browser.copy(slots = it.browser.slots.map { slot -> slot?.let(::marked) }),
-        detail = it.detail?.let(::marked),
-        detailItems = it.detailItems.map(::marked),
-      )
-    }
+    projectAll(::marked)
   }
 
   /** Applies confirmed write results newer than `base` and the live pending flag to a freshly read item. */
   private fun presented(item: MediaUi, base: Long): MediaUi {
     val confirmed = confirmedUserData[item.id]?.takeIf { it.revision > base }
-    val overlaid = confirmed?.let { item.copy(played = it.played, favorite = it.favorite) } ?: item
-    val updating = userDataWrites.containsKey(item.id)
+    val overlaid = (confirmed?.let { item.copy(played = it.played, favorite = it.favorite) } ?: item).copy(inWatchlist = item.id in watchlistIds)
+    val updating = userDataWrites.containsKey(item.id) || item.id in batchWriteIds
     return if (overlaid.updating == updating) overlaid else overlaid.copy(updating = updating)
   }
 
-  private fun media(item: VideoLibraryItem, scope: ProfileScopeRef) = MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
-  private fun metadata(year: Int?, type: String) = listOfNotNull(year?.toString(), type).joinToString(" · ")
-  private fun artwork(id: String?, scope: ProfileScopeRef): ArtworkUi? = id?.let { ArtworkUi(it, scope) }
+  private fun media(item: VideoLibraryItem, scope: ProfileScopeRef) = CatalogPresentation(scope, watchlistIds).library(item)
 
   private fun showError(error: Throwable) {
     val resource = when (error) {
@@ -658,7 +1279,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       is SdkException.NoActiveProfile -> R.string.not_connected
       else -> R.string.sdk_request_failed
     }
-    mutableState.update { it.copy(error = app.getString(resource)) }
+    mutableState.update { it.copy(error = app.localizedString(resource)) }
   }
 
   override fun onCleared() {
@@ -669,8 +1290,12 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     closeBrowserSession()
     cancelUserDataWrites()
     confirmedUserData.clear()
+    closeRetainedBrowsers()
+    collectionUndo?.watchlist?.destroy()
+    historyUndo?.receipt?.destroy()
     visibility.close()
-    player.stop()
+    app.beforePlaybackHandoff = null
+    playback.close()
     super.onCleared()
   }
 }

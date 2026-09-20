@@ -788,6 +788,29 @@ impl SettingsStore {
         })
     }
 
+    /// Replaces the ordered language preferences in one validated atomic write.
+    pub fn set_subtitle_languages(
+        &mut self,
+        languages: Vec<String>,
+    ) -> Result<bool, SettingsMutationError> {
+        let languages: Vec<_> = languages
+            .into_iter()
+            .map(|language| language.trim().to_ascii_lowercase())
+            .collect();
+        for (index, language) in languages.iter().enumerate() {
+            if !valid_subtitle_language(language) {
+                return Err(SettingsMutationError::InvalidSubtitleLanguage);
+            }
+            if languages[..index].contains(language) {
+                return Err(SettingsMutationError::DuplicateSubtitleLanguage);
+            }
+        }
+        self.update(move |settings| {
+            settings.subtitle_languages = languages;
+            Ok(())
+        })
+    }
+
     pub fn move_subtitle_language(
         &mut self,
         index: usize,

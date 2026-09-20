@@ -168,6 +168,8 @@ pub struct SignOutOutcome {
     pub teardown_error: Option<crate::SdkError>,
     /// Watchlist cleanup failure recorded after the committed deletion.
     pub watchlist_error: Option<crate::SdkError>,
+    /// Local recovery cleanup failure after committed credential deletion.
+    pub recovery_error: Option<crate::SdkError>,
 }
 
 impl From<jellypilot_sdk::SignOutOutcome> for SignOutOutcome {
@@ -179,6 +181,7 @@ impl From<jellypilot_sdk::SignOutOutcome> for SignOutOutcome {
                 .map(|key| key.as_str().to_owned()),
             teardown_error: outcome.teardown_error.map(crate::SdkError::from),
             watchlist_error: outcome.watchlist_error.map(crate::SdkError::from),
+            recovery_error: outcome.recovery_error.map(crate::SdkError::from),
         }
     }
 }
@@ -498,16 +501,20 @@ impl From<ms::FavoritesPage> for FavoritesPage {
 pub struct WatchHistoryPage {
     pub start_index: i32,
     pub limit: i32,
+    /// Cursor in the original merged server stream, including hidden rows.
+    pub next_start_index: i32,
+    /// Server count before local History hiding; not a visible-list total.
     pub total_record_count: i32,
     pub has_more: bool,
     pub items: Vec<VideoLibraryItem>,
 }
 
-impl From<ms::WatchHistoryPage> for WatchHistoryPage {
-    fn from(page: ms::WatchHistoryPage) -> Self {
+impl From<jellypilot_sdk::HistoryPage> for WatchHistoryPage {
+    fn from(page: jellypilot_sdk::HistoryPage) -> Self {
         Self {
             start_index: page.start_index,
             limit: page.limit,
+            next_start_index: page.next_start_index,
             total_record_count: page.total_record_count,
             has_more: page.has_more,
             items: page.items.into_iter().map(VideoLibraryItem::from).collect(),

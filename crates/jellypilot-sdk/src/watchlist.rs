@@ -23,6 +23,77 @@ use crate::item_actions::{
 };
 use crate::{OperationToken, Sdk, SdkError, SdkInner};
 
+/// Scope-bound undo for an atomic Watchlist removal. The original records are
+/// retained inside Rust, so callers cannot forge another profile's membership.
+pub struct WatchlistRemoval {
+    inner: Arc<SdkInner>,
+    token: Arc<OperationToken>,
+    records: Vec<WatchlistRecord>,
+    undo_gate: Arc<tokio::sync::Mutex<bool>>,
+}
+
+impl WatchlistRemoval {
+    pub fn removed_entries(&self) -> Vec<WatchlistRecord> {
+        self.records.clone()
+    }
+
+    /// Restores the exact removed records. Repeating a successful undo is harmless.
+    pub async fn undo(&self) -> Result<bool, SdkError> {
+        let mut undone = Arc::clone(&self.undo_gate).lock_owned().await;
+        if *undone {
+            return Ok(false);
+        }
+        let admissions = self
+            .records
+            .iter()
+            .map(|record| {
+                self.inner
+                    .admit_item(
+                        &self.token,
+                        record.item_id(),
+                        jellypilot_core::item_actions::Action::Watchlist(true),
+                    )
+                    .map(Admission::immediate)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let inner = Arc::clone(&self.inner);
+        let token = Arc::clone(&self.token);
+        let records = self.records.clone();
+        self.inner
+            .handle
+            .spawn_blocking(move || {
+                let result = inner
+                    .with_scoped_watchlist_write(&token, move |store, scope| {
+                        if records.iter().any(|record| record.scope() != scope) {
+                            return Err(SdkError::Stale);
+                        }
+                        let changed = store
+                            .restore_items(&records)
+                            .map_err(|error| SdkError::Storage(error.to_string()))?;
+                        Ok((changed, (changed, store.records_for(scope))))
+                    })
+                    .map(|(revision, (changed, records))| WatchlistSnapshot {
+                        revision,
+                        records,
+                        changed,
+                    });
+                let changed = result
+                    .as_ref()
+                    .map(|snapshot| snapshot.changed)
+                    .map_err(Clone::clone);
+                for admission in admissions {
+                    admission.finish_watchlist(result.clone())?;
+                }
+                if changed.is_ok() {
+                    *undone = true;
+                }
+                changed
+            })
+            .await
+            .map_err(|_| SdkError::Storage("the Watchlist undo worker failed".to_owned()))?
+    }
+}
+
 /// Watchlist storage adapter over the SDK-owned store.
 ///
 /// The store mutation runs under the SDK state lock through
@@ -88,6 +159,65 @@ impl WatchlistStorage for ScopedWatchlist {
 }
 
 impl Sdk {
+    /// Removes the selected Watchlist entries in one atomic storage transaction.
+    /// Failure admits no partial selection; successful undo preserves original order.
+    pub async fn remove_watchlist_items(
+        &self,
+        token: Arc<OperationToken>,
+        mut item_ids: Vec<String>,
+    ) -> Result<Arc<WatchlistRemoval>, SdkError> {
+        item_ids.sort();
+        item_ids.dedup();
+        let admissions = item_ids
+            .iter()
+            .map(|id| {
+                self.inner
+                    .admit_item(
+                        &token,
+                        id,
+                        jellypilot_core::item_actions::Action::Watchlist(false),
+                    )
+                    .map(Admission::immediate)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let undo_token = self.new_operation_token()?;
+        if undo_token.scope_ref()? != token.scope_ref()? {
+            return Err(SdkError::Stale);
+        }
+        let inner = Arc::clone(&self.inner);
+        let records = self
+            .inner
+            .handle
+            .spawn_blocking(move || {
+                let result = inner.with_scoped_watchlist_write(&token, move |store, scope| {
+                    let removed = store
+                        .remove_items(scope, &item_ids)
+                        .map_err(|error| SdkError::Storage(error.to_string()))?;
+                    Ok((!removed.is_empty(), (removed, store.records_for(scope))))
+                });
+                let snapshot = result
+                    .as_ref()
+                    .map(|(revision, (removed, records))| WatchlistSnapshot {
+                        revision: *revision,
+                        changed: !removed.is_empty(),
+                        records: records.clone(),
+                    })
+                    .map_err(Clone::clone);
+                for admission in admissions {
+                    admission.finish_watchlist(snapshot.clone())?;
+                }
+                result.map(|(_, (removed, _))| removed)
+            })
+            .await
+            .map_err(|_| SdkError::Storage("the Watchlist removal worker failed".to_owned()))??;
+        Ok(Arc::new(WatchlistRemoval {
+            inner: Arc::clone(&self.inner),
+            token: undo_token,
+            records,
+            undo_gate: Arc::new(tokio::sync::Mutex::new(false)),
+        }))
+    }
+
     /// Watchlist records for the active profile, most recently added first.
     pub async fn watchlist_items(
         &self,

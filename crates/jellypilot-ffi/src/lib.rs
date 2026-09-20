@@ -7,8 +7,14 @@
 
 mod browse;
 mod callbacks;
+mod catalog;
 mod dto;
 mod error;
+mod history;
+mod playback;
+mod preferences;
+mod remote;
+mod watchlist;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,8 +23,14 @@ use jellypilot_media_server as ms;
 
 pub use browse::{BrowsePreferences, BrowseQuery, BrowseSession, BrowseSnapshot, BrowseStatus};
 pub use callbacks::{QuickConnectListener, QuickConnectOutcome, SdkHooks, SecureCredentialStore};
+pub use catalog::CollectionTarget;
 pub use dto::*;
 pub use error::{CredentialStoreError, SdkError};
+pub use history::HistoryRemoval;
+pub use playback::*;
+pub use preferences::{BusinessPreferences, IntroSkipMode, LoginPrefill};
+pub use remote::{RemoteCommand, RemoteTarget, RemoteTargetEvent, RemoteTargetState};
+pub use watchlist::WatchlistRemoval;
 
 uniffi::setup_scaffolding!();
 
