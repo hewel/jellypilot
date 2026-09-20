@@ -9,6 +9,7 @@ player-skip-intro = 跳过片头？
 player-skip-credits = 跳过片尾？
 player-skip = 跳过
 player-auto-skip-intro-credits = 跳过片头片尾
+player-options = 播放选项
 player-range-intro = 片头
 player-range-credits = 片尾
 player-audio = 音轨

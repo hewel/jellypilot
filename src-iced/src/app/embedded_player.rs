@@ -30,6 +30,8 @@ pub enum Message {
   VolumeBy(f64),
   SeekHovered(Option<f64>),
   Wake(Instant),
+  OptionsToggled,
+  OptionsDismissed,
   InformationToggled,
   InformationDismissed,
   InformationSampled {
@@ -63,6 +65,8 @@ impl std::fmt::Debug for Message {
       Self::VolumeBy(_) => "VolumeBy",
       Self::SeekHovered(_) => "SeekHovered",
       Self::Wake(_) => "Wake",
+      Self::OptionsToggled => "OptionsToggled",
+      Self::OptionsDismissed => "OptionsDismissed",
       Self::InformationToggled => "InformationToggled",
       Self::InformationDismissed => "InformationDismissed",
       Self::InformationSampled { .. } => "InformationSampled([redacted])",
@@ -90,6 +94,7 @@ pub struct Surface {
   returning: bool,
   replacement_generation: u64,
   was_active: bool,
+  options_open: bool,
   information_open: bool,
   information: Option<Box<PlaybackStatistics>>,
   information_failed: bool,
@@ -205,6 +210,10 @@ pub(super) fn information_open(state: &State) -> bool {
   state.shell.embedded_player.information_open
 }
 
+pub(super) fn options_open(state: &State) -> bool {
+  state.shell.embedded_player.options_open
+}
+
 pub(super) fn information(state: &State) -> Option<&PlaybackStatistics> {
   state.shell.embedded_player.information.as_deref()
 }
@@ -240,6 +249,11 @@ fn menu_open(state: &State) -> bool {
 }
 
 pub(super) fn input_blocked(state: &State) -> bool {
+  controls_blocked(state) || options_open(state)
+}
+
+/// Options may operate their own controls while blocking picture shortcuts.
+pub(super) fn controls_blocked(state: &State) -> bool {
   state.shell.settings_open
     || state.shell.account_popover_open
     || state.shell.compact_search_open
@@ -310,6 +324,12 @@ pub(super) fn reconcile(state: &mut State) {
     state.playback.view.lifecycle.replacement_generation,
   );
   let active = active(state);
+  if !active
+    || controls_blocked(state)
+    || !super::view::player::embedded_options_available(state, state.shell.window_size.width)
+  {
+    state.shell.embedded_player.options_open = false;
+  }
   let settled = state.playback.view.lifecycle.settled;
   // The core adjustment state owns drag flags and desired targets; embedded
   // only reports whether its presentation is active and settled.
@@ -335,7 +355,7 @@ pub(super) fn reconcile(state: &mut State) {
     || state.shell.account_popover_open
     || super::accounts::blocking_modal(&state.accounts)
     || state.shell.quit_requested;
-  if blocked || menu_open(state) {
+  if blocked || menu_open(state) || options_open(state) {
     state.shell.embedded_player.information_open = false;
     state.shell.embedded_player.information = None;
   }
@@ -387,6 +407,7 @@ fn observe_replacement(surface: &mut Surface, generation: u64) {
     surface.replacement_generation = generation;
     surface.returning = false;
     surface.feedback = None;
+    surface.options_open = false;
     surface.information = None;
     surface.information_failed = false;
     surface.buffered_ranges.clear();
@@ -704,11 +725,25 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
         .queue_artwork
         .settle(state.kernel.request_gate.current_session(), completion);
     }
+    Message::OptionsToggled => {
+      if state.playback.view.busy
+        || controls_blocked(state)
+        || state.shell.quit_requested
+        || !super::view::player::embedded_options_available(state, state.shell.window_size.width)
+      {
+        return Task::none();
+      }
+      state.shell.embedded_player.options_open = !options_open(state);
+    }
+    Message::OptionsDismissed => {
+      state.shell.embedded_player.options_open = false;
+    }
     Message::InformationToggled => {
       if state.playback.view.lifecycle.replacing || state.shell.quit_requested {
         return Task::none();
       }
       let surface = &mut state.shell.embedded_player;
+      surface.options_open = false;
       surface.information_open = !surface.information_open;
       surface.information = None;
       surface.information_failed = false;
@@ -841,7 +876,7 @@ fn pointer_moved(
   surface.cursor_visible = true;
   surface.cursor_deadline = Some(now + IDLE);
   let bottom = position.y >= (bounds.height - controls_height).max(0.0);
-  let top = position.y <= 100.0 && (position.x <= 112.0 || position.x >= bounds.width - 112.0);
+  let top = position.y <= 100.0 && (position.x <= 112.0 || position.x >= bounds.width - 144.0);
   if !bottom
     && !top
     && surface
@@ -954,6 +989,162 @@ fn expire(surface: &mut Surface, deadline: Instant, now: Instant, held: bool) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn narrow_options_keep_skip_accessible_and_capture_dismissal_input() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{mouse, Point, Rectangle, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Default)]
+    struct Targets(Vec<Rectangle>);
+    impl widget::Operation for Targets {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn focusable(
+        &mut self,
+        _: Option<&widget::Id>,
+        bounds: Rectangle,
+        _: &mut dyn widget::operation::Focusable,
+      ) {
+        self.0.push(bounds);
+      }
+    }
+
+    let mut state = State::boot(false);
+    let client = jellypilot_media_server::JellyfinClient::new();
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://media.example.com".to_owned(),
+        user_id: "user-1".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    state.kernel.client = Some(Arc::new(client));
+    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+      item: jellypilot_mpv::playback::NowPlayingItem {
+        item_id: "episode".into(),
+        title: "Episode".into(),
+        item_type: "Episode".into(),
+        series_id: Some("series".into()),
+        runtime_seconds: Some(60.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".into(),
+        original_language: None,
+      },
+      paused: false,
+      position_seconds: 10.0,
+      duration_seconds: Some(60.0),
+      volume: 75.0,
+      muted: false,
+    });
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let bounds = Size::new(768.0, 576.0);
+    state.shell.window_size = bounds;
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+
+    let mut ui = UserInterface::build(
+      crate::app::view::player::embedded(&state),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut targets = Targets::default();
+    ui.operate(&renderer, &mut targets);
+    let trigger = targets
+      .0
+      .iter()
+      .find(|target| target.x > 600.0 && target.x < 680.0 && target.y == 24.0)
+      .expect("options trigger beside Information");
+    let mut bus = iced::advanced::shell::Bus::new();
+    let _ = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[press.clone(), release.clone()],
+      mouse::Cursor::Available(trigger.center()),
+      &mut renderer,
+      &mut bus,
+    );
+    assert!(bus
+      .drain()
+      .any(|(message, _)| matches!(message, AppMessage::EmbeddedPlayer(Message::OptionsToggled))));
+    let cache = ui.into_cache();
+
+    state.shell.embedded_player.options_open = true;
+    assert!(
+      input_blocked(&state),
+      "the open menu blocks picture shortcuts"
+    );
+    assert!(
+      !controls_blocked(&state),
+      "the menu's own toggle remains usable"
+    );
+    assert!(
+      held(&state),
+      "menu interaction holds chrome and cursor visible"
+    );
+    let mut ui = UserInterface::build(
+      crate::app::view::player::embedded(&state),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    let mut targets = Targets::default();
+    ui.operate(&renderer, &mut targets);
+    let toggle = targets
+      .0
+      .iter()
+      .find(|target| target.width > 100.0 && target.y >= 72.0 && target.y < 150.0)
+      .expect("skip toggle inside the options menu");
+    let mut bus = iced::advanced::shell::Bus::new();
+    let _ = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[press.clone(), release],
+      mouse::Cursor::Available(toggle.center()),
+      &mut renderer,
+      &mut bus,
+    );
+    assert!(bus.drain().any(|(message, _)| matches!(
+      message,
+      AppMessage::Playback(PlaybackMessage::IntroModeChanged(false))
+    )));
+
+    for event in [
+      key(keyboard::Key::Named(keyboard::key::Named::Escape), false),
+      press,
+    ] {
+      let mut bus = iced::advanced::shell::Bus::new();
+      let (_, statuses) = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[event],
+        mouse::Cursor::Available(Point::new(384.0, 288.0)),
+        &mut renderer,
+        &mut bus,
+      );
+      assert_eq!(statuses, [event::Status::Captured]);
+      let messages: Vec<_> = bus.drain().map(|(message, _)| message).collect();
+      assert!(messages.iter().any(|message| matches!(
+        message,
+        AppMessage::EmbeddedPlayer(Message::OptionsDismissed)
+      )));
+      assert!(!messages
+        .iter()
+        .any(|message| matches!(message, AppMessage::Playback(PlaybackMessage::Intent(_)))));
+    }
+  }
 
   fn key(key: keyboard::Key, repeat: bool) -> Event {
     Event::Keyboard(keyboard::Event::KeyPressed {
@@ -1079,6 +1270,17 @@ mod tests {
     assert!(
       surface.back_visible && !surface.visible,
       "the information corner reveals the top chrome"
+    );
+    pointer_moved(
+      &mut surface,
+      iced::Point::new(977.0, 40.0),
+      bounds,
+      202.0,
+      now + IDLE + IDLE,
+    );
+    assert!(
+      surface.back_visible,
+      "the options target stays inside the top reveal region"
     );
     // Responsive controls and fullscreen use their actual measured surface, not the saved window.
     pointer_moved(

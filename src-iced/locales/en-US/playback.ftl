@@ -9,6 +9,7 @@ player-skip-intro = Skip intro?
 player-skip-credits = Skip credits?
 player-skip = Skip
 player-auto-skip-intro-credits = Skip intro & credits
+player-options = Playback options
 player-range-intro = Intro
 player-range-credits = Credits
 player-audio = Audio

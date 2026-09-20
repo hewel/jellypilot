@@ -521,9 +521,7 @@ pub(super) fn guard_activation<'a>(
         bounds: state.shell.window_size,
         controls_height: controls_reveal_height(
           state.shell.window_size.width,
-          embedded_tools_width(
-            crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
-          ),
+          crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
         ),
       })
     }
@@ -572,7 +570,7 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     // the top bar has auto-hidden.
     let info_visible = back_visible || embedded_player::information_open(state);
     layers = layers.push(reveal_player_chrome(
-      container(super::player_info::button(state))
+      container(embedded_top_tools(state, bounds.width))
         .padding(iced::Padding {
           top: TOKENS.spacing.s6,
           right: embedded_inset(bounds.width),
@@ -709,9 +707,7 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
             bounds,
             controls_height: controls_reveal_height(
               bounds.width,
-              embedded_tools_width(
-                crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
-              ),
+              crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
             ),
           })
         })
@@ -746,6 +742,54 @@ fn embedded_volume_icon(muted: bool, volume: f64) -> Icon {
   } else {
     Icon::VolumeLoud
   }
+}
+
+pub(crate) fn embedded_options_available(state: &State, window_width: f32) -> bool {
+  !embedded_skip_fits_inline(window_width - 2.0 * embedded_inset(window_width))
+    && crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some()
+}
+
+fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> {
+  let mut tools = row![].spacing(TOKENS.spacing.s2).align_y(Alignment::Center);
+  if embedded_options_available(state, window_width) {
+    let open = embedded_player::options_open(state);
+    let trigger = focus_tooltip(
+      control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
+        .style(cinema::top_control)
+        .icon_size(IconSize::Custom(16.0))
+        .padding(0)
+        .width(Length::Fixed(40.0))
+        .min_height(40.0)
+        .content_centered(true)
+        .on_press_maybe(
+          (!state.playback.view.busy).then_some(Message::EmbeddedPlayer(
+            embedded_player::Message::OptionsToggled,
+          )),
+        ),
+      state.t("player-options"),
+      TooltipOptions::default(),
+    );
+    let content = crate::app::playback::series_intro_mode(&state.playback, &state.kernel)
+      .filter(|_| open)
+      .map_or_else(
+        || column![].into(),
+        |mode| embedded_skip_toggle(state, mode),
+      );
+    tools = tools.push(popover(
+      trigger,
+      content,
+      open,
+      PopoverOptions {
+        width: Some(260.0_f32.min((window_width - 24.0).max(1.0))),
+        alignment: jellypilot_ui::overlay::Alignment::End,
+        appearance: PopoverAppearance::PlaybackInformation,
+        consume_outside_press: true,
+        ..PopoverOptions::default()
+      },
+      Message::EmbeddedPlayer(embedded_player::Message::OptionsDismissed),
+    ));
+  }
+  tools.push(super::player_info::button(state)).into()
 }
 
 fn embedded_action<'a>(
@@ -842,8 +886,10 @@ fn embedded_bar<'a>(
   // The per-series skip-mode pill exists only for eligible episodes; the
   // resolved mode comes from the preference owner, never inferred here.
   let intro_mode = crate::app::playback::series_intro_mode(&state.playback, &state.kernel);
-  let skip_toggle_width = embedded_tools_width(intro_mode.is_some());
-  let skip_toggle = intro_mode.map(|mode| embedded_skip_toggle(state, mode));
+  let tools_width = embedded_tools_width(width, intro_mode.is_some());
+  let skip_toggle = intro_mode
+    .filter(|_| embedded_skip_fits_inline(width))
+    .map(|mode| embedded_skip_toggle(state, mode));
   let volume: Element<'_, Message> = tracked_slider(
     slider(
       0.0..=100.0,
@@ -901,14 +947,14 @@ fn embedded_bar<'a>(
     volume,
   ]
   .align_y(Alignment::Center);
-  let tools = row![
-    row![
-      tracks,
-      skip_toggle.unwrap_or_else(|| space::horizontal().width(0).into()),
-      output
-    ]
+  let mut track_output = row![tracks]
     .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+    .align_y(Alignment::Center);
+  if let Some(skip_toggle) = skip_toggle {
+    track_output = track_output.push(skip_toggle);
+  }
+  let tools = row![
+    track_output.push(output),
     container(space::horizontal())
       .width(1)
       .height(18)
@@ -927,7 +973,7 @@ fn embedded_bar<'a>(
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
   .into();
-  let controls = embedded_controls(identity, transport.into(), tools, width, skip_toggle_width);
+  let controls = embedded_controls(identity, transport.into(), tools, width, tools_width);
   // The controls float on the scrim without a card; `opaque` keeps the strip
   // from leaking presses into the pause-toggle surface behind it.
   let panel = opaque(
@@ -945,12 +991,16 @@ fn embedded_bar<'a>(
 const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
 /// Upper bound for the tools cluster without the skip-mode pill.
 const EMBEDDED_TOOLS_WIDTH: f32 = 269.0;
-/// Upper bound once the localized skip-mode pill can appear; the pill is
-/// capped so this stays a safe reflow threshold, not an exact measurement.
+/// Includes the localized skip-mode pill. Below this side-slot budget the
+/// pill moves to Playback options, preserving the reference's transport row.
 const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 480.0;
 
-fn embedded_tools_width(has_skip_toggle: bool) -> f32 {
-  if has_skip_toggle {
+fn embedded_skip_fits_inline(width: f32) -> bool {
+  width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
+}
+
+fn embedded_tools_width(width: f32, has_skip_toggle: bool) -> f32 {
+  if has_skip_toggle && embedded_skip_fits_inline(width) {
     EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
   } else {
     EMBEDDED_TOOLS_WIDTH
@@ -967,7 +1017,7 @@ fn embedded_inset(width: f32) -> f32 {
 
 fn embedded_controls_height(width: f32, tools_width: f32) -> f32 {
   if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * tools_width {
-    if width > 900.0 - 4.0 * TOKENS.spacing.s9 {
+    if width > 900.0 - 2.0 * TOKENS.spacing.s9 {
       48.0
     } else {
       44.0
@@ -979,8 +1029,9 @@ fn embedded_controls_height(width: f32, tools_width: f32) -> f32 {
   }
 }
 
-fn controls_reveal_height(width: f32, tools_width: f32) -> f32 {
+fn controls_reveal_height(width: f32, has_skip_toggle: bool) -> f32 {
   let inset = embedded_inset(width);
+  let tools_width = embedded_tools_width(width - 2.0 * inset, has_skip_toggle);
   // Timeline, inner padding, controls, bottom inset, and the prompt allowance.
   24.0
     + 2.0 * TOKENS.spacing.s3
@@ -1226,7 +1277,7 @@ fn embedded_skip_toggle<'a>(
   mode: jellypilot_core::config::IntroMode,
 ) -> Element<'a, Message> {
   let automatic = mode == jellypilot_core::config::IntroMode::Automatic;
-  let enabled = !state.playback.view.busy && !embedded_player::input_blocked(state);
+  let enabled = !state.playback.view.busy && !embedded_player::controls_blocked(state);
   let label = state.t("player-auto-skip-intro-credits");
   focus_tooltip(
     control_button_content(
@@ -3324,61 +3375,103 @@ mod tests {
       }
     }
 
-    let state = State::boot(false);
+    let mut state = State::boot(false);
     let mut now_playing = test_now_playing();
     now_playing.item.title =
       "An unusually long episode title that must truncate, not move play ".repeat(8);
     now_playing.duration_seconds = Some(360_000.0);
+    now_playing.position_seconds = 36_000.0;
+    state.playback.view.now_playing = Some(now_playing.clone());
+    let client = jellypilot_media_server::JellyfinClient::new();
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://media.example.com".to_owned(),
+        user_id: "user-1".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    let client = std::sync::Arc::new(client);
     let renderer = iced::Renderer::new(
       iced::advanced::renderer::Settings::default(),
       Some("tiny-skia"),
     )
     .await
     .expect("software renderer");
-    for (window_width, expected_height) in [
-      (1099.0, 112.0),
-      (900.0, 108.0),
-      (768.0, 108.0),
-      (700.0, 164.0),
-      (400.0, 216.0),
+    for (language, has_skip_toggle) in [
+      (jellypilot_core::locale::UiLanguage::English, false),
+      (jellypilot_core::locale::UiLanguage::English, true),
+      (jellypilot_core::locale::UiLanguage::SimplifiedChinese, true),
     ] {
-      let card_width = window_width - 2.0 * embedded_inset(window_width);
-      let mut content = embedded_bar(&state, &now_playing, card_width);
-      let mut tree = Tree::new(&content);
-      tree.diff(&mut content);
-      let node = content.as_widget_mut().layout(
-        &mut tree,
-        &renderer,
-        &layout::Limits::new(Size::new(card_width, 0.0), Size::new(card_width, 900.0)),
-      );
-      assert_eq!(
-        node.size().height,
-        expected_height,
-        "window width {window_width}"
-      );
-      let mut measured = Vec::new();
-      boxes(Layout::new(&node), &mut measured);
-      assert!(
-        measured
-          .iter()
-          .all(|bounds| bounds.x >= -0.5 && bounds.x + bounds.width <= card_width + 0.5),
-        "controls and long timestamps must not overflow at {window_width}: {measured:?}"
-      );
-      let primary = measured
-        .iter()
-        .find(|bounds| bounds.size() == Size::new(44.0, 44.0))
-        .expect("primary play control remains full size");
-      if window_width != 700.0 {
+      state.kernel.locale = Localizer::new(language);
+      state.kernel.client = has_skip_toggle.then(|| client.clone());
+      for (window_width, expected_height) in [
+        (1920.0, 112.0),
+        (1600.0, 112.0),
+        (1440.0, 112.0),
+        (1280.0, 112.0),
+        (1172.0, 112.0),
+        (1171.0, 112.0),
+        (1099.0, 112.0),
+        (1024.0, 112.0),
+        (901.0, 112.0),
+        (900.0, 108.0),
+        (768.0, 108.0),
+        (750.0, 108.0),
+        (700.0, 164.0),
+        (600.0, 164.0),
+        (599.0, 164.0),
+        (480.0, 164.0),
+        (400.0, 216.0),
+      ] {
+        let card_width = window_width - 2.0 * embedded_inset(window_width);
+        let mut content = embedded_bar(&state, &now_playing, card_width);
+        let mut tree = Tree::new(&content);
+        tree.diff(&mut content);
+        let node = content.as_widget_mut().layout(
+          &mut tree,
+          &renderer,
+          &layout::Limits::new(Size::new(card_width, 0.0), Size::new(card_width, 900.0)),
+        );
+        assert_eq!(
+          node.size().height,
+          expected_height,
+          "window width {window_width}, {language:?}, skip toggle: {has_skip_toggle}"
+        );
+        let mut measured = Vec::new();
+        boxes(Layout::new(&node), &mut measured);
         assert!(
-          (primary.center().x - Point::new(card_width / 2.0, 0.0).x).abs() < 0.5,
-          "play must stay centered despite long metadata at {window_width}: {primary:?}"
+          measured
+            .iter()
+            .all(|bounds| bounds.x >= -0.5 && bounds.x + bounds.width <= card_width + 0.5),
+          "controls and long timestamps must not overflow at {window_width}: {measured:?}"
+        );
+        let primary = measured
+          .iter()
+          .find(|bounds| bounds.size() == Size::new(44.0, 44.0))
+          .expect("primary play control remains full size");
+        if window_width >= 750.0 || window_width == 400.0 {
+          assert!(
+            (primary.center().x - Point::new(card_width / 2.0, 0.0).x).abs() < 0.5,
+            "play must stay centered despite long metadata at {window_width}: {primary:?}"
+          );
+        }
+        assert!(
+          controls_reveal_height(window_width, has_skip_toggle)
+            >= expected_height + embedded_inset(window_width),
+          "pointer reveal region must contain the entire responsive controls"
+        );
+        assert_eq!(
+          measured
+            .iter()
+            .any(|bounds| bounds.size() == Size::new(85.0, 48.0)),
+          window_width > 900.0,
+          "thumbnail visibility at {window_width}",
         );
       }
-      assert!(
-        controls_reveal_height(window_width, embedded_tools_width(false))
-          >= expected_height + embedded_inset(window_width),
-        "pointer reveal region must contain the entire responsive controls"
-      );
     }
   }
 
