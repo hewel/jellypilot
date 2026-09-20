@@ -91,7 +91,9 @@ Jellyfin 12.0 does not require legacy authorization to be enabled: JellyPilot us
 Enter the server's actual base URL, including any configured reverse-proxy base path; Jellyfin 12 removed the automatic `/emby` and `/mediabrowser` route aliases.
 
 ### Native Media Segments & Intro Skipper
-Intro Skipper reads Jellyfin's native media segments, including ranges published by the Intro Skipper plugin or server-side scheduled tasks. Automatic, Manual, and Off modes apply to intro/credit ranges independently. The deprecated plugin endpoint is no longer used. If no native segment ranges are available, playback continues without skipping; ensure the server's segment extraction or plugin synchronization has populated them.
+Intro Skipper reads Jellyfin's native media segments, including ranges published by the Intro Skipper plugin or server-side scheduled tasks. Desktop playback offers Automatic and Manual modes for intro/credit ranges; older Off settings migrate to Manual, never to automatic skipping. The embedded episode player's toggle remembers a series-specific choice for the current server and account. Choices matching the global setting follow that setting instead of retaining an override.
+
+Manual skip actions remain available while playback stays inside a range, unless dismissed or used; leaving and re-entering offers them again. Automatic mode silently attempts each range at most once per playback session. Credit skipping seeks to the range end; normal playback completion handles the next episode. The deprecated plugin endpoint is no longer used. If no native segment ranges are available, playback continues without skipping; ensure the server's segment extraction or plugin synchronization has populated them.
 
 ## 🗺️ Roadmap
 

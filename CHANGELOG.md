@@ -5,6 +5,8 @@ All notable changes to JellyPilot are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added profile-scoped desktop Intro Skipper choices per series, persisted across episodes and restarts, with overrides following the global setting whenever their values match.
+- Added real MPV chapter markers and available chapter names to the embedded timeline, alongside fetched intro/credit ranges; seek hover remains free of preview frames and invented metadata.
 - Added experimental HDR10 output for Linux Wayland Embedded MPV Playback, with Auto / On / Off selection, decoded PQ/HLG detection, a 203-nit UI reference white, and SDR fallback when unsupported. Broader display-chain compatibility and automatic-transition visual acceptance remain under validation.
 - Added Android risk bring-up modules for Compose account/browse queries, a shared Rust SDK/UniFFI bridge, Keystore-backed credentials, and an independent libmpv/Media3 player. Debug builds and nonvisual emulator checks pass, and physical-device manual verification was reported passed by the user; the complete client and detailed device/HDR evidence remain outstanding.
 - Added desktop movie and episode Media Specifications with first-source resolution, range, codec and frame rate, default-first audio/subtitle summaries, and bounded read-only track popovers. Missing metadata remains distinct from confirmed empty track lists.
@@ -12,11 +14,14 @@ All notable changes to JellyPilot are documented in this file.
 - Added shared, interruptible desktop motion for controls, floating surfaces, navigation, responsive structural changes, overview expansion, theme colors, and user-selected Hero changes, with reduced-motion support and no invisible animation frame loop.
 
 ### Changed
+- Added automatic complete/minimal embedded-player presentation: leaving controls immediately reveals a read-only edge timeline, which hides after three seconds during playback and remains while paused. Visibility switches without animation so drawing and hit targets change together; the central pause indicator is also instantaneous. Information and manual skip prompts remain independent of hidden controls; human visual acceptance is pending.
+- Changed desktop Intro Skipper to Automatic / Manual, migrating legacy Off to Manual. Manual actions last for the current range stay and return after re-entry; automatic attempts remain once per range per playback session, including failures. Android retains its existing contract.
 - Separated display-free and desktop Rust workspaces and added Android preparation, native build, and validation entries to the existing task dispatcher. Desktop business-SDK migration and clean-room Android release acceptance remain later gates.
 - Aligned complete detail-page media information with the main content lane and added narrow-width stacking and long-value wrapping.
 - With an initialized tray, closing either desktop App Mode now destroys its window while retaining the runtime and Full-mode browsing context. Embedded playback pauses before a requested close completes; explicit Play restores the player, while ordinary Show does not resume. External MPV continues, and explicit Quit still shuts down.
 
 ### Fixed
+- Prevented outside presses that dismiss embedded playback Information from also activating the underlying video or controls.
 - Prevented detail-page audio and subtitle popovers from stretching into a blank full-height panel during dismissal.
 
 ## [2.2.1] - 2026-09-14

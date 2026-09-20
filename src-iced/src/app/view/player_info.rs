@@ -55,6 +55,7 @@ pub(super) fn button(state: &State) -> Element<'_, Message> {
       width: Some(380.0_f32.min((state.shell.window_size.width - 24.0).max(1.0))),
       alignment: jellypilot_ui::overlay::Alignment::End,
       appearance: PopoverAppearance::PlaybackInformation,
+      consume_outside_press: true,
       ..PopoverOptions::default()
     },
     Message::EmbeddedPlayer(embedded_player::Message::InformationDismissed),

@@ -25,6 +25,7 @@ pub enum Message {
     bounds: iced::Size,
     controls_height: f32,
   },
+  PointerLeft,
   Back,
   SeekBy(f64),
   VolumeBy(f64),
@@ -40,6 +41,10 @@ pub enum Message {
     token: Instant,
     ranges: Vec<(f64, f64)>,
   },
+  ChaptersLoaded {
+    generation: u64,
+    chapters: Option<Arc<Vec<jellypilot_mpv::statistics::PlaybackChapter>>>,
+  },
   QueueArtworkLoaded(super::artwork::ImageCompletion),
   QueueScrolled {
     epoch: u64,
@@ -53,6 +58,7 @@ impl std::fmt::Debug for Message {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     formatter.write_str(match self {
       Self::PointerMoved { .. } => "PointerMoved",
+      Self::PointerLeft => "PointerLeft",
       Self::Back => "Back",
       Self::SeekBy(_) => "SeekBy",
       Self::VolumeBy(_) => "VolumeBy",
@@ -62,6 +68,7 @@ impl std::fmt::Debug for Message {
       Self::InformationDismissed => "InformationDismissed",
       Self::InformationSampled { .. } => "InformationSampled([redacted])",
       Self::BufferSampled { .. } => "BufferSampled",
+      Self::ChaptersLoaded { .. } => "ChaptersLoaded",
       Self::QueueArtworkLoaded(_) => "QueueArtworkLoaded([redacted])",
       Self::QueueScrolled { .. } => "QueueScrolled",
     })
@@ -72,6 +79,9 @@ impl std::fmt::Debug for Message {
 pub struct Surface {
   visible: bool,
   idle_deadline: Option<Instant>,
+  minimal_deadline: Option<Instant>,
+  paused: bool,
+  pointer_regions: Option<(bool, bool)>,
   back_visible: bool,
   back_deadline: Option<Instant>,
   cursor_visible: bool,
@@ -91,7 +101,24 @@ pub struct Surface {
   queue_artwork: super::artwork::ImageCollection,
   queue_observed: bool,
   queue_scroll_edges: (bool, bool),
+  /// Chapter metadata fetched once per media generation; `None` while the
+  /// request is pending or was never issued, `Some` (possibly empty) once
+  /// the reader answered for the current generation.
+  chapters: Option<Arc<Vec<jellypilot_mpv::statistics::PlaybackChapter>>>,
+  /// Chapter start times mirrored for the marker widget, which cannot see
+  /// the MPV chapter type.
+  chapter_times: Vec<f64>,
+  /// Generation the outstanding chapter fetch belongs to.
+  chapter_demand: Option<u64>,
+  /// Real intro/credit intervals converted for the marker widget.
+  intro_ranges: Vec<(f64, f64)>,
   queue_item_count: usize,
+}
+
+impl Surface {
+  fn minimal_visible(&self) -> bool {
+    !self.visible && (self.paused || self.minimal_deadline.is_some())
+  }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -110,6 +137,19 @@ struct ObservationSubscription {
 impl Hash for ObservationSubscription {
   fn hash<H: Hasher>(&self, state: &mut H) {
     self.demand.hash(state);
+    Arc::as_ptr(&self.controller).hash(state);
+  }
+}
+
+#[derive(Clone)]
+struct ChapterSubscription {
+  generation: u64,
+  controller: super::state::PlaybackControllerHandle,
+}
+
+impl Hash for ChapterSubscription {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.generation.hash(state);
     Arc::as_ptr(&self.controller).hash(state);
   }
 }
@@ -218,6 +258,10 @@ pub(super) fn controls_visible(state: &State) -> bool {
   !active(state) || state.shell.embedded_player.visible || held(state)
 }
 
+pub(super) fn minimal_visible(state: &State) -> bool {
+  !controls_visible(state) && state.shell.embedded_player.minimal_visible()
+}
+
 pub(super) fn back_visible(state: &State) -> bool {
   !active(state) || state.shell.embedded_player.back_visible || held(state)
 }
@@ -252,18 +296,14 @@ pub(super) fn is_volume_dragging(state: &State) -> bool {
 }
 
 fn held(state: &State) -> bool {
-  state
-    .playback
-    .view
-    .now_playing
-    .as_ref()
-    .is_some_and(|playing| playing.paused)
-    || state.playback.seek_dragging
+  // Only interactions that genuinely need the controls keep them open: an
+  // in-flight drag, an open track/queue menu, or blocked input. Pausing, a
+  // live skip prompt, and the Information panel stay visible on their own
+  // without forcing the complete presentation.
+  state.playback.seek_dragging
     || state.playback.volume_dragging
-    || state.playback.view.intro_prompt.is_some()
     || input_blocked(state)
     || state.shell.embedded_player.returning
-    || information_open(state)
 }
 
 pub(super) fn reconcile(state: &mut State) {
@@ -278,11 +318,18 @@ pub(super) fn reconcile(state: &mut State) {
   }
   let held = held(state);
   let settled = state.playback.view.lifecycle.settled;
+  let paused = state
+    .playback
+    .view
+    .now_playing
+    .as_ref()
+    .is_some_and(|playing| playing.paused);
   reconcile_surface(
     &mut state.shell.embedded_player,
     active,
     held,
     settled,
+    paused,
     Instant::now(),
   );
   let blocked = state.shell.settings_open
@@ -293,7 +340,10 @@ pub(super) fn reconcile(state: &mut State) {
     state.shell.embedded_player.information_open = false;
     state.shell.embedded_player.information = None;
   }
-  let visible = active && controls_visible(state) && !blocked;
+  // Information keeps its statistics demand while the rest of the chrome is
+  // allowed to auto-hide; buffer-only sampling still follows the controls.
+  let visible =
+    active && (controls_visible(state) || state.shell.embedded_player.information_open) && !blocked;
   let generation = state.playback.view.lifecycle.replacement_generation;
   let replacing = state.playback.view.lifecycle.replacing;
   reconcile_observation(
@@ -309,6 +359,12 @@ pub(super) fn reconcile(state: &mut State) {
     _ => 0,
   };
   reconcile_queue(surface, queue_open, queue_open && !blocked, item_count);
+  reconcile_chapters(
+    surface,
+    active && !replacing && state.playback.view.now_playing.is_some(),
+    generation,
+  );
+  sync_intro_ranges(surface, &state.playback.view.intro_ranges);
   state
     .image_diagnostics
     .record(surface.queue_artwork.take_summary());
@@ -338,11 +394,64 @@ fn observe_replacement(surface: &mut Surface, generation: u64) {
     surface.information_failed = false;
     surface.buffered_ranges.clear();
     surface.observation = None;
+    surface.chapters = None;
+    surface.chapter_times.clear();
+    surface.chapter_demand = None;
+    surface.intro_ranges.clear();
     surface.queue_artwork.clear();
   }
 }
 
-fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, settled: bool, now: Instant) {
+/// Chapter metadata is queried once per media generation, only while a real
+/// item is playing and not mid-replacement. The demand survives until the
+/// reader answers; a failed read still settles it so the timeline never
+fn reconcile_chapters(surface: &mut Surface, needed: bool, generation: u64) {
+  if !needed {
+    surface.chapter_demand = None;
+    return;
+  }
+  if surface.chapters.is_none() && surface.chapter_demand.is_none() {
+    surface.chapter_demand = Some(generation);
+  }
+}
+
+/// Mirrors the session's fetched intro/credit intervals into the marker
+/// widget's plain pair form; empty while inactive, unfetched, or retired.
+fn sync_intro_ranges(surface: &mut Surface, ranges: &[jellypilot_media_server::IntroSkipRange]) {
+  let converted = ranges
+    .iter()
+    .map(|range| (range.start_seconds, range.end_seconds));
+  if !surface.intro_ranges.iter().copied().eq(converted.clone()) {
+    surface.intro_ranges.clear();
+    surface.intro_ranges.extend(converted);
+  }
+}
+
+pub(super) fn chapters(state: &State) -> Option<&[jellypilot_mpv::statistics::PlaybackChapter]> {
+  state
+    .shell
+    .embedded_player
+    .chapters
+    .as_deref()
+    .map(Vec::as_slice)
+}
+
+pub(super) fn chapter_times(state: &State) -> &[f64] {
+  &state.shell.embedded_player.chapter_times
+}
+
+pub(super) fn intro_ranges(state: &State) -> &[(f64, f64)] {
+  &state.shell.embedded_player.intro_ranges
+}
+
+fn reconcile_surface(
+  surface: &mut Surface,
+  active: bool,
+  held: bool,
+  settled: bool,
+  paused: bool,
+  now: Instant,
+) {
   if !active {
     // Drop all transient presentation on exit; the view owns the scoped cursor.
     if surface.was_active {
@@ -356,6 +465,17 @@ fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, settled: b
     surface.cursor_visible = true;
   }
   surface.was_active = true;
+  if !held {
+    if let Some((bottom, top)) = surface.pointer_regions {
+      if !bottom {
+        hide_controls(surface, now);
+      }
+      if !top {
+        surface.back_visible = false;
+        surface.back_deadline = None;
+      }
+    }
+  }
   if held {
     surface.visible = true;
     surface.idle_deadline = None;
@@ -371,6 +491,13 @@ fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, settled: b
   }
   if !held && surface.cursor_visible && surface.cursor_deadline.is_none() {
     surface.cursor_deadline = Some(now + IDLE);
+  }
+  if surface.paused && !paused && !surface.visible {
+    surface.minimal_deadline = Some(now + IDLE);
+  }
+  surface.paused = paused;
+  if surface.visible || paused {
+    surface.minimal_deadline = None;
   }
   if settled {
     surface.desired_seek = None;
@@ -388,6 +515,7 @@ pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
     .into_iter()
     .chain(surface.back_deadline)
     .chain(surface.cursor_deadline)
+    .chain(surface.minimal_deadline)
     .chain(surface.feedback.as_ref().map(|(_, deadline)| *deadline))
     .min();
   let wake = deadline.map_or_else(Subscription::none, |deadline| {
@@ -403,7 +531,17 @@ pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
     ),
     _ => Subscription::none(),
   };
-  Subscription::batch([wake, observation])
+  let chapters = match (surface.chapter_demand, state.playback.controller.as_ref()) {
+    (Some(generation), Some(controller)) => Subscription::run_with(
+      ChapterSubscription {
+        generation,
+        controller: Arc::clone(controller),
+      },
+      chapter_stream,
+    ),
+    _ => Subscription::none(),
+  };
+  Subscription::batch([wake, observation, chapters])
 }
 
 fn reconcile_observation(surface: &mut Surface, visible: bool, generation: u64, now: Instant) {
@@ -458,6 +596,29 @@ fn observation_stream(
   })
 }
 
+/// One chapter metadata read per demand generation. The stream stays alive
+/// after answering so the subscription is not respawned into a second query;
+/// `ChaptersLoaded` settles the demand and drops the stream.
+fn chapter_stream(
+  subscription: &ChapterSubscription,
+) -> impl iced::futures::Stream<Item = AppMessage> {
+  let subscription = subscription.clone();
+  iced::stream::channel(1, async move |mut output| {
+    let reader = subscription.controller.lock().await.statistics_reader();
+    let chapters = match reader {
+      Some(reader) => reader.chapters().await.ok().map(Arc::new),
+      None => None,
+    };
+    let _ = output
+      .send(AppMessage::EmbeddedPlayer(Message::ChaptersLoaded {
+        generation: subscription.generation,
+        chapters,
+      }))
+      .await;
+    std::future::pending::<()>().await;
+  })
+}
+
 pub(super) fn reserved_key(event: &Event) -> bool {
   let Event::Keyboard(keyboard::Event::KeyPressed {
     modified_key,
@@ -490,6 +651,8 @@ fn wake_stream(deadline: &Instant) -> impl iced::futures::Stream<Item = AppMessa
 }
 
 pub(super) fn keyboard(event: Event, status: event::Status) -> Option<AppMessage> {
+  use keyboard::key::Named;
+
   if status == event::Status::Captured {
     return None;
   }
@@ -505,7 +668,6 @@ pub(super) fn keyboard(event: Event, status: event::Status) -> Option<AppMessage
   if !modifiers.is_empty() {
     return None;
   }
-  use keyboard::key::Named;
   let message = match modified_key.as_ref() {
     keyboard::Key::Named(Named::ArrowLeft) => Message::SeekBy(-5.0),
     keyboard::Key::Named(Named::ArrowRight) => Message::SeekBy(5.0),
@@ -589,6 +751,28 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
         surface.buffered_ranges = ranges;
       }
     }
+    Message::ChaptersLoaded {
+      generation,
+      chapters,
+    } => {
+      let surface = &mut state.shell.embedded_player;
+      if surface.chapter_demand == Some(generation) {
+        surface.chapter_demand = None;
+      }
+      // Late replies for a replaced media generation are dropped, never
+      // stored against the new item.
+      if surface.replacement_generation == generation {
+        if let Some(chapters) = chapters {
+          surface.chapter_times = chapters
+            .iter()
+            .map(|chapter| chapter.time_seconds)
+            .collect();
+          surface.chapters = Some(chapters);
+        } else {
+          surface.chapters = Some(Arc::new(Vec::new()));
+        }
+      }
+    }
     Message::PointerMoved {
       position,
       bounds,
@@ -602,6 +786,7 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
         now,
       );
     }
+    Message::PointerLeft => pointer_left(&mut state.shell.embedded_player, now),
     Message::SeekHovered(position) => {
       state.shell.embedded_player.seek_hover = position.filter(|v| v.is_finite());
       if position.is_some() {
@@ -656,19 +841,55 @@ fn pointer_moved(
   now: Instant,
 ) {
   if !iced::Rectangle::with_size(bounds).contains(position) {
+    pointer_left(surface, now);
     return;
   }
   surface.cursor_visible = true;
   surface.cursor_deadline = Some(now + IDLE);
-  if position.y >= (bounds.height - controls_height).max(0.0) {
+  let bottom = position.y >= (bounds.height - controls_height).max(0.0);
+  let top = position.y <= 100.0 && (position.x <= 112.0 || position.x >= bounds.width - 112.0);
+  if !bottom
+    && !top
+    && surface
+      .pointer_regions
+      .is_some_and(|(bottom, top)| bottom || top)
+  {
+    surface.minimal_deadline = Some(now + IDLE);
+  }
+  surface.pointer_regions = Some((bottom, top));
+  if bottom {
     surface.visible = true;
     surface.idle_deadline = Some(now + IDLE);
+    surface.minimal_deadline = None;
+  } else {
+    hide_controls(surface, now);
   }
-  // Back and information share the top chrome, independently of the transport.
-  if position.y <= 100.0 && (position.x <= 112.0 || position.x >= bounds.width - 112.0) {
-    surface.back_visible = true;
-    surface.back_deadline = Some(now + IDLE);
+  surface.back_visible = top;
+  surface.back_deadline = top.then_some(now + IDLE);
+}
+
+fn pointer_left(surface: &mut Surface, now: Instant) {
+  if surface
+    .pointer_regions
+    .is_some_and(|(bottom, top)| bottom || top)
+  {
+    surface.minimal_deadline = Some(now + IDLE);
   }
+  surface.pointer_regions = Some((false, false));
+  hide_controls(surface, now);
+  surface.back_visible = false;
+  surface.back_deadline = None;
+  surface.cursor_visible = false;
+  surface.cursor_deadline = None;
+}
+
+fn hide_controls(surface: &mut Surface, now: Instant) {
+  if surface.visible {
+    surface.minimal_deadline = Some(now + IDLE);
+  }
+  surface.visible = false;
+  surface.idle_deadline = None;
+  surface.seek_hover = None;
 }
 
 fn dispatch(state: &mut State, intent: PlaybackIntent) -> super::playback::PlaybackUpdate {
@@ -756,13 +977,14 @@ pub(super) fn return_to_source(state: &mut State) -> Task<AppMessage> {
 
 fn expire(surface: &mut Surface, deadline: Instant, now: Instant, held: bool) {
   if surface.idle_deadline == Some(deadline) && now >= deadline && !held {
-    surface.visible = false;
-    surface.idle_deadline = None;
-    surface.seek_hover = None;
+    hide_controls(surface, now);
   }
   if surface.back_deadline == Some(deadline) && now >= deadline && !held {
     surface.back_visible = false;
     surface.back_deadline = None;
+  }
+  if surface.minimal_deadline == Some(deadline) && now >= deadline && !held {
+    surface.minimal_deadline = None;
   }
   if surface.cursor_deadline == Some(deadline) && now >= deadline && !held {
     surface.cursor_visible = false;
@@ -915,17 +1137,15 @@ mod tests {
       now,
     );
     assert!(surface.visible && !surface.back_visible);
-    let deadline = surface.idle_deadline.unwrap();
-    // Moving over the picture does not keep the transport alive.
+    // Leaving the transport switches immediately, without waiting for idle.
     pointer_moved(
       &mut surface,
       iced::Point::new(550.0, 450.0),
       bounds,
       202.0,
-      now + IDLE,
+      now + Duration::from_millis(50),
     );
-    expire(&mut surface, deadline, now + IDLE, false);
-    assert!(!surface.visible);
+    assert!(!surface.visible && surface.minimal_visible());
     pointer_moved(
       &mut surface,
       iced::Point::new(60.0, 40.0),
@@ -962,7 +1182,7 @@ mod tests {
   fn picture_motion_reveals_cursor_without_revealing_controls() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, now);
+    reconcile_surface(&mut surface, true, false, true, false, now);
     let now = now + IDLE;
     expire(&mut surface, now, now, false);
     let bounds = iced::Size::new(1920.0, 1080.0);
@@ -992,7 +1212,7 @@ mod tests {
       surface.cursor_visible,
       "motion restores the cursor after timeout"
     );
-    reconcile_surface(&mut surface, false, false, true, deadline);
+    reconcile_surface(&mut surface, false, false, true, false, deadline);
     assert!(!surface.cursor_visible);
     assert!(surface.cursor_deadline.is_none());
   }
@@ -1001,27 +1221,142 @@ mod tests {
   fn idle_holds_cancel_old_deadlines_and_exit_clears_feedback() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, now);
+    reconcile_surface(&mut surface, true, false, true, false, now);
     let old = surface.idle_deadline.unwrap();
-    // A menu, pause or drag arriving before the wake must keep controls visible.
-    reconcile_surface(&mut surface, true, true, true, now + IDLE);
+    // A menu or drag arriving before the wake must keep controls visible.
+    reconcile_surface(&mut surface, true, true, true, false, now + IDLE);
     expire(&mut surface, old, now + IDLE, true);
     assert!(surface.visible);
     assert!(surface.idle_deadline.is_none());
-    reconcile_surface(&mut surface, true, false, true, now + IDLE);
+    reconcile_surface(&mut surface, true, false, true, false, now + IDLE);
     expire(&mut surface, old, now + IDLE, false);
     assert!(surface.visible);
     expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
     assert!(!surface.visible);
     surface.feedback = Some(("75%".into(), now + IDLE + IDLE + FEEDBACK));
-    reconcile_surface(&mut surface, true, false, false, now + IDLE + IDLE);
+    reconcile_surface(&mut surface, true, false, false, false, now + IDLE + IDLE);
     assert!(
       !surface.visible,
       "keyboard feedback must not reveal hidden controls"
     );
-    reconcile_surface(&mut surface, false, false, false, now + IDLE + IDLE);
+    reconcile_surface(&mut surface, false, false, false, false, now + IDLE + IDLE);
     assert!(surface.feedback.is_none());
     assert!(surface.idle_deadline.is_none());
+  }
+
+  #[test]
+  fn paused_playback_with_information_and_manual_prompt_can_auto_hide() {
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+      item: jellypilot_mpv::playback::NowPlayingItem {
+        item_id: "episode".into(),
+        title: "Episode".into(),
+        item_type: "Episode".into(),
+        series_id: Some("series".into()),
+        runtime_seconds: Some(60.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".into(),
+        original_language: None,
+      },
+      paused: true,
+      position_seconds: 10.0,
+      duration_seconds: Some(60.0),
+      volume: 75.0,
+      muted: false,
+    });
+    state.playback.view.intro_prompt = Some(jellypilot_mpv::playback_session::IntroPromptView {
+      kind: jellypilot_media_server::IntroSkipKind::Introduction,
+    });
+    state.shell.embedded_player.information_open = true;
+    let now = Instant::now();
+    let hold = held(&state);
+    let surface = &mut state.shell.embedded_player;
+    reconcile_surface(surface, true, hold, true, true, now);
+    expire(surface, now + IDLE, now + IDLE, hold);
+    assert!(!surface.visible && !surface.back_visible);
+    reconcile_surface(surface, true, hold, true, true, now + IDLE);
+    expire(surface, now + IDLE + IDLE, now + IDLE + IDLE, hold);
+    assert!(surface.minimal_visible());
+    assert!(surface.information_open);
+    assert!(state.playback.view.intro_prompt.is_some());
+  }
+
+  #[test]
+  fn leaving_controls_shows_minimal_then_hides_it_without_picture_motion_extending_it() {
+    let now = Instant::now();
+    let bounds = iced::Size::new(1100.0, 900.0);
+    let mut surface = Surface::default();
+    reconcile_surface(&mut surface, true, false, true, false, now);
+    pointer_moved(
+      &mut surface,
+      iced::Point::new(550.0, 800.0),
+      bounds,
+      202.0,
+      now,
+    );
+    let left_at = now + Duration::from_millis(50);
+    pointer_moved(
+      &mut surface,
+      iced::Point::new(550.0, 450.0),
+      bounds,
+      202.0,
+      left_at,
+    );
+    assert!(!surface.visible && !surface.back_visible && surface.minimal_visible());
+
+    pointer_moved(
+      &mut surface,
+      iced::Point::new(600.0, 450.0),
+      bounds,
+      202.0,
+      left_at + IDLE,
+    );
+    expire(&mut surface, left_at + IDLE, left_at + IDLE, false);
+    reconcile_surface(&mut surface, true, false, true, false, left_at + IDLE);
+    assert!(!surface.minimal_visible());
+    assert!(
+      surface.cursor_visible,
+      "picture motion only renews the cursor"
+    );
+  }
+
+  #[test]
+  fn pause_restores_minimal_and_resume_gives_it_a_fresh_timeout() {
+    let now = Instant::now();
+    let mut surface = Surface::default();
+    reconcile_surface(&mut surface, true, false, true, false, now);
+    pointer_left(&mut surface, now);
+    expire(&mut surface, now + IDLE, now + IDLE, false);
+    assert!(!surface.minimal_visible());
+
+    reconcile_surface(&mut surface, true, false, true, true, now + IDLE);
+    expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
+    assert!(surface.minimal_visible(), "pause has no minimal timeout");
+
+    let resumed = now + IDLE + IDLE;
+    reconcile_surface(&mut surface, true, false, true, false, resumed);
+    expire(&mut surface, now + IDLE, resumed, false);
+    assert!(
+      surface.minimal_visible(),
+      "an old wake cannot hide the resumed presentation"
+    );
+    expire(&mut surface, resumed + IDLE, resumed + IDLE, false);
+    reconcile_surface(&mut surface, true, false, true, false, resumed + IDLE);
+    assert!(!surface.minimal_visible());
+  }
+
+  #[test]
+  fn leaving_during_a_hold_switches_to_minimal_when_the_hold_ends() {
+    let now = Instant::now();
+    let mut surface = Surface::default();
+    reconcile_surface(&mut surface, true, true, true, false, now);
+    pointer_left(&mut surface, now);
+    reconcile_surface(&mut surface, true, true, true, false, now);
+    assert!(surface.visible && !surface.minimal_visible());
+    reconcile_surface(&mut surface, true, false, true, false, now + IDLE);
+    assert!(!surface.visible && !surface.back_visible && surface.minimal_visible());
+    expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
+    assert!(!surface.minimal_visible());
   }
 
   #[test]
@@ -1031,6 +1366,7 @@ mod tests {
         item_id: "movie".into(),
         title: "Movie".into(),
         item_type: "Movie".into(),
+        series_id: None,
         runtime_seconds: Some(60.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".into(),
@@ -1049,7 +1385,7 @@ mod tests {
       Some(PlaybackIntent::Seek(15.0))
     ));
     // A refresh or earlier control result still contains the old transport.
-    reconcile_surface(&mut surface, true, false, false, now);
+    reconcile_surface(&mut surface, true, false, false, false, now);
     assert!(matches!(
       adjustment(&mut surface, &playing, true, 5.0, now),
       Some(PlaybackIntent::Seek(20.0))
@@ -1067,7 +1403,7 @@ mod tests {
       adjustment(&mut surface, &playing, false, 5.0, now),
       Some(PlaybackIntent::SetVolume(100.0))
     ));
-    reconcile_surface(&mut surface, true, false, true, now);
+    reconcile_surface(&mut surface, true, false, true, false, now);
     assert!(matches!(
       adjustment(&mut surface, &playing, true, -5.0, now),
       Some(PlaybackIntent::Seek(5.0))
@@ -1086,7 +1422,7 @@ mod tests {
       information_open: true,
       ..Surface::default()
     };
-    reconcile_surface(&mut surface, true, true, true, now);
+    reconcile_surface(&mut surface, true, true, true, false, now);
     reconcile_observation(&mut surface, true, 0, now);
     let old = surface.observation.unwrap().token;
     let sample = || {
@@ -1128,7 +1464,7 @@ mod tests {
     );
     settle_information(&mut surface, current, sample());
     assert!(!surface.information_failed);
-    reconcile_surface(&mut surface, false, false, false, now + IDLE);
+    reconcile_surface(&mut surface, false, false, false, false, now + IDLE);
     settle_information(&mut surface, current, sample());
     assert!(surface.information.is_none());
     assert!(
@@ -1168,5 +1504,38 @@ mod return_tests {
     surface.returning = true;
     observe_replacement(&mut surface, 2);
     assert!(!stop_return(&mut surface, Some(StopCompletion::Succeeded)));
+  }
+}
+
+#[cfg(test)]
+mod marker_tests {
+  use super::*;
+
+  #[test]
+  fn chapter_demand_is_issued_once_per_generation_and_settles_on_reply() {
+    let mut surface = Surface::default();
+    reconcile_chapters(&mut surface, true, 7);
+    assert_eq!(surface.chapter_demand, Some(7));
+    // A second reconcile while the read is in flight must not reissue.
+    reconcile_chapters(&mut surface, true, 7);
+    assert_eq!(surface.chapter_demand, Some(7));
+
+    surface.chapter_demand = None;
+    surface.chapters = Some(Arc::new(Vec::new()));
+    reconcile_chapters(&mut surface, true, 7);
+    assert!(
+      surface.chapter_demand.is_none(),
+      "an answered generation must never be queried again"
+    );
+
+    // A replacement clears the cache and re-arms the demand for the new media.
+    observe_replacement(&mut surface, 8);
+    assert!(surface.chapters.is_none() && surface.chapter_times.is_empty());
+    reconcile_chapters(&mut surface, true, 8);
+    assert_eq!(surface.chapter_demand, Some(8));
+
+    // Hidden or replaced media drops the demand without fetching.
+    reconcile_chapters(&mut surface, false, 8);
+    assert!(surface.chapter_demand.is_none());
   }
 }

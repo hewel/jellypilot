@@ -708,16 +708,11 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         ));
       }
       if settings_after.intro_mode != settings_before.intro_mode {
-        let mode = state.kernel.intro_availability().mode;
-        tasks.push(
-          playback::apply_playback_input(
-            &mut state.playback,
-            &mut state.kernel,
-            state.shell.quit_requested,
-            PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
-          )
-          .task,
-        );
+        tasks.push(playback::refresh_intro_mode(
+          &mut state.playback,
+          &mut state.kernel,
+          state.shell.quit_requested,
+        ));
       }
       if settings_after.playback_target_name != settings_before.playback_target_name {
         tasks.push(playback::refinalize_playback_target(
@@ -747,6 +742,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
             | super::message::PlaybackMessage::AudioTrackSelected(_)
             | super::message::PlaybackMessage::SubtitleTrackSelected(_)
             | super::message::PlaybackMessage::QueueItemSelected(_)
+            | super::message::PlaybackMessage::IntroModeChanged(_)
         )
       {
         return Task::none();
@@ -1440,6 +1436,7 @@ mod tests {
         item_id: String::new(),
         title: "Current episode".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(1800.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
@@ -1863,6 +1860,7 @@ mod tests {
             item_id: "another".to_owned(),
             title: "Another movie".to_owned(),
             item_type: "Movie".to_owned(),
+            series_id: None,
             runtime_seconds: Some(2400.0),
             start_position_seconds: 0.0,
             play_method: "DirectPlay".to_owned(),
@@ -2377,6 +2375,7 @@ mod tests {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),
@@ -2476,7 +2475,7 @@ mod tests {
       now,
     );
     let (prompt_id, command) = controller_effect(effects.effects);
-    assert!(matches!(command, ControllerCommand::ShowText { .. }));
+    assert!(matches!(command, ControllerCommand::IntroPrompt { .. }));
     state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
@@ -2515,53 +2514,69 @@ mod tests {
     assert!(state.kernel.active_toast.is_none());
   }
 
-  #[test]
-  fn settings_intro_mode_threads_into_playback_availability() {
-    let (settings, _file) = isolated_settings("intro-availability");
-    let mut state = test_state();
-    state.kernel.settings = settings;
-    for (configured, expected) in [
-      (
-        jellypilot_core::config::IntroMode::Automatic,
-        IntroSkipMode::Automatic,
-      ),
-      (
-        jellypilot_core::config::IntroMode::Manual,
-        IntroSkipMode::Manual,
-      ),
-      (jellypilot_core::config::IntroMode::Off, IntroSkipMode::Off),
-    ] {
-      state
-        .kernel
-        .settings
-        .set_intro_mode(configured)
-        .expect("isolated settings should save");
-      let availability = state.kernel.intro_availability();
-      assert_eq!(availability.mode, expected);
-      assert!(!availability.skipper_available);
-    }
-  }
+  #[tokio::test]
+  async fn intro_mode_mutation_updates_the_active_playback_session() {
+    use iced::futures::StreamExt;
 
-  #[test]
-  fn intro_mode_mutation_updates_the_active_playback_session() {
-    let (settings, _file) = isolated_settings("live-intro-mode");
+    let (mut settings, _file) = isolated_settings("live-intro-mode");
+    settings
+      .set_intro_mode(jellypilot_core::config::IntroMode::Manual)
+      .unwrap();
     let mut state = active_intro_prompt_state();
     state.kernel.settings = settings;
     state.settings.view =
       crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
 
-    drop(update(
+    let task = update(
       &mut state,
       Message::Settings(SettingsMessage::IntroModeSelected(
-        jellypilot_core::config::IntroMode::Off,
+        jellypilot_core::config::IntroMode::Automatic,
       )),
-    ));
-
-    assert_eq!(
-      state.kernel.settings.snapshot().intro_mode(),
-      jellypilot_core::config::IntroMode::Off
     );
     assert!(state.playback.view.intro_prompt.is_none());
+    // Settle the prompt-clear command before asking the serialized controller
+    // for its next observation.
+    if let Some(mut actions) = iced_runtime::task::into_stream(task) {
+      while let Some(action) = actions.next().await {
+        if let iced_runtime::Action::Output(message) = action {
+          drop(update(&mut state, message));
+        }
+      }
+    }
+
+    // The re-fed mode governs the next observation: inside the fetched range,
+    // Automatic issues the skip seek instead of presenting the manual prompt.
+    let now = Instant::now();
+    let (refresh_id, _) = controller_effect(
+      state
+        .playback
+        .session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+        .effects,
+    );
+    let effects = state.playback.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(15.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      now,
+    );
+    let (_, command) = controller_effect(effects.effects);
+    assert!(
+      matches!(command, ControllerCommand::Seek(target) if target == 30.0),
+      "the re-fed Automatic mode must drive the skip seek"
+    );
+    assert_eq!(
+      state.kernel.settings.snapshot().intro_mode(),
+      jellypilot_core::config::IntroMode::Automatic
+    );
   }
 
   #[test]

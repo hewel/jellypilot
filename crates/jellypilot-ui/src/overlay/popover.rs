@@ -33,6 +33,9 @@ pub struct PopoverOptions {
     pub match_trigger_width: bool,
     pub close_on_escape: bool,
     pub close_on_outside_press: bool,
+    /// Consume the outside press that dismisses the panel so it cannot also
+    /// activate whatever sits underneath (e.g. the video's pause toggle).
+    pub consume_outside_press: bool,
     pub clamp_to_viewport: bool,
     pub flip_when_overflow: bool,
     pub appearance: PopoverAppearance,
@@ -48,6 +51,7 @@ impl Default for PopoverOptions {
             match_trigger_width: false,
             close_on_escape: true,
             close_on_outside_press: true,
+            consume_outside_press: false,
             clamp_to_viewport: true,
             flip_when_overflow: true,
             appearance: PopoverAppearance::Default,
@@ -371,6 +375,9 @@ where
             ) == OutsidePressAction::PublishDismissal
         {
             shell.publish(self.on_dismiss.clone());
+            if self.options.consume_outside_press {
+                shell.capture_event();
+            }
             return;
         }
 
@@ -517,6 +524,57 @@ mod tests {
     use iced::{Event, Point, Rectangle, Size};
 
     use super::{outside_press_action, primary_press_position, OutsidePressAction, PopoverOptions};
+
+    #[test]
+    fn consuming_outside_dismissal_does_not_activate_the_underlying_surface() {
+        use iced::advanced::renderer::{Headless, Settings};
+        use iced::widget::{container, mouse_area, space, stack, text};
+        use iced::Fill;
+        use iced_runtime::user_interface::{Cache, UserInterface};
+
+        let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            Settings::default(),
+            Some("tiny-skia"),
+        ))
+        .expect("software renderer");
+        let bounds = Size::new(400.0, 300.0);
+        for consume in [false, true] {
+            let view = stack![
+                mouse_area(container(space::horizontal()).width(Fill).height(Fill))
+                    .on_press("underlying"),
+                super::popover(
+                    container(text("Information")).width(100).height(40),
+                    container(text("Media properties")).width(140).height(40),
+                    true,
+                    PopoverOptions {
+                        consume_outside_press: consume,
+                        ..PopoverOptions::default()
+                    },
+                    "dismiss",
+                ),
+            ]
+            .width(Fill)
+            .height(Fill);
+            let mut ui = UserInterface::build(view, bounds, Cache::new(), &mut renderer);
+            let mut messages = iced::advanced::shell::Bus::new();
+            ui.update(
+                &iced::window::Headless,
+                &iced::advanced::shell::Waker::noop(),
+                &[Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left,
+                ))],
+                mouse::Cursor::Available(Point::new(300.0, 200.0)),
+                &mut renderer,
+                &mut messages,
+            );
+            let messages: Vec<_> = messages.drain().map(|(message, _)| message).collect();
+            if consume {
+                assert_eq!(messages, ["dismiss"]);
+            } else {
+                assert_eq!(messages, ["dismiss", "underlying"]);
+            }
+        }
+    }
 
     #[test]
     fn open_popover_hides_trigger_hint_but_preserves_content_hint() {

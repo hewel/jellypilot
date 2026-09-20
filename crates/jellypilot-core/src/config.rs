@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browse_model::BrowsePreferences;
 use crate::locale::LanguagePreference;
+use crate::watchlist::ProfileScope;
 
 #[cfg(feature = "native")]
 pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
@@ -17,13 +18,14 @@ const CONFIG_FILE: &str = "config.json";
 /// Revision 1 applies the Linux Embedded MPV default to files that still record External.
 const CURRENT_SETTINGS_REVISION: u32 = 1;
 
+/// Global Intro Skipper behavior (ADR 0045): Automatic skips detected ranges,
+/// Manual presents the skip action. The retired Off value migrates to Manual.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IntroMode {
     #[default]
     Automatic,
     Manual,
-    Off,
 }
 
 impl<'de> Deserialize<'de> for IntroMode {
@@ -34,11 +36,24 @@ impl<'de> Deserialize<'de> for IntroMode {
         let value = serde_json::Value::deserialize(deserializer)?;
         Ok(match value.as_str() {
             Some(mode) if mode.eq_ignore_ascii_case("manual") => Self::Manual,
-            Some(mode) if mode.eq_ignore_ascii_case("off") => Self::Off,
+            // Legacy "off" migrates to Manual: former Off users gain the manual
+            // action but are never opted into automatic skipping.
+            Some(mode) if mode.eq_ignore_ascii_case("off") => Self::Manual,
             _ => Self::Automatic,
         })
     }
 }
+/// A profile-scoped per-series Intro Skipper choice (ADR 0045). A record exists
+/// only while the choice differs from the global setting; selecting the global
+/// value clears it, and a global change clears every record that now matches.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesIntroPreference {
+    scope: ProfileScope,
+    series_id: String,
+    mode: IntroMode,
+}
+
 /// Preferred color scheme: follow the OS, or pin the dark or light theme.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -284,6 +299,11 @@ pub struct Settings {
     auto_login: bool,
     #[serde(default)]
     intro_mode: IntroMode,
+    /// Profile-scoped per-series Intro Skipper choices (ADR 0045). Records
+    /// exist only while a choice differs from the global `intro_mode`; a
+    /// global change clears every record that now matches, across all scopes.
+    #[serde(default, deserialize_with = "deserialize_series_intro_modes")]
+    series_intro_modes: Vec<SeriesIntroPreference>,
     #[serde(default)]
     theme_mode: ThemeMode,
     #[serde(default)]
@@ -350,6 +370,7 @@ impl Default for Settings {
             username: String::new(),
             auto_login: default_auto_login(),
             intro_mode: IntroMode::Automatic,
+            series_intro_modes: Vec::new(),
             theme_mode: ThemeMode::System,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
@@ -465,6 +486,16 @@ impl Settings {
 
     pub const fn browse_filters(&self) -> BrowseFilterSettings {
         self.library_filters
+    }
+
+    /// The effective Intro Skipper mode for a series in a profile scope: the
+    /// recorded override, or the global setting when none is recorded.
+    #[must_use]
+    pub fn series_intro_mode(&self, series_id: &str, scope: &ProfileScope) -> IntroMode {
+        self.series_intro_modes
+            .iter()
+            .find(|record| &record.scope == scope && record.series_id == series_id)
+            .map_or(self.intro_mode, |record| record.mode)
     }
 }
 
@@ -598,9 +629,15 @@ impl SettingsStore {
         })
     }
 
+    /// Sets the global Intro Skipper mode and clears every per-series record
+    /// that now matches it — across all profile scopes — in the same atomic
+    /// write, so overrides pinned to the new global never resurrect.
     pub fn set_intro_mode(&mut self, mode: IntroMode) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.intro_mode = mode;
+            settings
+                .series_intro_modes
+                .retain(|record| record.mode != mode);
             Ok(())
         })
     }
@@ -631,6 +668,41 @@ impl SettingsStore {
         let changed = self.settings.ui_language != preference;
         self.settings.ui_language = preference;
         Ok(changed)
+    }
+
+    /// Persists a per-series Intro Skipper choice for a profile scope.
+    /// Selecting the global value clears the series' record instead of pinning
+    /// a redundant one. Returns whether the effective mode for the series
+    /// changed; a failed write leaves the live snapshot unchanged.
+    pub fn set_series_intro_mode(
+        &mut self,
+        series_id: &str,
+        scope: &ProfileScope,
+        mode: IntroMode,
+    ) -> Result<bool, SettingsMutationError> {
+        if series_id.trim().is_empty() {
+            return Err(ConfigError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "series intro mode requires a series id",
+            ))
+            .into());
+        }
+        self.update(|settings| {
+            if settings.series_intro_mode(series_id, scope) == mode {
+                return Ok(());
+            }
+            settings
+                .series_intro_modes
+                .retain(|record| !(&record.scope == scope && record.series_id == series_id));
+            if mode != settings.intro_mode {
+                settings.series_intro_modes.push(SeriesIntroPreference {
+                    scope: scope.clone(),
+                    series_id: series_id.to_owned(),
+                    mode,
+                });
+            }
+            Ok(())
+        })
     }
 
     pub fn set_auto_login(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
@@ -1004,6 +1076,23 @@ where
     Ok(value.as_bool().unwrap_or_default())
 }
 
+/// Leniently decodes per-series intro records: entries with an invalid scope,
+/// blank series id, or unknown mode are dropped rather than failing the whole
+/// settings file.
+fn deserialize_series_intro_modes<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SeriesIntroPreference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<SeriesIntroPreference>(value).ok())
+        .filter(|record| !record.series_id.trim().is_empty())
+        .collect())
+}
+
 fn deserialize_reduced_motion<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1075,7 +1164,9 @@ fn read_from(path: &Path) -> Result<Settings, ConfigError> {
 fn read_and_migrate(path: &Path) -> Result<(Settings, bool), ConfigError> {
     let contents = fs::read_to_string(path)?;
     let settings = serde_json::from_str(&contents)?;
-    Ok(migrate_settings(settings))
+    let (mut settings, migrated) = migrate_settings(settings);
+    let normalized = normalize_series_intro_modes(&mut settings);
+    Ok((settings, migrated || normalized))
 }
 
 fn migrate_settings(mut settings: Settings) -> (Settings, bool) {
@@ -1088,6 +1179,28 @@ fn migrate_settings(mut settings: Settings) -> (Settings, bool) {
     }
     settings.settings_revision = CURRENT_SETTINGS_REVISION;
     (settings, true)
+}
+
+/// Drops duplicate and global-matching per-series records so a stale file
+/// cannot resurrect an override the global setting already covers. Returns
+/// whether the settings changed.
+fn normalize_series_intro_modes(settings: &mut Settings) -> bool {
+    let records = &mut settings.series_intro_modes;
+    let original_len = records.len();
+    let mut kept = 0;
+    for index in 0..original_len {
+        let record = &records[index];
+        if record.mode != settings.intro_mode
+            && !records[..kept].iter().any(|existing| {
+                existing.scope == record.scope && existing.series_id == record.series_id
+            })
+        {
+            records.swap(kept, index);
+            kept += 1;
+        }
+    }
+    records.truncate(kept);
+    kept != original_len
 }
 
 fn save_to(path: &Path, settings: &Settings) -> Result<(), ConfigError> {
@@ -1273,6 +1386,7 @@ mod tests {
             username: "alice".to_owned(),
             auto_login: false,
             intro_mode: IntroMode::Manual,
+            series_intro_modes: Vec::new(),
             theme_mode: ThemeMode::Dark,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
@@ -1767,6 +1881,20 @@ mod tests {
     }
 
     #[test]
+    fn legacy_off_intro_mode_migrates_to_manual() {
+        let path = test_path("legacy-off-intro-mode");
+        let _ = fs::remove_file(&path);
+        fs::write(
+      &path,
+      r#"{"remember":true,"server_url":"https://media.example.com","provider":"jellyfin","username":"alice","intro_mode":"off"}"#,
+    )
+    .unwrap();
+
+        assert_eq!(load_from(&path).unwrap().intro_mode(), IntroMode::Manual);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn malformed_start_minimized_defaults_without_discarding_login_fields() {
         let path = test_path("malformed-start-minimized");
         let _ = fs::remove_file(&path);
@@ -1838,9 +1966,9 @@ mod tests {
         external.playback_target_name = Some("Bedroom".to_owned());
         save_to(&path, &external).unwrap();
 
-        assert!(store.set_intro_mode(IntroMode::Off).unwrap());
+        assert!(store.set_intro_mode(IntroMode::Automatic).unwrap());
 
-        external.intro_mode = IntroMode::Off;
+        external.intro_mode = IntroMode::Automatic;
         assert_eq!(load_from(&path).unwrap(), external);
         assert_eq!(store.snapshot(), &external);
         fs::remove_file(path).unwrap();
@@ -1896,10 +2024,167 @@ mod tests {
         fs::create_dir(&temporary).unwrap();
         let mut store = store_at(path.clone(), original.clone());
 
-        assert!(store.set_intro_mode(IntroMode::Off).is_err());
+        assert!(store.set_intro_mode(IntroMode::Automatic).is_err());
         assert_eq!(store.snapshot(), &original);
         assert_eq!(load_from(&path).unwrap(), original);
         fs::remove_dir(temporary).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    fn test_scope(user_id: &str) -> ProfileScope {
+        ProfileScope::new(
+            jellypilot_media_server::MediaServerProvider::Jellyfin,
+            "https://media.example.com",
+            user_id,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn series_intro_mode_persists_per_scope_and_clears_on_global_choice() {
+        let path = test_path("series-intro-persist");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+        let scope_a = test_scope("user-a");
+        let scope_b = test_scope("user-b");
+
+        assert!(store
+            .set_series_intro_mode("series-1", &scope_a, IntroMode::Manual)
+            .unwrap());
+        assert!(!store
+            .set_series_intro_mode("series-1", &scope_b, IntroMode::Automatic)
+            .unwrap());
+
+        let reloaded = load_from(&path).unwrap();
+        assert_eq!(
+            reloaded.series_intro_mode("series-1", &scope_a),
+            IntroMode::Manual
+        );
+        // The scope-b record matched the global and was never pinned.
+        assert_eq!(
+            reloaded.series_intro_mode("series-1", &scope_b),
+            IntroMode::Automatic
+        );
+        assert_eq!(
+            reloaded.series_intro_mode("other-series", &scope_a),
+            IntroMode::Automatic
+        );
+
+        // Selecting the global value clears the override.
+        assert!(store
+            .set_series_intro_mode("series-1", &scope_a, IntroMode::Automatic)
+            .unwrap());
+        assert_eq!(
+            load_from(&path)
+                .unwrap()
+                .series_intro_mode("series-1", &scope_a),
+            IntroMode::Automatic
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn global_intro_change_normalizes_every_scope_atomically() {
+        let path = test_path("series-intro-global-normalize");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+        let scope_a = test_scope("user-a");
+        let scope_b = test_scope("user-b");
+        store
+            .set_series_intro_mode("series-1", &scope_a, IntroMode::Manual)
+            .unwrap();
+        store
+            .set_series_intro_mode("series-2", &scope_b, IntroMode::Manual)
+            .unwrap();
+
+        // Global Manual clears both scopes' Manual records in the same write.
+        assert!(store.set_intro_mode(IntroMode::Manual).unwrap());
+        let reloaded = load_from(&path).unwrap();
+        assert_eq!(
+            reloaded.series_intro_mode("series-1", &scope_a),
+            IntroMode::Manual
+        );
+        assert_eq!(
+            reloaded.series_intro_mode("series-2", &scope_b),
+            IntroMode::Manual
+        );
+
+        // Back to Automatic: no stale record resurrects an override.
+        assert!(store.set_intro_mode(IntroMode::Automatic).unwrap());
+        let reloaded = load_from(&path).unwrap();
+        assert_eq!(
+            reloaded.series_intro_mode("series-1", &scope_a),
+            IntroMode::Automatic
+        );
+        assert_eq!(
+            reloaded.series_intro_mode("series-2", &scope_b),
+            IntroMode::Automatic
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_global_write_preserves_settings_and_overrides() {
+        let path = test_path("series-intro-atomic-failure");
+        let temporary = temporary_path(&path);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&temporary);
+        let mut store = store_at(path.clone(), Settings::default());
+        let scope = test_scope("user-a");
+        store
+            .set_series_intro_mode("series-1", &scope, IntroMode::Manual)
+            .unwrap();
+        let original = store.snapshot().clone();
+        fs::create_dir(&temporary).unwrap();
+
+        assert!(store.set_intro_mode(IntroMode::Manual).is_err());
+        assert_eq!(store.snapshot(), &original);
+        let reloaded = load_from(&path).unwrap();
+        assert_eq!(reloaded.intro_mode(), IntroMode::Automatic);
+        assert_eq!(
+            reloaded.series_intro_mode("series-1", &scope),
+            IntroMode::Manual
+        );
+        fs::remove_dir(temporary).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn loading_normalizes_stale_series_records() {
+        let path = test_path("series-intro-load-normalize");
+        let _ = fs::remove_file(&path);
+        let scope = test_scope("user-a");
+        let settings = Settings {
+            series_intro_modes: vec![
+                SeriesIntroPreference {
+                    scope: scope.clone(),
+                    series_id: "series-1".to_owned(),
+                    mode: IntroMode::Automatic, // matches global: stale
+                },
+                SeriesIntroPreference {
+                    scope: scope.clone(),
+                    series_id: "series-2".to_owned(),
+                    mode: IntroMode::Manual,
+                },
+                SeriesIntroPreference {
+                    scope,
+                    series_id: "series-2".to_owned(),
+                    mode: IntroMode::Automatic, // duplicate: dropped
+                },
+            ],
+            ..Settings::default()
+        };
+        save_to(&path, &settings).unwrap();
+
+        let loaded = load_from(&path).unwrap();
+        assert_eq!(
+            loaded.series_intro_mode("series-1", &test_scope("user-a")),
+            IntroMode::Automatic
+        );
+        assert_eq!(
+            loaded.series_intro_mode("series-2", &test_scope("user-a")),
+            IntroMode::Manual
+        );
         fs::remove_file(path).unwrap();
     }
 }

@@ -21,6 +21,15 @@ pub struct StatisticsReader {
   mpv: MpvClient,
 }
 
+/// One real chapter from the active file's `chapter-list` property.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaybackChapter {
+  /// Finite, non-negative chapter start time in seconds.
+  pub time_seconds: f64,
+  /// File-supplied title, absent for unnamed chapters.
+  pub title: Option<String>,
+}
+
 /// A coherent statistics sample for one playing file.
 ///
 /// `playlist_entry_id` identifies the MPV playlist entry the sample describes.
@@ -212,6 +221,26 @@ impl StatisticsReader {
       return Err(MpvError::MediaChanged);
     }
     Ok(seekable_ranges(&decode_json(Some(value))))
+  }
+
+  /// Read real chapter starts and optional titles, sorted by start time.
+  ///
+  /// Unavailable metadata yields no chapters; malformed timestamps are
+  /// omitted rather than replaced with invented boundaries. Like other
+  /// samples, the result belongs to one verified playing playlist entry.
+  ///
+  /// # Errors
+  ///
+  /// Returns transport failures or [`MpvError::MediaChanged`] when playback
+  /// is replaced during the query.
+  pub async fn chapters(&self) -> Result<Vec<PlaybackChapter>, MpvError> {
+    let before = self.playing_entry_id().await?;
+    let value = property(&self.mpv, "chapter-list").await?;
+    let after = self.playing_entry_id().await?;
+    if before != after {
+      return Err(MpvError::MediaChanged);
+    }
+    Ok(chapters(decode_json(value)))
   }
 
   /// Identity of the playlist entry MPV marks `playing`, from one `playlist`
@@ -500,6 +529,31 @@ fn json_bool(map: &serde_json::Value, key: &str) -> Option<bool> {
   map.get(key).and_then(serde_json::Value::as_bool)
 }
 
+fn chapters(value: Option<serde_json::Value>) -> Vec<PlaybackChapter> {
+  let Some(serde_json::Value::Array(entries)) = value else {
+    return Vec::new();
+  };
+  let mut chapters: Vec<_> = entries
+    .into_iter()
+    .filter_map(|mut entry| {
+      let time_seconds = json_f64(&entry, "time").filter(|time| *time >= 0.0)?;
+      let title = entry
+        .get_mut("title")
+        .map(serde_json::Value::take)
+        .and_then(|value| match value {
+          serde_json::Value::String(title) if !title.trim().is_empty() => Some(title),
+          _ => None,
+        });
+      Some(PlaybackChapter {
+        time_seconds,
+        title,
+      })
+    })
+    .collect();
+  chapters.sort_by(|left, right| left.time_seconds.total_cmp(&right.time_seconds));
+  chapters
+}
+
 /// `seekable-ranges` entries with finite `start`/`end`, sorted by start.
 /// Overlapping ranges are kept as reported; merging them would invent
 /// contiguous progress MPV did not confirm.
@@ -757,6 +811,69 @@ mod tests {
       "expected MediaChanged, got {result:?}"
     );
 
+    drop(reader);
+    peer.await.expect("peer task should finish");
+  }
+
+  #[tokio::test]
+  async fn chapters_preserve_real_boundaries_and_optional_titles() {
+    let (reader, peer) = spawn_peer(
+      HashMap::from([(
+        "chapter-list".to_owned(),
+        serde_json::json!([
+          {"time": 120.5, "title": "The return"},
+          {"time": 0.0, "title": "Opening"},
+          {"time": 45.0},
+          {"time": 90.0, "title": "  "},
+          {"title": "Missing timestamp"},
+          {"time": -1.0, "title": "Invalid"},
+          {"time": "60", "title": "Invalid"}
+        ]),
+      )]),
+      VecDeque::from([playing_playlist(42)]),
+    )
+    .await;
+
+    assert_eq!(
+      reader.chapters().await.unwrap(),
+      vec![
+        PlaybackChapter {
+          time_seconds: 0.0,
+          title: Some("Opening".to_owned())
+        },
+        PlaybackChapter {
+          time_seconds: 45.0,
+          title: None
+        },
+        PlaybackChapter {
+          time_seconds: 90.0,
+          title: None
+        },
+        PlaybackChapter {
+          time_seconds: 120.5,
+          title: Some("The return".to_owned())
+        },
+      ]
+    );
+    drop(reader);
+    peer.await.expect("peer task should finish");
+  }
+
+  #[tokio::test]
+  async fn chapters_reject_media_replaced_during_query() {
+    let (reader, peer) = spawn_peer(
+      HashMap::from([(
+        "chapter-list".to_owned(),
+        serde_json::json!([{"time": 10.0, "title": "Old item"}]),
+      )]),
+      VecDeque::from([playing_playlist(42), playing_playlist(43)]),
+    )
+    .await;
+
+    assert!(matches!(
+      reader.chapters().await,
+      Err(MpvError::MediaChanged)
+    ));
     drop(reader);
     peer.await.expect("peer task should finish");
   }

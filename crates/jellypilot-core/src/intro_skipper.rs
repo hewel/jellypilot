@@ -1,10 +1,15 @@
 //! Stateful Intro Skipper decisions, independent of playback command execution.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jellypilot_media_server::{IntroSkipKind, IntroSkipRange};
 
 const PROMPT_DURATION_MS: u32 = 3_000;
+
+/// Whole-range prompts are retired by the policy, not the presenter. MPV's
+/// show-text duration is a signed 32-bit millisecond value.
+const PERSISTENT_PROMPT_DURATION_MS: u32 = i32::MAX as u32;
 
 /// Intro Skipper behavior for playback observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +17,18 @@ pub enum IntroSkipMode {
     Automatic,
     Manual,
     Off,
+}
+
+/// How a presented manual prompt ages and rearms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualPromptPolicy {
+    /// Legacy contract: a prompt expires three seconds after presentation and
+    /// each range offers it at most once per session.
+    Timed,
+    /// Desktop contract (ADR 0045): a prompt stays live for the whole
+    /// continuous stay inside its range. Dismissal and use suppress only the
+    /// current stay; leaving the range rearms it.
+    WholeRange,
 }
 
 /// Opaque correlation for a single prompt presentation attempt.
@@ -38,8 +55,14 @@ pub enum IntroSkipAction {
 
 struct RangeState {
     range: IntroSkipRange,
+    /// The automatic attempt was issued; seeking back never rearms it.
     consumed: bool,
+    /// Timed policy: the one prompt offer per session was already made.
     notified: bool,
+    /// WholeRange policy: dismissal or use suppresses the current stay only.
+    suppressed: bool,
+    /// The most recent observation was inside this range.
+    inside: bool,
 }
 
 struct PendingPrompt {
@@ -49,14 +72,19 @@ struct PendingPrompt {
 
 struct ActivePrompt {
     range: usize,
-    expires_at: Instant,
+    /// Timed policy deadline; `None` while a whole-range stay keeps the
+    /// prompt alive.
+    expires_at: Option<Instant>,
 }
 
 /// Owns range consumption and the pending/live manual prompt lifecycle.
 /// Create a fresh policy for each playback session; controller epochs stay with the caller.
 pub struct IntroSkipper {
     mode: IntroSkipMode,
+    manual_policy: ManualPromptPolicy,
     ranges: Vec<RangeState>,
+    /// The real fetched ranges behind `ranges`; never synthesized.
+    intro_ranges: Arc<[IntroSkipRange]>,
     pending_prompt: Option<PendingPrompt>,
     active_prompt: Option<ActivePrompt>,
     prompt_sequence: u64,
@@ -69,10 +97,18 @@ impl Default for IntroSkipper {
 }
 
 impl IntroSkipper {
+    /// Legacy policy: timed prompts, preserved for callers that have not
+    /// migrated to the desktop contract.
     pub fn new(mode: IntroSkipMode) -> Self {
+        Self::with_manual_policy(mode, ManualPromptPolicy::Timed)
+    }
+
+    pub fn with_manual_policy(mode: IntroSkipMode, manual_policy: ManualPromptPolicy) -> Self {
         Self {
             mode,
+            manual_policy,
             ranges: Vec::new(),
+            intro_ranges: Arc::from([]),
             pending_prompt: None,
             active_prompt: None,
             prompt_sequence: 0,
@@ -83,13 +119,24 @@ impl IntroSkipper {
         self.mode
     }
 
+    /// The real fetched ranges accepted by `replace_ranges`; empty while Off
+    /// or before a fetch settles.
+    pub fn ranges(&self) -> Arc<[IntroSkipRange]> {
+        Arc::clone(&self.intro_ranges)
+    }
+
     /// Off forgets fetched ranges. Re-enabling does not restore or refetch them.
     pub fn set_mode(&mut self, mode: IntroSkipMode) {
+        if mode == IntroSkipMode::Off
+            || (self.manual_policy == ManualPromptPolicy::WholeRange && self.mode != mode)
+        {
+            self.active_prompt = None;
+            self.pending_prompt = None;
+        }
         self.mode = mode;
         if mode == IntroSkipMode::Off {
             self.ranges.clear();
-            self.dismiss_prompt();
-            self.pending_prompt = None;
+            self.intro_ranges = Arc::from([]);
         }
     }
 
@@ -97,18 +144,22 @@ impl IntroSkipper {
     pub fn replace_ranges(&mut self, ranges: Vec<IntroSkipRange>) {
         self.dismiss_prompt();
         self.pending_prompt = None;
-        self.ranges = if self.mode == IntroSkipMode::Off {
-            Vec::new()
+        if self.mode == IntroSkipMode::Off {
+            self.ranges = Vec::new();
+            self.intro_ranges = Arc::from([]);
         } else {
-            ranges
+            self.intro_ranges = Arc::from(ranges.as_slice());
+            self.ranges = ranges
                 .into_iter()
                 .map(|range| RangeState {
                     range,
                     consumed: false,
                     notified: false,
+                    suppressed: false,
+                    inside: false,
                 })
-                .collect()
-        };
+                .collect();
+        }
     }
 
     /// Consume an eligible attempt at issuance, regardless of eventual seek success.
@@ -123,34 +174,23 @@ impl IntroSkipper {
         if self.mode == IntroSkipMode::Off || !position.is_finite() {
             return None;
         }
-        let index = self.ranges.iter().position(|state| {
-            !state.consumed
-                && position >= state.range.start_seconds
-                && position < state.range.end_seconds
-        })?;
-        let state = &mut self.ranges[index];
+        self.update_stays(position);
+        let index = self.eligible_range(position, input)?;
         if matches!(input, IntroSkipInput::ManualSkip) {
-            if self.mode != IntroSkipMode::Manual
-                || self
-                    .active_prompt
-                    .as_ref()
-                    .is_none_or(|prompt| prompt.range != index)
-            {
-                return None;
-            }
-            state.consumed = true;
-            state.notified = true;
-            self.active_prompt = None;
-            return Some(IntroSkipAction::ManualSkip(state.range.end_seconds));
+            return self.manual_skip(index);
         }
         match self.mode {
             IntroSkipMode::Automatic => {
+                let state = &mut self.ranges[index];
                 state.consumed = true;
                 state.notified = true;
                 Some(IntroSkipAction::Seek(state.range.end_seconds))
             }
-            IntroSkipMode::Manual if !state.notified => {
-                state.notified = true;
+            IntroSkipMode::Manual => {
+                if self.manual_policy == ManualPromptPolicy::Timed && self.ranges[index].notified {
+                    return None;
+                }
+                self.ranges[index].notified = true;
                 self.prompt_sequence = self.prompt_sequence.wrapping_add(1);
                 let token = IntroPromptToken(self.prompt_sequence);
                 self.pending_prompt = Some(PendingPrompt {
@@ -159,10 +199,105 @@ impl IntroSkipper {
                 });
                 Some(IntroSkipAction::ShowPrompt {
                     token,
-                    duration_ms: PROMPT_DURATION_MS,
+                    duration_ms: match self.manual_policy {
+                        ManualPromptPolicy::Timed => PROMPT_DURATION_MS,
+                        ManualPromptPolicy::WholeRange => PERSISTENT_PROMPT_DURATION_MS,
+                    },
                 })
             }
-            IntroSkipMode::Manual | IntroSkipMode::Off => None,
+            IntroSkipMode::Off => None,
+        }
+    }
+
+    /// The range a position observation or manual skip applies to.
+    fn eligible_range(&self, position: f64, input: IntroSkipInput) -> Option<usize> {
+        let contains = |state: &RangeState| {
+            position >= state.range.start_seconds && position < state.range.end_seconds
+        };
+        if matches!(input, IntroSkipInput::ManualSkip) {
+            if self.manual_policy == ManualPromptPolicy::WholeRange {
+                return self.active_prompt.as_ref().and_then(|prompt| {
+                    contains(&self.ranges[prompt.range]).then_some(prompt.range)
+                });
+            }
+            return self
+                .ranges
+                .iter()
+                .position(|state| !state.consumed && contains(state));
+        }
+        if self.mode == IntroSkipMode::Manual
+            && self.manual_policy == ManualPromptPolicy::WholeRange
+        {
+            // One prompt at a time; stay-scoped suppression does not block
+            // another overlapping range or consume its automatic attempt.
+            if self.pending_prompt.is_some() || self.active_prompt.is_some() {
+                return None;
+            }
+            return self
+                .ranges
+                .iter()
+                .position(|state| !state.suppressed && contains(state));
+        }
+        self.ranges
+            .iter()
+            .position(|state| !state.consumed && contains(state))
+    }
+
+    fn manual_skip(&mut self, index: usize) -> Option<IntroSkipAction> {
+        if self.mode != IntroSkipMode::Manual
+            || self
+                .active_prompt
+                .as_ref()
+                .is_none_or(|prompt| prompt.range != index)
+        {
+            return None;
+        }
+        let state = &mut self.ranges[index];
+        match self.manual_policy {
+            // Legacy: using the prompt consumes the range for the session.
+            ManualPromptPolicy::Timed => {
+                state.consumed = true;
+                state.notified = true;
+            }
+            // Desktop: the skip suppresses only the current stay; the range
+            // rearms on re-entry and keeps its automatic attempt.
+            ManualPromptPolicy::WholeRange => state.suppressed = true,
+        }
+        self.active_prompt = None;
+        Some(IntroSkipAction::ManualSkip(state.range.end_seconds))
+    }
+
+    /// Record an authoritative playback position without issuing skip actions.
+    /// Confirmed seeks must update stays even between periodic observations.
+    pub fn update_stays(&mut self, position: f64) {
+        if !position.is_finite() {
+            return;
+        }
+        for index in 0..self.ranges.len() {
+            let inside = position >= self.ranges[index].range.start_seconds
+                && position < self.ranges[index].range.end_seconds;
+            if self.ranges[index].inside == inside {
+                continue;
+            }
+            self.ranges[index].inside = inside;
+            if inside || self.manual_policy != ManualPromptPolicy::WholeRange {
+                continue;
+            }
+            self.ranges[index].suppressed = false;
+            if self
+                .active_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.range == index)
+            {
+                self.active_prompt = None;
+            }
+            if self
+                .pending_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.range == index)
+            {
+                self.pending_prompt = None;
+            }
         }
     }
 
@@ -179,10 +314,18 @@ impl IntroSkipper {
         let Some(pending) = self.pending_prompt.take() else {
             return;
         };
-        if presented && self.mode == IntroSkipMode::Manual && !self.ranges[pending.range].consumed {
+        let state = &self.ranges[pending.range];
+        let live = presented
+            && self.mode == IntroSkipMode::Manual
+            && match self.manual_policy {
+                ManualPromptPolicy::Timed => !state.consumed,
+                ManualPromptPolicy::WholeRange => state.inside && !state.suppressed,
+            };
+        if live {
             self.active_prompt = Some(ActivePrompt {
                 range: pending.range,
-                expires_at: now + Duration::from_millis(u64::from(PROMPT_DURATION_MS)),
+                expires_at: (self.manual_policy == ManualPromptPolicy::Timed)
+                    .then(|| now + Duration::from_millis(u64::from(PROMPT_DURATION_MS))),
             });
         }
     }
@@ -191,15 +334,18 @@ impl IntroSkipper {
         if self
             .active_prompt
             .as_ref()
-            .is_some_and(|prompt| now >= prompt.expires_at)
+            .is_some_and(|prompt| prompt.expires_at.is_some_and(|deadline| now >= deadline))
         {
             self.active_prompt = None;
         }
     }
 
-    /// Dismiss the presented prompt without rearming its range.
+    /// Dismiss the presented prompt. Whole-range suppression lasts only for
+    /// the current stay; timed prompts stay spent for the session.
     pub fn dismiss_prompt(&mut self) {
-        self.active_prompt = None;
+        if let Some(active) = self.active_prompt.take() {
+            self.ranges[active.range].suppressed = true;
+        }
     }
 
     /// Current presented prompt, after the most recent time observation.
@@ -224,6 +370,12 @@ mod tests {
 
     fn policy(mode: IntroSkipMode) -> IntroSkipper {
         let mut policy = IntroSkipper::new(mode);
+        policy.replace_ranges(vec![range(IntroSkipKind::Introduction, 10.0, 30.0)]);
+        policy
+    }
+
+    fn desktop(mode: IntroSkipMode) -> IntroSkipper {
+        let mut policy = IntroSkipper::with_manual_policy(mode, ManualPromptPolicy::WholeRange);
         policy.replace_ranges(vec![range(IntroSkipKind::Introduction, 10.0, 30.0)]);
         policy
     }
@@ -474,5 +626,170 @@ mod tests {
             policy.observe(40.0, now, IntroSkipInput::ManualSkip),
             Some(IntroSkipAction::ManualSkip(60.0))
         );
+    }
+
+    #[test]
+    fn whole_range_prompt_outlives_the_timed_deadline_while_inside() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        policy.advance_time(now + Duration::from_secs(600));
+        assert_eq!(policy.prompt_kind(), Some(IntroSkipKind::Introduction));
+        assert_eq!(
+            policy.observe(
+                10.0,
+                now + Duration::from_secs(600),
+                IntroSkipInput::ManualSkip
+            ),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+    }
+
+    #[test]
+    fn whole_range_exit_retires_the_prompt_and_reentry_rearms_it() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.prompt_kind(), None);
+        let rearmed = prompt(&mut policy, now, 15.0);
+        policy.prompt_settled(rearmed, true, now);
+        assert_eq!(policy.prompt_kind(), Some(IntroSkipKind::Introduction));
+    }
+
+    #[test]
+    fn whole_range_dismissal_and_use_suppress_only_the_current_stay() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        policy.dismiss_prompt();
+        assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        // Re-entry rearms after a dismissal.
+        let rearmed = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(rearmed, true, now);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+        // A used prompt also suppresses only until the stay ends.
+        assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        assert!(matches!(
+            policy.observe(10.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::ShowPrompt { .. })
+        ));
+    }
+
+    #[test]
+    fn whole_range_manual_skip_preserves_the_automatic_attempt() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        policy.set_mode(IntroSkipMode::Automatic);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(30.0))
+        );
+    }
+
+    #[test]
+    fn whole_range_pending_prompt_dies_when_its_range_is_left() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        // The late settlement is rejected: the stay it belonged to is over.
+        policy.prompt_settled(token, true, now);
+        assert_eq!(policy.prompt_kind(), None);
+        assert_eq!(policy.observe(10.0, now, IntroSkipInput::ManualSkip), None);
+        // Re-entry issues a fresh presentation rather than reviving the stale one.
+        let rearmed = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(rearmed, true, now);
+        assert_eq!(policy.prompt_kind(), Some(IntroSkipKind::Introduction));
+    }
+
+    #[test]
+    fn whole_range_failed_presentation_retries_while_the_stay_continues() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, false, now);
+        let retried = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(retried, true, now);
+        assert_eq!(policy.prompt_kind(), Some(IntroSkipKind::Introduction));
+    }
+
+    #[test]
+    fn whole_range_suppressed_range_never_blocks_an_overlapping_range() {
+        let now = Instant::now();
+        let mut policy =
+            IntroSkipper::with_manual_policy(IntroSkipMode::Manual, ManualPromptPolicy::WholeRange);
+        policy.replace_ranges(vec![
+            range(IntroSkipKind::Introduction, 10.0, 30.0),
+            range(IntroSkipKind::Credits, 20.0, 40.0),
+        ]);
+        let token = prompt(&mut policy, now, 25.0);
+        policy.prompt_settled(token, true, now);
+        policy.dismiss_prompt();
+        // The overlapping credits range still offers its own prompt.
+        let credits = prompt(&mut policy, now, 25.0);
+        policy.prompt_settled(credits, true, now);
+        assert_eq!(policy.prompt_kind(), Some(IntroSkipKind::Credits));
+        assert_eq!(
+            policy.observe(25.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(40.0))
+        );
+    }
+
+    #[test]
+    fn off_forgets_live_prompts_under_both_manual_policies() {
+        let now = Instant::now();
+        for mut policy in [
+            desktop(IntroSkipMode::Manual),
+            policy(IntroSkipMode::Manual),
+        ] {
+            let token = prompt(&mut policy, now, 10.0);
+            policy.prompt_settled(token, true, now);
+            policy.set_mode(IntroSkipMode::Off);
+            assert_eq!(policy.prompt_kind(), None);
+            assert!(policy.ranges().is_empty());
+            policy.set_mode(IntroSkipMode::Manual);
+            assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
+        }
+    }
+
+    #[test]
+    fn desktop_mode_changes_retire_prompts_but_keep_manual_and_automatic_attempts_independent() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        policy.set_mode(IntroSkipMode::Automatic);
+        assert_eq!(policy.prompt_kind(), None);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(30.0))
+        );
+        // Even if that automatic seek failed, Manual can offer an action.
+        policy.set_mode(IntroSkipMode::Manual);
+        let token = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(token, true, now);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+        policy.update_stays(30.0);
+        policy.set_mode(IntroSkipMode::Automatic);
+        assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
     }
 }

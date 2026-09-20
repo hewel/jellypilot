@@ -920,6 +920,7 @@ mod gpu_probe {
             item_id: self.item_id.clone(),
             title: self.title.clone(),
             item_type: "Video".to_owned(),
+            series_id: None,
             runtime_seconds: Some(self.runtime),
             start_position_seconds: 0.0,
             play_method: "DirectPlay".to_owned(),

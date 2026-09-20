@@ -18,7 +18,7 @@ use std::time::Instant;
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::audio_tracks::AudioTrackStore;
-use jellypilot_core::config::Settings;
+use jellypilot_core::config::{IntroMode, Settings};
 use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate, SessionToken};
 use jellypilot_core::volume_memory::SeasonVolumeStore;
@@ -50,7 +50,7 @@ use super::accounts;
 use super::artwork::{ImageCollection, ImagePriority, ImageSpec};
 use super::kernel::Kernel;
 use super::message::{Message, PlaybackMessage, RemoteMessage, SettingsMessage};
-use super::state::{NoticeLevel, PlaybackControllerHandle};
+use super::state::{intro_skip_mode, NoticeLevel, PlaybackControllerHandle};
 
 pub(crate) mod remote;
 
@@ -1097,6 +1097,115 @@ fn queue_item_start_intent(
   }
 }
 
+/// The connected profile's scope for device-local playback preferences.
+/// `None` while signed out or when the connection lacks a usable identity.
+fn playback_scope(kernel: &Kernel) -> Option<ProfileScope> {
+  let connection = kernel.client.as_ref()?.login().connection_state();
+  if !connection.connected {
+    return None;
+  }
+  ProfileScope::new(
+    connection.provider,
+    connection.server_url?,
+    connection.user_id?,
+  )
+  .ok()
+}
+
+/// The effective mode for a series id: its profile-scoped override recorded in
+/// settings, or the global setting. A scope that cannot be resolved (signed
+/// out, missing identity) never matches a record, so the global applies.
+fn effective_intro_mode(kernel: &Kernel, series_id: Option<&str>) -> IntroMode {
+  let settings = kernel.settings.snapshot();
+  series_id
+    .filter(|id| !id.trim().is_empty())
+    .zip(playback_scope(kernel))
+    .map_or_else(
+      || settings.intro_mode(),
+      |(id, scope)| settings.series_intro_mode(id, &scope),
+    )
+}
+
+/// The series an episode belongs to; movies and unidentified items have none.
+fn playable_series_id(item: &Playable) -> Option<&str> {
+  let (item_type, series_id) = match item {
+    Playable::Library(item) => (item.item_type.as_str(), item.series_id.as_deref()),
+    Playable::Detail(item) => (item.item_type.as_str(), item.series_id.as_deref()),
+    Playable::Media(item) => (item.item_type.as_str(), item.series_id.as_deref()),
+  };
+  (item_type == "Episode").then_some(series_id).flatten()
+}
+
+/// Intro availability for one start: the effective per-series mode plus the
+/// provider capability. Every start path resolves here so library, remote,
+/// queue, and adjacent starts all honor the current preferences.
+fn start_intro_availability(
+  kernel: &Kernel,
+  item: &Playable,
+) -> jellypilot_mpv::playback_session::IntroAvailability {
+  jellypilot_mpv::playback_session::IntroAvailability {
+    mode: intro_skip_mode(effective_intro_mode(kernel, playable_series_id(item))),
+    skipper_available: kernel
+      .client
+      .as_ref()
+      .is_some_and(|client| client.supports_intro_skipper()),
+  }
+}
+
+/// The effective intro mode for the currently playing episode: `Some` only for
+/// an episode with an identified series on a provider that supports the
+/// skipper, in a session whose profile scope resolves. The player toggle is
+/// hidden whenever this returns `None`.
+pub(crate) fn series_intro_mode(surface: &Surface, kernel: &Kernel) -> Option<IntroMode> {
+  if !kernel
+    .client
+    .as_ref()
+    .is_some_and(|client| client.supports_intro_skipper())
+  {
+    return None;
+  }
+  let item = surface.view.now_playing.as_ref()?;
+  if item.item.item_type != "Episode" {
+    return None;
+  }
+  let series_id = item
+    .item
+    .series_id
+    .as_deref()
+    .filter(|id| !id.trim().is_empty())?;
+  let scope = playback_scope(kernel)?;
+  Some(
+    kernel
+      .settings
+      .snapshot()
+      .series_intro_mode(series_id, &scope),
+  )
+}
+
+/// Re-feeds the effective intro mode into the session after a preference
+/// change (global or per-series), so an active playback observes the new
+/// choice without restarting.
+pub(crate) fn refresh_intro_mode(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+) -> Task<Message> {
+  let series_id = surface
+    .view
+    .now_playing
+    .as_ref()
+    .and_then(|view| (view.item.item_type == "Episode").then_some(view.item.series_id.as_deref()))
+    .flatten();
+  let mode = intro_skip_mode(effective_intro_mode(kernel, series_id));
+  apply_playback_input(
+    surface,
+    kernel,
+    quit_requested,
+    PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
+  )
+  .task
+}
+
 fn load_queue_after_start(
   surface: &mut Surface,
   kernel: &Kernel,
@@ -1223,6 +1332,52 @@ fn update_playback(
       quit_requested,
       PlaybackInput::Event(Box::new(*event)),
     ),
+    PlaybackMessage::IntroModeChanged(automatic) => {
+      // The player toggle writes the current series' profile-scoped choice.
+      // Busy or replacing playback rejects the write so a stale toggle can
+      // never land on a different item than the one it was shown for.
+      if surface.view.busy || surface.view.lifecycle.replacing {
+        return PlaybackUpdate::without_transition(Task::none());
+      }
+      let Some(mode) = series_intro_mode(surface, kernel) else {
+        return PlaybackUpdate::without_transition(Task::none());
+      };
+      let Some((series_id, scope)) = surface
+        .view
+        .now_playing
+        .as_ref()
+        .and_then(|view| view.item.series_id.clone())
+        .zip(playback_scope(kernel))
+      else {
+        return PlaybackUpdate::without_transition(Task::none());
+      };
+      let selected = if automatic {
+        IntroMode::Automatic
+      } else {
+        IntroMode::Manual
+      };
+      if selected == mode {
+        return PlaybackUpdate::without_transition(Task::none());
+      }
+      match kernel
+        .settings
+        .set_series_intro_mode(&series_id, &scope, selected)
+      {
+        Ok(_) => {
+          PlaybackUpdate::without_transition(refresh_intro_mode(surface, kernel, quit_requested))
+        }
+        Err(error) => {
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Config,
+            format!("Could not save the series intro preference: {error}"),
+          );
+          PlaybackUpdate::without_transition(
+            kernel.show_toast(NoticeLevel::Error, UiText::new("settings-save-error")),
+          )
+        }
+      }
+    }
     PlaybackMessage::SeekDragStarted => {
       surface.seek_dragging = true;
       surface.seek_preview = None;
@@ -1509,6 +1664,12 @@ fn update_playback(
         if let Some(playable) = started.as_deref() {
           tasks.push(load_queue_after_start(surface, kernel, playable));
         }
+        if started_ok {
+          // A start queued behind in-flight work captured its intro mode at
+          // dispatch; re-feed the effective mode so a preference change made
+          // while the start was queued still governs the first observation.
+          tasks.push(refresh_intro_mode(surface, kernel, quit_requested));
+        }
       }
       if cleanup_accepted && matches!(shutdown_cleanup, Some(Ok(()))) {
         surface.controller_configuration.invalidate_pending();
@@ -1631,6 +1792,16 @@ pub(crate) fn apply_playback_input(
   quit_requested: bool,
   input: PlaybackInput,
 ) -> PlaybackUpdate {
+  // Every start resolves its effective intro mode here — after the per-series
+  // preferences are bound — so library, remote, queue, and adjacent starts all
+  // honor the active profile's choices rather than a stale dispatch-time value.
+  // Mutate in place: other intents pass through without re-boxing.
+  let mut input = input;
+  if let PlaybackInput::Intent(intent) = &mut input {
+    if let PlaybackIntent::Start { item, intro, .. } = intent.as_mut() {
+      *intro = start_intro_availability(kernel, item);
+    }
+  }
   let PlaybackStep {
     effects,
     transition,
@@ -1715,6 +1886,7 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::QueueMenuToggled => "queue-menu-toggled",
     PlaybackMessage::QueueMenuDismissed => "queue-menu-dismissed",
     PlaybackMessage::QueueItemSelected(_) => "queue-item-selected",
+    PlaybackMessage::IntroModeChanged(_) => "intro-mode-changed",
     PlaybackMessage::QueueLoaded { .. } => "queue-loaded",
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
     PlaybackMessage::AdjacentSettled { .. } => "adjacent-settled",
@@ -2194,6 +2366,16 @@ fn execute_controller_command(
           ControllerSettlement::OsdShown(controller.show_text(&text, duration_ms).await),
           None,
         ),
+        ControllerCommand::IntroPrompt { text, duration_ms } => (
+          ControllerSettlement::OsdShown(if crate::embedded::enabled() {
+            // The embedded surface owns the prompt; MPV OSD is reserved for
+            // unrelated feedback and its independently toggled statistics.
+            Ok(())
+          } else {
+            controller.show_text(&text, duration_ms).await
+          }),
+          None,
+        ),
         ControllerCommand::ToggleStats => (
           ControllerSettlement::OsdShown(controller.toggle_stats().await),
           None,
@@ -2374,6 +2556,144 @@ mod tests {
   use jellypilot_mpv::playback_session::{IntroAvailability, NowPlayingView, TracksView};
   use jellypilot_session::{GeneralCommand, JellyfinCommand, JellyfinWebSocketEvent, PlayRequest};
 
+  fn connected_jellyfin_kernel(kernel: &mut Kernel) {
+    kernel.connection = ConnectionPhase::Connected;
+    let client = JellyfinClient::new();
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: "https://media.example.com".to_owned(),
+        user_id: "user-1".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    kernel.client = Some(Arc::new(client));
+  }
+
+  /// An isolated settings directory and a store bound to it, so persistence
+  /// tests observe reloaded behavior instead of the live snapshot.
+  fn isolated_settings_dir() -> (std::path::PathBuf, SettingsStore) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let directory = std::env::temp_dir().join(format!(
+      "jellypilot-iced-series-intro-{}-{}",
+      std::process::id(),
+      NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    (
+      directory.clone(),
+      SettingsStore::for_test(directory.join("config.json")),
+    )
+  }
+
+  fn test_scope() -> ProfileScope {
+    ProfileScope::new(
+      jellypilot_media_server::MediaServerProvider::Jellyfin,
+      "https://media.example.com",
+      "user-1",
+    )
+    .unwrap()
+  }
+
+  fn episode_now_playing(series_id: &str) -> NowPlayingView {
+    NowPlayingView {
+      item: NowPlayingItem {
+        item_id: "episode-1".to_owned(),
+        title: "Pilot".to_owned(),
+        item_type: "Episode".to_owned(),
+        series_id: Some(series_id.to_owned()),
+        runtime_seconds: Some(1_800.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".to_owned(),
+        original_language: None,
+      },
+      paused: false,
+      position_seconds: 0.0,
+      duration_seconds: Some(1_800.0),
+      volume: 75.0,
+      muted: false,
+    }
+  }
+
+  #[test]
+  fn series_intro_mode_requires_an_eligible_episode_and_scope() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface.view.now_playing = Some(episode_now_playing("series-1"));
+    // No client: the capability is hidden.
+    assert_eq!(series_intro_mode(&surface, &kernel), None);
+    connected_jellyfin_kernel(&mut kernel);
+    // Connected profile: the global default applies with no override.
+    assert_eq!(
+      series_intro_mode(&surface, &kernel),
+      Some(IntroMode::Automatic)
+    );
+    // Movies never expose the toggle.
+    surface.view.now_playing = Some(NowPlayingView {
+      item: NowPlayingItem {
+        item_type: "Movie".to_owned(),
+        series_id: None,
+        ..episode_now_playing("series-1").item
+      },
+      ..episode_now_playing("series-1")
+    });
+    assert_eq!(series_intro_mode(&surface, &kernel), None);
+  }
+
+  #[test]
+  fn intro_mode_changed_persists_the_series_override() {
+    let (directory, settings) = isolated_settings_dir();
+    let (mut surface, mut kernel) = active_playback_fixture();
+    kernel.settings = settings;
+    connected_jellyfin_kernel(&mut kernel);
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::IntroModeChanged(false),
+    ));
+
+    assert_eq!(
+      series_intro_mode(&surface, &kernel),
+      Some(IntroMode::Manual)
+    );
+    let reloaded = SettingsStore::load_in_dir(directory.clone()).unwrap();
+    assert_eq!(
+      reloaded
+        .snapshot()
+        .series_intro_mode("series-1", &test_scope()),
+      IntroMode::Manual
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+  }
+
+  #[test]
+  fn intro_mode_changed_is_rejected_while_replacing() {
+    let (directory, settings) = isolated_settings_dir();
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.settings = settings;
+    connected_jellyfin_kernel(&mut kernel);
+    surface.view.now_playing = Some(episode_now_playing("series-1"));
+    surface.view.lifecycle.replacing = true;
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::IntroModeChanged(false),
+    ));
+
+    assert_eq!(
+      series_intro_mode(&surface, &kernel),
+      Some(IntroMode::Automatic)
+    );
+    assert!(!directory.join("config.json").exists());
+    let _ = std::fs::remove_dir_all(directory);
+  }
+
   use super::*;
 
   fn test_fixture() -> (Surface, Kernel) {
@@ -2488,6 +2808,7 @@ mod tests {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),
@@ -3629,6 +3950,7 @@ mod tests {
         item_id: "episode-2".to_owned(),
         title: "Second".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),

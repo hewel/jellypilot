@@ -311,6 +311,9 @@ pub enum PlaybackMessage {
   QueueMenuToggled,
   QueueMenuDismissed,
   QueueItemSelected(Box<VideoLibraryItem>),
+  /// The player skip toggle: `true` selects Automatic, `false` Manual, for the
+  /// current episode's series within the active profile (ADR 0045).
+  IntroModeChanged(bool),
   QueueLoaded {
     session: SessionToken,
     generation: u64,

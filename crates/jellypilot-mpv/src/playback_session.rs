@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 use jellypilot_core::intro_skipper::{
   IntroPromptToken, IntroSkipAction, IntroSkipInput, IntroSkipMode, IntroSkipper,
+  ManualPromptPolicy,
 };
 use jellypilot_media_server::{IntroSkipKind, IntroSkipRange, MediaItem};
 
@@ -132,6 +134,13 @@ pub enum ControllerCommand {
     text: String,
     duration_ms: i64,
   },
+  /// Intro Skipper prompt presentation owned by the session: a non-empty
+  /// `text` shows the prompt, an empty `text` retires the session-owned
+  /// prompt without touching unrelated OSD feedback.
+  IntroPrompt {
+    text: String,
+    duration_ms: i64,
+  },
   ToggleStats,
   Stop,
   Refresh,
@@ -149,7 +158,7 @@ impl ControllerCommand {
       Self::SelectAudioTrack(_) | Self::SelectSubtitleTrack(_) => {
         ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
       }
-      Self::ShowText { .. } | Self::ToggleStats => {
+      Self::ShowText { .. } | Self::IntroPrompt { .. } | Self::ToggleStats => {
         ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback))
       }
       Self::Shutdown => ControllerSettlement::Shutdown(PlaybackShutdownOutcome {
@@ -370,6 +379,9 @@ pub struct SessionView {
   pub tracks: TracksView,
   pub adjacent: AdjacentView,
   pub intro_prompt: Option<IntroPromptView>,
+  /// Real fetched intro/credit ranges for the active item; empty while no
+  /// playback is active, the fetch has not settled, or ranges were retired.
+  pub intro_ranges: Arc<[IntroSkipRange]>,
   pub notice: Option<PlaybackNotice>,
   pub engine_available: bool,
   pub busy: bool,
@@ -400,6 +412,9 @@ pub struct PlaybackSession {
   /// automatic adjacent/end-file advancement stays parked until an explicit
   /// play intent lifts it (ADR 0043).
   suspended: bool,
+  /// The session-owned intro prompt text is on the controller's OSD; only a
+  /// dedicated clear may retire it so unrelated feedback is never clobbered.
+  prompt_osd: bool,
   replacing: bool,
   replacement_generation: u64,
 }
@@ -425,9 +440,10 @@ impl Default for PlaybackSession {
       pending: VecDeque::new(),
       cleanup_pending: false,
       quitting: false,
+      suspended: false,
+      prompt_osd: false,
       replacing: false,
       replacement_generation: 0,
-      suspended: false,
     }
   }
 }
@@ -439,6 +455,10 @@ impl PlaybackSession {
       PlaybackInput::Intent(intent) => self.handle_intent(*intent, now),
       PlaybackInput::Event(event) => self.handle_event(*event, now),
     };
+    // The policy may have retired a live prompt this step (range exit,
+    // dismissal, mode change, or replacement); retire its OSD without
+    // touching unrelated on-screen feedback.
+    step.effects.extend(self.retire_prompt_osd());
     // Acceptance bumps the generation, so a queued or coalesced replacement
     // reports once here and its later dispatch never repeats the fact.
     step.transition.replacement_accepted = self.replacement_generation != generation;
@@ -475,6 +495,7 @@ impl PlaybackSession {
         .intro
         .prompt_kind()
         .map(|kind| IntroPromptView { kind }),
+      intro_ranges: self.intro.ranges(),
       notice: self.notice.clone(),
       engine_available: self.engine_available,
       busy: self.presentation_busy(),
@@ -747,6 +768,14 @@ impl PlaybackSession {
       ControllerCommand::SetMuted(muted) => self.desired_muted = Some(*muted),
       _ => {}
     }
+    // Any dispatched OSD text replaces whatever the screen shows: the
+    // session-owned prompt flag only survives until something else displays.
+    if matches!(
+      request.command,
+      ControllerCommand::ShowText { .. } | ControllerCommand::IntroPrompt { .. }
+    ) {
+      self.prompt_osd = false;
+    }
     let id = self.next_effect_id();
     let ControllerRequest {
       command, operation, ..
@@ -828,6 +857,7 @@ impl PlaybackSession {
         PlaybackStep::applied(Vec::new())
       }
       (ControllerOperation::Prompt { token }, ControllerSettlement::OsdShown(result)) => {
+        self.prompt_osd = result.is_ok();
         self.intro.prompt_settled(token, result.is_ok(), now);
         if let Err(error) = result {
           self.notice = Some(PlaybackNotice::Failed(error));
@@ -838,6 +868,11 @@ impl PlaybackSession {
         if let Err(error) = result {
           self.notice = Some(PlaybackNotice::Failed(error));
         }
+        PlaybackStep::applied(Vec::new())
+      }
+      // Retiring the session-owned prompt is housekeeping: its result never
+      // surfaces as a notice.
+      (ControllerOperation::PromptClear, ControllerSettlement::OsdShown(_)) => {
         PlaybackStep::applied(Vec::new())
       }
       (ControllerOperation::Shutdown, ControllerSettlement::Shutdown(outcome)) => {
@@ -862,7 +897,7 @@ impl PlaybackSession {
         self.sync_desired_transport();
         self.tracks = TracksView::Unavailable;
         self.adjacent = AdjacentState::default();
-        self.intro = IntroSkipper::new(intro.mode);
+        self.intro = IntroSkipper::with_manual_policy(intro.mode, ManualPromptPolicy::WholeRange);
         self.skipper_available = intro.skipper_available;
         self.set_warning_notice(warnings);
         self.start_auxiliary(intro)
@@ -882,6 +917,7 @@ impl PlaybackSession {
   fn finish_control(&mut self, result: Result<PlaybackOutcome, PlaybackError>) {
     match result {
       Ok(outcome) => {
+        self.intro.update_stays(outcome.snapshot.transport.time_pos);
         self.snapshot = Some(outcome.snapshot);
         self.sync_desired_transport();
         self.set_warning_notice(outcome.warnings);
@@ -1104,6 +1140,31 @@ impl PlaybackSession {
       }
     }
   }
+
+  /// Retire the session-owned intro prompt OSD once the policy no longer
+  /// presents it. The dedicated clear only runs while the prompt text is
+  /// still the last thing shown and no other text is queued, so unrelated
+  /// feedback is never clobbered.
+  fn retire_prompt_osd(&mut self) -> Vec<PlaybackEffect> {
+    if !self.prompt_osd || self.intro.prompt_kind().is_some() {
+      return Vec::new();
+    }
+    if self.pending.iter().any(|request| {
+      matches!(
+        request.command,
+        ControllerCommand::ShowText { .. } | ControllerCommand::IntroPrompt { .. }
+      )
+    }) {
+      return Vec::new();
+    }
+    let request = ControllerRequest::clear_prompt();
+    if self.controller_busy() {
+      self.queue_request(request);
+      Vec::new()
+    } else {
+      self.dispatch(request)
+    }
+  }
   /// Display-free suspension (ADR 0043): the window closed while the session
   /// stays resident. Queued work that could start or resume playback is
   /// cancelled outright — it must never inherit a fresh presentation lease
@@ -1320,6 +1381,9 @@ enum ControllerOperation {
   Prompt {
     token: IntroPromptToken,
   },
+  /// Retiring the session-owned prompt text; its result is housekeeping and
+  /// never surfaces as a notice.
+  PromptClear,
   Osd,
   Shutdown,
 }
@@ -1328,7 +1392,7 @@ impl ControllerOperation {
   fn occupancy(&self) -> ControllerOccupancy {
     match self {
       Self::Refresh => ControllerOccupancy::Refresh,
-      Self::Prompt { .. } | Self::Osd => ControllerOccupancy::Osd,
+      Self::Prompt { .. } | Self::PromptClear | Self::Osd => ControllerOccupancy::Osd,
       Self::Start { .. }
       | Self::Controlled
       | Self::Stop
@@ -1349,6 +1413,7 @@ enum RequestKind {
   AudioTrack,
   SubtitleTrack,
   ShowText,
+  IntroPrompt,
   Stats,
   Stop,
   Refresh,
@@ -1409,12 +1474,23 @@ impl ControllerRequest {
 
   fn prompt(token: IntroPromptToken, duration_ms: u32, text: String) -> Self {
     Self {
-      kind: RequestKind::ShowText,
-      command: ControllerCommand::ShowText {
+      kind: RequestKind::IntroPrompt,
+      command: ControllerCommand::IntroPrompt {
         text,
         duration_ms: i64::from(duration_ms),
       },
       operation: ControllerOperation::Prompt { token },
+    }
+  }
+
+  fn clear_prompt() -> Self {
+    Self {
+      kind: RequestKind::IntroPrompt,
+      command: ControllerCommand::IntroPrompt {
+        text: String::new(),
+        duration_ms: 0,
+      },
+      operation: ControllerOperation::PromptClear,
     }
   }
 
@@ -1574,6 +1650,7 @@ mod tests {
         item_id: item_id.to_owned(),
         title: "Pilot".to_owned(),
         item_type: item_type.to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(1_500.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
@@ -2404,7 +2481,7 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let effects = refresh_at(&mut session, now, 10.0, Vec::new());
     let (prompt_id, command) = controller_effect(effects);
-    assert!(matches!(command, ControllerCommand::ShowText { .. }));
+    assert!(matches!(command, ControllerCommand::IntroPrompt { .. }));
     assert!(session
       .handle(
         PlaybackInput::Intent(Box::new(PlaybackIntent::SkipIntro)),
@@ -3178,6 +3255,247 @@ mod tests {
     );
   }
 
+  fn settle_osd(session: &mut PlaybackSession, id: EffectId, now: Instant) -> Vec<PlaybackEffect> {
+    session
+      .handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::OsdShown(Ok(())),
+        })),
+        now,
+      )
+      .effects
+  }
+
+  #[test]
+  fn manual_prompt_stays_live_past_the_timed_deadline_while_inside() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, command) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    assert!(matches!(
+      command,
+      ControllerCommand::IntroPrompt { duration_ms, .. } if (1..=i64::from(i32::MAX)).contains(&duration_ms)
+    ));
+    settle_osd(&mut session, prompt_id, now);
+    assert!(session.view().intro_prompt.is_some());
+
+    // Far past the legacy three-second lifetime the prompt is still live.
+    let later = now + std::time::Duration::from_secs(600);
+    assert!(refresh_at(&mut session, later, 20.0, Vec::new()).is_empty());
+    assert!(session.view().intro_prompt.is_some());
+  }
+
+  #[test]
+  fn leaving_the_range_retires_the_prompt_and_reentry_rearms_it() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, prompt_id, now);
+
+    // The exit observation retires the prompt and clears the session-owned
+    // OSD through the dedicated command.
+    let (clear_id, command) = controller_effect(refresh_at(&mut session, now, 35.0, Vec::new()));
+    assert!(matches!(
+      command,
+      ControllerCommand::IntroPrompt { ref text, .. } if text.is_empty()
+    ));
+    assert!(session.view().intro_prompt.is_none());
+    settle_osd(&mut session, clear_id, now);
+
+    // Re-entry offers the prompt again.
+    let (rearmed_id, command) = controller_effect(refresh_at(&mut session, now, 15.0, Vec::new()));
+    assert!(matches!(
+      command,
+      ControllerCommand::IntroPrompt { ref text, .. } if !text.is_empty()
+    ));
+    settle_osd(&mut session, rearmed_id, now);
+    assert_eq!(
+      session.view().intro_prompt,
+      Some(IntroPromptView {
+        kind: IntroSkipKind::Introduction
+      })
+    );
+  }
+
+  #[test]
+  fn dismissal_suppresses_only_the_current_stay() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, prompt_id, now);
+
+    let (clear_id, _) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::DismissIntro)),
+          now,
+        )
+        .effects,
+    );
+    assert!(session.view().intro_prompt.is_none());
+    settle_osd(&mut session, clear_id, now);
+
+    // The dismissed stay stays quiet; leaving and re-entering rearms it.
+    assert!(refresh_at(&mut session, now, 10.0, Vec::new()).is_empty());
+    assert!(refresh_at(&mut session, now, 35.0, Vec::new()).is_empty());
+    let (rearmed_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, rearmed_id, now);
+    assert!(session.view().intro_prompt.is_some());
+  }
+
+  #[test]
+  fn manual_skip_suppresses_the_stay_and_reentry_rearms() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, prompt_id, now);
+
+    let (seek_id, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::SkipIntro)),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(command, ControllerCommand::Seek(30.0)));
+    assert!(session.view().intro_prompt.is_none());
+
+    // Settling the skip dispatches the queued confirmation text; the retired
+    // prompt OSD is never cleared on top of it.
+    let (osd_id, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+            id: seek_id,
+            settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+              snapshot: snapshot("episode-1", "Episode", 30.0),
+              warnings: Vec::new(),
+            })),
+          })),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(
+      command,
+      ControllerCommand::ShowText { ref text, .. } if text == "Skipped segment"
+    ));
+    settle_osd(&mut session, osd_id, now);
+
+    // The confirmed seek already ended the stay; re-entry before the next
+    // periodic outside-position sample must still rearm the prompt.
+    let (rearmed_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, rearmed_id, now);
+    assert!(session.view().intro_prompt.is_some());
+  }
+
+  #[test]
+  fn stats_osd_does_not_lose_ownership_of_the_manual_prompt() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, prompt_id, now);
+    let (stats_id, _) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::ToggleStats)),
+          now,
+        )
+        .effects,
+    );
+    settle_osd(&mut session, stats_id, now);
+    let (_, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::DismissIntro)),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(command, ControllerCommand::IntroPrompt { text, .. } if text.is_empty()));
+  }
+
+  #[test]
+  fn late_prompt_settlement_after_mode_change_clears_the_stale_osd() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+
+    // A mode change can retire the prompt while its presentation is in flight.
+    assert!(session
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(
+          IntroSkipMode::Automatic
+        ))),
+        now,
+      )
+      .effects
+      .is_empty());
+    assert!(session.view().intro_prompt.is_none());
+
+    // The stale presentation still lands on screen; the session retires it
+    // with a dedicated clear instead of leaving it up.
+    let (clear_id, command) = controller_effect(settle_osd(&mut session, prompt_id, now));
+    assert!(matches!(
+      command,
+      ControllerCommand::IntroPrompt { ref text, .. } if text.is_empty()
+    ));
+    assert!(session.view().intro_prompt.is_none());
+    settle_osd(&mut session, clear_id, now);
+
+    let (_, command) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    assert!(matches!(command, ControllerCommand::Seek(30.0)));
+  }
+
+  #[test]
+  fn off_mode_change_retires_the_prompt_osd() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    settle_osd(&mut session, prompt_id, now);
+
+    let (clear_id, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(IntroSkipMode::Off))),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(
+      command,
+      ControllerCommand::IntroPrompt { ref text, .. } if text.is_empty()
+    ));
+    assert!(session.view().intro_prompt.is_none());
+    assert!(session.view().intro_ranges.is_empty());
+    settle_osd(&mut session, clear_id, now);
+  }
+
+  #[test]
+  fn intro_ranges_projection_tracks_the_real_fetched_ranges() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    assert!(session.view().intro_ranges.is_empty());
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    assert_eq!(&*session.view().intro_ranges, &[intro_range()]);
+
+    let (stop_id, _) = controller_effect(
+      session
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now)
+        .effects,
+    );
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: stop_id,
+        settlement: ControllerSettlement::Stopped(Ok(PlaybackStopOutcome {
+          warnings: Vec::new(),
+        })),
+      })),
+      now,
+    );
+    assert!(session.view().intro_ranges.is_empty());
+  }
+
   #[test]
   fn seek_intent_is_emitted_for_an_active_timeline_regardless_of_busy() {
     assert!(matches!(
@@ -3248,6 +3566,13 @@ mod tests {
         ControllerCommand::ShowText {
           text: "Hi".to_owned(),
           duration_ms: 1_000,
+        },
+        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::IntroPrompt {
+          text: "Skip".to_owned(),
+          duration_ms: 3_000,
         },
         ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
       ),

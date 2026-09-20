@@ -510,7 +510,12 @@ pub(super) fn guard_activation<'a>(
       Message::EmbeddedPlayer(embedded_player::Message::PointerMoved {
         position,
         bounds: state.shell.window_size,
-        controls_height: controls_reveal_height(state.shell.window_size.width),
+        controls_height: controls_reveal_height(
+          state.shell.window_size.width,
+          embedded_tools_width(
+            crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
+          ),
+        ),
       })
     }
     message => message,
@@ -522,6 +527,7 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
   responsive(move |bounds| -> Element<'_, Message> {
     let visible = embedded_player::controls_visible(state);
     let back_visible = embedded_player::back_visible(state);
+    let minimal = embedded_player::minimal_visible(state);
     let mut layers = stack![
       if state.playback.view.busy || embedded_player::input_blocked(state) {
         inert(video_surface())
@@ -531,10 +537,9 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     ]
     .width(Fill)
     .height(Fill);
-    // Chrome layers stay mounted so `motion::reveal` can animate their exits;
-    // while logically hidden they draw the retained presentation and capture
-    // no input.
-    layers = layers.push(super::motion::reveal(
+    // Keep widget state mounted, but switch drawing and hit targets together
+    // so no outgoing control remains visible after it becomes inert.
+    layers = layers.push(reveal_player_chrome(
       container(space::horizontal())
         .width(Fill)
         .height(160)
@@ -547,16 +552,29 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       ButtonVariant::Tonal,
       back_visible.then_some(Message::EmbeddedPlayer(embedded_player::Message::Back)),
     );
-    layers = layers.push(super::motion::reveal(
-      container(
-        row![back, space::horizontal(), super::player_info::button(state)]
-          .align_y(Alignment::Center),
-      )
-      .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
-      .width(Fill),
+    layers = layers.push(reveal_player_chrome(
+      container(back)
+        .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
+        .width(Fill),
       back_visible,
     ));
-    layers = layers.push(super::motion::reveal(
+    // The Information popover outlives the top chrome: while its panel is
+    // open the trigger stays mounted (and clickable) even when the rest of
+    // the top bar has auto-hidden.
+    let info_visible = back_visible || embedded_player::information_open(state);
+    layers = layers.push(reveal_player_chrome(
+      container(super::player_info::button(state))
+        .padding(iced::Padding {
+          top: TOKENS.spacing.s6,
+          right: embedded_inset(bounds.width),
+          bottom: 0.0,
+          left: 0.0,
+        })
+        .width(Fill)
+        .align_x(Alignment::End),
+      info_visible,
+    ));
+    layers = layers.push(reveal_player_chrome(
       container(
         container(space::horizontal())
           .width(Fill)
@@ -569,7 +587,7 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       visible,
     ));
     if let Some(now_playing) = state.playback.view.now_playing.as_ref() {
-      layers = layers.push(super::motion::reveal(
+      layers = layers.push(reveal_player_chrome(
         container(embedded_bar(
           state,
           now_playing,
@@ -585,6 +603,80 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
         .height(Fill)
         .align_y(Alignment::End),
         visible,
+      ));
+      // Minimal presentation: the shallow scrim, the read-only edge line,
+      // and — while paused — the center indicator. None of them hold the
+      // complete controls open.
+      layers = layers.push(reveal_player_chrome(
+        container(
+          container(space::horizontal())
+            .width(Fill)
+            .height(80)
+            .style(cinema::minimal_scrim),
+        )
+        .width(Fill)
+        .height(Fill)
+        .align_y(Alignment::End),
+        minimal,
+      ));
+      if let Some(duration) = now_playing
+        .duration_seconds
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+      {
+        let position = state
+          .playback
+          .seek_preview
+          .unwrap_or(now_playing.position_seconds);
+        layers = layers.push(reveal_player_chrome(
+          container(
+            container(cinema::minimal_track(
+              position.clamp(0.0, duration),
+              duration,
+              embedded_player::chapter_times(state),
+              embedded_player::intro_ranges(state),
+            ))
+            .width(Fill)
+            .height(4),
+          )
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+          minimal,
+        ));
+      }
+      let pause_indicator: Element<'_, Message> = if !visible && now_playing.paused {
+        container(icon_with_color(
+          Icon::Pause,
+          IconSize::Custom(28.0),
+          DARK_PALETTE.text.heading,
+        ))
+        .width(72)
+        .height(72)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .style(cinema::pause_chip)
+        .into()
+      } else {
+        space::horizontal().into()
+      };
+      layers = layers.push(container(pause_indicator).center(Fill));
+    }
+    // The skip prompt floats independently of the transport: it stays
+    // available in the minimal presentation without holding controls open.
+    if let Some(prompt) = embedded_intro_prompt(state) {
+      layers = layers.push(reveal_player_chrome(
+        container(prompt)
+          .padding(iced::Padding {
+            top: 0.0,
+            right: embedded_inset(bounds.width),
+            bottom: 20.0,
+            left: 0.0,
+          })
+          .width(Fill)
+          .height(Fill)
+          .align_x(Alignment::End)
+          .align_y(Alignment::End),
+        !visible,
       ));
     }
     if let Some(feedback) = embedded_player::feedback(state) {
@@ -604,9 +696,17 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
           Message::EmbeddedPlayer(embedded_player::Message::PointerMoved {
             position,
             bounds,
-            controls_height: controls_reveal_height(bounds.width),
+            controls_height: controls_reveal_height(
+              bounds.width,
+              embedded_tools_width(
+                crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
+              ),
+            ),
           })
         })
+        .on_exit(Message::EmbeddedPlayer(
+          embedded_player::Message::PointerLeft,
+        ))
         .interaction(if embedded_player::cursor_visible(state) {
           iced::mouse::Interaction::Idle
         } else {
@@ -616,6 +716,13 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     .into()
   })
   .into()
+}
+
+fn reveal_player_chrome<'a>(
+  content: impl Into<Element<'a, Message>>,
+  visible: bool,
+) -> Element<'a, Message> {
+  jellypilot_ui::widgets::motion::reveal(content, visible, false, TOKENS.durations.none)
 }
 
 fn embedded_volume_icon(muted: bool, volume: f64) -> Icon {
@@ -721,6 +828,11 @@ fn embedded_bar<'a>(
   ]
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center);
+  // The per-series skip-mode pill exists only for eligible episodes; the
+  // resolved mode comes from the preference owner, never inferred here.
+  let intro_mode = crate::app::playback::series_intro_mode(&state.playback, &state.kernel);
+  let skip_toggle_width = embedded_tools_width(intro_mode.is_some());
+  let skip_toggle = intro_mode.map(|mode| embedded_skip_toggle(state, mode));
   let volume: Element<'_, Message> = tracked_slider(
     slider(
       0.0..=100.0,
@@ -769,7 +881,13 @@ fn embedded_bar<'a>(
   ]
   .align_y(Alignment::Center);
   let tools = row![
-    row![tracks, output].align_y(Alignment::Center),
+    row![
+      tracks,
+      skip_toggle.unwrap_or_else(|| space::horizontal().width(0).into()),
+      output
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
     container(space::horizontal())
       .width(1)
       .height(18)
@@ -788,7 +906,7 @@ fn embedded_bar<'a>(
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
   .into();
-  let controls = embedded_controls(identity, transport.into(), tools, width);
+  let controls = embedded_controls(identity, transport.into(), tools, width, skip_toggle_width);
   // The controls float on the scrim without a card; `opaque` keeps the strip
   // from leaking presses into the pause-toggle surface behind it.
   let panel = opaque(
@@ -804,7 +922,19 @@ fn embedded_bar<'a>(
 }
 
 const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
+/// Upper bound for the tools cluster without the skip-mode pill.
 const EMBEDDED_TOOLS_WIDTH: f32 = 269.0;
+/// Upper bound once the localized skip-mode pill can appear; the pill is
+/// capped so this stays a safe reflow threshold, not an exact measurement.
+const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 480.0;
+
+fn embedded_tools_width(has_skip_toggle: bool) -> f32 {
+  if has_skip_toggle {
+    EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
+  } else {
+    EMBEDDED_TOOLS_WIDTH
+  }
+}
 
 fn embedded_inset(width: f32) -> f32 {
   if width < 600.0 {
@@ -814,27 +944,27 @@ fn embedded_inset(width: f32) -> f32 {
   }
 }
 
-fn embedded_controls_height(width: f32) -> f32 {
-  if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * EMBEDDED_TOOLS_WIDTH {
+fn embedded_controls_height(width: f32, tools_width: f32) -> f32 {
+  if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * tools_width {
     if width > 900.0 - 4.0 * TOKENS.spacing.s9 {
       48.0
     } else {
       44.0
     }
-  } else if width >= EMBEDDED_TRANSPORT_WIDTH + EMBEDDED_TOOLS_WIDTH + TOKENS.spacing.s4 {
+  } else if width >= EMBEDDED_TRANSPORT_WIDTH + tools_width + TOKENS.spacing.s4 {
     48.0 + TOKENS.spacing.s3 + 44.0
   } else {
     48.0 + TOKENS.spacing.s3 + 44.0 + TOKENS.spacing.s3 + 40.0
   }
 }
 
-fn controls_reveal_height(width: f32) -> f32 {
+fn controls_reveal_height(width: f32, tools_width: f32) -> f32 {
   let inset = embedded_inset(width);
   // Timeline, inner padding, controls, bottom inset, and the prompt allowance.
   24.0
     + 2.0 * TOKENS.spacing.s3
     + TOKENS.spacing.s4
-    + embedded_controls_height(width - 2.0 * inset)
+    + embedded_controls_height(width - 2.0 * inset, tools_width)
     + TOKENS.spacing.s4
     + inset
     + 36.0
@@ -845,8 +975,9 @@ fn embedded_controls<'a>(
   transport: Element<'a, Message>,
   tools: Element<'a, Message>,
   width: f32,
+  tools_width: f32,
 ) -> Element<'a, Message> {
-  if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * EMBEDDED_TOOLS_WIDTH {
+  if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * tools_width {
     // Fixed equal side slots prevent intrinsic metadata width from moving play.
     let side = (width - EMBEDDED_TRANSPORT_WIDTH) / 2.0;
     row![
@@ -857,7 +988,7 @@ fn embedded_controls<'a>(
     .align_y(Alignment::Center)
     .width(Fill)
     .into()
-  } else if width >= EMBEDDED_TRANSPORT_WIDTH + EMBEDDED_TOOLS_WIDTH + TOKENS.spacing.s4 {
+  } else if width >= EMBEDDED_TRANSPORT_WIDTH + tools_width + TOKENS.spacing.s4 {
     column![
       identity,
       row![transport, space::horizontal(), tools].align_y(Alignment::Center),
@@ -1066,6 +1197,54 @@ fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   ))
 }
 
+/// The per-series Automatic/Manual pill (ADR 0045). `true` on the switch is
+/// Automatic; the whole pill is one >=40px native target and is disabled
+/// while playback is busy or input is blocked.
+fn embedded_skip_toggle<'a>(
+  state: &'a State,
+  mode: jellypilot_core::config::IntroMode,
+) -> Element<'a, Message> {
+  let automatic = mode == jellypilot_core::config::IntroMode::Automatic;
+  let enabled = !state.playback.view.busy && !embedded_player::input_blocked(state);
+  let label = state.t("player-auto-skip-intro-credits");
+  focus_tooltip(
+    control_button_content(
+      move |control_state| {
+        container(
+          row![
+            text(label.clone())
+              .size(12)
+              .line_height(iced::Pixels(14.0))
+              .color(if enabled {
+                DARK_PALETTE.text.heading
+              } else {
+                DARK_PALETTE.text.muted
+              }),
+            cinema::mini_switch(automatic, control_state),
+          ]
+          .spacing(TOKENS.spacing.s2)
+          .align_y(Alignment::Center),
+        )
+        .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s3])
+        .style(move |_| cinema::skip_toggle_pill(control_state))
+        .into()
+      },
+      ButtonVariant::Text,
+    )
+    .on_press_maybe(
+      enabled.then_some(Message::Playback(PlaybackMessage::IntroModeChanged(
+        !automatic,
+      ))),
+    )
+    .style(cinema::invisible)
+    .padding(0)
+    .min_height(40.0)
+    .content_centered(true),
+    state.t("player-auto-skip-intro-credits"),
+    TooltipOptions::default(),
+  )
+}
+
 fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let position = state
     .playback
@@ -1093,6 +1272,9 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
         position.clamp(0.0, duration),
         duration,
         embedded_player::buffered_ranges(state),
+        embedded_player::chapter_times(state),
+        embedded_player::intro_ranges(state),
+        embedded_player::seek_hover(state),
         !state.playback.view.busy || embedded_player::is_seek_dragging(state),
       ),
       tracked_slider(
@@ -1125,9 +1307,34 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
     .on_exit(Message::EmbeddedPlayer(
       embedded_player::Message::SeekHovered(None),
     ));
+    let chapter_label = embedded_player::chapters(state).and_then(|chapters| {
+      chapters
+        .iter()
+        .take_while(|chapter| chapter.time_seconds <= target)
+        .last()
+        .and_then(|chapter| chapter.title.as_deref())
+    });
+    let mut tooltip_text = format_duration(target);
+    if let Some(label) = chapter_label {
+      tooltip_text.push_str(" · ");
+      tooltip_text.push_str(label);
+    }
+    if let Some(range) = state
+      .playback
+      .view
+      .intro_ranges
+      .iter()
+      .find(|range| range.start_seconds <= target && target < range.end_seconds)
+    {
+      tooltip_text.push_str(" · ");
+      tooltip_text.push_str(&state.t(match range.kind {
+        IntroSkipKind::Introduction => "player-range-intro",
+        IntroSkipKind::Credits => "player-range-credits",
+      }));
+    }
     let rail: Element<'_, Message> = iced::widget::tooltip(
       rail,
-      text(format_duration(target)).font(MONO_FONT).size(12),
+      text(tooltip_text).font(MONO_FONT).size(12),
       iced::widget::tooltip::Position::FollowCursor,
     )
     .delay(std::time::Duration::ZERO)
@@ -3142,7 +3349,8 @@ mod tests {
         );
       }
       assert!(
-        controls_reveal_height(window_width) >= expected_height + embedded_inset(window_width),
+        controls_reveal_height(window_width, embedded_tools_width(false))
+          >= expected_height + embedded_inset(window_width),
         "pointer reveal region must contain the entire responsive controls"
       );
     }
@@ -3154,6 +3362,7 @@ mod tests {
         item_id: "episode-1".to_owned(),
         title: "Pilot Episode".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: Some("series-1".to_owned()),
         runtime_seconds: Some(2_400.0),
         start_position_seconds: 0.0,
         play_method: "DirectPlay".to_owned(),
@@ -3359,6 +3568,7 @@ mod tests {
               item_id: "episode-1".to_owned(),
               title: "Pilot Episode".to_owned(),
               item_type: "Episode".to_owned(),
+              series_id: Some("series-1".to_owned()),
               runtime_seconds: Some(2_400.0),
               start_position_seconds: 0.0,
               play_method: "DirectPlay".to_owned(),
@@ -3404,6 +3614,7 @@ mod tests {
                   item_id: "episode-1".to_owned(),
                   title: "Pilot Episode".to_owned(),
                   item_type: "Episode".to_owned(),
+                  series_id: Some("series-1".to_owned()),
                   runtime_seconds: Some(2_400.0),
                   start_position_seconds: 0.0,
                   play_method: "DirectPlay".to_owned(),

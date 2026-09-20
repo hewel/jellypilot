@@ -6,6 +6,8 @@ These definitions describe accepted product semantics. Delivery status for the S
 
 The [UI internationalization specification](docs/i18n-design-spec.md) records UI Language decisions separately from their implementation status.
 
+The [embedded player design contract](docs/design-system.md#embedded-player-synchronization) records the accepted player-state and Intro Skipper revisions separately from their implementation status.
+
 The desktop [motion contract](docs/design-system.md#2026-09-15-desktop-motion-contract) and [Background Residency decision](docs/adr/0043-desktop-background-residency.md) are implemented and code-level validated. Their desktop appearance, tray usability, and window-manager acceptance remain human checks.
 
 ## Language
@@ -220,7 +222,7 @@ JellyPilot advancing playback past an Intro Skipper range without asking the use
 _Avoid_: Skip prompt, countdown, overlay
 
 **Manual Intro Skip**:
-JellyPilot advancing playback past an Intro Skipper range only when the user invokes the skip action while that range's prompt is active. Manual Intro Skip is distinct from silent Automatic Intro Skip.
+JellyPilot advancing playback past an Intro Skipper range only when the user invokes its active skip action, distinct from silent Automatic Intro Skip. In the desktop contract, the prompt remains available throughout the current stay in that range unless dismissed or used, and becomes available again on re-entry.
 _Avoid_: Automatic Intro Skip, next episode command
 
 **Credit Skip**:
@@ -228,8 +230,12 @@ JellyPilot advancing playback past an Intro Skipper credit range. Credit Skip do
 _Avoid_: Next episode command, outro button
 
 **Intro Skipper Setting**:
-A global user preference selecting Automatic, Manual, or Off for Intro Skipper ranges during playback. Automatic is the default and skips silently; Manual offers a prompt for a user-invoked skip, while Off disables Intro Skipper behavior.
+The global user preference controlling Intro Skipper behavior: the desktop choice is Automatic or Manual, with Automatic as the default. Automatic skips silently; Manual offers a user-invoked skip without automatically advancing playback.
 _Avoid_: Automation, Playback automation, Plugin install state, server setting
+
+**Series Intro Skipper Preference**:
+A persistent desktop Automatic or Manual choice for one series within one Profile Scope, overriding the Intro Skipper Setting across episodes, later playback, and application restarts. Only values different from the global setting remain overrides: selecting the global value or changing the global setting to match an override clears it and restores following the global setting.
+_Avoid_: Global setting, current-episode-only toggle, server-side preference
 
 **Diagnostics**:
 A user-facing support view that shows sanitized JellyPilot runtime events useful for understanding Jellyfin connection, Playback Target, and external player problems. Diagnostics are not a developer console and should not expose arbitrary frontend console output or secret-bearing values.
@@ -317,9 +323,9 @@ Dev: "Should JellyPilot show a skip button over MPV?"
 
 Domain expert: "No. Automatic Intro Skip means JellyPilot skips the eligible range silently."
 
-Dev: "If the user seeks back into a skipped intro, should JellyPilot skip it again?"
+Dev: "If the user seeks back into a skipped intro, should JellyPilot automatically skip it again?"
 
-Domain expert: "No. Each fetched Intro Skipper range is skipped at most once for that playback session."
+Domain expert: "No. Automatic Intro Skip attempts each fetched range at most once per Playback Session. Desktop Manual Intro Skip offers the action again when the user re-enters the range."
 
 Dev: "Does skipping credits mean JellyPilot immediately starts the next episode?"
 

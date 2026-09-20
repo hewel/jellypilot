@@ -1,25 +1,5 @@
-use crate::config::IntroMode;
-
 pub const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
     ["eng", "spa", "fra", "deu", "ita", "por", "jpn", "zho"];
-
-#[must_use]
-pub const fn config_intro_mode(selected: u32) -> IntroMode {
-    match selected {
-        1 => IntroMode::Manual,
-        2 => IntroMode::Off,
-        _ => IntroMode::Automatic,
-    }
-}
-
-#[must_use]
-pub const fn intro_mode_selection(mode: IntroMode) -> u32 {
-    match mode {
-        IntroMode::Automatic => 0,
-        IntroMode::Manual => 1,
-        IntroMode::Off => 2,
-    }
-}
 
 #[must_use]
 pub fn format_byte_count(bytes: u64) -> String {

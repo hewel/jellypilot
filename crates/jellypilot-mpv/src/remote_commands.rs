@@ -330,6 +330,7 @@ mod tests {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),
         item_type: "Episode".to_owned(),
+        series_id: None,
         runtime_seconds: Some(1_800.0),
         start_position_seconds: 0.0,
         play_method: "Transcode".to_owned(),

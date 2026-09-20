@@ -19,12 +19,27 @@ const PANEL_RADIUS: f32 = 16.0;
 const PANEL_FILL: Color = Color::from_rgba8(0x19, 0x1a, 0x21, 0.8);
 const RAIL: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.22);
 const BUFFERED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
+/// Intro/credit interval wash; Paper paints it at the buffered layer's value.
+const SEGMENT: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
+/// Chapter and skip-boundary tick: 2×10 white/70% centered on the rail.
+const MARKER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.7);
+const MARKER_WIDTH: f32 = 2.0;
+const MARKER_HEIGHT: f32 = 10.0;
+/// Hover position tick: 2×12 solid white with a soft glow.
+const HOVER_MARKER_HEIGHT: f32 = 12.0;
 const RAIL_WIDTH: f32 = 4.0;
 const KNOB_RADIUS: f32 = 7.0;
 const KNOB_BORDER: f32 = 2.5;
 const PROGRESS_START: Color = Color::from_rgb8(0x63, 0x66, 0xf1);
 const PROGRESS_END: Color = Color::from_rgb8(0x81, 0x8c, 0xf8);
 const VOLUME_KNOB_RADIUS: f32 = 4.0;
+/// Paused minimal indicator: 72px framed circle centered on the picture.
+const PAUSE_CHIP: f32 = 72.0;
+/// Skip-mode pill geometry: 32px visual inside a 40px hit target.
+const PILL_HEIGHT: f32 = 32.0;
+const MINI_TRACK: Size = Size::new(26.0, 15.0);
+const MINI_KNOB: f32 = 11.0;
+const MINI_KNOB_INSET: f32 = 2.0;
 
 /// The actual play method, using the information panel's compact status pill.
 pub fn play_method_badge<'a, Message: 'a>(label: String, font: iced::Font) -> Element<'a, Message> {
@@ -326,6 +341,154 @@ pub fn scrim(top: bool) -> container::Style {
     }
 }
 
+/// The minimal presentation's shallow bottom gradient: 80px, black/30% to
+/// transparent, much weaker than the complete scrim.
+pub fn minimal_scrim(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Gradient(
+            gradient::Linear::new(Degrees(180.0))
+                .add_stop(0.0, Color::TRANSPARENT)
+                .add_stop(0.45, Color::BLACK.scale_alpha(0.14))
+                .add_stop(1.0, Color::BLACK.scale_alpha(0.3))
+                .into(),
+        )),
+        ..container::Style::default()
+    }
+}
+
+/// The paused minimal indicator: a 72px framed circle centered on the picture.
+pub fn pause_chip(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(FRAMED_FILL)),
+        border: Border {
+            radius: (PAUSE_CHIP / 2.0).into(),
+            smoothing: super::container::SURFACE_SMOOTHING,
+            color: FRAMED_EDGE,
+            width: 1.0,
+        },
+        shadow: Shadow {
+            color: Color::BLACK.scale_alpha(0.35),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 32.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// The skip-mode pill's translucent fill; hover lifts it like other quiet
+/// cinema controls, disabled keeps the resting fill.
+pub fn skip_toggle_pill(state: crate::icons::IconControlState) -> container::Style {
+    let fill = match state {
+        crate::icons::IconControlState::Hovered => DARK_PALETTE.colors.controlHover,
+        crate::icons::IconControlState::Rest | crate::icons::IconControlState::Disabled => {
+            Color::WHITE.scale_alpha(0.06)
+        }
+    };
+    container::Style {
+        background: Some(Background::Color(fill)),
+        border: Border {
+            radius: (PILL_HEIGHT / 2.0).into(),
+            smoothing: super::container::SURFACE_SMOOTHING,
+            color: Color::TRANSPARENT,
+            width: 0.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Invisible button chrome for content that paints its own surface (the
+/// skip-mode pill); the keyboard focus ring still draws around the hit area.
+pub fn invisible(
+    _theme: &Theme,
+    _variant: ButtonVariant,
+    _status: button::Status,
+) -> button::Style {
+    button::Style::default()
+}
+
+/// The compact 26×15 switch inside the skip-mode pill. Interaction stays on
+/// the enclosing control; this leaf only paints the resolved state.
+pub fn mini_switch<'a, Message: 'a>(
+    on: bool,
+    state: crate::icons::IconControlState,
+) -> Element<'a, Message> {
+    Element::new(MiniSwitch { on, state })
+}
+
+struct MiniSwitch {
+    on: bool,
+    state: crate::icons::IconControlState,
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for MiniSwitch {
+    fn size(&self) -> Size<Length> {
+        Size::new(
+            Length::Fixed(MINI_TRACK.width),
+            Length::Fixed(MINI_TRACK.height),
+        )
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut widget::Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::atomic(limits, MINI_TRACK.width, MINI_TRACK.height)
+    }
+
+    fn draw(
+        &self,
+        _tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: iced::mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let colors = DARK_PALETTE.colors;
+        let disabled = self.state == crate::icons::IconControlState::Disabled;
+        let track = if disabled {
+            colors.control
+        } else if self.on {
+            colors.primary
+        } else if self.state == crate::icons::IconControlState::Hovered {
+            colors.controlHover
+        } else {
+            colors.surfaceContainerHighest
+        };
+        let knob = if disabled {
+            DARK_PALETTE.text.muted
+        } else {
+            colors.onPrimary
+        };
+        let bounds = layout.bounds();
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: Border::default().rounded(TOKENS.radii.full),
+                ..renderer::Quad::default()
+            },
+            Background::Color(track),
+        );
+        let travel = (MINI_TRACK.width - MINI_KNOB - 2.0 * MINI_KNOB_INSET) * self.on as u8 as f32;
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: Rectangle {
+                    x: bounds.x + MINI_KNOB_INSET + travel,
+                    y: bounds.y + MINI_KNOB_INSET,
+                    width: MINI_KNOB,
+                    height: MINI_KNOB,
+                },
+                border: Border::default().rounded(TOKENS.radii.full),
+                ..renderer::Quad::default()
+            },
+            Background::Color(knob),
+        );
+    }
+}
+
 /// Non-interactive slider appearance while a playback command is settling.
 pub fn unavailable_slider(theme: &Theme, _status: slider::Status) -> slider::Style {
     let mut style = slider::default(theme, slider::Status::Active);
@@ -337,19 +500,50 @@ pub fn unavailable_slider(theme: &Theme, _status: slider::Status) -> slider::Sty
     style
 }
 
-/// Buffered ranges and gradient progress painted under the transparent seek
-/// slider; the slider keeps the pointer and keyboard contract.
+/// Buffered ranges, chapter points, and intro/credit intervals painted under
+/// the transparent seek slider; the slider keeps the pointer and keyboard
+/// contract. `chapters` are time points, `segments` are real skip intervals —
+/// callers pass only fetched data, never inferred markers. `hover` draws the
+/// glowing position tick while the pointer previews a seek.
 pub fn timeline_track<'a, Message: 'a>(
     position: f64,
     duration: f64,
     buffered: &'a [(f64, f64)],
+    chapters: &'a [f64],
+    segments: &'a [(f64, f64)],
+    hover: Option<f64>,
     available: bool,
 ) -> Element<'a, Message> {
     Element::new(TimelineTrack {
         position,
         duration,
         buffered,
+        chapters,
+        segments,
+        hover,
         available,
+        minimal: false,
+    })
+}
+
+/// The read-only edge line of the minimal presentation: rail, real chapter
+/// and intro/credit markers, and gradient progress — no buffered layer, knob,
+/// or input. Seeking happens on the complete timeline after reveal.
+pub fn minimal_track<'a, Message: 'a>(
+    position: f64,
+    duration: f64,
+    chapters: &'a [f64],
+    segments: &'a [(f64, f64)],
+) -> Element<'a, Message> {
+    Element::new(TimelineTrack {
+        position,
+        duration,
+        buffered: &[],
+        chapters,
+        segments,
+        hover: None,
+        available: true,
+        minimal: true,
     })
 }
 
@@ -357,7 +551,11 @@ struct TimelineTrack<'a> {
     position: f64,
     duration: f64,
     buffered: &'a [(f64, f64)],
+    chapters: &'a [f64],
+    segments: &'a [(f64, f64)],
+    hover: Option<f64>,
     available: bool,
+    minimal: bool,
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
@@ -388,11 +586,22 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
         if bounds.width <= 0.0 || !self.duration.is_finite() || self.duration <= 0.0 {
             return;
         }
-        let rail = Rectangle {
-            x: bounds.x,
-            y: bounds.y + (bounds.height - RAIL_WIDTH) / 2.0,
-            width: bounds.width,
-            height: RAIL_WIDTH,
+        let rail = if self.minimal {
+            // The edge line anchors to the surface bottom; markers overflow
+            // upward into the picture like the Paper reference.
+            Rectangle {
+                x: bounds.x,
+                y: bounds.y + bounds.height - RAIL_WIDTH,
+                width: bounds.width,
+                height: RAIL_WIDTH,
+            }
+        } else {
+            Rectangle {
+                x: bounds.x,
+                y: bounds.y + (bounds.height - RAIL_WIDTH) / 2.0,
+                width: bounds.width,
+                height: RAIL_WIDTH,
+            }
         };
         let rail_border = Border {
             radius: (RAIL_WIDTH / 2.0).into(),
@@ -424,6 +633,25 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
                         ..renderer::Quad::default()
                     },
                     BUFFERED,
+                );
+            }
+            for &(start, end) in self.segments {
+                let left = (start / self.duration).clamp(0.0, 1.0) as f32;
+                let right = (end / self.duration).clamp(0.0, 1.0) as f32;
+                if right <= left {
+                    continue;
+                }
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle {
+                            x: rail.x + left * rail.width,
+                            width: (right - left) * rail.width,
+                            ..rail
+                        },
+                        border: rail_border,
+                        ..renderer::Quad::default()
+                    },
+                    SEGMENT,
                 );
             }
             let fraction = (self.position / self.duration).clamp(0.0, 1.0) as f32;
@@ -459,33 +687,95 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
                     },
                 );
             }
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: Rectangle {
-                        x: bounds.x + fraction * bounds.width - KNOB_RADIUS,
-                        y: bounds.y + bounds.height / 2.0 - KNOB_RADIUS,
-                        width: KNOB_RADIUS * 2.0,
-                        height: KNOB_RADIUS * 2.0,
-                    },
-                    border: Border {
-                        color: Color::WHITE,
-                        width: KNOB_BORDER,
-                        radius: KNOB_RADIUS.into(),
-                        ..Border::default()
-                    },
-                    shadow: Shadow {
-                        color: Color::BLACK.scale_alpha(0.5),
-                        offset: Vector::new(0.0, 2.0),
-                        blur_radius: 8.0,
-                    },
-                    ..renderer::Quad::default()
-                },
-                if self.available {
-                    DARK_PALETTE.colors.secondary
+            // Chapter points and skip boundaries share the 2×10 marker; both
+            // are real positions, so coinciding ticks simply overdraw.
+            let marker = |at: f64| Rectangle {
+                x: rail.x + (at / self.duration).clamp(0.0, 1.0) as f32 * rail.width
+                    - MARKER_WIDTH / 2.0,
+                y: if self.minimal {
+                    rail.y + rail.height - MARKER_HEIGHT
                 } else {
-                    DARK_PALETTE.text.muted
+                    rail.y + (rail.height - MARKER_HEIGHT) / 2.0
                 },
-            );
+                width: MARKER_WIDTH,
+                height: MARKER_HEIGHT,
+            };
+            let marker_border = Border {
+                radius: 1.0.into(),
+                ..Border::default()
+            };
+            for &chapter in self.chapters {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: marker(chapter),
+                        border: marker_border,
+                        ..renderer::Quad::default()
+                    },
+                    MARKER,
+                );
+            }
+            for &(start, end) in self.segments {
+                for boundary in [start, end] {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: marker(boundary),
+                            border: marker_border,
+                            ..renderer::Quad::default()
+                        },
+                        MARKER,
+                    );
+                }
+            }
+            if let Some(hover) = self.hover {
+                let at = (hover / self.duration).clamp(0.0, 1.0) as f32;
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle {
+                            x: rail.x + at * rail.width - MARKER_WIDTH / 2.0,
+                            y: rail.y + (rail.height - HOVER_MARKER_HEIGHT) / 2.0,
+                            width: MARKER_WIDTH,
+                            height: HOVER_MARKER_HEIGHT,
+                        },
+                        border: marker_border,
+                        shadow: Shadow {
+                            color: Color::WHITE.scale_alpha(0.8),
+                            offset: Vector::new(0.0, 0.0),
+                            blur_radius: 6.0,
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    Color::WHITE,
+                );
+            }
+            if !self.minimal {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: Rectangle {
+                            x: bounds.x + fraction * bounds.width - KNOB_RADIUS,
+                            y: bounds.y + bounds.height / 2.0 - KNOB_RADIUS,
+                            width: KNOB_RADIUS * 2.0,
+                            height: KNOB_RADIUS * 2.0,
+                        },
+                        border: Border {
+                            color: Color::WHITE,
+                            width: KNOB_BORDER,
+                            radius: KNOB_RADIUS.into(),
+                            ..Border::default()
+                        },
+                        shadow: Shadow {
+                            color: Color::BLACK.scale_alpha(0.5),
+                            offset: Vector::new(0.0, 2.0),
+                            blur_radius: 8.0,
+                        },
+                        ..renderer::Quad::default()
+                    },
+                    if self.available {
+                        DARK_PALETTE.colors.secondary
+                    } else {
+                        DARK_PALETTE.text.muted
+                    },
+                );
+            }
         });
     }
 }

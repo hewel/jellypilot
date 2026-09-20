@@ -369,11 +369,6 @@ fn playback_section(state: &State) -> Element<'_, Message> {
       mode == IntroMode::Manual,
       SettingsMessage::IntroModeSelected(IntroMode::Manual),
     ),
-    menu_option(
-      state.t("settings-off"),
-      mode == IntroMode::Off,
-      SettingsMessage::IntroModeSelected(IntroMode::Off),
-    ),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -1254,7 +1249,6 @@ fn intro_mode_label(locale: Localizer, mode: IntroMode) -> String {
   locale.text(match mode {
     IntroMode::Automatic => "settings-intro-automatic",
     IntroMode::Manual => "settings-intro-manual",
-    IntroMode::Off => "settings-off",
   })
 }
 

@@ -510,7 +510,6 @@ pub fn intro_skip_mode(mode: IntroMode) -> IntroSkipMode {
   match mode {
     IntroMode::Automatic => IntroSkipMode::Automatic,
     IntroMode::Manual => IntroSkipMode::Manual,
-    IntroMode::Off => IntroSkipMode::Off,
   }
 }
 
