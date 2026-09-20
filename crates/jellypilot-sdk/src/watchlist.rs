@@ -122,7 +122,7 @@ impl Sdk {
             .inner
             .item_actions
             .run_watchlist(
-                admission,
+                admission.immediate(),
                 storage,
                 WatchlistWrite {
                     item_id: item.id.clone(),
@@ -152,7 +152,7 @@ impl Sdk {
             .inner
             .item_actions
             .run_watchlist(
-                admission,
+                admission.immediate(),
                 storage,
                 WatchlistWrite {
                     item_id,

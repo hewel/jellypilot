@@ -8,10 +8,9 @@ use std::sync::Arc;
 
 use jellypilot_media_server::{
     FavoritesPage, FavoritesPageRequest, VideoItemDetail, VideoItemStreams, VideoLibraryItem,
-    VideoLibraryPage, VideoLibraryPageRequest, VideoLibraryShortcut, VideoPlaybackTarget,
-    VideoSearchPage, VideoSearchRequest, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
-    VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, WatchHistoryPage,
-    WatchHistoryPageRequest,
+    VideoLibraryShortcut, VideoPlaybackTarget, VideoSeasonEpisodesPage,
+    VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate,
+    WatchHistoryPage, WatchHistoryPageRequest,
 };
 
 use crate::{OperationToken, Sdk, SdkError};
@@ -56,40 +55,6 @@ impl Sdk {
                 client
                     .library()
                     .library_latest(library_id)
-                    .await
-                    .map_err(SdkError::from)
-            })
-            .await
-    }
-
-    /// Paged Library Browser listing.
-    pub async fn browse_video(
-        &self,
-        token: Arc<OperationToken>,
-        request: VideoLibraryPageRequest,
-    ) -> Result<VideoLibraryPage, SdkError> {
-        self.inner
-            .scoped(&token, |client| async move {
-                client
-                    .library()
-                    .browse_video(request)
-                    .await
-                    .map_err(SdkError::from)
-            })
-            .await
-    }
-
-    /// Paged video-only library search.
-    pub async fn search_video(
-        &self,
-        token: Arc<OperationToken>,
-        request: VideoSearchRequest,
-    ) -> Result<VideoSearchPage, SdkError> {
-        self.inner
-            .scoped(&token, |client| async move {
-                client
-                    .library()
-                    .search_video(request)
                     .await
                     .map_err(SdkError::from)
             })
@@ -269,13 +234,26 @@ impl Sdk {
             self.inner
                 .admit_item(&token, &item_id, crate::item_actions::server_action(action))?;
         let inner = Arc::clone(&self.inner);
+        let worker_token = Arc::clone(&token);
+        let receipt = admission.receipt().clone();
         self.inner
             .scoped(&token, move |client| async move {
-                inner
+                let result = inner
                     .item_actions
                     .run_server(admission, client)
                     .await
                     .map_err(SdkError::from)
+                    .and_then(|update| {
+                        if worker_token.is_cancelled() {
+                            return Err(SdkError::Cancelled);
+                        }
+                        inner.publish_user_data(&worker_token.scope, &update)?;
+                        Ok(update)
+                    });
+                // Publication is part of delivery, not the outer caller's
+                // scheduling. A newer same-item write cannot overtake it.
+                let _ = inner.item_actions.acknowledge(&receipt);
+                result
             })
             .await
     }

@@ -20,6 +20,7 @@
 //!   caller drops its future or the SDK is closed.
 
 mod account;
+pub mod browse;
 mod error;
 mod hooks;
 mod image;
@@ -222,6 +223,7 @@ struct SdkState {
     epoch: u64,
     active: Option<ActiveSession>,
     tokens: HashMap<u64, Vec<Weak<CancellationToken>>>,
+    browsers: Vec<Weak<browse::BrowseSession>>,
     watchlist: Option<WatchlistStore>,
     closed: bool,
     /// Number of committed account transactions currently owning session
@@ -330,7 +332,6 @@ impl SdkInner {
         }
         self.item_actions
             .begin(item_id, action)
-            .map(item_actions::Admission::immediate)
             .map_err(SdkError::from)
     }
 
@@ -737,6 +738,7 @@ impl Sdk {
                 epoch: 0,
                 active: None,
                 tokens: HashMap::new(),
+                browsers: Vec::new(),
                 watchlist: None,
                 closed: false,
                 committed_cleanup: 0,

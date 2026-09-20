@@ -5,6 +5,7 @@
 //! `jellypilot-sdk`; cancelling a consumer-side coroutine is not business
 //! cancellation — use [`OperationToken`].
 
+mod browse;
 mod callbacks;
 mod dto;
 mod error;
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use jellypilot_media_server as ms;
 
+pub use browse::{BrowsePreferences, BrowseQuery, BrowseSession, BrowseSnapshot, BrowseStatus};
 pub use callbacks::{QuickConnectListener, QuickConnectOutcome, SdkHooks, SecureCredentialStore};
 pub use dto::*;
 pub use error::{CredentialStoreError, SdkError};
@@ -339,29 +341,11 @@ impl JellypilotSdk {
             .map_err(SdkError::from)
     }
 
-    /// Paged Library Browser listing.
-    pub async fn browse_video(
-        &self,
-        token: Arc<OperationToken>,
-        request: VideoLibraryPageRequest,
-    ) -> Result<VideoLibraryPage, SdkError> {
+    /// Opens one scope-bound result set with SDK-owned paging and cancellation.
+    pub fn open_browser(&self, query: BrowseQuery) -> Result<Arc<BrowseSession>, SdkError> {
         self.sdk
-            .browse_video(token.inner.clone(), request.into())
-            .await
-            .map(VideoLibraryPage::from)
-            .map_err(SdkError::from)
-    }
-
-    /// Paged video-only library search.
-    pub async fn search_video(
-        &self,
-        token: Arc<OperationToken>,
-        request: VideoSearchRequest,
-    ) -> Result<VideoSearchPage, SdkError> {
-        self.sdk
-            .search_video(token.inner.clone(), request.into())
-            .await
-            .map(VideoSearchPage::from)
+            .open_browser(query.into())
+            .map(|inner| Arc::new(BrowseSession { inner }))
             .map_err(SdkError::from)
     }
 

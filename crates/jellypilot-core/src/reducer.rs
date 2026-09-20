@@ -598,7 +598,7 @@ impl LibraryBrowseCore {
         }
     }
 
-    fn total_record_count(&self) -> Option<u32> {
+    pub(crate) fn total_record_count(&self) -> Option<u32> {
         self.page_zero().map(|page| page.total_record_count)
     }
 

@@ -1,6 +1,8 @@
 //! Deterministic regressions for scope cancellation, stale rejection, and
-//! cross-profile state partitioning. No network: sessions are adopted
-//! through the test hook and credentials live in memory.
+//! cross-profile state partitioning. Credentials live in memory; request
+//! regressions use controlled loopback HTTP servers.
+
+mod browse;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1089,11 +1091,17 @@ async fn scope_ref_without_active_profile_is_typed() {
     assert_eq!(error, SdkError::NoActiveProfile);
 }
 
+struct HttpRequest<Body> {
+    headers: String,
+    reply: tokio::sync::oneshot::Sender<Body>,
+    disconnected: tokio::sync::oneshot::Receiver<()>,
+}
+
 /// Each accepted request waits for its own response, so tests control
-/// mutation ordering without timing the network or sleeping.
-async fn controlled_user_data_server() -> (
+/// delivery ordering and observe cancellation without sleeping.
+async fn controlled_http_server<Body: AsRef<str> + Send + 'static>() -> (
     String,
-    tokio::sync::mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<&'static str>>,
+    tokio::sync::mpsc::UnboundedReceiver<HttpRequest<Body>>,
     tokio_util::task::AbortOnDropHandle<()>,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1102,8 +1110,7 @@ async fn controlled_user_data_server() -> (
         .await
         .expect("bind mutation server");
     let address = listener.local_addr().expect("server address");
-    let (requests, received) =
-        tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<&'static str>>();
+    let (requests, received) = tokio::sync::mpsc::unbounded_channel::<HttpRequest<Body>>();
     let task = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         loop {
@@ -1114,7 +1121,9 @@ async fn controlled_user_data_server() -> (
                     connections.spawn(async move {
                         let mut headers = Vec::new();
                         loop {
-                            let byte = stream.read_u8().await.expect("read request");
+                            let Ok(byte) = stream.read_u8().await else {
+                                return;
+                            };
                             headers.push(byte);
                             if headers.ends_with(b"\r\n\r\n") {
                                 break;
@@ -1122,10 +1131,26 @@ async fn controlled_user_data_server() -> (
                             assert!(headers.len() < 16_384, "bounded request headers");
                         }
                         let (reply, response) = tokio::sync::oneshot::channel();
-                        if requests.send(reply).is_err() {
+                        let (disconnected, closed) = tokio::sync::oneshot::channel();
+                        if requests.send(HttpRequest {
+                            headers: String::from_utf8(headers).expect("HTTP headers"),
+                            reply,
+                            disconnected: closed,
+                        }).is_err() {
                             return;
                         }
-                        if let Ok(body) = response.await {
+                        let response = tokio::select! {
+                            response = response => response,
+                            () = async {
+                                let mut discard = [0_u8; 512];
+                                while matches!(stream.read(&mut discard).await, Ok(count) if count > 0) {}
+                            } => {
+                                let _ = disconnected.send(());
+                                return;
+                            }
+                        };
+                        if let Ok(body) = response {
+                            let body = body.as_ref();
                             let response = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                                 body.len()
@@ -1150,19 +1175,20 @@ async fn controlled_user_data_server() -> (
 }
 
 async fn next_user_data_request(
-    requests: &mut tokio::sync::mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<&'static str>>,
+    requests: &mut tokio::sync::mpsc::UnboundedReceiver<HttpRequest<&'static str>>,
 ) -> tokio::sync::oneshot::Sender<&'static str> {
     tokio::time::timeout(Duration::from_secs(10), requests.recv())
         .await
         .expect("mutation should reach server")
         .expect("server should remain available")
+        .reply
 }
 
 #[tokio::test]
 async fn item_writes_share_admission_without_blocking_independent_items() {
     use jellypilot_media_server::VideoUserDataAction;
 
-    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (server, mut requests, _server_task) = controlled_http_server().await;
     let (sdk, _dir) = test_sdk();
     sdk.adopt_test_session(test_session("ada", &server));
     let sdk = Arc::new(sdk);
@@ -1234,7 +1260,7 @@ async fn item_writes_share_admission_without_blocking_independent_items() {
 async fn unconfirmed_server_write_releases_admission_for_retry() {
     use jellypilot_media_server::VideoUserDataAction;
 
-    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (server, mut requests, _server_task) = controlled_http_server().await;
     let (sdk, _dir) = test_sdk();
     sdk.adopt_test_session(test_session("ada", &server));
     let sdk = Arc::new(sdk);
@@ -1283,7 +1309,7 @@ async fn unconfirmed_server_write_releases_admission_for_retry() {
 async fn replaced_scope_cannot_accept_a_pending_item_write() {
     use jellypilot_media_server::VideoUserDataAction;
 
-    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (server, mut requests, _server_task) = controlled_http_server().await;
     let (sdk, _dir) = test_sdk();
     sdk.adopt_test_session(test_session("ada", &server));
     let sdk = Arc::new(sdk);
@@ -1418,7 +1444,7 @@ impl WatchlistStorage for RecordingWatchlist {
 
 #[tokio::test]
 async fn settled_server_write_stays_busy_until_acknowledged() {
-    let (server, mut requests, _server_task) = controlled_user_data_server().await;
+    let (server, mut requests, _server_task) = controlled_http_server().await;
     let executor = ItemActions::default();
     executor.reset_scope(Some(
         ProfileScope::new(MediaServerProvider::Jellyfin, server.as_str(), "ada").expect("scope"),

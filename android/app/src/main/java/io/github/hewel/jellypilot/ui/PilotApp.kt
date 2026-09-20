@@ -10,8 +10,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
@@ -24,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -37,10 +40,14 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import io.github.hewel.jellypilot.AppViewModel
 import io.github.hewel.jellypilot.R
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit) {
   val state by model.state.collectAsStateWithLifecycle()
+  // Keep viewport state while detail/player temporarily removes Browse.
+  val browserGridState = key(state.browser.generation) { rememberLazyGridState() }
   BackHandler(state.detail != null || state.showPlayer) { model.back() }
   PilotTheme {
     Surface(color = MaterialTheme.colorScheme.background) {
@@ -75,9 +82,12 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
                   state.detail != null -> Detail(state.detail!!, state.detailItems, model)
                   state.destination == Destination.Account -> Accounts(state, model)
                   state.activeName == null -> EmptyConnection(model::addAccount)
-                  else -> Browse(state, model)
+                  else -> Browse(state, model, browserGridState)
                 }
-                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+                val browseVisible = state.detail == null && state.activeName != null &&
+                  (state.destination == Destination.Library || state.destination == Destination.Search)
+                if (state.busy || (browseVisible && state.browser.refreshing)) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+
               }
               Text(stringResource(R.string.bringup_notice), Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.labelSmall)
               if (!rail) Navigation(state.destination, false, model::navigate)
@@ -125,17 +135,16 @@ private fun EmptyConnection(connect: () -> Unit) {
 }
 
 @Composable
-private fun Browse(state: AppUiState, model: AppViewModel) {
-  var query by remember { mutableStateOf("") }
+private fun Browse(state: AppUiState, model: AppViewModel, gridState: LazyGridState) {
   Column(Modifier.fillMaxSize()) {
     if (state.destination == Destination.Search) {
       OutlinedTextField(
-        value = query, onValueChange = { query = it; model.search(it) }, singleLine = true,
+        value = state.searchQuery, onValueChange = model::search, singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         placeholder = { Text(stringResource(R.string.query_hint)) },
         leadingIcon = { Icon(painterResource(R.drawable.ic_search), null) },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { model.search(query) }),
+        keyboardActions = KeyboardActions(onSearch = { model.search(state.searchQuery) }),
       )
     }
     if (state.destination == Destination.Library) {
@@ -145,17 +154,109 @@ private fun Browse(state: AppUiState, model: AppViewModel) {
         }
       }
     }
-    if (state.items.isEmpty() && !state.busy) {
-      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.no_results), color = LocalPilotColors.current.metadata) }
+    if (state.destination == Destination.Home) {
+      if (state.items.isEmpty() && !state.busy) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.no_results), color = LocalPilotColors.current.metadata) }
+      } else {
+        LazyVerticalGrid(
+          columns = GridCells.Adaptive(109.dp), modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+          items(state.items, key = { it.id }) { item -> Poster(item) { model.showDetail(item.id) } }
+        }
+      }
     } else {
-      LazyVerticalGrid(
-        columns = GridCells.Adaptive(109.dp), modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp),
-      ) {
-        items(state.items, key = { it.id }) { item -> Poster(item) { model.showDetail(item.id) } }
-        if (state.hasMore) item { TextButton(onClick = model::loadMore, enabled = !state.busy) { Text(stringResource(R.string.load_more)) } }
+      BrowserGrid(state.browser, model, gridState)
+    }
+  }
+}
+
+/**
+ * Sparse browse grid over the SDK session window. Cells are absolute display
+ * indexes; slots the SDK has not delivered render as fixed-height
+ * placeholders, and viewport demand is reported back through
+ * [AppViewModel.setBrowserDisplayRange].
+ */
+@Composable
+private fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: LazyGridState) {
+  val count = if (browser.isVirtual) browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt() else browser.slots.size
+  // Report the visible window expanded by one viewport on each side, rounded
+  // outward to complete rows; the SDK owns page scheduling from this demand.
+  LaunchedEffect(gridState, count) {
+    snapshotFlow {
+      val visible = gridState.layoutInfo.visibleItemsInfo
+      if (visible.isEmpty() || count == 0) return@snapshotFlow null
+      val first = visible.minOf { it.index }.toLong()
+      if (first >= count) return@snapshotFlow null
+      val last = visible.maxOf { it.index }.toLong().coerceAtMost(count.toLong() - 1)
+      val rowTop = visible.minOf { it.offset.y }
+      val columns = visible.count { it.offset.y == rowTop }.coerceAtLeast(1).toLong()
+      val span = visible.size.toLong()
+      val start = ((first - span).coerceAtLeast(0) / columns) * columns
+      val end = (((last + span + columns) / columns) * columns).coerceAtMost(count.toLong())
+      start to end
+    }.distinctUntilChanged().collect { range ->
+      if (range != null) model.setBrowserDisplayRange(browser.generation, range.first.toUInt(), range.second.toUInt())
+    }
+  }
+  when {
+    browser.status == BrowseUiStatus.Failed && !browser.hasContent -> {
+      Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(browser.error ?: stringResource(R.string.sdk_request_failed), color = LocalPilotColors.current.body)
+        if (browser.retryable) {
+          Spacer(Modifier.height(16.dp))
+          FilledTonalButton(onClick = model::retryBrowser, enabled = !browser.retryBusy) { Text(stringResource(R.string.retry)) }
+        }
       }
     }
+    browser.status == BrowseUiStatus.Loading && !browser.hasContent -> {
+      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    }
+    count == 0 -> {
+      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.no_results), color = LocalPilotColors.current.metadata) }
+    }
+    else -> Column(Modifier.fillMaxSize()) {
+      if (browser.loadingMore && !browser.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
+      val retainedError = browser.error ?: browser.refreshError
+      // A virtual list's end can be thousands of rows away. Paging failures
+      // must remain actionable even when every visible slot is a placeholder.
+      if (retainedError != null) {
+        Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+          Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(retainedError, Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.labelSmall)
+            if (browser.retryable) {
+              TextButton(onClick = model::retryBrowser, enabled = !browser.retryBusy) { Text(stringResource(R.string.retry)) }
+            }
+          }
+        }
+      }
+      LazyVerticalGrid(
+        state = gridState,
+        columns = GridCells.Adaptive(109.dp), modifier = Modifier.fillMaxWidth().weight(1f),
+        contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
+        items(count, key = { it }) { index ->
+          val slot = index.toUInt().let { absolute ->
+            if (absolute >= browser.visibleStart && absolute < browser.loadedEnd) {
+              browser.slots.getOrNull((absolute - browser.visibleStart).toInt())
+            } else null
+          }
+          if (slot != null) Poster(slot) { model.showDetail(slot.id) } else PosterPlaceholder()
+        }
+      }
+    }
+  }
+}
+
+/** Noninteractive stand-in for a slot whose page the SDK has not delivered. */
+@Composable
+private fun PosterPlaceholder() {
+  val titleHeight = with(LocalDensity.current) { MaterialTheme.typography.labelLarge.lineHeight.toDp() }
+  val metadataHeight = with(LocalDensity.current) { MaterialTheme.typography.labelSmall.lineHeight.toDp() }
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh))
+    Spacer(Modifier.height(titleHeight * 2))
+    Spacer(Modifier.height(metadataHeight))
   }
 }
 
@@ -177,7 +278,7 @@ private fun Artwork(artwork: ArtworkUi?, title: String, modifier: Modifier) {
 private fun Poster(item: MediaUi, open: () -> Unit) {
   Column(Modifier.clickable(onClick = open), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Artwork(item.artwork, item.title, Modifier.fillMaxWidth().aspectRatio(2f / 3f))
-    Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+    Text(item.title, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
     Text(item.metadata, maxLines = 1, overflow = TextOverflow.Ellipsis, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.labelSmall)
   }
 }

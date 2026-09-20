@@ -33,7 +33,16 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private var authGeneration = 0L
   private var queryGeneration = 0L
   private var searchText = ""
-  private var nextIndex = 0
+  private var searchDebounce: Job? = null
+  /** The single SDK-owned browse session for the current Library/Search query. */
+  private var browseSession: BrowseSession? = null
+  private var browseCollector: Job? = null
+  /** Set only while the retained session is suspended for detail/player navigation. */
+  private var browserSuspended = false
+  /** Incremented on every suspend intent; lets a failed detail load resume only its own suspension. */
+  private var browserSuspendEpoch = 0L
+  /** Monotonic session generation; published into BrowserUi so the grid keys its viewport per session, not per scope-relative identity. */
+  private var browserGeneration = 0L
   private var libraries = emptyList<VideoLibraryShortcut>()
   /** In-flight Favorite/Played writes keyed by item id; each owns its token and job, independent of the browse query slot. */
   private val userDataWrites = mutableMapOf<String, PendingWrite>()
@@ -50,32 +59,55 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       if (sdk.activeProfile() != null) refresh()
     }
   }
-
-  fun setVisible(visible: Boolean) { visibility.setVisible(visible) }
+  fun setVisible(visible: Boolean) {
+    visibility.setVisible(visible)
+    // This ViewModel is Application-owned: activityFinished() closed the
+    // session, so reopening must restore the intended browse query.
+    if (visible && browseSession == null && sdk.activeProfile() != null) {
+      when (state.value.destination) {
+        Destination.Search -> search(searchText)
+        Destination.Library -> openLibraryQuery()
+        else -> Unit
+      }
+    }
+  }
   fun activityFinished() {
     cancelLogin()
     cancelQuery()
+    closeBrowserSession()
     player.stop()
     mutableState.update { it.copy(showPlayer = false, busy = false) }
   }
   fun dismissError() { mutableState.update { it.copy(error = null) } }
   fun addAccount() { mutableState.update { it.copy(showSignIn = true, error = null) } }
-  fun openPlayer() { cancelQuery(); mutableState.update { it.copy(showPlayer = true, busy = false) } }
+  fun openPlayer() {
+    suspendBrowser()
+    cancelQuery()
+    mutableState.update { it.copy(showPlayer = true, busy = false) }
+  }
   fun back() {
     if (state.value.showPlayer) {
       player.stop()
       mutableState.update { it.copy(showPlayer = false) }
+      resumeBrowser()
     } else {
       cancelQuery()
       mutableState.update { it.copy(detail = null, detailItems = emptyList(), busy = false) }
+      resumeBrowser()
     }
   }
 
   fun navigate(destination: Destination) {
     if (state.value.destination == destination && state.value.detail == null) return
     cancelQuery()
-    mutableState.update { it.copy(destination = destination, detail = null, detailItems = emptyList(), items = emptyList(), busy = false, hasMore = false) }
-    if (destination == Destination.Account) viewModelScope.launch { refreshIdentity() } else refresh()
+    closeBrowserSession()
+    mutableState.update { it.copy(destination = destination, detail = null, detailItems = emptyList(), items = emptyList(), browser = BrowserUi(), busy = false) }
+    when (destination) {
+      Destination.Account -> viewModelScope.launch { refreshIdentity() }
+      Destination.Search -> search(searchText)
+      Destination.Library -> openLibraryQuery()
+      Destination.Home -> refresh()
+    }
   }
 
   fun cancelLogin() {
@@ -193,12 +225,12 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   private suspend fun connectionChanged(saved: List<SavedProfile>? = null) {
     cancelQuery()
+    closeBrowserSession()
     cancelUserDataWrites()
     confirmedUserData.clear()
     libraries = emptyList()
     searchText = ""
-    nextIndex = 0
-    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, items = emptyList(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, hasMore = false, busy = false, destination = Destination.Home) }
+    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, items = emptyList(), browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "") }
     refreshIdentity(saved)
     if (sdk.activeProfile() != null) refresh()
   }
@@ -211,7 +243,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     queryJob = null
   }
 
-  private fun query(debounce: Boolean = false, action: suspend (OperationToken, ProfileScopeRef, Long) -> Unit) {
+  private fun query(action: suspend (OperationToken, ProfileScopeRef, Long) -> Unit) {
     cancelQuery()
     if (sdk.activeProfile() == null) return
     val generation = queryGeneration
@@ -222,7 +254,6 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     queryJob = viewModelScope.launch {
       var token: OperationToken? = null
       try {
-        if (debounce) delay(250)
         val operation = sdk.newOperationToken()
         token = operation
         queryToken = operation
@@ -240,18 +271,167 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     }
   }
 
+  /**
+   * Replaces the browse session with one immutable SDK query. The old session
+   * is closed before the new one exists, so a stale query can never publish
+   * into the new projection.
+   */
+  private fun openBrowserSession(query: BrowseQuery) {
+    closeBrowserSession()
+    if (sdk.activeProfile() == null) return
+    val session = try {
+      sdk.openBrowser(query)
+    } catch (error: Exception) {
+      showError(error)
+      return
+    }
+    val generation = ++browserGeneration
+    browseSession = session
+    // A session opened while detail/player is showing starts suspended;
+    // back() resumes it when the temporary navigation ends.
+    if (state.value.detail != null || state.value.showPlayer) suspendBrowser()
+    browseCollector = viewModelScope.launch {
+      // `base` is captured before each await so a write confirming while the
+      // snapshot is in flight still overlays its confirmed flags on publish.
+      var base = confirmedRevision
+      var snapshot = try {
+        session.snapshot()
+      } catch (error: Exception) {
+        if (browseSession === session) showError(error)
+        return@launch
+      }
+      while (true) {
+        publish(session, snapshot, generation, base)
+        base = confirmedRevision
+        snapshot = try {
+          session.nextSnapshot(snapshot.revision)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+          if (browseSession === session) showError(error)
+          return@launch
+        }
+      }
+    }
+  }
+
+  /** Publishes one session snapshot if the session and its profile scope are still current. */
+  private fun publish(session: BrowseSession, snapshot: BrowseSnapshot, generation: Long, base: Long) {
+    if (browseSession !== session || browserGeneration != generation || !sdk.isScopeActive(snapshot.scope)) return
+    val scope = snapshot.scope
+    mutableState.update {
+      it.copy(
+        browser = BrowserUi(
+          revision = snapshot.revision,
+          generation = generation,
+          status = when (snapshot.status) {
+            BrowseStatus.INACTIVE -> BrowseUiStatus.Inactive
+            BrowseStatus.LOADING -> BrowseUiStatus.Loading
+            BrowseStatus.EMPTY -> BrowseUiStatus.Empty
+            BrowseStatus.READY -> BrowseUiStatus.Ready
+            BrowseStatus.FAILED -> BrowseUiStatus.Failed
+          },
+          slots = snapshot.items.map { item -> item?.let { presented(media(it, scope), base) } },
+          visibleStart = snapshot.visibleStart,
+          totalCount = snapshot.totalCount,
+          isVirtual = snapshot.isVirtual,
+          loadingMore = snapshot.loadingMore,
+          error = snapshot.error,
+          retryable = snapshot.retryable,
+          retryBusy = snapshot.retryBusy,
+          refreshing = snapshot.refreshing,
+          refreshError = snapshot.refreshError,
+        ),
+      )
+    }
+  }
+
+  private fun closeBrowserSession() {
+    searchDebounce?.cancel()
+    searchDebounce = null
+    browseCollector?.cancel()
+    browseCollector = null
+    val session = browseSession
+    browseSession = null
+    browserSuspended = false
+    if (session != null) {
+      try {
+        session.shutdown()
+      } catch (error: Exception) {
+        showError(error)
+      }
+      session.destroy()
+    }
+  }
+
+
+  /** Pauses page work while detail/player navigation retains the result set.
+   *  Returns the suspend epoch so a failed detail load can tell whether its
+   *  suspension is still the current one. */
+  private fun suspendBrowser(): Long {
+    val epoch = ++browserSuspendEpoch
+    val session = browseSession ?: return epoch
+    if (!browserSuspended) {
+      try {
+        session.`suspend`()
+        browserSuspended = true
+      } catch (error: Exception) {
+        showError(error)
+      }
+    }
+    return epoch
+  }
+
+  private fun resumeBrowser() {
+    val current = state.value
+    if (current.showPlayer || current.detail != null) return
+    val session = browseSession ?: return
+    if (!browserSuspended) return
+    try {
+      session.resume()
+      browserSuspended = false
+    } catch (error: Exception) {
+      showError(error)
+    }
+  }
+
+  /** Resumes only if no newer suspend intent (detail, player, replacement) ran since `epoch`. */
+  private fun resumeBrowserIfCurrent(epoch: Long) {
+    if (browserSuspendEpoch == epoch) resumeBrowser()
+  }
+
+  /** Runs one synchronous session call, surfacing SDK failures uniformly. */
+  private fun browserCall(action: (BrowseSession) -> Unit) {
+    val session = browseSession ?: return
+    try {
+      action(session)
+    } catch (error: Exception) {
+      showError(error)
+    }
+  }
+
+  /** Viewport demand from the grid; the SDK owns all page scheduling. The
+   *  generation fence drops emissions a replaced grid can still send before
+   *  Compose removes its effect. */
+  fun setBrowserDisplayRange(generation: Long, start: UInt, end: UInt) {
+    if (generation != browserGeneration) return
+    browserCall { it.setDisplayRange(start, end) }
+  }
+
+  /** Retries retained failures without discarding usable results. */
+  fun retryBrowser() = browserCall { it.retry() }
+
   fun refresh() {
     state.value.detail?.let { showDetail(it.id); return }
     when (state.value.destination) {
       Destination.Account -> viewModelScope.launch { refreshIdentity() }
-      Destination.Search -> search(searchText)
-      Destination.Library -> loadLibrary(false)
+      Destination.Search -> if (browseSession != null) browserCall { it.refresh() } else search(searchText)
+      Destination.Library -> if (browseSession != null) browserCall { it.refresh() } else openLibraryQuery()
       Destination.Home -> query { token, scope, base ->
         loadLibraries(token)
         val home = sdk.videoHome(token)
         val latest = libraries.firstOrNull()?.let { sdk.libraryLatest(token, it.id) } ?: emptyList()
         currentCoroutineContext().ensureActive()
-        mutableState.update { it.copy(items = (home.continueWatching + home.nextUp + latest).distinctBy { item -> item.id }.map { item -> presented(media(item, scope), base) }, hasMore = false) }
+        mutableState.update { it.copy(items = (home.continueWatching + home.nextUp + latest).distinctBy { item -> item.id }.map { item -> presented(media(item, scope), base) }) }
       }
     }
   }
@@ -264,57 +444,79 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   fun selectLibrary(id: String) {
-    mutableState.update { it.copy(libraryId = id, items = emptyList(), hasMore = false) }
-    loadLibrary(false)
+    if (state.value.libraryId == id) return
+    mutableState.update { it.copy(libraryId = id, browser = BrowserUi()) }
+    openLibraryQuery()
   }
 
-  private fun loadLibrary(append: Boolean) = query { token, scope, base ->
+  /** Loads the shortcut list if needed, then opens the selected library session. */
+  private fun openLibraryQuery() = query { token, _, _ ->
     if (libraries.isEmpty()) loadLibraries(token)
-    val library = libraries.firstOrNull { it.id == state.value.libraryId } ?: return@query
-    val kind = when (library.collectionType.lowercase()) {
-      "movies" -> VideoLibraryKind.MOVIES
-      "tvshows" -> VideoLibraryKind.TV_SHOWS
-      else -> throw IllegalStateException("Unsupported library kind")
-    }
-    val page = sdk.browseVideo(token, VideoLibraryPageRequest(library.id, kind, if (append) nextIndex else 0, 48, VideoLibrarySort.RECENTLY_ADDED, VideoLibrarySortDirection.DESCENDING, VideoLibraryPlayedFilter.ALL, false))
-    currentCoroutineContext().ensureActive()
-    nextIndex = page.startIndex + page.items.size
-    val items = page.items.map { presented(media(it, scope), base) }
-    mutableState.update { it.copy(items = (if (append) it.items + items else items).distinctBy { item -> item.id }, hasMore = page.hasMore) }
+    openLibrarySession()
   }
 
+  private fun openLibrarySession() {
+    val library = libraries.firstOrNull { it.id == state.value.libraryId } ?: return
+    openBrowserSession(
+      BrowseQuery.Library(
+        library,
+        BrowsePreferences(
+          sort = VideoLibrarySort.RECENTLY_ADDED,
+          sortDirection = VideoLibrarySortDirection.DESCENDING,
+          playedFilter = VideoLibraryPlayedFilter.ALL,
+          favoritesOnly = false,
+        ),
+      ),
+    )
+  }
   fun search(value: String) {
+    if (state.value.destination != Destination.Search) return
     searchText = value
-    searchPage(false)
-  }
-
-  private fun searchPage(append: Boolean) = query(debounce = !append) { token, scope, base ->
-    val page = sdk.searchVideo(token, VideoSearchRequest(searchText, if (append) nextIndex else 0, 48))
-    currentCoroutineContext().ensureActive()
-    nextIndex = page.startIndex + page.items.size
-    val items = page.items.map { presented(media(it, scope), base) }
-    mutableState.update { it.copy(items = (if (append) it.items + items else items).distinctBy { item -> item.id }, hasMore = page.hasMore) }
-  }
-
-  fun loadMore() {
-    if (state.value.busy || !state.value.hasMore) return
-    if (state.value.destination == Destination.Search) searchPage(true) else loadLibrary(true)
-  }
-
-  fun showDetail(id: String) = query { token, scope, base ->
-    val type = (state.value.items + state.value.detailItems).firstOrNull { it.id == id }?.itemType ?: state.value.detail?.takeIf { it.id == id }?.itemType
-    val detail = if (type == "Series") {
-      val show = sdk.showDetail(token, id)
-      MediaUi(show.id, show.name, "Series", metadata(show.productionYear, "Series"), artwork(show.artworkImageId, scope), show.overview.orEmpty(), show.favorite, show.played)
-    } else {
-      val item = sdk.itemDetail(token, id)
-      MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
+    // A new search intent fences obsolete query-slot work (e.g. an in-flight
+    // detail load) so it cannot publish over the replacement session.
+    cancelQuery()
+    // The previous query's session is obsolete immediately; only opening the
+    // replacement is debounced so a stale query can never publish again.
+    closeBrowserSession()
+    mutableState.update { it.copy(searchQuery = value, busy = false) }
+    searchDebounce = viewModelScope.launch {
+      delay(250)
+      // Clear the handle first: openBrowserSession closes the current session,
+      // which would otherwise cancel this still-running job.
+      searchDebounce = null
+      openBrowserSession(BrowseQuery.Search(searchText))
     }
-    currentCoroutineContext().ensureActive()
-    mutableState.update { it.copy(detail = presented(detail, base), detailItems = emptyList()) }
-    val related = sdk.similarVideo(token, id)
-    currentCoroutineContext().ensureActive()
-    mutableState.update { it.copy(detailItems = related.map { item -> presented(media(item, scope), base) }) }
+  }
+
+  fun showDetail(id: String) {
+    val suspendEpoch = suspendBrowser()
+    query { token, scope, base ->
+      var detailShown = false
+      try {
+        val type = (state.value.browser.slots.asSequence().filterNotNull() + state.value.items + state.value.detailItems)
+          .firstOrNull { it.id == id }?.itemType
+          ?: state.value.detail?.takeIf { it.id == id }?.itemType
+        val detail = if (type == "Series") {
+          val show = sdk.showDetail(token, id)
+          MediaUi(show.id, show.name, "Series", metadata(show.productionYear, "Series"), artwork(show.artworkImageId, scope), show.overview.orEmpty(), show.favorite, show.played)
+        } else {
+          val item = sdk.itemDetail(token, id)
+          MediaUi(item.id, item.name, item.itemType, metadata(item.productionYear, item.itemType), artwork(item.artworkImageId, scope), item.overview.orEmpty(), item.favorite, item.played)
+        }
+        currentCoroutineContext().ensureActive()
+        mutableState.update { it.copy(detail = presented(detail, base), detailItems = emptyList()) }
+        detailShown = true
+        val related = sdk.similarVideo(token, id)
+        currentCoroutineContext().ensureActive()
+        mutableState.update { it.copy(detailItems = related.map { item -> presented(media(item, scope), base) }) }
+      } catch (error: Exception) {
+        // The retained browser stays suspended only while a detail is actually
+        // shown; a failed or fenced load must hand it back to the grid, but
+        // never over a newer suspend intent (player, newer detail, session swap).
+        if (!detailShown) resumeBrowserIfCurrent(suspendEpoch)
+        throw error
+      }
+    }
   }
 
   fun setFavorite(id: String, favorite: Boolean) { updateUserData(id, if (favorite) VideoUserDataAction.FAVORITE else VideoUserDataAction.UNFAVORITE) }
@@ -340,7 +542,14 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
         if (!sdk.isScopeActive(scope)) return@launch
         confirmedUserData[id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
         fun reconciled(item: MediaUi) = if (item.id == result.itemId) item.copy(played = result.played, favorite = result.favorite, updating = false) else item
-        mutableState.update { it.copy(items = it.items.map(::reconciled), detail = it.detail?.let(::reconciled), detailItems = it.detailItems.map(::reconciled)) }
+        mutableState.update {
+          it.copy(
+            items = it.items.map(::reconciled),
+            browser = it.browser.copy(slots = it.browser.slots.map { slot -> slot?.let(::reconciled) }),
+            detail = it.detail?.let(::reconciled),
+            detailItems = it.detailItems.map(::reconciled),
+          )
+        }
       } catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) { showError(error) }
       finally {
@@ -370,7 +579,14 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
 
   private fun setWritePending(id: String, updating: Boolean) {
     fun marked(item: MediaUi) = if (item.id == id) item.copy(updating = updating) else item
-    mutableState.update { it.copy(items = it.items.map(::marked), detail = it.detail?.let(::marked), detailItems = it.detailItems.map(::marked)) }
+    mutableState.update {
+      it.copy(
+        items = it.items.map(::marked),
+        browser = it.browser.copy(slots = it.browser.slots.map { slot -> slot?.let(::marked) }),
+        detail = it.detail?.let(::marked),
+        detailItems = it.detailItems.map(::marked),
+      )
+    }
   }
 
   /** Applies confirmed write results newer than `base` and the live pending flag to a freshly read item. */
@@ -403,6 +619,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     quickSession?.cancel()
     quickSession?.destroy()
     cancelQuery()
+    closeBrowserSession()
     cancelUserDataWrites()
     confirmedUserData.clear()
     visibility.close()

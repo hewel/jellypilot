@@ -367,8 +367,8 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
       if let Some(banner) = failure_overlay(
         state.palette(),
         state.kernel.locale,
-        browse.data.refresh_failure(),
-        browse.data.is_refreshing(),
+        browse.browser.model().refresh_failure(),
+        browse.browser.model().is_refreshing(),
       ) {
         surface = surface.push(banner);
       }
@@ -399,8 +399,12 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
       visible_items,
       *visible_start,
       *total_record_count,
-      browse.data.refresh_failure().or(load_more_failure.as_ref()),
-      *retry_busy || browse.data.is_refreshing(),
+      browse
+        .browser
+        .model()
+        .refresh_failure()
+        .or(load_more_failure.as_ref()),
+      *retry_busy || browse.browser.model().is_refreshing(),
       class,
     ),
   }

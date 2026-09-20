@@ -42,7 +42,7 @@
   <string name="unfavorite">取消收藏</string>
   <string name="mark_played">标记为已观看</string>
   <string name="mark_unplayed">标记为未观看</string>
-  <string name="load_more">加载更多</string>
+
   <string name="all_media">全部媒体</string>
   <string name="play">播放</string>
   <string name="pause">暂停</string>

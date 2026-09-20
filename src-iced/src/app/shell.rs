@@ -73,7 +73,7 @@ impl RefreshTarget {
           state.shell.destination,
           Destination::Library { .. } | Destination::Search(_)
         )
-        .then(|| full.browse.data.identity().map(str::to_owned))
+        .then(|| full.browse.browser.model().identity().map(str::to_owned))
         .flatten()
       }),
     }
@@ -88,7 +88,7 @@ impl RefreshTarget {
         == state
           .full
           .as_ref()
-          .and_then(|full| full.browse.data.identity()))
+          .and_then(|full| full.browse.browser.model().identity()))
   }
 }
 
@@ -111,7 +111,7 @@ fn active_browse_refreshing(state: &State) -> bool {
   ) && state
     .full
     .as_ref()
-    .is_some_and(|full| full.browse.data.is_refreshing())
+    .is_some_and(|full| full.browse.browser.model().is_refreshing())
 }
 
 pub(crate) fn refresh_busy(state: &State) -> bool {
@@ -920,7 +920,7 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
   match &state.shell.destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } | Destination::Search(_) => {
-      if full.browse.data.identity().is_some() {
+      if full.browse.browser.model().identity().is_some() {
         browse::refresh(&mut full.browse, &mut state.kernel)
       } else {
         browse::start(&mut full.browse, &mut state.kernel, source)
@@ -1188,10 +1188,15 @@ mod tests {
   use jellypilot_core::request_gate::RequestGate;
 
   use super::*;
-  use jellypilot_core::browse_model::{
-    BrowseEffect, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
-    LibraryBrowseView,
-  };
+  use jellypilot_core::browse_model::LibraryBrowseView;
+
+  use crate::app::test_support::{page_settled, BrowseFixture, FixtureReply, FixtureRequest};
+
+  /// The still-unanswered initial page request and its task stream.
+  struct PendingBrowse {
+    stream: iced::futures::stream::BoxStream<'static, iced_runtime::Action<Message>>,
+    request: FixtureRequest,
+  }
 
   fn test_library() -> jellypilot_media_server::VideoLibraryShortcut {
     jellypilot_media_server::VideoLibraryShortcut {
@@ -1203,10 +1208,13 @@ mod tests {
     }
   }
 
-  fn browsing_state() -> (State, BrowsePageRequest) {
+  /// Boots a Library destination whose initial page request is parked at the
+  /// fixture, unanswered, so tests control when (or whether) it settles.
+  async fn browsing_state() -> (State, BrowseFixture, PendingBrowse) {
     let mut state = State::boot(false);
     state.kernel = test_fixture().1;
-    state.kernel.client = Some(Arc::new(jellypilot_media_server::JellyfinClient::new()));
+    let fixture = BrowseFixture::new();
+    state.kernel.client = Some(fixture.client());
     state.full = Some(super::super::state::FullUi::default());
     state.shell.destination = Destination::Library {
       library_id: "movies".into(),
@@ -1215,25 +1223,21 @@ mod tests {
     state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![test_library()]);
     let source = browse_source(&state).unwrap();
-    let model = &mut state.full.as_mut().unwrap().browse.data;
-    let request = page_request(model.configure(source).unwrap());
-    state.full.as_mut().unwrap().browse.view = state.full.as_ref().unwrap().browse.data.view();
-    (state, request)
+    let mut stream = iced_runtime::task::into_stream(browse::start(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      Some(source),
+    ))
+    .expect("browse start emits page work");
+    let mut fixture = fixture;
+    let request = fixture.next_request(&mut stream).await;
+    (state, fixture, PendingBrowse { stream, request })
   }
 
-  fn page_request(effects: Vec<BrowseEffect>) -> BrowsePageRequest {
-    effects
-      .into_iter()
-      .find_map(|effect| match effect {
-        BrowseEffect::RequestPage(request) => Some(request),
-        _ => None,
-      })
-      .unwrap()
-  }
-
-  #[test]
-  fn directory_refresh_does_not_restart_a_page_after_leaving_and_returning() {
-    let (mut state, _) = browsing_state();
+  #[tokio::test]
+  async fn directory_refresh_does_not_restart_a_page_after_leaving_and_returning() {
+    let (mut state, mut fixture, pending) = browsing_state().await;
+    drop(pending);
     drop(update_shell(&mut state, ShellMessage::RefreshCurrent));
     let generation = state.shell.refresh_generation;
     let session = state.kernel.request_gate.current_session();
@@ -1241,14 +1245,16 @@ mod tests {
       &mut state,
       Destination::Search("another query".into()),
     ));
-    drop(navigate_back(&mut state));
-    let model = &state.full.as_ref().unwrap().browse;
-    let token = *model.page_tasks.keys().next().expect("resumed delivery");
-    let resumed = BrowsePageSettlement {
-      source_id: model.data.identity().unwrap().into(),
-      token,
-      result: Err("not delivered".into()),
-    };
+    let mut stream =
+      iced_runtime::task::into_stream(navigate_back(&mut state)).expect("restore emits page work");
+    let request = fixture.next_request(&mut stream).await;
+    request.reply(FixtureReply::Failure);
+    let resumed = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("resumed request settles");
     drop(update_shell(
       &mut state,
       ShellMessage::DirectoryLoaded {
@@ -1262,34 +1268,44 @@ mod tests {
       .as_ref()
       .unwrap()
       .browse
-      .data
+      .browser
+      .model()
       .is_current_settlement(&resumed));
     assert!(!refresh_busy(&state));
   }
 
-  #[test]
-  fn directory_refresh_does_not_replace_changed_query_preferences() {
-    let (mut state, _) = browsing_state();
+  #[tokio::test]
+  async fn directory_refresh_does_not_replace_changed_query_preferences() {
+    let (mut state, mut fixture, pending) = browsing_state().await;
+    drop(pending);
     drop(update_shell(&mut state, ShellMessage::RefreshCurrent));
     let generation = state.shell.refresh_generation;
     let session = state.kernel.request_gate.current_session();
-    let source = browse_source(&state).unwrap();
-    let request = page_request(
+    // A filter mutation reconfigures the browser, which changes the logical
+    // identity the captured refresh target is bound to.
+    state.full.as_mut().unwrap().browse.filters = Some(
       state
-        .full
-        .as_mut()
-        .unwrap()
-        .browse
-        .data
-        .configure_with_preferences(
-          source,
-          BrowsePreferences {
-            sort: jellypilot_media_server::VideoLibrarySort::ReleaseDate,
-            ..BrowsePreferences::default()
-          },
-        )
-        .unwrap(),
+        .kernel
+        .settings
+        .snapshot()
+        .browse_filters()
+        .with_sort(jellypilot_media_server::VideoLibrarySort::ReleaseDate),
     );
+    let source = browse_source(&state).unwrap();
+    let mut stream = iced_runtime::task::into_stream(browse::start(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      Some(source),
+    ))
+    .expect("reconfigured browse emits page work");
+    let request = fixture.next_request(&mut stream).await;
+    request.reply(FixtureReply::Failure);
+    let changed = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("reconfigured request settles");
     reconcile_refresh(&mut state);
     drop(update_shell(
       &mut state,
@@ -1304,37 +1320,32 @@ mod tests {
       .as_ref()
       .unwrap()
       .browse
-      .data
-      .is_current_settlement(&BrowsePageSettlement {
-        source_id: request.source_id,
-        token: request.token,
-        result: Err("not delivered".into()),
-      },));
+      .browser
+      .model()
+      .is_current_settlement(&changed));
     assert!(!refresh_busy(&state));
   }
 
-  #[test]
-  fn browse_refresh_busy_follows_model_settlement_not_task_completion() {
-    let (mut state, initial) = browsing_state();
-    state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .data
-      .settle(BrowsePageSettlement {
-        source_id: initial.source_id,
-        token: initial.token,
-        result: Ok(BrowsePagePayload {
-          start_index: 0,
-          limit: initial.limit,
-          total_record_count: 0,
-          has_more: false,
-          items: Vec::new(),
-        }),
-      })
-      .unwrap();
-    let request = page_request(state.full.as_mut().unwrap().browse.data.refresh().unwrap());
+  #[tokio::test]
+  async fn browse_refresh_busy_follows_model_settlement_not_task_completion() {
+    let (mut state, mut fixture, pending) = browsing_state().await;
+    pending.request.reply(FixtureReply::Page {
+      total: 0,
+      artwork: false,
+    });
+    let mut stream = pending.stream;
+    let settlements = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await;
+    for message in settlements {
+      drop(super::super::update::update(&mut state, message));
+    }
+    let mut stream = iced_runtime::task::into_stream(browse::refresh(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ))
+    .expect("refresh emits page work");
+    let request = fixture.next_request(&mut stream).await;
     state.shell.refresh = Some(RefreshRun {
       target: Some(RefreshTarget::capture(&state)),
       phase: RefreshPhase::BrowsePage,
@@ -1349,16 +1360,13 @@ mod tests {
       }),
     ));
     assert!(refresh_busy(&state));
-    drop(super::super::update::update(
-      &mut state,
-      Message::Browse(super::super::message::BrowseMessage::PageSettled(
-        BrowsePageSettlement {
-          source_id: request.source_id,
-          token: request.token,
-          result: Err("refresh failed".into()),
-        },
-      )),
-    ));
+    request.reply(FixtureReply::Failure);
+    let settlements = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await;
+    for message in settlements {
+      drop(super::super::update::update(&mut state, message));
+    }
     assert!(!refresh_busy(&state));
     assert!(matches!(
       state.full.as_ref().unwrap().browse.view,

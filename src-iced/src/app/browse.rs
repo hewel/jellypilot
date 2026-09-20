@@ -2,22 +2,16 @@
 //! preferences, the scroll-driven display window, the sidebar search input,
 //! and the browse artwork pipeline (grid cards).
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::i18n::UiText;
 use iced::widget::operation;
-use iced::{task, Task};
-use jellypilot_core::browse::fetch_browse_page;
-use jellypilot_core::browse_model::{
-  BrowseDeliveryToken, BrowseEffect, BrowseModel, BrowsePageRequest, BrowsePageSettlement,
-  BrowsePreferences, BrowseSource, LibraryBrowseView,
-};
+use iced::Task;
+use jellypilot_core::browse_model::{BrowsePreferences, BrowseSource, LibraryBrowseView};
 use jellypilot_core::browse_window::visible_display_range;
 use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::VideoLibrarySortDirection;
+use jellypilot_sdk::browse::{BrowseWork, Browser};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::widgets::artwork_grid::ArtworkGridViewport;
 
@@ -40,14 +34,13 @@ struct ScrollSnapshot {
   id: iced::widget::Id,
 }
 
-/// Browse surface slice: the Library Browser model and its derived view, the
-/// artwork cells bound for the grid cards, the in-flight page request
-/// handles, the tracked scroll viewport, and the sidebar search input text.
+/// Browse surface slice: the SDK-owned Library Browser and its derived view,
+/// the artwork cells bound for the grid cards, the tracked scroll viewport,
+/// and the sidebar search input text.
 pub struct Surface {
-  pub data: BrowseModel,
+  pub browser: Browser,
   pub view: LibraryBrowseView,
   pub artwork: ImageCollection,
-  pub page_tasks: HashMap<BrowseDeliveryToken, task::Handle>,
   pub viewport: BrowseViewport,
   pub grid_viewport: Option<ArtworkGridViewport>,
   pub scroll_id: iced::widget::Id,
@@ -61,10 +54,9 @@ pub struct Surface {
 impl Default for Surface {
   fn default() -> Self {
     Self {
-      data: BrowseModel::default(),
+      browser: Browser::default(),
       view: LibraryBrowseView::Inactive,
       artwork: ImageCollection::default(),
-      page_tasks: HashMap::new(),
       viewport: BrowseViewport::default(),
       grid_viewport: None,
       scroll_id: iced::widget::Id::unique(),
@@ -87,9 +79,9 @@ impl Surface {
   }
 }
 
-/// Data and query context owned by one navigation-history entry.
+/// Browser and query context owned by one navigation-history entry.
 pub(crate) struct Snapshot {
-  data: BrowseModel,
+  browser: Browser,
   viewport: BrowseViewport,
   grid_viewport: Option<ArtworkGridViewport>,
   scroll_id: iced::widget::Id,
@@ -100,12 +92,13 @@ pub(crate) struct Snapshot {
 }
 
 pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> Snapshot {
-  drop(surface.data.suspend());
-  abort_pages(surface);
-  let data = std::mem::take(&mut surface.data);
+  // Suspending cancels the in-flight page requests; their late settlements
+  // arrive rejected and are dropped by the currency check.
+  surface.browser.suspend();
+  let browser = std::mem::take(&mut surface.browser);
   sync_view(surface);
   Snapshot {
-    data,
+    browser,
     viewport: surface.viewport,
     grid_viewport: surface.grid_viewport,
     scroll_id: surface.scroll_id.clone(),
@@ -122,9 +115,9 @@ pub(crate) fn restore(
   snapshot: Snapshot,
   window_size: iced::Size,
 ) -> Task<Message> {
-  abort_pages(surface);
   begin_artwork_view(surface);
-  surface.data = snapshot.data;
+  // Replacing the browser drops the previous owner, cancelling its requests.
+  surface.browser = snapshot.browser;
   surface.viewport = snapshot.viewport;
   surface.grid_viewport = snapshot.grid_viewport;
   surface.scroll_id = snapshot.scroll_id;
@@ -133,8 +126,8 @@ pub(crate) fn restore(
   surface.mode = snapshot.mode;
   surface.alternate_scroll = snapshot.alternate_scroll;
   surface.sort_menu_open = false;
-  let effects = match surface.data.resume() {
-    Ok(effects) => effects,
+  let work = match surface.browser.resume() {
+    Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -150,7 +143,7 @@ pub(crate) fn restore(
   };
   sync_view(surface);
   Task::batch([
-    apply_effects(surface, kernel, effects),
+    apply_work(surface, work),
     sync_scroll_window(surface, kernel, window_size),
     prepare_artwork(surface),
   ])
@@ -265,8 +258,8 @@ pub fn update(
       sync_scroll_window(surface, kernel, window_size)
     }
     BrowseMessage::Retry => {
-      let effects = match surface.data.retry() {
-        Ok(effects) => effects,
+      let work = match surface.browser.retry() {
+        Ok(work) => work,
         Err(error) => {
           kernel.diagnostics.record(
             DiagnosticLevel::Error,
@@ -280,28 +273,27 @@ pub fn update(
         }
       };
       sync_view(surface);
-      apply_effects(surface, kernel, effects)
+      apply_work(surface, work)
     }
     BrowseMessage::PageSettled(settlement) => {
-      if !surface.data.is_current_settlement(&settlement) {
+      if !surface.browser.model().is_current_settlement(&settlement) {
         return Task::none();
       }
-      surface.page_tasks.remove(&settlement.token);
       if let Err(error) = &settlement.result {
         kernel.diagnostics.record(
           DiagnosticLevel::Error,
           DiagnosticCategory::Connection,
           format!("Browse page load failed: {error}"),
         );
-        if surface.data.is_refreshing() {
+        if surface.browser.model().is_refreshing() {
           kernel.notice = Some(
             UiText::new("browse-refresh-failed")
               .arg("details", sanitize_message(&error.to_string())),
           );
         }
       }
-      let effects = match surface.data.settle(settlement) {
-        Ok(effects) => effects,
+      let work = match surface.browser.settle(settlement) {
+        Ok(work) => work,
         Err(error) => {
           kernel.diagnostics.record(
             DiagnosticLevel::Error,
@@ -316,7 +308,7 @@ pub fn update(
       };
       sync_view(surface);
       Task::batch([
-        apply_effects(surface, kernel, effects),
+        apply_work(surface, work),
         sync_scroll_window(surface, kernel, window_size),
         prepare_artwork(surface),
       ])
@@ -370,9 +362,8 @@ pub fn start(
   source: Option<BrowseSource>,
 ) -> Task<Message> {
   let Some(source) = source else {
-    abort_pages(surface);
     begin_artwork_view(surface);
-    surface.data.reset();
+    surface.browser.reset();
     sync_view(surface);
     kernel.notice = Some(UiText::new("browse-library-unavailable"));
     return Task::none();
@@ -381,8 +372,11 @@ pub fn start(
     .filters
     .get_or_insert_with(|| kernel.settings.snapshot().browse_filters());
   let preferences = BrowsePreferences::from(filters);
-  let effects = match surface.data.configure_with_preferences(source, preferences) {
-    Ok(effects) => effects,
+  let work = match surface
+    .browser
+    .configure(kernel.client.clone(), source, preferences)
+  {
+    Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -397,18 +391,18 @@ pub fn start(
     }
   };
   // A reconfigure that changes nothing (same source and preferences, e.g.
-  // re-selecting the active filter) emits no commands: the model retains its
+  // re-selecting the active filter) emits no work: the model retains its
   // pages, so no page settlement will re-drive artwork preparation. Tearing
   // the artwork view down here would strand a settled grid on placeholders,
   // but the view is still re-synced so an in-flight load keeps reflecting
   // Loading.
-  if effects.is_empty() {
+  if work.is_empty() {
     sync_view(surface);
     return Task::none();
   }
   begin_artwork_view(surface);
   sync_view(surface);
-  apply_effects(surface, kernel, effects)
+  apply_work(surface, work)
 }
 
 /// Recomputes the scroll-driven display window and loads newly visible pages.
@@ -440,11 +434,11 @@ pub(crate) fn sync_scroll_window(
   );
   // Metadata-only peek: the hot scroll path must not clone the window's
   // items via `display_range()` just to compare the range.
-  if surface.data.peek_display_range().as_ref() == Some(&range) {
+  if surface.browser.model().peek_display_range().as_ref() == Some(&range) {
     return Task::none();
   }
-  let effects = match surface.data.set_display_range(range, total) {
-    Ok(effects) => effects,
+  let work = match surface.browser.set_display_range(range) {
+    Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -458,20 +452,17 @@ pub(crate) fn sync_scroll_window(
     }
   };
   sync_view(surface);
-  Task::batch([
-    apply_effects(surface, kernel, effects),
-    prepare_artwork(surface),
-  ])
+  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
 }
 
 fn sync_view(surface: &mut Surface) {
-  surface.view = surface.data.view();
+  surface.view = surface.browser.model().view();
 }
 
 /// Refreshes the model's stored query without releasing usable image demand.
 pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  let effects = match surface.data.refresh() {
-    Ok(effects) => effects,
+  let work = match surface.browser.refresh() {
+    Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -485,10 +476,7 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Messag
     }
   };
   sync_view(surface);
-  Task::batch([
-    apply_effects(surface, kernel, effects),
-    prepare_artwork(surface),
-  ])
+  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
 }
 
 pub(crate) fn apply_user_data_update(
@@ -496,8 +484,8 @@ pub(crate) fn apply_user_data_update(
   kernel: &mut Kernel,
   update: &jellypilot_media_server::VideoUserDataUpdate,
 ) -> Task<Message> {
-  let effects = match surface.data.apply_user_data_update(update) {
-    Ok(effects) => effects,
+  let work = match surface.browser.apply_user_data_update(update) {
+    Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -512,75 +500,35 @@ pub(crate) fn apply_user_data_update(
     }
   };
   sync_view(surface);
-  Task::batch([
-    apply_effects(surface, kernel, effects),
-    prepare_artwork(surface),
-  ])
+  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
 }
 
-fn apply_effects(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  effects: Vec<BrowseEffect>,
-) -> Task<Message> {
+fn apply_work(surface: &mut Surface, work: BrowseWork) -> Task<Message> {
   // Viewport resets must land before page requests: Task::batch runs in
   // parallel, so a fast settlement could evaluate the stale near-tail offset
   // and advance another window before scroll-to-zero is applied.
-  let mut resets = Vec::new();
-  let mut tasks = Vec::with_capacity(effects.len());
-  for effect in effects {
-    match effect {
-      BrowseEffect::ResetViewport => {
-        surface.viewport.offset_y = 0.0;
-        surface.grid_viewport = None;
-        surface.alternate_scroll = None;
-        // Loading placeholders have no ready-grid ID. A new query identity
-        // also resets remembered offsets when its first real layout appears.
-        surface.scroll_id = iced::widget::Id::unique();
-        resets.push(operation::scroll_to(
-          surface.scroll_id.clone(),
-          operation::AbsoluteOffset { x: 0.0, y: 0.0 },
-        ));
-      }
-      BrowseEffect::RequestPage(request) => {
-        tasks.push(start_page_request(surface, kernel, request));
-      }
-      BrowseEffect::CancelPage { token } => {
-        if let Some(handle) = surface.page_tasks.remove(&token) {
-          handle.abort();
-        }
-      }
-    }
+  let mut reset = Task::none();
+  if work.reset_viewport {
+    surface.viewport.offset_y = 0.0;
+    surface.grid_viewport = None;
+    surface.alternate_scroll = None;
+    // Loading placeholders have no ready-grid ID. A new query identity
+    // also resets remembered offsets when its first real layout appears.
+    surface.scroll_id = iced::widget::Id::unique();
+    reset = operation::scroll_to(
+      surface.scroll_id.clone(),
+      operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+    );
   }
-  let tasks = Task::batch(tasks);
-  if resets.is_empty() {
-    tasks
-  } else {
-    Task::batch(resets).chain(tasks)
-  }
-}
-
-fn start_page_request(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  request: BrowsePageRequest,
-) -> Task<Message> {
-  let token = request.token;
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    return Task::done(Message::Browse(BrowseMessage::PageSettled(
-      BrowsePageSettlement {
-        source_id: request.source_id,
-        token,
-        result: Err("media-server-session-unavailable".to_owned()),
-      },
-    )));
-  };
-  let (task, handle) = Task::perform(fetch_browse_page(client, request), move |settlement| {
-    Message::Browse(BrowseMessage::PageSettled(settlement))
-  })
-  .abortable();
-  surface.page_tasks.insert(token, handle);
-  task
+  // The SDK owns request cancellation; the futures only deliver settlements.
+  // `run` is a lazy async fn, so requests start when the chained task polls
+  // them — after the viewport reset has been emitted.
+  let requests = Task::batch(work.requests.into_iter().map(|request| {
+    Task::perform(request.run(), |settlement| {
+      Message::Browse(BrowseMessage::PageSettled(settlement))
+    })
+  }));
+  reset.chain(requests)
 }
 
 /// Retains candidates in the sparse metadata window; measured images start loads.
@@ -610,27 +558,20 @@ fn begin_artwork_view(surface: &mut Surface) {
 }
 
 /// Browse leave hook, invoked by the top-level router when the destination
-/// switches away from Library/Search: aborts in-flight page requests,
-/// releases this view's image demand, and resets the model.
+/// switches away from Library/Search: cancels in-flight page requests,
+/// releases this view's image demand, and resets the browser.
 pub(crate) fn leave_view(surface: &mut Surface) {
-  abort_pages(surface);
   begin_artwork_view(surface);
-  surface.data.reset();
+  surface.browser.reset();
   sync_view(surface);
   surface.alternate_scroll = None;
 }
 
-/// Browse portion of the router's connected-surface reset: aborts in-flight
-/// page requests, drops the artwork cells, and resets the model and view.
+/// Browse portion of the router's connected-surface reset: cancels in-flight
+/// page requests, drops the artwork cells, and resets the browser and view.
 pub(crate) fn reset(surface: &mut Surface) {
   leave_view(surface);
   surface.filters = None;
-}
-
-fn abort_pages(surface: &mut Surface) {
-  for (_, handle) in surface.page_tasks.drain() {
-    handle.abort();
-  }
 }
 
 #[cfg(test)]
@@ -643,6 +584,10 @@ mod tests {
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
   use jellypilot_media_server::VideoLibraryItem;
+
+  use crate::app::test_support::{
+    dispatch_settlement, drain_task, fixture_item_id, page_settled, BrowseFixture, FixtureReply,
+  };
 
   use super::*;
 
@@ -679,13 +624,38 @@ mod tests {
     (Surface::default(), kernel)
   }
 
-  #[test]
-  fn view_modes_retain_the_query_and_restore_independent_navigation_scrolls() {
-    let (mut surface, mut kernel) = test_fixture();
+  /// A surface whose kernel client is bound to a controlled local server.
+  fn fixture_surface() -> (Surface, Kernel, BrowseFixture) {
+    let (surface, mut kernel) = test_fixture();
+    let fixture = BrowseFixture::new();
+    kernel.client = Some(fixture.client());
+    (surface, kernel, fixture)
+  }
+
+  fn search_source(kernel: &Kernel, query: &str) -> BrowseSource {
+    BrowseSource::Search {
+      session: kernel.request_gate.current_session(),
+      query: query.to_owned(),
+    }
+  }
+
+  #[tokio::test]
+  async fn view_modes_retain_the_query_and_restore_independent_navigation_scrolls() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "retained query");
-    let request = browse_request(surface.data.configure(source).unwrap());
-    settle_page(&mut surface.data, request, 240);
-    sync_view(&mut surface);
+    let task = start(&mut surface, &mut kernel, Some(source));
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 240,
+        artwork: false,
+      },
+    )
+    .await;
     surface.search_input = "retained query".to_owned();
     surface.filters = Some(kernel.settings.snapshot().browse_filters());
     surface.viewport.offset_y = 600.0;
@@ -719,7 +689,7 @@ mod tests {
       },
     ));
     let expected = visible_display_range(810.0, 405.0, 1, 81.0, 240);
-    assert_eq!(surface.data.peek_display_range(), Some(expected));
+    assert_eq!(surface.browser.model().peek_display_range(), Some(expected));
     surface.viewport.offset_y = 810.0;
     drop(update(
       &mut surface,
@@ -752,15 +722,44 @@ mod tests {
 
   #[tokio::test]
   async fn resumed_refresh_rejects_departed_results_and_retains_cards_on_failure() {
-    let (mut surface, mut kernel) = test_fixture();
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "original");
-    let first = browse_request(surface.data.configure(source).unwrap());
-    settle_page(&mut surface.data, first, 240);
-    let deep = surface.data.set_display_range(192..216, 240).unwrap();
-    for effect in deep {
-      if let BrowseEffect::RequestPage(request) = effect {
-        settle_page(&mut surface.data, request, 240);
-      }
+    let task = start(&mut surface, &mut kernel, Some(source));
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 240,
+        artwork: false,
+      },
+    )
+    .await;
+    // Load the deep window the failed refresh must retain.
+    let mut pending = surface
+      .browser
+      .set_display_range(192..216)
+      .expect("display range applies")
+      .requests;
+    while let Some(request) = pending.pop() {
+      let settlement = fixture
+        .run_request(
+          request,
+          FixtureReply::Page {
+            total: 240,
+            artwork: false,
+          },
+        )
+        .await;
+      pending.extend(
+        surface
+          .browser
+          .settle(settlement)
+          .expect("deep page settles")
+          .requests,
+      );
     }
     sync_view(&mut surface);
     surface.viewport.offset_y = 8_000.0;
@@ -769,24 +768,58 @@ mod tests {
       height: WINDOW_HEIGHT,
     });
     let scroll_id = surface.scroll_id.clone();
-    let departed = task_settlement(refresh(&mut surface, &mut kernel)).await;
-    let (_, handle) = Task::<Message>::none().abortable();
-    surface.page_tasks.insert(departed.token, handle);
+
+    let mut refresh_stream = iced_runtime::task::into_stream(refresh(&mut surface, &mut kernel))
+      .expect("refresh emits page work");
+    let departed_request = fixture.next_request(&mut refresh_stream).await;
     let saved = snapshot(&mut surface, Some("original"));
-    assert!(surface.page_tasks.is_empty());
-    assert!(!saved.data.is_current_settlement(&departed));
-    let current = task_settlement(restore(&mut surface, &mut kernel, saved, window_size())).await;
-    let (_, handle) = Task::<Message>::none().abortable();
-    surface.page_tasks.insert(current.token, handle);
-    dispatch_settlement(&mut surface, &mut kernel, departed);
-    assert!(surface.page_tasks.contains_key(&current.token));
-    assert!(surface.data.is_refreshing());
-    dispatch_settlement(&mut surface, &mut kernel, current);
-    assert!(!surface.data.is_refreshing());
-    assert!(surface.data.refresh_failure().is_some());
+    departed_request.reply(FixtureReply::Failure);
+    let departed = fixture
+      .run_stream(&mut refresh_stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("cancelled refresh still settles");
+    assert!(!saved.browser.model().is_current_settlement(&departed));
+
+    let mut restore_stream =
+      iced_runtime::task::into_stream(restore(&mut surface, &mut kernel, saved, window_size()))
+        .expect("restore resumes page work");
+    let settlements = fixture
+      .run_stream(&mut restore_stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .filter_map(page_settled)
+      .collect::<Vec<_>>();
+    // The departed settlement is rejected while the resumed refresh is still
+    // in flight; the current failures then complete it.
+    drop(dispatch_settlement(
+      &mut surface,
+      &mut kernel,
+      window_size(),
+      departed,
+    ));
+    assert!(surface.browser.model().is_refreshing());
+    for settlement in settlements {
+      let task = dispatch_settlement(&mut surface, &mut kernel, window_size(), settlement);
+      drain_task(
+        &mut surface,
+        &mut kernel,
+        &mut fixture,
+        window_size(),
+        task,
+        &mut |_| FixtureReply::Failure,
+      )
+      .await;
+    }
+    assert!(!surface.browser.model().is_refreshing());
+    assert!(surface.browser.model().refresh_failure().is_some());
     assert_eq!(surface.viewport.offset_y, 8_000.0);
     assert_eq!(surface.scroll_id, scroll_id);
-    surface.data.set_display_range(192..216, 240).unwrap();
+    surface
+      .browser
+      .set_display_range(192..216)
+      .expect("display range applies");
     sync_view(&mut surface);
     assert_eq!(
       surface.grid_viewport,
@@ -798,7 +831,10 @@ mod tests {
     let LibraryBrowseView::Ready { visible_items, .. } = &surface.view else {
       panic!("failed refresh must preserve deep cached pages");
     };
-    assert_eq!(visible_items[0].item.as_ref().unwrap().id, "item-192");
+    assert_eq!(
+      visible_items[0].item.as_ref().unwrap().id,
+      fixture_item_id(192)
+    );
     let retry = update(
       &mut surface,
       &mut kernel,
@@ -807,28 +843,51 @@ mod tests {
       window_size(),
       BrowseMessage::Retry,
     );
-    assert!(surface.data.is_refreshing());
-    let retry = task_settlement(retry).await;
-    assert!(surface.data.is_current_settlement(&retry));
+    assert!(surface.browser.model().is_refreshing());
+    let retry = fixture
+      .run_task(retry, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("retry emits a settlement");
+    assert!(surface.browser.model().is_current_settlement(&retry));
   }
 
   #[tokio::test]
   async fn empty_refresh_failure_survives_history_and_retries_without_resetting_scroll() {
-    let (mut surface, mut kernel) = test_fixture();
-    let first = browse_request(
-      surface
-        .data
-        .configure(search_source(&kernel, "empty"))
-        .unwrap(),
-    );
-    settle_page(&mut surface.data, first, 0);
-    sync_view(&mut surface);
-    let failure = task_settlement(refresh(&mut surface, &mut kernel)).await;
-    dispatch_settlement(&mut surface, &mut kernel, failure);
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
+    let source = search_source(&kernel, "empty");
+    let task = start(&mut surface, &mut kernel, Some(source));
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 0,
+        artwork: false,
+      },
+    )
+    .await;
+    let failure = fixture
+      .run_task(refresh(&mut surface, &mut kernel), |_| {
+        FixtureReply::Failure
+      })
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("refresh emits a settlement");
+    drop(dispatch_settlement(
+      &mut surface,
+      &mut kernel,
+      window_size(),
+      failure,
+    ));
     let saved = snapshot(&mut surface, Some("empty"));
     drop(restore(&mut surface, &mut kernel, saved, window_size()));
     assert!(matches!(surface.view, LibraryBrowseView::Empty));
-    assert!(surface.data.refresh_failure().is_some());
+    assert!(surface.browser.model().refresh_failure().is_some());
     let scroll_id = surface.scroll_id.clone();
     let retry = update(
       &mut surface,
@@ -838,235 +897,138 @@ mod tests {
       window_size(),
       BrowseMessage::Retry,
     );
-    assert!(surface.data.is_refreshing());
+    assert!(surface.browser.model().is_refreshing());
     assert_eq!(surface.scroll_id, scroll_id);
-    dispatch_settlement(&mut surface, &mut kernel, task_settlement(retry).await);
-    assert!(matches!(surface.view, LibraryBrowseView::Empty));
-    assert!(surface.data.refresh_failure().is_some());
-  }
-
-  fn settle_page(model: &mut BrowseModel, request: BrowsePageRequest, total: u32) {
-    let mut pending = vec![request];
-    while let Some(request) = pending.pop() {
-      let end = (request.start_index + request.limit).min(total);
-      let effects = model
-        .settle(BrowsePageSettlement {
-          source_id: request.source_id,
-          token: request.token,
-          result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-            start_index: request.start_index,
-            limit: request.limit,
-            total_record_count: total,
-            has_more: end < total,
-            items: (request.start_index..end)
-              .map(|index| episode(&format!("item-{index}"), 1))
-              .collect(),
-          }),
-        })
-        .unwrap();
-      pending.extend(effects.into_iter().filter_map(|effect| match effect {
-        BrowseEffect::RequestPage(request) => Some(request),
-        BrowseEffect::CancelPage { .. } | BrowseEffect::ResetViewport => None,
-      }));
-    }
-  }
-
-  async fn task_settlement(task: Task<Message>) -> BrowsePageSettlement {
-    use iced::futures::StreamExt;
-    let mut stream = iced_runtime::task::into_stream(task).expect("page task");
-    while let Some(action) = stream.next().await {
-      if let iced_runtime::Action::Output(Message::Browse(BrowseMessage::PageSettled(settlement))) =
-        action
-      {
-        return settlement;
+    for message in fixture.run_task(retry, |_| FixtureReply::Failure).await {
+      if let Some(settlement) = page_settled(message) {
+        drop(dispatch_settlement(
+          &mut surface,
+          &mut kernel,
+          window_size(),
+          settlement,
+        ));
       }
     }
-    panic!("page task must deliver a settlement");
-  }
-
-  fn dispatch_settlement(
-    surface: &mut Surface,
-    kernel: &mut Kernel,
-    settlement: BrowsePageSettlement,
-  ) {
-    drop(update(
-      surface,
-      kernel,
-      None,
-      false,
-      window_size(),
-      BrowseMessage::PageSettled(settlement),
-    ));
+    assert!(matches!(surface.view, LibraryBrowseView::Empty));
+    assert!(surface.browser.model().refresh_failure().is_some());
   }
 
   #[tokio::test]
-  async fn snapshot_aborts_owned_delivery_without_a_separate_leave_hook() {
-    use iced::futures::StreamExt;
-    let (mut surface, kernel) = test_fixture();
-    let request = browse_request(
-      surface
-        .data
-        .configure(search_source(&kernel, "pending"))
-        .unwrap(),
-    );
-    let settlement = BrowsePageSettlement {
-      source_id: request.source_id,
-      token: request.token,
-      result: Err("departed".to_owned()),
-    };
-    let (task, handle) = Task::done(Message::Browse(BrowseMessage::PageSettled(
-      settlement.clone(),
-    )))
-    .abortable();
-    surface.page_tasks.insert(request.token, handle);
+  async fn snapshot_cancels_owned_delivery_without_a_separate_leave_hook() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
+    let source = search_source(&kernel, "pending");
+    let mut stream =
+      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
+        .expect("start emits page work");
+    let request = fixture.next_request(&mut stream).await;
     let mut saved = snapshot(&mut surface, Some("pending"));
-    let mut stream = iced_runtime::task::into_stream(task).expect("owned delivery");
-    assert!(stream.next().await.is_none());
-    assert!(!saved.data.is_current_settlement(&settlement));
-    let resumed = browse_request(saved.data.resume().unwrap());
-    assert_ne!(resumed.token, settlement.token);
+    request.reply(FixtureReply::Failure);
+    let settlement = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("cancelled delivery still settles");
+    assert!(!saved.browser.model().is_current_settlement(&settlement));
+    let work = saved.browser.resume().expect("resume reissues work");
+    let request = work.requests.into_iter().next().expect("resumed request");
+    let resumed = fixture.run_request(request, FixtureReply::Failure).await;
+    assert!(saved.browser.model().is_current_settlement(&resumed));
   }
 
   #[tokio::test]
   async fn refresh_start_and_failure_preserve_overlapping_image_demand() {
     use jellypilot_core::image_lifecycle::ImagePriority;
-    let (mut surface, mut kernel) = test_fixture();
-    let request = browse_request(
-      surface
-        .data
-        .configure(search_source(&kernel, "images"))
-        .unwrap(),
-    );
-    let mut item = episode("cached", 1);
-    item.artwork_image_id = Some("cached-image".to_owned());
-    surface
-      .data
-      .settle(BrowsePageSettlement {
-        source_id: request.source_id,
-        token: request.token,
-        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-          start_index: 0,
-          limit: 24,
-          total_record_count: 1,
-          has_more: false,
-          items: vec![item],
-        }),
-      })
-      .unwrap();
-    sync_view(&mut surface);
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
+    let source = search_source(&kernel, "images");
+    let task = start(&mut surface, &mut kernel, Some(source));
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 1,
+        artwork: true,
+      },
+    )
+    .await;
+    let LibraryBrowseView::Ready { visible_items, .. } = &surface.view else {
+      panic!("fixture page must ready the view");
+    };
+    let item = visible_items[0]
+      .item
+      .clone()
+      .expect("fixture item is present");
     drop(surface.artwork.observe(
       kernel.request_gate.current_session(),
       ImageSpec {
-        key: "cached".to_owned(),
-        image_id: "cached-image".to_owned(),
+        key: item.id.clone(),
+        image_id: item.artwork_image_id.clone().expect("fixture artwork"),
         size_class: ArtworkSizeClass::Card,
         derived: DerivedArtwork::default(),
       },
       Some(ImagePriority::Visible),
-      Arc::new(jellypilot_media_server::JellyfinClient::new()),
+      fixture.client(),
       Arc::clone(&kernel.artwork_adapter),
       |completion| Message::Browse(BrowseMessage::ArtworkLoaded(completion)),
     ));
     let epoch = surface.artwork.epoch();
     let task = refresh(&mut surface, &mut kernel);
-    assert!(surface.artwork.get("cached").is_some());
+    assert!(surface.artwork.get(&item.id).is_some());
     assert_eq!(surface.artwork.epoch(), epoch);
-    dispatch_settlement(&mut surface, &mut kernel, task_settlement(task).await);
-    assert!(surface.artwork.get("cached").is_some());
+    for message in fixture.run_task(task, |_| FixtureReply::Failure).await {
+      if let Some(settlement) = page_settled(message) {
+        drop(dispatch_settlement(
+          &mut surface,
+          &mut kernel,
+          window_size(),
+          settlement,
+        ));
+      }
+    }
+    assert!(surface.artwork.get(&item.id).is_some());
     assert_eq!(surface.artwork.epoch(), epoch);
   }
 
-  fn browse_request(effects: Vec<BrowseEffect>) -> BrowsePageRequest {
-    effects
-      .into_iter()
-      .find_map(|effect| match effect {
-        BrowseEffect::RequestPage(request) => Some(request),
-        BrowseEffect::ResetViewport | BrowseEffect::CancelPage { .. } => None,
-      })
-      .expect("browse request should be emitted")
-  }
-
-  fn search_source(kernel: &Kernel, query: &str) -> BrowseSource {
-    BrowseSource::Search {
-      session: kernel.request_gate.current_session(),
-      query: query.to_owned(),
-    }
-  }
-
-  fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
-    VideoLibraryItem {
-      premiere_date: None,
-      community_rating: None,
-      episode_count: None,
-      last_played_date: None,
-      logo_image_id: None,
-      id: id.to_owned(),
-      name: "Episode".to_owned(),
-      item_type: "Episode".to_owned(),
-      production_year: None,
-      runtime_seconds: Some(1_800.0),
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      series_poster_image_id: None,
-      episode_thumb_image_id: None,
-      series_thumb_image_id: None,
-      series_backdrop_image_id: None,
-      season_number: Some(season_number),
-      episode_number: Some(1),
-      series_id: Some("show-1".to_owned()),
-      series_name: Some("Show".to_owned()),
-      resume_position_seconds: None,
-      played_percentage: None,
-      overview: None,
-      index_number_end: None,
-      season_poster_image_id: None,
-      end_year: None,
-      series_continuing: false,
-      unplayed_item_count: None,
-    }
-  }
-
-  #[test]
-  fn identical_browse_resubmit_keeps_the_in_flight_request_handle() {
-    let (mut surface, mut kernel) = test_fixture();
+  #[tokio::test]
+  async fn identical_browse_resubmit_starts_no_new_page_request() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "arrival");
-    let request = browse_request(
-      surface
-        .data
-        .configure(source.clone())
-        .expect("search should configure"),
-    );
-    let (_, handle) = Task::<Message>::none().abortable();
-    surface.page_tasks.insert(request.token, handle);
+    let mut stream =
+      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source.clone())))
+        .expect("start emits page work");
+    let request = fixture.next_request(&mut stream).await;
 
-    drop(start(&mut surface, &mut kernel, Some(source)));
+    let resubmit = start(&mut surface, &mut kernel, Some(source));
 
-    assert!(surface.page_tasks.contains_key(&request.token));
+    assert!(iced_runtime::task::into_stream(resubmit).is_none());
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
+    drop(request);
   }
 
-  #[test]
-  fn stale_same_session_settlement_keeps_the_reopened_request_handle() {
-    let (mut surface, mut kernel) = test_fixture();
+  #[tokio::test]
+  async fn stale_settlement_is_rejected_without_touching_the_reopened_query() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "arrival");
-    let stale = browse_request(
-      surface
-        .data
-        .configure(source.clone())
-        .expect("first search should configure"),
-    );
-    surface.data = BrowseModel::default();
-    let current = browse_request(
-      surface
-        .data
-        .configure(source)
-        .expect("search should reopen"),
-    );
-    sync_view(&mut surface);
-    let (_, handle) = Task::<Message>::none().abortable();
-    surface.page_tasks.insert(current.token, handle);
+    let mut first_stream =
+      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source.clone())))
+        .expect("first start emits page work");
+    let first_request = fixture.next_request(&mut first_stream).await;
+    leave_view(&mut surface);
+    first_request.reply(FixtureReply::Failure);
+    let stale = fixture
+      .run_stream(&mut first_stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("cancelled request still settles");
+
+    let mut reopened_stream =
+      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
+        .expect("reopen emits page work");
+    let reopened_request = fixture.next_request(&mut reopened_stream).await;
 
     drop(update(
       &mut surface,
@@ -1074,34 +1036,55 @@ mod tests {
       None,
       false,
       window_size(),
-      BrowseMessage::PageSettled(BrowsePageSettlement {
-        source_id: stale.source_id,
-        token: stale.token,
-        result: Err("stale server response".to_owned()),
-      }),
+      BrowseMessage::PageSettled(stale),
     ));
 
-    assert!(surface.page_tasks.contains_key(&current.token));
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
+    reopened_request.reply(FixtureReply::Failure);
+    let reopened = fixture
+      .run_stream(&mut reopened_stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("reopened request settles");
+    assert!(surface.browser.model().is_current_settlement(&reopened));
   }
 
-  #[test]
-  fn reset_viewport_effect_clears_the_recorded_scroll_offset() {
-    let (mut surface, mut kernel) = test_fixture();
+  #[tokio::test]
+  async fn reset_viewport_work_clears_scroll_before_page_requests_start() {
+    use iced::futures::StreamExt;
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     surface.viewport.offset_y = 640.0;
+    surface.grid_viewport = Some(ArtworkGridViewport {
+      offset_y: 640.0,
+      height: 300.0,
+    });
+    let source = search_source(&kernel, "reset");
+    let mut stream =
+      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
+        .expect("configure emits page work");
 
-    drop(apply_effects(
-      &mut surface,
-      &mut kernel,
-      vec![BrowseEffect::ResetViewport],
-    ));
-
+    let first = stream.next().await.expect("scroll reset is emitted first");
+    assert!(matches!(first, iced_runtime::Action::Widget(_)));
     assert_eq!(surface.viewport.offset_y, 0.0);
+    assert_eq!(surface.grid_viewport, None);
+    // The page request reaches the server only after the reset action.
+    let request = fixture.next_request(&mut stream).await;
+    assert!(request.target().to_lowercase().contains("startindex=0"));
+    request.reply(FixtureReply::Page {
+      total: 0,
+      artwork: false,
+    });
+    drop(
+      fixture
+        .run_stream(&mut stream, |_| FixtureReply::Failure)
+        .await,
+    );
   }
 
-  #[test]
-  fn browse_scroll_position_drives_the_display_window() {
-    let (mut surface, mut kernel) = test_fixture();
+  #[tokio::test]
+  async fn browse_scroll_position_drives_the_display_window() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let library = BrowseSource::Library {
       session: kernel.request_gate.current_session(),
       shortcut: jellypilot_media_server::VideoLibraryShortcut {
@@ -1112,72 +1095,29 @@ mod tests {
         artwork_image_id: None,
       },
     };
-    let initial_request = browse_request(
-      surface
-        .data
-        .configure(library)
-        .expect("library should configure"),
-    );
-    sync_view(&mut surface);
-
-    let settlement = BrowsePageSettlement {
-      source_id: initial_request.source_id.clone(),
-      token: initial_request.token,
-      result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-        start_index: 0,
-        limit: 24,
-        total_record_count: 264,
-        has_more: true,
-        items: (0..24)
-          .map(|index| VideoLibraryItem {
-            premiere_date: None,
-            community_rating: None,
-            episode_count: None,
-            last_played_date: None,
-            logo_image_id: None,
-            id: format!("item-{index}"),
-            name: format!("Item {index}"),
-            item_type: "Movie".to_owned(),
-            production_year: None,
-            runtime_seconds: None,
-            played: false,
-            favorite: false,
-            artwork_image_id: None,
-            backdrop_image_id: None,
-            series_poster_image_id: None,
-            episode_thumb_image_id: None,
-            series_thumb_image_id: None,
-            series_backdrop_image_id: None,
-            season_number: None,
-            episode_number: None,
-            series_id: None,
-            series_name: None,
-            resume_position_seconds: None,
-            played_percentage: None,
-            overview: None,
-            index_number_end: None,
-            season_poster_image_id: None,
-            end_year: None,
-            series_continuing: false,
-            unplayed_item_count: None,
-          })
-          .collect(),
-      }),
-    };
-    drop(update(
+    let task = start(&mut surface, &mut kernel, Some(library));
+    drain_task(
       &mut surface,
       &mut kernel,
-      None,
-      false,
+      &mut fixture,
       window_size(),
-      BrowseMessage::PageSettled(settlement),
-    ));
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 264,
+        artwork: false,
+      },
+    )
+    .await;
 
     let metrics = browse_metrics(
       grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
       surface.mode,
     );
-    let initial = surface.data.display_range().expect("metadata window");
+    let initial = surface
+      .browser
+      .model()
+      .display_range()
+      .expect("metadata window");
     assert_eq!(initial.start, 0);
     assert!(
       (initial.end as usize / metrics.columns) as f32 * metrics.row_height >= 2.0 * WINDOW_HEIGHT
@@ -1185,7 +1125,7 @@ mod tests {
     assert!(initial.end < 264, "scroll projection must remain sparse");
 
     let epoch = surface.artwork.epoch();
-    drop(update(
+    let task = update(
       &mut surface,
       &mut kernel,
       None,
@@ -1196,9 +1136,22 @@ mod tests {
         offset_y: -120.0,
         height: WINDOW_HEIGHT,
       },
-    ));
+    );
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 264,
+        artwork: false,
+      },
+    )
+    .await;
     let measured_initial = surface
-      .data
+      .browser
+      .model()
       .display_range()
       .expect("measured metadata window");
     assert_eq!(
@@ -1214,7 +1167,7 @@ mod tests {
 
     // Scrolling ten rows down shifts the window without resetting it.
     surface.viewport.offset_y = 2870.0;
-    drop(update(
+    let task = update(
       &mut surface,
       &mut kernel,
       None,
@@ -1225,9 +1178,22 @@ mod tests {
         offset_y: 2750.0,
         height: WINDOW_HEIGHT,
       },
-    ));
+    );
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 264,
+        artwork: false,
+      },
+    )
+    .await;
     let scrolled = surface
-      .data
+      .browser
+      .model()
       .display_range()
       .expect("scrolled metadata window");
     let first_row = scrolled.start as usize / metrics.columns;
@@ -1242,13 +1208,17 @@ mod tests {
     assert!(scrolled.start > 0 && scrolled.end < 264);
 
     // An unchanged viewport keeps the window and emits no page requests.
-    let pending_before = surface.page_tasks.len();
-    drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(scrolled));
-    assert_eq!(surface.page_tasks.len(), pending_before);
+    let outputs = fixture
+      .run_task(
+        sync_scroll_window(&mut surface, &mut kernel, window_size()),
+        |_| panic!("unchanged window must not request pages"),
+      )
+      .await;
+    assert!(outputs.is_empty());
+    assert_eq!(surface.browser.model().display_range(), Some(scrolled));
 
     // Scrolling back up restores the earlier window.
-    drop(update(
+    let task = update(
       &mut surface,
       &mut kernel,
       None,
@@ -1259,8 +1229,23 @@ mod tests {
         offset_y: -120.0,
         height: WINDOW_HEIGHT,
       },
-    ));
-    assert_eq!(surface.data.display_range(), Some(measured_initial));
+    );
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Page {
+        total: 264,
+        artwork: false,
+      },
+    )
+    .await;
+    assert_eq!(
+      surface.browser.model().display_range(),
+      Some(measured_initial)
+    );
   }
 
   #[test]
@@ -1333,5 +1318,40 @@ mod tests {
       },
     ));
     assert_eq!(surface.grid_viewport, None);
+  }
+
+  fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
+    VideoLibraryItem {
+      premiere_date: None,
+      community_rating: None,
+      episode_count: None,
+      last_played_date: None,
+      logo_image_id: None,
+      id: id.to_owned(),
+      name: "Episode".to_owned(),
+      item_type: "Episode".to_owned(),
+      production_year: None,
+      runtime_seconds: Some(1_800.0),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
+      season_number: Some(season_number),
+      episode_number: Some(1),
+      series_id: Some("show-1".to_owned()),
+      series_name: Some("Show".to_owned()),
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
+    }
   }
 }

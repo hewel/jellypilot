@@ -229,30 +229,6 @@ impl From<jellypilot_sdk::ActiveProfile> for ActiveProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
-pub enum VideoLibraryKind {
-    Movies,
-    TvShows,
-}
-
-impl From<VideoLibraryKind> for ms::VideoLibraryKind {
-    fn from(kind: VideoLibraryKind) -> Self {
-        match kind {
-            VideoLibraryKind::Movies => Self::Movies,
-            VideoLibraryKind::TvShows => Self::TvShows,
-        }
-    }
-}
-
-impl From<ms::VideoLibraryKind> for VideoLibraryKind {
-    fn from(kind: ms::VideoLibraryKind) -> Self {
-        match kind {
-            ms::VideoLibraryKind::Movies => Self::Movies,
-            ms::VideoLibraryKind::TvShows => Self::TvShows,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
 pub enum VideoLibrarySort {
     Title,
     RecentlyAdded,
@@ -505,94 +481,14 @@ impl From<ms::VideoLibraryShortcut> for VideoLibraryShortcut {
     }
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
-pub struct VideoLibraryPageRequest {
-    pub library_id: String,
-    pub collection_type: VideoLibraryKind,
-    pub start_index: i32,
-    pub limit: i32,
-    pub sort: VideoLibrarySort,
-    pub sort_direction: VideoLibrarySortDirection,
-    pub played_filter: VideoLibraryPlayedFilter,
-    pub favorites_only: bool,
-}
-
-impl From<VideoLibraryPageRequest> for ms::VideoLibraryPageRequest {
-    fn from(request: VideoLibraryPageRequest) -> Self {
+impl From<VideoLibraryShortcut> for ms::VideoLibraryShortcut {
+    fn from(value: VideoLibraryShortcut) -> Self {
         Self {
-            library_id: request.library_id,
-            collection_type: request.collection_type.into(),
-            start_index: request.start_index,
-            limit: request.limit,
-            sort: request.sort.into(),
-            sort_direction: request.sort_direction.into(),
-            played_filter: request.played_filter.into(),
-            favorites_only: request.favorites_only,
-        }
-    }
-}
-
-#[derive(Clone, Debug, uniffi::Record)]
-pub struct VideoLibraryPage {
-    pub library_id: String,
-    pub collection_type: VideoLibraryKind,
-    pub start_index: i32,
-    pub limit: i32,
-    pub total_record_count: i32,
-    pub has_more: bool,
-    pub items: Vec<VideoLibraryItem>,
-}
-
-impl From<ms::VideoLibraryPage> for VideoLibraryPage {
-    fn from(page: ms::VideoLibraryPage) -> Self {
-        Self {
-            library_id: page.library_id,
-            collection_type: page.collection_type.into(),
-            start_index: page.start_index,
-            limit: page.limit,
-            total_record_count: page.total_record_count,
-            has_more: page.has_more,
-            items: page.items.into_iter().map(VideoLibraryItem::from).collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, uniffi::Record)]
-pub struct VideoSearchRequest {
-    pub query: String,
-    pub start_index: i32,
-    pub limit: i32,
-}
-
-impl From<VideoSearchRequest> for ms::VideoSearchRequest {
-    fn from(request: VideoSearchRequest) -> Self {
-        Self {
-            query: request.query,
-            start_index: request.start_index,
-            limit: request.limit,
-        }
-    }
-}
-
-#[derive(Clone, Debug, uniffi::Record)]
-pub struct VideoSearchPage {
-    pub query: String,
-    pub start_index: i32,
-    pub limit: i32,
-    pub total_record_count: i32,
-    pub has_more: bool,
-    pub items: Vec<VideoLibraryItem>,
-}
-
-impl From<ms::VideoSearchPage> for VideoSearchPage {
-    fn from(page: ms::VideoSearchPage) -> Self {
-        Self {
-            query: page.query,
-            start_index: page.start_index,
-            limit: page.limit,
-            total_record_count: page.total_record_count,
-            has_more: page.has_more,
-            items: page.items.into_iter().map(VideoLibraryItem::from).collect(),
+            id: value.id,
+            name: value.name,
+            collection_type: value.collection_type,
+            item_count: value.item_count,
+            artwork_image_id: value.artwork_image_id,
         }
     }
 }

@@ -380,8 +380,8 @@ impl Admission {
     ///
     /// A receipt whose binding ended reports `Failed(SdkError::Stale)`; a
     /// result that does not confirm the requested value reports
-    /// [`ItemActionError::NotConfirmed`]. A matching receipt always releases
-    /// admission.
+    /// [`ItemActionError::NotConfirmed`]. Deferred admission remains held
+    /// until the owner acknowledges result delivery.
     fn settle(mut self, result: Result<Outcome, String>) -> Result<Outcome, ItemActionError> {
         let receipt = self.take();
         let mut state = self

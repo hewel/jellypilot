@@ -17,6 +17,8 @@ pub mod settings;
 pub mod shell;
 pub mod state;
 mod subscriptions;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod update;
 mod view;
 

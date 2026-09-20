@@ -3,7 +3,8 @@
 //! [`BrowseModel`] owns query identity, retained data, refresh replacement and
 //! delivery correlation. A suspended model can move into navigation history;
 //! resuming it reissues unfinished work without reusing physical delivery IDs.
-//! Runtime task handles, layout geometry and image demand remain in the shell.
+//! The SDK executes request effects; layout geometry and image demand remain
+//! in the platform shell.
 //! Refresh retains a complete usable result set until the captured replacement
 //! window is ready, so failure does not turn a display projection into a second
 //! source of lifecycle state.
@@ -273,6 +274,12 @@ impl BrowseModel {
     #[must_use]
     pub fn identity(&self) -> Option<&str> {
         self.committed.source_id.as_deref()
+    }
+
+    /// Current result count without materializing the display payloads.
+    #[must_use]
+    pub fn total_record_count(&self) -> Option<u32> {
+        self.committed.core.total_record_count()
     }
 
     /// Pauses physical work without discarding data or unfinished paging intent.
@@ -572,8 +579,8 @@ impl BrowseResultSet {
             preferences.identity()
         );
         let source_changed = self.source_id.as_deref() != Some(source_id.as_str());
-        // The native shell accumulates loaded pages across window moves; the
-        // core default (eviction) remains the wasm/web contract.
+        // Returning to visited windows or navigation history reuses loaded
+        // pages rather than replacing usable cards with placeholders.
         self.core.set_retain_loaded_pages(true);
         let update = self.core.dispatch(LibraryBrowseAction::Configure {
             source_id: source_id.clone(),

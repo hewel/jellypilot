@@ -2888,50 +2888,48 @@ mod tests {
     use iced::advanced::renderer::Headless;
     use iced::{mouse, Event, Font, Point, Size};
     use iced_runtime::user_interface::{Cache, UserInterface};
-    use jellypilot_core::browse_model::{BrowseEffect, BrowsePagePayload, BrowsePageSettlement};
 
     let mut state = test_state();
-    let image_id = image_reference(&mut state, "scroll-regression");
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    state.kernel.client = Some(fixture.client());
+    state.kernel.connection = ConnectionPhase::Connected;
     state
       .shell
       .navigate_to(Destination::Search("scroll regression".into()));
     let source = shell::browse_source(&state).unwrap();
     let browse = &mut state.full.as_mut().unwrap().browse;
-    let mut effects = browse.data.configure(source).unwrap();
+    let mut pending = browse
+      .browser
+      .configure(Some(fixture.client()), source, Default::default())
+      .unwrap()
+      .requests;
     let mut expanded = false;
-    while let Some(effect) = effects.pop() {
-      let BrowseEffect::RequestPage(request) = effect else {
-        continue;
-      };
-      let end = (request.start_index + request.limit).min(240);
-      effects.extend(
-        browse
-          .data
-          .settle(BrowsePageSettlement {
-            source_id: request.source_id,
-            token: request.token,
-            result: Ok(BrowsePagePayload {
-              start_index: request.start_index,
-              limit: request.limit,
-              total_record_count: 240,
-              has_more: end < 240,
-              items: (request.start_index..end)
-                .map(|index| {
-                  let mut item = episode(&format!("scroll-{index}"), 1);
-                  item.artwork_image_id = Some(image_id.clone());
-                  item
-                })
-                .collect(),
-            }),
-          })
-          .unwrap(),
-      );
+    while let Some(request) = pending.pop() {
+      let settlement = fixture
+        .run_request(
+          request,
+          crate::app::test_support::FixtureReply::Page {
+            total: 240,
+            artwork: true,
+          },
+        )
+        .await;
+      pending.extend(browse.browser.settle(settlement).unwrap().requests);
       if !expanded {
         expanded = true;
-        effects.extend(browse.data.set_display_range(0..240, 240).unwrap());
+        pending.extend(browse.browser.set_display_range(0..240).unwrap().requests);
       }
     }
-    browse.view = browse.data.view();
+    browse.view = browse.browser.model().view();
+    let image_id = {
+      let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
+        panic!("fixture pages must ready the view");
+      };
+      visible_items
+        .iter()
+        .find_map(|slot| slot.item.as_ref()?.artwork_image_id.clone())
+        .expect("fixture items carry artwork")
+    };
     state.kernel.artwork_adapter.seed_raster_for_test(
       &image_id,
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
@@ -3013,60 +3011,52 @@ mod tests {
     }
   }
 
-  #[test]
-  fn back_restores_search_results_viewport_and_cached_artwork() {
-    use jellypilot_core::browse_model::{BrowseEffect, BrowsePagePayload, BrowsePageSettlement};
+  #[tokio::test]
+  async fn back_restores_search_results_viewport_and_cached_artwork() {
+    use crate::app::test_support::{drain_state_task, BrowseFixture, FixtureReply};
+
     let mut state = test_state();
-    let image_id = image_reference(&mut state, "browse-art-1");
+    let mut fixture = BrowseFixture::new();
+    state.kernel.client = Some(fixture.client());
+    state.kernel.connection = ConnectionPhase::Connected;
     let destination = Destination::Search("original query".to_owned());
     state.shell.navigate_to(destination.clone());
     let source = shell::browse_source(&state).expect("search source");
-    let browse = &mut state.full.as_mut().unwrap().browse;
-    let request = browse
-      .data
-      .configure(source)
-      .unwrap()
-      .into_iter()
-      .find_map(|effect| {
-        if let BrowseEffect::RequestPage(request) = effect {
-          Some(request)
-        } else {
-          None
-        }
-      })
-      .unwrap();
-    let mut item = episode("browse-item-1", 1);
-    item.artwork_image_id = Some(image_id.clone());
-    browse
-      .data
-      .settle(BrowsePageSettlement {
-        source_id: request.source_id,
-        token: request.token,
-        result: Ok(BrowsePagePayload {
-          start_index: 0,
-          limit: 24,
-          total_record_count: 24,
-          has_more: false,
-          items: (1..=24)
-            .map(|index| {
-              let mut item = item.clone();
-              item.id = format!("browse-item-{index}");
-              item
-            })
-            .collect(),
-        }),
-      })
-      .unwrap();
-    browse.view = browse.data.view();
-    browse.viewport.offset_y = 500.0;
-    browse.search_input = "original query".to_owned();
+    let task = browse::start(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      Some(source),
+    );
+    drain_state_task(&mut state, &mut fixture, task, &mut |_| {
+      FixtureReply::Page {
+        total: 24,
+        artwork: true,
+      }
+    })
+    .await;
+    let (first_id, image_id) = {
+      let browse = &state.full.as_ref().unwrap().browse;
+      let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
+        panic!("fixture page must ready the view");
+      };
+      let item = visible_items[0].item.as_ref().expect("fixture item");
+      (
+        item.id.clone(),
+        item.artwork_image_id.clone().expect("fixture artwork"),
+      )
+    };
+    {
+      let browse = &mut state.full.as_mut().unwrap().browse;
+      browse.viewport.offset_y = 500.0;
+      browse.search_input = "original query".to_owned();
+    }
     state.kernel.artwork_adapter.seed_raster_for_test(
       &image_id,
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
 
-    drop(shell::open_detail(&mut state, item));
+    drop(shell::open_detail(&mut state, episode("detail-item", 1)));
     // Visiting a second result set must not overwrite the earlier history entry.
     drop(shell::navigate(
       &mut state,
@@ -3083,7 +3073,7 @@ mod tests {
       Message::Browse(BrowseMessage::SearchSubmitted),
     ));
     drop(shell::navigate_back(&mut state));
-    observe_browse_image(&mut state, "browse-item-1", &image_id);
+    observe_browse_image(&mut state, &first_id, &image_id);
 
     assert_eq!(state.shell.destination, destination);
     let browse = &state.full.as_ref().unwrap().browse;
@@ -3092,18 +3082,19 @@ mod tests {
     let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
       panic!("back must show cached results without entering Loading");
     };
-    assert_eq!(visible_items[0].item.as_ref().unwrap().id, "browse-item-1");
-    let cell = browse
-      .artwork
-      .get("browse-item-1")
-      .expect("restored poster");
+    assert_eq!(visible_items[0].item.as_ref().unwrap().id, first_id);
+    let cell = browse.artwork.get(&first_id).expect("restored poster");
     assert!(cell.handle().is_some());
   }
 
-  #[test]
-  fn reselecting_active_played_filter_keeps_loaded_artwork() {
+  #[tokio::test]
+  async fn reselecting_active_played_filter_keeps_loaded_artwork() {
+    use crate::app::test_support::{drain_state_task, BrowseFixture, FixtureReply};
+
     let mut state = test_state();
-    let image_id = image_reference(&mut state, "browse-art-1");
+    let mut fixture = BrowseFixture::new();
+    state.kernel.client = Some(fixture.client());
+    state.kernel.connection = ConnectionPhase::Connected;
     state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
         id: "movies".to_owned(),
@@ -3117,58 +3108,39 @@ mod tests {
       collection_type: "movies".to_owned(),
     };
 
-    // Configure and settle the browse model exactly like a completed page
-    // load, so the Ready view comes from the model rather than test injection.
+    // Drive the real start path so the Ready view comes from a settled page.
     let source = shell::browse_source(&state).expect("library source resolves");
-    let preferences = jellypilot_core::browse_model::BrowsePreferences::from(
-      state.kernel.settings.snapshot().browse_filters(),
+    let task = browse::start(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      Some(source),
     );
-    let request = state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .data
-      .configure_with_preferences(source, preferences)
-      .expect("library configures")
-      .into_iter()
-      .find_map(|effect| match effect {
-        jellypilot_core::browse_model::BrowseEffect::RequestPage(request) => Some(request),
-        _ => None,
-      })
-      .expect("bootstrap page request is emitted");
+    drain_state_task(&mut state, &mut fixture, task, &mut |_| {
+      FixtureReply::Page {
+        total: 1,
+        artwork: true,
+      }
+    })
+    .await;
+    let (item_id, image_id) = {
+      let browse = &state.full.as_ref().unwrap().browse;
+      let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
+        panic!("fixture page must ready the view");
+      };
+      let item = visible_items[0].item.as_ref().expect("fixture item");
+      (
+        item.id.clone(),
+        item.artwork_image_id.clone().expect("fixture artwork"),
+      )
+    };
     // Data settlement retains candidates; geometry admits the cached image.
     state.kernel.artwork_adapter.seed_raster_for_test(
       &image_id,
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
-    let mut item = episode("browse-item-1", 1);
-    item.artwork_image_id = Some(image_id.clone());
-    drop(browse::update(
-      &mut state.full.as_mut().unwrap().browse,
-      &mut state.kernel,
-      None,
-      false,
-      state.shell.window_size,
-      BrowseMessage::PageSettled(jellypilot_core::browse_model::BrowsePageSettlement {
-        source_id: request.source_id.clone(),
-        token: request.token,
-        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-          start_index: 0,
-          limit: 24,
-          total_record_count: 1,
-          has_more: false,
-          items: vec![item],
-        }),
-      }),
-    ));
-    assert!(matches!(
-      state.full.as_ref().unwrap().browse.view,
-      LibraryBrowseView::Ready { .. }
-    ));
 
-    observe_browse_image(&mut state, "browse-item-1", &image_id);
+    observe_browse_image(&mut state, &item_id, &image_id);
     assert_eq!(
       state
         .full
@@ -3176,7 +3148,7 @@ mod tests {
         .unwrap()
         .browse
         .artwork
-        .get("browse-item-1")
+        .get(&item_id)
         .map(|cell| cell.state),
       Some(ImageStatus::Ready)
     );
@@ -3198,7 +3170,7 @@ mod tests {
     );
     let cell = browse
       .artwork
-      .get("browse-item-1")
+      .get(&item_id)
       .expect("reselecting the active filter must not drop artwork cells");
     assert_eq!(cell.state, ImageStatus::Ready);
     assert!(cell.handle().is_some());
@@ -3294,9 +3266,14 @@ mod tests {
     assert_eq!(state.shell.destination, Destination::NowPlaying);
   }
 
-  #[test]
-  fn entering_control_only_aborts_browse_and_resets_library_surfaces() {
+  #[tokio::test]
+  async fn entering_control_only_cancels_browse_and_resets_library_surfaces() {
+    use crate::app::test_support::{page_settled, BrowseFixture, FixtureReply};
+
     let mut state = test_state();
+    let mut fixture = BrowseFixture::new();
+    state.kernel.client = Some(fixture.client());
+    state.kernel.connection = ConnectionPhase::Connected;
     state.shell.window_size = iced::Size::new(1440.0, 810.0);
     state.shell.destination = Destination::Library {
       library_id: "movies".to_owned(),
@@ -3311,36 +3288,29 @@ mod tests {
         artwork_image_id: None,
       }]);
     let source = shell::browse_source(&state).unwrap();
-    let request = state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .data
-      .configure(source)
-      .unwrap()
-      .into_iter()
-      .find_map(|effect| match effect {
-        jellypilot_core::browse_model::BrowseEffect::RequestPage(request) => Some(request),
-        _ => None,
-      })
-      .unwrap();
-    let (_task, handle) =
-      Task::perform(std::future::pending::<Message>(), std::convert::identity).abortable();
-    let cancellation = handle.clone();
-    state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .page_tasks
-      .insert(request.token, handle);
+    let mut stream = iced_runtime::task::into_stream(browse::start(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      Some(source),
+    ))
+    .expect("browse start emits page work");
+    let request = fixture.next_request(&mut stream).await;
 
     drop(shell::apply_app_mode(
       &mut state,
       jellypilot_core::config::AppMode::ControlOnly,
     ));
-    assert!(cancellation.is_aborted());
+
+    // The SDK cancels the in-flight request when the surface resets; its
+    // settlement still arrives, rejected, without reaching the server reply.
+    let settlement = fixture
+      .run_stream(&mut stream, |_| FixtureReply::Failure)
+      .await
+      .into_iter()
+      .find_map(page_settled)
+      .expect("cancelled request still settles");
+    assert!(settlement.result.is_err());
+    drop(request);
     assert_eq!(state.shell.destination, Destination::NowPlaying);
     assert!(state.shell.navigation_stack.is_empty());
     assert!(state.full.is_none());
