@@ -198,22 +198,6 @@ impl AdjacentDirection {
   }
 }
 
-/// Seek intent for a scrubber position, clamped to the active timeline.
-/// `None` while playback is inactive, the position is not finite, or no
-/// positive finite duration is known.
-#[must_use]
-pub fn seek_intent(position: f64, duration: Option<f64>, active: bool) -> Option<PlaybackIntent> {
-  let duration = duration.filter(|duration| duration.is_finite() && *duration > 0.0)?;
-  (active && position.is_finite()).then(|| PlaybackIntent::Seek(position.clamp(0.0, duration)))
-}
-
-/// Volume intent for a slider value, clamped to MPV's 0-100 range. `None`
-/// while playback is inactive or the value is not finite.
-#[must_use]
-pub fn volume_intent(volume: f64, active: bool) -> Option<PlaybackIntent> {
-  (active && volume.is_finite()).then(|| PlaybackIntent::SetVolume(volume.clamp(0.0, 100.0)))
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdjacentAvailability {
   Idle,
@@ -3548,27 +3532,6 @@ mod tests {
       now,
     );
     assert!(session.view().intro_ranges.is_empty());
-  }
-
-  #[test]
-  fn seek_intent_is_emitted_for_an_active_timeline_regardless_of_busy() {
-    assert!(matches!(
-      seek_intent(125.0, Some(100.0), true),
-      Some(PlaybackIntent::Seek(100.0))
-    ));
-    assert!(seek_intent(10.0, None, true).is_none());
-    assert!(seek_intent(10.0, Some(100.0), false).is_none());
-    assert!(seek_intent(f64::NAN, Some(100.0), true).is_none());
-  }
-
-  #[test]
-  fn volume_intent_is_emitted_for_active_playback_regardless_of_busy() {
-    assert!(matches!(
-      volume_intent(125.0, true),
-      Some(PlaybackIntent::SetVolume(100.0))
-    ));
-    assert!(volume_intent(50.0, false).is_none());
-    assert!(volume_intent(f64::INFINITY, true).is_none());
   }
 
   #[test]

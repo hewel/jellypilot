@@ -31,6 +31,8 @@ mod load_state;
 pub mod locale;
 #[cfg(feature = "portable")]
 pub mod logs;
+#[cfg(feature = "portable")]
+pub mod now_playing_adjustments;
 pub mod player_logs;
 pub mod request_gate;
 #[cfg(feature = "portable")]

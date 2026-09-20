@@ -7,9 +7,8 @@ use std::time::{Duration, Instant};
 use iced::futures::SinkExt;
 use iced::{event, keyboard, Event, Subscription, Task};
 use jellypilot_core::config::AppMode;
-use jellypilot_mpv::playback_session::{
-  seek_intent, volume_intent, ControllerAcceptance, PlaybackIntent, StopCompletion,
-};
+use jellypilot_core::now_playing_adjustments::{Control, Input as AdjustmentInput};
+use jellypilot_mpv::playback_session::{ControllerAcceptance, PlaybackIntent, StopCompletion};
 use jellypilot_mpv::statistics::PlaybackStatistics;
 
 use super::message::{Message as AppMessage, PlaybackMessage, ShellMessage};
@@ -88,8 +87,6 @@ pub struct Surface {
   cursor_deadline: Option<Instant>,
   feedback: Option<(String, Instant)>,
   seek_hover: Option<f64>,
-  desired_seek: Option<f64>,
-  desired_volume: Option<f64>,
   returning: bool,
   replacement_generation: u64,
   was_active: bool,
@@ -288,11 +285,11 @@ pub(super) fn seek_hover(state: &State) -> Option<f64> {
 }
 
 pub(super) fn is_seek_dragging(state: &State) -> bool {
-  state.playback.seek_dragging
+  state.playback.adjustments.view().seek_dragging
 }
 
 pub(super) fn is_volume_dragging(state: &State) -> bool {
-  state.playback.volume_dragging
+  state.playback.adjustments.view().volume_dragging
 }
 
 fn held(state: &State) -> bool {
@@ -300,8 +297,9 @@ fn held(state: &State) -> bool {
   // in-flight drag, an open track/queue menu, or blocked input. Pausing, a
   // live skip prompt, and the Information panel stay visible on their own
   // without forcing the complete presentation.
-  state.playback.seek_dragging
-    || state.playback.volume_dragging
+  let adjustments = state.playback.adjustments.view();
+  adjustments.seek_dragging
+    || adjustments.volume_dragging
     || input_blocked(state)
     || state.shell.embedded_player.returning
 }
@@ -312,12 +310,14 @@ pub(super) fn reconcile(state: &mut State) {
     state.playback.view.lifecycle.replacement_generation,
   );
   let active = active(state);
-  if !active {
-    state.playback.seek_dragging = false;
-    state.playback.volume_dragging = false;
-  }
-  let held = held(state);
   let settled = state.playback.view.lifecycle.settled;
+  // The core adjustment state owns drag flags and desired targets; embedded
+  // only reports whether its presentation is active and settled.
+  let _ = super::playback::adjust(
+    &mut state.playback,
+    AdjustmentInput::Presentation { active, settled },
+  );
+  let held = held(state);
   let paused = state
     .playback
     .view
@@ -328,7 +328,6 @@ pub(super) fn reconcile(state: &mut State) {
     &mut state.shell.embedded_player,
     active,
     held,
-    settled,
     paused,
     Instant::now(),
   );
@@ -386,8 +385,6 @@ fn reconcile_queue(surface: &mut Surface, open: bool, observed: bool, item_count
 fn observe_replacement(surface: &mut Surface, generation: u64) {
   if surface.replacement_generation != generation {
     surface.replacement_generation = generation;
-    surface.desired_seek = None;
-    surface.desired_volume = None;
     surface.returning = false;
     surface.feedback = None;
     surface.information = None;
@@ -444,14 +441,7 @@ pub(super) fn intro_ranges(state: &State) -> &[(f64, f64)] {
   &state.shell.embedded_player.intro_ranges
 }
 
-fn reconcile_surface(
-  surface: &mut Surface,
-  active: bool,
-  held: bool,
-  settled: bool,
-  paused: bool,
-  now: Instant,
-) {
+fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, paused: bool, now: Instant) {
   if !active {
     // Drop all transient presentation on exit; the view owns the scoped cursor.
     if surface.was_active {
@@ -498,10 +488,6 @@ fn reconcile_surface(
   surface.paused = paused;
   if surface.visible || paused {
     surface.minimal_deadline = None;
-  }
-  if settled {
-    surface.desired_seek = None;
-    surface.desired_volume = None;
   }
 }
 
@@ -811,22 +797,30 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       return update.task;
     }
     Message::SeekBy(delta) | Message::VolumeBy(delta) => {
-      if input_blocked(state) {
+      if input_blocked(state) || state.playback.view.now_playing.is_none() {
         return Task::none();
       }
-      let Some(playing) = state.playback.view.now_playing.as_ref() else {
+      let control = if matches!(message, Message::SeekBy(_)) {
+        Control::Seek
+      } else {
+        Control::Volume
+      };
+      let Some(intent) =
+        super::playback::adjust(&mut state.playback, AdjustmentInput::Step(control, delta))
+      else {
         return Task::none();
       };
-      let surface = &mut state.shell.embedded_player;
-      let Some(intent) = adjustment(
-        surface,
-        playing,
-        matches!(message, Message::SeekBy(_)),
-        delta,
-        now,
-      ) else {
-        return Task::none();
+      let text = match intent {
+        PlaybackIntent::Seek(position) => format!(
+          "{:+.0} s · {}:{:02}",
+          delta,
+          position as u64 / 60,
+          position as u64 % 60
+        ),
+        PlaybackIntent::SetVolume(volume) => format!("{volume:.0}%"),
+        _ => return Task::none(),
       };
+      state.shell.embedded_player.feedback = Some((text, now + FEEDBACK));
       return dispatch(state, intent).task;
     }
   }
@@ -901,48 +895,6 @@ fn dispatch(state: &mut State, intent: PlaybackIntent) -> super::playback::Playb
   )
 }
 
-/// Capture local adjustment previews before playback consumes the input.
-pub(super) fn before_playback(state: &mut State, message: &PlaybackMessage) {
-  if !crate::embedded::enabled() {
-    return;
-  }
-  let surface = &mut state.shell.embedded_player;
-  match message {
-    PlaybackMessage::SeekReleased => {
-      if let Some(position) = state.playback.seek_preview {
-        surface.desired_seek = Some(position);
-      }
-    }
-    PlaybackMessage::VolumeReleased => {
-      if let Some(volume) = state.playback.volume_preview {
-        surface.desired_volume = Some(volume);
-      }
-    }
-    PlaybackMessage::SeekAdjusted(position) => {
-      if let Some(PlaybackIntent::Seek(position)) = seek_intent(
-        *position,
-        state
-          .playback
-          .view
-          .now_playing
-          .as_ref()
-          .and_then(|view| view.duration_seconds),
-        state.playback.view.now_playing.is_some(),
-      ) {
-        surface.desired_seek = Some(position);
-      }
-    }
-    PlaybackMessage::VolumeAdjusted(volume) => {
-      if let Some(PlaybackIntent::SetVolume(volume)) =
-        volume_intent(*volume, state.playback.view.now_playing.is_some())
-      {
-        surface.desired_volume = Some(volume);
-      }
-    }
-    _ => {}
-  }
-}
-
 /// Navigation consumes the session's accepted outcome, never a raw controller message.
 pub(super) fn after_playback(state: &mut State, acceptance: ControllerAcceptance) -> bool {
   if !crate::embedded::enabled() {
@@ -997,45 +949,6 @@ fn expire(surface: &mut Surface, deadline: Instant, now: Instant, held: bool) {
   {
     surface.feedback = None;
   }
-}
-
-fn adjustment(
-  surface: &mut Surface,
-  playing: &jellypilot_mpv::playback_session::NowPlayingView,
-  seek: bool,
-  delta: f64,
-  now: Instant,
-) -> Option<PlaybackIntent> {
-  let intent = if seek {
-    seek_intent(
-      surface.desired_seek.unwrap_or(playing.position_seconds) + delta,
-      playing.duration_seconds,
-      true,
-    )
-  } else {
-    volume_intent(
-      surface.desired_volume.unwrap_or(playing.volume) + delta,
-      true,
-    )
-  }?;
-  let text = match intent {
-    PlaybackIntent::Seek(position) => {
-      surface.desired_seek = Some(position);
-      format!(
-        "{:+.0} s · {}:{:02}",
-        delta,
-        position as u64 / 60,
-        position as u64 % 60
-      )
-    }
-    PlaybackIntent::SetVolume(volume) => {
-      surface.desired_volume = Some(volume);
-      format!("{volume:.0}%")
-    }
-    _ => return None,
-  };
-  surface.feedback = Some((text, now + FEEDBACK));
-  Some(intent)
 }
 
 #[cfg(test)]
@@ -1182,7 +1095,7 @@ mod tests {
   fn picture_motion_reveals_cursor_without_revealing_controls() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, false, now);
+    reconcile_surface(&mut surface, true, false, false, now);
     let now = now + IDLE;
     expire(&mut surface, now, now, false);
     let bounds = iced::Size::new(1920.0, 1080.0);
@@ -1212,7 +1125,7 @@ mod tests {
       surface.cursor_visible,
       "motion restores the cursor after timeout"
     );
-    reconcile_surface(&mut surface, false, false, true, false, deadline);
+    reconcile_surface(&mut surface, false, false, false, deadline);
     assert!(!surface.cursor_visible);
     assert!(surface.cursor_deadline.is_none());
   }
@@ -1221,25 +1134,25 @@ mod tests {
   fn idle_holds_cancel_old_deadlines_and_exit_clears_feedback() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, false, now);
+    reconcile_surface(&mut surface, true, false, false, now);
     let old = surface.idle_deadline.unwrap();
     // A menu or drag arriving before the wake must keep controls visible.
-    reconcile_surface(&mut surface, true, true, true, false, now + IDLE);
+    reconcile_surface(&mut surface, true, true, false, now + IDLE);
     expire(&mut surface, old, now + IDLE, true);
     assert!(surface.visible);
     assert!(surface.idle_deadline.is_none());
-    reconcile_surface(&mut surface, true, false, true, false, now + IDLE);
+    reconcile_surface(&mut surface, true, false, false, now + IDLE);
     expire(&mut surface, old, now + IDLE, false);
     assert!(surface.visible);
     expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
     assert!(!surface.visible);
     surface.feedback = Some(("75%".into(), now + IDLE + IDLE + FEEDBACK));
-    reconcile_surface(&mut surface, true, false, false, false, now + IDLE + IDLE);
+    reconcile_surface(&mut surface, true, false, false, now + IDLE + IDLE);
     assert!(
       !surface.visible,
       "keyboard feedback must not reveal hidden controls"
     );
-    reconcile_surface(&mut surface, false, false, false, false, now + IDLE + IDLE);
+    reconcile_surface(&mut surface, false, false, false, now + IDLE + IDLE);
     assert!(surface.feedback.is_none());
     assert!(surface.idle_deadline.is_none());
   }
@@ -1271,10 +1184,10 @@ mod tests {
     let now = Instant::now();
     let hold = held(&state);
     let surface = &mut state.shell.embedded_player;
-    reconcile_surface(surface, true, hold, true, true, now);
+    reconcile_surface(surface, true, hold, true, now);
     expire(surface, now + IDLE, now + IDLE, hold);
     assert!(!surface.visible && !surface.back_visible);
-    reconcile_surface(surface, true, hold, true, true, now + IDLE);
+    reconcile_surface(surface, true, hold, true, now + IDLE);
     expire(surface, now + IDLE + IDLE, now + IDLE + IDLE, hold);
     assert!(surface.minimal_visible());
     assert!(surface.information_open);
@@ -1286,7 +1199,7 @@ mod tests {
     let now = Instant::now();
     let bounds = iced::Size::new(1100.0, 900.0);
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, false, now);
+    reconcile_surface(&mut surface, true, false, false, now);
     pointer_moved(
       &mut surface,
       iced::Point::new(550.0, 800.0),
@@ -1312,7 +1225,7 @@ mod tests {
       left_at + IDLE,
     );
     expire(&mut surface, left_at + IDLE, left_at + IDLE, false);
-    reconcile_surface(&mut surface, true, false, true, false, left_at + IDLE);
+    reconcile_surface(&mut surface, true, false, false, left_at + IDLE);
     assert!(!surface.minimal_visible());
     assert!(
       surface.cursor_visible,
@@ -1324,24 +1237,24 @@ mod tests {
   fn pause_restores_minimal_and_resume_gives_it_a_fresh_timeout() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, false, true, false, now);
+    reconcile_surface(&mut surface, true, false, false, now);
     pointer_left(&mut surface, now);
     expire(&mut surface, now + IDLE, now + IDLE, false);
     assert!(!surface.minimal_visible());
 
-    reconcile_surface(&mut surface, true, false, true, true, now + IDLE);
+    reconcile_surface(&mut surface, true, false, true, now + IDLE);
     expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
     assert!(surface.minimal_visible(), "pause has no minimal timeout");
 
     let resumed = now + IDLE + IDLE;
-    reconcile_surface(&mut surface, true, false, true, false, resumed);
+    reconcile_surface(&mut surface, true, false, false, resumed);
     expire(&mut surface, now + IDLE, resumed, false);
     assert!(
       surface.minimal_visible(),
       "an old wake cannot hide the resumed presentation"
     );
     expire(&mut surface, resumed + IDLE, resumed + IDLE, false);
-    reconcile_surface(&mut surface, true, false, true, false, resumed + IDLE);
+    reconcile_surface(&mut surface, true, false, false, resumed + IDLE);
     assert!(!surface.minimal_visible());
   }
 
@@ -1349,70 +1262,14 @@ mod tests {
   fn leaving_during_a_hold_switches_to_minimal_when_the_hold_ends() {
     let now = Instant::now();
     let mut surface = Surface::default();
-    reconcile_surface(&mut surface, true, true, true, false, now);
+    reconcile_surface(&mut surface, true, true, false, now);
     pointer_left(&mut surface, now);
-    reconcile_surface(&mut surface, true, true, true, false, now);
+    reconcile_surface(&mut surface, true, true, false, now);
     assert!(surface.visible && !surface.minimal_visible());
-    reconcile_surface(&mut surface, true, false, true, false, now + IDLE);
+    reconcile_surface(&mut surface, true, false, false, now + IDLE);
     assert!(!surface.visible && !surface.back_visible && surface.minimal_visible());
     expire(&mut surface, now + IDLE + IDLE, now + IDLE + IDLE, false);
     assert!(!surface.minimal_visible());
-  }
-
-  #[test]
-  fn repeated_adjustments_accumulate_until_all_async_snapshots_settle() {
-    let playing = jellypilot_mpv::playback_session::NowPlayingView {
-      item: jellypilot_mpv::playback::NowPlayingItem {
-        item_id: "movie".into(),
-        title: "Movie".into(),
-        item_type: "Movie".into(),
-        series_id: None,
-        runtime_seconds: Some(60.0),
-        start_position_seconds: 0.0,
-        play_method: "DirectPlay".into(),
-        original_language: None,
-      },
-      paused: false,
-      position_seconds: 10.0,
-      duration_seconds: Some(60.0),
-      volume: 90.0,
-      muted: false,
-    };
-    let now = Instant::now();
-    let mut surface = Surface::default();
-    assert!(matches!(
-      adjustment(&mut surface, &playing, true, 5.0, now),
-      Some(PlaybackIntent::Seek(15.0))
-    ));
-    // A refresh or earlier control result still contains the old transport.
-    reconcile_surface(&mut surface, true, false, false, false, now);
-    assert!(matches!(
-      adjustment(&mut surface, &playing, true, 5.0, now),
-      Some(PlaybackIntent::Seek(20.0))
-    ));
-    for _ in 0..20 {
-      adjustment(&mut surface, &playing, true, 5.0, now);
-    }
-    assert_eq!(surface.desired_seek, Some(60.0));
-    adjustment(&mut surface, &playing, false, 5.0, now);
-    assert!(matches!(
-      adjustment(&mut surface, &playing, false, 5.0, now),
-      Some(PlaybackIntent::SetVolume(100.0))
-    ));
-    assert!(matches!(
-      adjustment(&mut surface, &playing, false, 5.0, now),
-      Some(PlaybackIntent::SetVolume(100.0))
-    ));
-    reconcile_surface(&mut surface, true, false, true, false, now);
-    assert!(matches!(
-      adjustment(&mut surface, &playing, true, -5.0, now),
-      Some(PlaybackIntent::Seek(5.0))
-    ));
-    let unknown = jellypilot_mpv::playback_session::NowPlayingView {
-      duration_seconds: None,
-      ..playing
-    };
-    assert!(adjustment(&mut surface, &unknown, true, 5.0, now).is_none());
   }
 
   #[test]
@@ -1422,7 +1279,7 @@ mod tests {
       information_open: true,
       ..Surface::default()
     };
-    reconcile_surface(&mut surface, true, true, true, false, now);
+    reconcile_surface(&mut surface, true, true, false, now);
     reconcile_observation(&mut surface, true, 0, now);
     let old = surface.observation.unwrap().token;
     let sample = || {
@@ -1464,7 +1321,7 @@ mod tests {
     );
     settle_information(&mut surface, current, sample());
     assert!(!surface.information_failed);
-    reconcile_surface(&mut surface, false, false, false, false, now + IDLE);
+    reconcile_surface(&mut surface, false, false, false, now + IDLE);
     settle_information(&mut surface, current, sample());
     assert!(surface.information.is_none());
     assert!(

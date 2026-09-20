@@ -199,6 +199,8 @@ fn bar_content<'a>(state: &'a State, view: BarView<'a>, width: f32) -> Element<'
   let position = if view.interactive {
     state
       .playback
+      .adjustments
+      .view()
       .seek_preview
       .unwrap_or(now_playing.position_seconds)
   } else {
@@ -343,7 +345,12 @@ fn track_selection(state: &State) -> Element<'_, Message> {
 fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let volume_slider = slider(
     0.0..=100.0,
-    state.playback.volume_preview.unwrap_or(now_playing.volume),
+    state
+      .playback
+      .adjustments
+      .view()
+      .volume_preview
+      .unwrap_or(now_playing.volume),
     |value| Message::Playback(PlaybackMessage::VolumeChanged(value)),
   )
   .on_release(Message::Playback(PlaybackMessage::VolumeReleased))
@@ -433,6 +440,8 @@ pub fn full(state: &State) -> Element<'_, Message> {
         .filter(|duration| duration.is_finite() && *duration > 0.0);
       let position = state
         .playback
+        .adjustments
+        .view()
         .seek_preview
         .unwrap_or(now_playing.position_seconds);
       let mut content = Column::new()
@@ -625,6 +634,8 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       {
         let position = state
           .playback
+          .adjustments
+          .view()
           .seek_preview
           .unwrap_or(now_playing.position_seconds);
         layers = layers.push(reveal_player_chrome(
@@ -836,7 +847,12 @@ fn embedded_bar<'a>(
   let volume: Element<'_, Message> = tracked_slider(
     slider(
       0.0..=100.0,
-      state.playback.volume_preview.unwrap_or(now_playing.volume),
+      state
+        .playback
+        .adjustments
+        .view()
+        .volume_preview
+        .unwrap_or(now_playing.volume),
       SliderEvent::Changed,
     )
     .step(1.0)
@@ -867,7 +883,12 @@ fn embedded_bar<'a>(
     embedded_action(
       embedded_volume_icon(
         now_playing.muted,
-        state.playback.volume_preview.unwrap_or(now_playing.volume),
+        state
+          .playback
+          .adjustments
+          .view()
+          .volume_preview
+          .unwrap_or(now_playing.volume),
       ),
       state.t(if now_playing.muted {
         "player-unmute"
@@ -1248,6 +1269,8 @@ fn embedded_skip_toggle<'a>(
 fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let position = state
     .playback
+    .adjustments
+    .view()
     .seek_preview
     .unwrap_or(now_playing.position_seconds);
   let Some(duration) = now_playing
@@ -1264,6 +1287,8 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
   let timeline = responsive(move |bounds| {
     let target = state
       .playback
+      .adjustments
+      .view()
       .seek_preview
       .or(embedded_player::seek_hover(state))
       .unwrap_or(position);
@@ -2312,6 +2337,7 @@ mod tests {
   use super::*;
   use crate::app::message::{Message, PlaybackMessage};
   use jellypilot_core::intro_skipper::IntroSkipMode;
+  use jellypilot_core::now_playing_adjustments::{Control, Input as AdjustmentInput};
   use jellypilot_media_server::VideoLibraryItem;
   use jellypilot_mpv::playback::{
     NowPlayingItem, Playable, PlaybackError, PlaybackOutcome, PlaybackRefreshOutcome,
@@ -3384,6 +3410,7 @@ mod tests {
 
     let mut state = State::boot(false);
     let now_playing = test_now_playing();
+    state.playback.view.now_playing = Some(test_now_playing());
     let mut renderer = iced::Renderer::new(
       iced::advanced::renderer::Settings::default(),
       Some("tiny-skia"),
@@ -3392,8 +3419,7 @@ mod tests {
     .expect("software renderer");
     for busy in [false, true] {
       state.playback.view.busy = busy;
-      state.playback.seek_dragging = false;
-      state.playback.seek_preview = None;
+      let _ = crate::app::playback::adjust(&mut state.playback, AdjustmentInput::Replace);
       let mut ui = UserInterface::build(
         embedded_timeline(&state, &now_playing),
         iced::Size::new(600.0, 24.0),
@@ -3460,14 +3486,20 @@ mod tests {
       // A remote command can make playback busy while the pointer is still held.
       // The existing drag must retain its widget state and deliver its release.
       let cache = ui.into_cache();
-      state.playback.seek_dragging = !busy;
-      state.playback.seek_preview = drag_messages.iter().rev().find_map(|message| {
-        if let Message::Playback(PlaybackMessage::SeekChanged(position)) = message {
-          Some(*position)
-        } else {
-          None
+      if !busy {
+        let _ = crate::app::playback::adjust(
+          &mut state.playback,
+          AdjustmentInput::DragStarted(Control::Seek),
+        );
+        for message in &drag_messages {
+          if let Message::Playback(PlaybackMessage::SeekChanged(position)) = message {
+            let _ = crate::app::playback::adjust(
+              &mut state.playback,
+              AdjustmentInput::Preview(Control::Seek, *position),
+            );
+          }
         }
-      });
+      }
       state.playback.view.busy = true;
       let mut ui = UserInterface::build(
         embedded_timeline(&state, &now_playing),

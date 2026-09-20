@@ -709,7 +709,6 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         return shell::toggle_player_fullscreen(state);
       }
       let had_playback = state.playback.view.now_playing.is_some();
-      super::embedded_player::before_playback(state, &message);
       let playback_update = playback::update(
         &mut state.playback,
         &mut state.kernel,
