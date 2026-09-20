@@ -91,4 +91,3 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
     }
   }
 }
-
