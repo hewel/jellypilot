@@ -27,9 +27,8 @@ source=(
   "$pkgname-$pkgver.pkg.tar.zst::$url/releases/download/v$pkgver/jellypilot-$pkgver-$_pkgrel-x86_64.pkg.tar.zst"
 )
 noextract=("$pkgname-$pkgver.pkg.tar.zst")
-# Fill from the final GitHub release SHA256SUMS before publishing to the AUR.
-# Keep integrity checks fail-closed until that artifact exists; never use SKIP.
-sha256sums=()
+# Verified against the final GitHub release SHA256SUMS and downloaded artifact.
+sha256sums=('be031aca4c16851df89be88876cacf9f7a7acce87d8f6c8bcefb972c9206446f')
 
 package() {
   bsdtar -x \
