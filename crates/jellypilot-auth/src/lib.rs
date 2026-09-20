@@ -1,16 +1,17 @@
 //! Authentication workflows and secure profile storage for JellyPilot frontends.
 
 pub mod login;
+mod storage;
 
 use std::fmt;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use jellypilot_core::watchlist::ProfileScope;
 use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider, SavedSession};
 #[cfg(feature = "native")]
 use keyring::{Entry, Error as KeyringError};
-use serde::{Deserialize, Serialize};
+use storage::ProfileState;
 use tokio::sync::oneshot;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -18,34 +19,7 @@ use zeroize::{Zeroize, Zeroizing};
 const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot";
 #[cfg(feature = "native")]
 const KEYRING_ACCOUNT: &str = "saved-media-server-profiles-v1";
-const LEGACY_STORAGE_VERSION: u32 = 1;
-const STORAGE_VERSION: u32 = 2;
 const WORKER_THREAD_NAME: &str = "jellypilot-secret-service";
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredProfiles {
-    version: u32,
-    profiles: Vec<SavedSession>,
-    #[serde(default)]
-    last_successfully_activated: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredProfilesRef<'a> {
-    version: u32,
-    profiles: &'a [SavedSession],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_successfully_activated: Option<&'a str>,
-}
-
-struct SensitiveSessions(Vec<SavedSession>);
-
-struct SensitiveProfileState {
-    sessions: SensitiveSessions,
-    last_successfully_activated: Option<SavedProfileKey>,
-}
 
 pub struct SensitiveSavedSession(Option<SavedSession>);
 
@@ -127,28 +101,6 @@ impl Drop for AuthCredentials {
 impl fmt::Debug for AuthCredentials {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("AuthCredentials([redacted])")
-    }
-}
-
-impl Deref for SensitiveSessions {
-    type Target = Vec<SavedSession>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for SensitiveSessions {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Drop for SensitiveSessions {
-    fn drop(&mut self) {
-        for session in &mut self.0 {
-            session.access_token.zeroize();
-        }
     }
 }
 
@@ -448,8 +400,7 @@ impl AuthStore {
 
     fn load_profiles_snapshot_blocking(&self) -> Result<SavedProfilesSnapshot, AuthStorageError> {
         let _operation = self.lock_operation()?;
-        let state = self.load_state()?;
-        saved_profiles_snapshot(&state)
+        self.load_state()?.snapshot()
     }
 
     fn load_session_blocking(
@@ -457,27 +408,20 @@ impl AuthStore {
         key: &SavedProfileKey,
     ) -> Result<SensitiveSavedSession, AuthStorageError> {
         let _operation = self.lock_operation()?;
-        let mut state = self.load_state()?;
-        let position = state
-            .sessions
-            .iter()
-            .position(|session| profile_key(session) == *key)
-            .ok_or(AuthStorageError::ProfileNotFound)?;
-        Ok(SensitiveSavedSession::new(state.sessions.remove(position)))
+        self.load_state()?.session(key)
     }
 
     fn save_session_blocking(
         &self,
-        mut session: SensitiveSavedSession,
+        session: SensitiveSavedSession,
     ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
         let _operation = self.lock_operation()?;
         let mut state = self.load_state()?;
-        let session = session.take_for_storage();
-        let key = upsert_session(&mut state.sessions, session);
+        let key = state.save(session)?;
         // Summaries are computed before the write: a failure here leaves the
         // stored blob untouched, so an error never misreports a committed
         // save as failed.
-        let summaries = profile_summaries(&state.sessions)?;
+        let summaries = state.summaries()?;
         self.write_state(&state)?;
         Ok((key, summaries))
     }
@@ -488,17 +432,11 @@ impl AuthStore {
     ) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
         let _operation = self.lock_operation()?;
         let mut state = self.load_state()?;
-        if !remove_session(&mut state.sessions, key) {
-            return Err(AuthStorageError::ProfileNotFound);
-        }
-        if state.last_successfully_activated.as_ref() == Some(key) {
-            state.last_successfully_activated = None;
-        }
-        // Summaries are computed before the irreversible credential
-        // deletion: a failure here aborts the removal, so an error never
-        // misreports a committed deletion as failed.
-        let summaries = profile_summaries(&state.sessions)?;
-        if state.sessions.is_empty() {
+        state.remove(key)?;
+        // Compute summaries before changing protected storage so an error
+        // never misreports a committed removal as failed.
+        let summaries = state.summaries()?;
+        if state.can_delete() {
             self.delete_all()?;
         } else {
             self.write_state(&state)?;
@@ -512,65 +450,27 @@ impl AuthStore {
     ) -> Result<(), AuthStorageError> {
         let _operation = self.lock_operation()?;
         let mut state = self.load_state()?;
-        if !state
-            .sessions
-            .iter()
-            .any(|session| profile_key(session) == *key)
-        {
-            return Err(AuthStorageError::ProfileNotFound);
-        }
-        if state.last_successfully_activated.as_ref() == Some(key) {
+        if !state.record_activation(key)? {
             return Ok(());
         }
-        state.last_successfully_activated = Some(key.clone());
         self.write_state(&state)
     }
 
-    fn load_state(&self) -> Result<SensitiveProfileState, AuthStorageError> {
+    fn load_state(&self) -> Result<ProfileState, AuthStorageError> {
         let secret = match self.credential.read() {
             Ok(secret) => Zeroizing::new(secret),
             Err(CredentialError::Missing) => {
-                return Ok(SensitiveProfileState {
-                    sessions: SensitiveSessions(Vec::new()),
-                    last_successfully_activated: None,
-                });
+                return Ok(ProfileState::default());
             }
             Err(CredentialError::Unavailable | CredentialError::WriteFailed) => {
                 return Err(AuthStorageError::Unavailable);
             }
         };
-        let stored: StoredProfiles =
-            serde_json::from_slice(secret.as_slice()).map_err(|_| AuthStorageError::Corrupt)?;
-        let sessions = SensitiveSessions(stored.profiles);
-        if !matches!(stored.version, LEGACY_STORAGE_VERSION | STORAGE_VERSION)
-            || !sessions.iter().all(valid_session)
-        {
-            return Err(AuthStorageError::Corrupt);
-        }
-
-        let last_successfully_activated = (stored.version == STORAGE_VERSION)
-            .then_some(stored.last_successfully_activated)
-            .flatten()
-            .map(SavedProfileKey)
-            .filter(|key| sessions.iter().any(|session| profile_key(session) == *key));
-        Ok(SensitiveProfileState {
-            sessions,
-            last_successfully_activated,
-        })
+        ProfileState::decode(secret.as_slice())
     }
 
-    fn write_state(&self, state: &SensitiveProfileState) -> Result<(), AuthStorageError> {
-        let encoded = Zeroizing::new(
-            serde_json::to_vec(&StoredProfilesRef {
-                version: STORAGE_VERSION,
-                profiles: &state.sessions,
-                last_successfully_activated: state
-                    .last_successfully_activated
-                    .as_ref()
-                    .map(|key| key.0.as_str()),
-            })
-            .map_err(|_| AuthStorageError::WriteFailed)?,
-        );
+    fn write_state(&self, state: &ProfileState) -> Result<(), AuthStorageError> {
+        let encoded = state.encode()?;
         self.credential
             .write(encoded.as_slice())
             .map_err(|_| AuthStorageError::WriteFailed)
@@ -632,56 +532,6 @@ impl SecureCredential for SecretServiceCredential {
 #[cfg(feature = "native")]
 fn keyring_entry() -> Result<Entry, CredentialError> {
     Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(|_| CredentialError::Unavailable)
-}
-
-fn upsert_session(sessions: &mut Vec<SavedSession>, session: SavedSession) -> SavedProfileKey {
-    let key = profile_key(&session);
-    let _ = remove_session(sessions, &key);
-    sessions.insert(0, session);
-    key
-}
-
-fn remove_session(sessions: &mut Vec<SavedSession>, key: &SavedProfileKey) -> bool {
-    if let Some(position) = sessions.iter().position(|saved| profile_key(saved) == *key) {
-        let mut removed = sessions.remove(position);
-        removed.access_token.zeroize();
-        true
-    } else {
-        false
-    }
-}
-
-fn profile_summaries(
-    sessions: &[SavedSession],
-) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
-    sessions
-        .iter()
-        .map(|session| {
-            let scope = ProfileScope::new(
-                session.provider,
-                session.server_url.clone(),
-                session.user_id.clone(),
-            )
-            .map_err(|_| AuthStorageError::Corrupt)?;
-            Ok(SavedProfileSummary {
-                key: SavedProfileKey::for_scope(&scope),
-                provider: session.provider,
-                server_url: session.server_url.clone(),
-                server_name: session.server_name.clone(),
-                user_name: session.user_name.clone(),
-                scope,
-            })
-        })
-        .collect()
-}
-
-fn saved_profiles_snapshot(
-    state: &SensitiveProfileState,
-) -> Result<SavedProfilesSnapshot, AuthStorageError> {
-    Ok(SavedProfilesSnapshot {
-        profiles: profile_summaries(&state.sessions)?,
-        last_successfully_activated: state.last_successfully_activated.clone(),
-    })
 }
 
 fn profile_key(session: &SavedSession) -> SavedProfileKey {
@@ -809,19 +659,24 @@ mod tests {
     }
 
     #[test]
-    fn upsert_session_replaces_the_same_server_user_profile() {
-        let mut sessions = vec![session("old-token")];
-
-        upsert_session(&mut sessions, session("new-token"));
-
-        assert_eq!(sessions[0].access_token, "new-token");
+    fn saving_a_session_replaces_the_same_server_user_profile() {
+        let store = memory_store();
+        let (key, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("old-token")))).unwrap();
+        block_on(store.save_session(SensitiveSavedSession::new(session("new-token")))).unwrap();
+        assert_eq!(
+            block_on(store.load_session(key)).unwrap().access_token,
+            "new-token"
+        );
     }
 
     #[test]
     fn saved_profile_debug_output_redacts_server_and_key() {
-        let summary = profile_summaries(&[session("secret-token")])
-            .expect("valid session should have a profile scope")
-            .remove(0);
+        let (_, mut profiles) = block_on(
+            memory_store().save_session(SensitiveSavedSession::new(session("secret-token"))),
+        )
+        .unwrap();
+        let summary = profiles.remove(0);
 
         let debug = format!("{summary:?}");
 
@@ -834,9 +689,9 @@ mod tests {
         saved.server_url = " https://media.example.com/ ".to_owned();
         saved.user_id = " user-1 ".to_owned();
 
-        let summary = profile_summaries(&[saved])
-            .expect("valid session should have a profile scope")
-            .remove(0);
+        let (_, mut profiles) =
+            block_on(memory_store().save_session(SensitiveSavedSession::new(saved))).unwrap();
+        let summary = profiles.remove(0);
 
         assert_eq!(summary.scope().server_url(), "https://media.example.com");
         assert_eq!(summary.scope().user_id(), "user-1");
@@ -873,11 +728,10 @@ mod tests {
     #[test]
     fn legacy_v1_store_loads_without_a_startup_selection() {
         let credential = Arc::new(MemoryCredential::default());
-        let encoded = serde_json::to_vec(&StoredProfilesRef {
-            version: LEGACY_STORAGE_VERSION,
-            profiles: &[session("legacy-token")],
-            last_successfully_activated: None,
-        })
+        let encoded = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "profiles": [session("legacy-token")],
+        }))
         .expect("legacy fixture should serialize");
         credential
             .write(&encoded)
@@ -1076,12 +930,181 @@ mod tests {
     fn typed_storage_error_round_trips_through_the_async_interface() {
         let credential = Arc::new(MemoryCredential::default());
         credential
-            .write(br#"{"version":3,"profiles":[]}"#)
+            .write(br#"{"version":4,"profiles":[]}"#)
             .expect("fixture should be stored");
         let store = store_with_credential(credential);
 
         let error = block_on(store.load_profiles()).expect_err("unsupported version should fail");
 
         assert_eq!(error, AuthStorageError::Corrupt);
+    }
+
+    fn v3_fixture() -> serde_json::Value {
+        let mut jellyfin = serde_json::to_value(session("jellyfin-token")).unwrap();
+        jellyfin["incarnation"] = 4.into();
+        jellyfin["proxyToken"] = "preserved-proxy-token".into();
+        let mut emby = jellyfin.clone();
+        emby["provider"] = "emby".into();
+        emby["incarnation"] = 7.into();
+        let mut moon = jellyfin.clone();
+        moon["provider"] = "moonTvPlus".into();
+        moon["incarnation"] = 9.into();
+        serde_json::json!({
+            "version": 3,
+            "profiles": [jellyfin, emby, moon],
+            "lastSuccessfullyActivated": profile_key(&session("unused")).as_str(),
+            "nextIncarnation": 12,
+        })
+    }
+
+    fn store_fixture(value: &serde_json::Value) -> (AuthStore, Arc<MemoryCredential>) {
+        let credential = Arc::new(MemoryCredential::default());
+        credential
+            .write(&serde_json::to_vec(value).unwrap())
+            .unwrap();
+        (store_with_credential(credential.clone()), credential)
+    }
+
+    fn read_fixture(credential: &MemoryCredential) -> serde_json::Value {
+        serde_json::from_slice(&credential.read().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn v3_relogin_preserves_other_accounts_and_advances_the_session_fence() {
+        let original = v3_fixture();
+        let (store, credential) = store_fixture(&original);
+        let key = profile_key(&session("unused"));
+        let snapshot = block_on(store.load_profiles_snapshot()).expect("v3 should load");
+        assert_eq!(snapshot.profiles().len(), 2);
+        assert_eq!(snapshot.last_successfully_activated(), Some(&key));
+        assert_eq!(
+            block_on(store.load_session(key.clone()))
+                .unwrap()
+                .access_token,
+            "jellyfin-token"
+        );
+
+        // Even an unchanged token must invalidate callbacks from the prior login.
+        block_on(store.save_session(SensitiveSavedSession::new(session("jellyfin-token"))))
+            .expect("relogin should save over v3");
+        block_on(store.record_successful_activation(key)).unwrap();
+
+        let saved = read_fixture(&credential);
+        assert_eq!(saved["version"], 3);
+        assert_eq!(saved["profiles"][0]["incarnation"], 12);
+        assert_eq!(saved["nextIncarnation"], 13);
+        assert_eq!(
+            saved["profiles"][0]["proxyToken"],
+            original["profiles"][0]["proxyToken"]
+        );
+        assert_eq!(saved["profiles"][1], original["profiles"][1]);
+        assert_eq!(saved["profiles"][2], original["profiles"][2]);
+    }
+
+    #[test]
+    fn unsupported_v3_account_is_retained_but_never_restored_or_removed() {
+        let mut original = v3_fixture();
+        let moon_key =
+            SavedProfileKey::from_raw("moontvplus|https://media.example.com|user-1".into());
+        original["lastSuccessfullyActivated"] = moon_key.as_str().into();
+        let (store, credential) = store_fixture(&original);
+        let snapshot = block_on(store.load_profiles_snapshot()).unwrap();
+        assert!(snapshot.last_successfully_activated().is_none());
+        assert!(matches!(
+            block_on(store.load_session(moon_key.clone())),
+            Err(AuthStorageError::ProfileNotFound)
+        ));
+        assert!(matches!(
+            block_on(store.remove_profile(moon_key)),
+            Err(AuthStorageError::ProfileNotFound)
+        ));
+
+        block_on(store.save_session(SensitiveSavedSession::new(session("fresh-token")))).unwrap();
+        let key = profile_key(&session("unused"));
+        assert_eq!(
+            block_on(store.load_session(key.clone()))
+                .unwrap()
+                .access_token,
+            "fresh-token"
+        );
+        block_on(store.remove_profile(key)).unwrap();
+
+        let saved = read_fixture(&credential);
+        assert_eq!(saved["profiles"][1], original["profiles"][2]);
+        assert_eq!(
+            saved["lastSuccessfullyActivated"],
+            original["lastSuccessfullyActivated"]
+        );
+    }
+
+    #[test]
+    fn v3_sign_out_and_readd_never_reuse_a_session_fence() {
+        let mut original = v3_fixture();
+        original["profiles"].as_array_mut().unwrap().truncate(1);
+        let (store, credential) = store_fixture(&original);
+        let key = profile_key(&session("unused"));
+        credential.fail_write.store(true, Ordering::Relaxed);
+        assert!(matches!(
+            block_on(store.remove_profile(key.clone())),
+            Err(AuthStorageError::WriteFailed)
+        ));
+        assert_eq!(read_fixture(&credential), original);
+        credential.fail_write.store(false, Ordering::Relaxed);
+
+        block_on(store.remove_profile(key)).unwrap();
+        let empty = read_fixture(&credential);
+        assert_eq!(empty["profiles"], serde_json::json!([]));
+        assert_eq!(empty["nextIncarnation"], 12);
+        assert!(block_on(store.load_profiles_snapshot())
+            .unwrap()
+            .last_successfully_activated()
+            .is_none());
+
+        block_on(store.save_session(SensitiveSavedSession::new(session("jellyfin-token"))))
+            .unwrap();
+        let saved = read_fixture(&credential);
+        assert_eq!(saved["profiles"][0]["incarnation"], 12);
+        assert_eq!(saved["nextIncarnation"], 13);
+    }
+
+    #[test]
+    fn failed_v3_relogin_leaves_the_original_credentials_unchanged() {
+        let original = v3_fixture();
+        let (store, credential) = store_fixture(&original);
+        credential.fail_write.store(true, Ordering::Relaxed);
+        let error = block_on(store.save_session(SensitiveSavedSession::new(session("new-token"))))
+            .expect_err("failed write should be reported");
+        assert_eq!(error, AuthStorageError::WriteFailed);
+        assert_eq!(read_fixture(&credential), original);
+    }
+
+    #[test]
+    fn v3_relogin_allocates_after_every_existing_incarnation() {
+        let mut original = v3_fixture();
+        original["nextIncarnation"] = 1.into();
+        let (store, credential) = store_fixture(&original);
+        block_on(store.save_session(SensitiveSavedSession::new(session("new-token")))).unwrap();
+        let saved = read_fixture(&credential);
+        assert_eq!(saved["profiles"][0]["incarnation"], 10);
+        assert_eq!(saved["nextIncarnation"], 11);
+    }
+
+    #[test]
+    fn unsupported_or_invalid_storage_cannot_be_overwritten_by_relogin() {
+        let mut future = v3_fixture();
+        future["version"] = 4.into();
+        let mut exhausted = v3_fixture();
+        exhausted["nextIncarnation"] = u64::MAX.into();
+        let mut invalid = v3_fixture();
+        invalid["profiles"][0]["accessToken"] = "".into();
+
+        for original in [future, exhausted, invalid] {
+            let (store, credential) = store_fixture(&original);
+            assert!(matches!(
+                block_on(store.save_session(SensitiveSavedSession::new(session("new-token")))),
+                Err(AuthStorageError::Corrupt)
+            ));
+            assert_eq!(read_fixture(&credential), original);
+        }
     }
 }
