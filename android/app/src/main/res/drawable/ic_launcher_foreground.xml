@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The existing transparent brand mark is 333 x 378. These fractional insets
+     preserve its aspect ratio at 48.45 x 55dp inside the 108dp adaptive layer.
+     Its entire alpha silhouette fits within the central 66dp safe circle.
+     The themed icon uses this same alpha silhouette, without a baked-in tile. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+  android:insetLeft="27.568343%"
+  android:insetTop="24.537037%"
+  android:insetRight="27.568343%"
+  android:insetBottom="24.537037%">
+  <bitmap
+    android:src="@drawable/jellypilot_launcher_mark"
+    android:gravity="fill"
+    android:filter="true" />
+</inset>

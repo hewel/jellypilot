@@ -30,7 +30,7 @@ class PlayerTimelineInteractionTest {
   private val seekLabel get() = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.seek)
 
   @Test fun playbackUpdatesCannotOverrideAnActiveDragAndReleaseSeeksOnce() {
-    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, durationSeconds = 100.0, positionSeconds = 10.0))
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, seekable = true, durationSeconds = 100.0, positionSeconds = 10.0))
     val seeks = mutableListOf<Double>()
     var dragging = false
     compose.setContent {
@@ -54,7 +54,7 @@ class PlayerTimelineInteractionTest {
   }
 
   @Test fun accessibilitySeekCommitsAndUnknownDurationDisablesSeeking() {
-    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, durationSeconds = 100.0, positionSeconds = 10.0))
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, seekable = true, durationSeconds = 100.0, positionSeconds = 10.0))
     val seeks = mutableListOf<Double>()
     compose.setContent {
       MaterialTheme {
@@ -72,14 +72,18 @@ class PlayerTimelineInteractionTest {
     compose.onNodeWithText("−00:25").assertExists()
     compose.runOnIdle {
       assertEquals(listOf(75.0), seeks)
-      snapshot.value = snapshot.value.copy(durationSeconds = null)
+      snapshot.value = snapshot.value.copy(seekable = false)
+    }
+    slider.assertIsNotEnabled()
+    compose.runOnIdle {
+      snapshot.value = snapshot.value.copy(seekable = true, durationSeconds = null)
     }
     slider.assertIsNotEnabled()
     compose.onNodeWithText("—").assertExists()
   }
 
   @Test fun holdingTheTimelineWithoutMovingKeepsPhoneControlsUntilRelease() {
-    val snapshot = PlayerSnapshot(status = PlayerStatus.READY, paused = false, durationSeconds = 100.0, positionSeconds = 50.0)
+    val snapshot = PlayerSnapshot(status = PlayerStatus.READY, seekable = true, paused = false, durationSeconds = 100.0, positionSeconds = 50.0)
     compose.setContent {
       val chrome = rememberPlayerChrome(1L, paused = false, phone = true, touchExploration = false)
       LaunchedEffect(Unit) { chrome.reveal() }

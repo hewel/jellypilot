@@ -88,6 +88,8 @@ internal object PilotPlayerTokens {
   val phoneVeil = Color.Black.copy(alpha = 0.18f)
   val phonePanelSelected = Color.White.copy(alpha = 0.06f)
   val phoneFeedback = Color.Black.copy(alpha = 0.7f)
+  val gestureStep = Color.Black.copy(alpha = 0.65f)
+  val gestureRail = Color.White.copy(alpha = 0.25f)
   val phoneRail = Color.White.copy(alpha = 0.25f)
   val phoneTopScrim = listOf(0f to Color.Black.copy(alpha = 0.4f), 0.25f to Color.Black.copy(alpha = 0.3f),
     0.5f to Color.Black.copy(alpha = 0.15f), 0.75f to Color.Black.copy(alpha = 0.04f), 1f to Color.Transparent)

@@ -94,6 +94,22 @@ class PlayerChromeInteractionTest {
     compose.onNodeWithText("Pause control").assertExists()
   }
 
+  @Test fun previewPauseDoesNotRevealChromeAndGestureRecognitionSuspendsAutoHide() {
+    mount()
+    compose.runOnIdle { chrome.gestureSeeking = true; chrome.gestureRecognizing = true; paused.value = true }
+    settle(); timeout()
+    compose.onNodeWithText("Play control").assertDoesNotExist()
+    compose.runOnIdle { paused.value = false; chrome.gestureSeeking = false; chrome.reveal() }
+    settle(); timeout()
+    compose.onNodeWithText("Pause control").assertExists()
+    compose.runOnIdle { chrome.gestureRecognizing = false; chrome.gestureFeedback = true }
+    settle(); timeout()
+    compose.onNodeWithText("Pause control").assertExists()
+    compose.runOnIdle { chrome.gestureFeedback = false; chrome.interacted() }
+    settle(); timeout()
+    compose.onNodeWithText("Pause control").assertDoesNotExist()
+  }
+
   @Test fun nestedAudioBackReturnsToMoreAndCloseRestoresTheOriginalTrigger() {
     paused.value = true
     mount()

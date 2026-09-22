@@ -24,9 +24,12 @@ internal class PlayerChromeState(visible: Boolean, paused: Boolean) {
     private set
   var dragging by mutableStateOf(false)
   var focused by mutableStateOf(false)
+  var gestureRecognizing by mutableStateOf(false)
+  var gestureFeedback by mutableStateOf(false)
+  var gestureSeeking by mutableStateOf(false)
 
   fun observedPause(paused: Boolean, phone: Boolean) {
-    if (phone && paused && !lastPaused) visible = true
+    if (phone && paused && !lastPaused && !gestureSeeking) visible = true
     lastPaused = paused
   }
   fun interacted() { interaction++ }
@@ -41,7 +44,11 @@ internal class PlayerChromeState(visible: Boolean, paused: Boolean) {
     reveal()
   }
   fun back() {
-    if (panelOrigin == PlayerPanel.More && panel != PlayerPanel.More) {
+    if (panel == PlayerPanel.GestureHelp) {
+      restoreRow = PlayerPanel.GestureHelp
+      panel = PlayerPanel.Picture
+      interacted()
+    } else if (panelOrigin == PlayerPanel.More && panel != PlayerPanel.More) {
       restoreRow = panel
       panel = PlayerPanel.More
       interacted()
@@ -82,8 +89,10 @@ internal fun rememberPlayerChrome(
   }
   LaunchedEffect(state, paused, phone) { state.observedPause(paused, phone) }
   LaunchedEffect(state, touchExploration) { if (touchExploration) state.reveal() }
-  LaunchedEffect(state, state.visible, state.panel, state.dragging, state.focused, state.interaction, paused, playing, phone, touchExploration) {
+  LaunchedEffect(state, state.visible, state.panel, state.dragging, state.focused, state.gestureRecognizing,
+    state.gestureFeedback, state.interaction, paused, playing, phone, touchExploration) {
     if (state.visible && state.panel == null && !state.dragging && !state.focused &&
+      !state.gestureRecognizing && !state.gestureFeedback &&
       !touchExploration && (!phone || (playing && !paused))) {
       delay(3_000)
       state.hide()

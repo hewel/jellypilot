@@ -100,6 +100,14 @@ cleanup and reconnect, failed registration, and replacement while an older regis
 
 ## Human acceptance after implementation
 
+The gesture regression layer includes deterministic arbitration tests (timers, axes, accumulation,
+endpoint clamping and cancellation), Compose input tests with real hit paths (controls, overlay
+text, same-frame second pointers and eligibility changes), and persistent settings/help navigation.
+`GesturePlaybackBoundaryTest` exercises real native seek transactions, paused intent, background
+revocation and temporary-rate restoration before replacement. Shared SDK tests exercise explicit
+seeks into overlapping intro/credit markers through the session boundary. The launcher is checked
+through packaged manifest/resources; mask shape and themed appearance remain human acceptance.
+
 Record the APK hash, device/OS, server type/version and media metadata with the result. Use a
 test account whose Favorites and Played flags can be changed deliberately.
 
@@ -134,8 +142,16 @@ test account whose Favorites and Played flags can be changed deliberately.
    Mobile design. Minimal should contain only the picture. Pausing reveals controls; hiding them
    and tapping again must remain paused. Controls must stay visible while holding a slider or
    using TalkBack. Check Settings → speed/brightness, nested Back/Close focus restoration, and
-   compact bottom-right skip/Undo feedback. Custom double-tap/swipe/hold playback gestures are
-   intentionally excluded; ordinary taps, sliders and Android edge navigation remain available.
+   compact bottom-right skip/Undo feedback. Exercise left/right double taps and repeated same-side
+   taps near both endpoints. Drag horizontally and release, then repeat with a downward cancellation
+   and with playback paused. Rewind into an intro marker and verify it is not immediately skipped.
+   Swipe left/right vertically for picture brightness/volume, cancel with a second finger, and
+   check mute/zero. Hold the center from a non-2× base rate, then release, pause, open settings,
+   background or switch episodes: the original rate must return and an explicit pause must stay
+   paused. Test a second finger on a visible button as well as on the picture. Turn Player gestures
+   off and reopen the app: single taps and visible controls must still work. Check TalkBack,
+   Reduced motion, system edge navigation and large text. Check ordinary/circular launcher masks,
+   themed icons and the system startup icon on the device's launcher.
 7. Reclaim the process during playback, reopen, and explicitly restore the local position as a
    new session. Check this separately from server Continue Watching. Send remote start/control
    commands while visible, backgrounded, locked and switching accounts; stale commands must not

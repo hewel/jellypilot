@@ -141,6 +141,7 @@ async fn playback_uses_original_media_reports_observed_state_and_clears_recovery
     let (finished, ()) = tokio::join!(session.finish(observation(3, 24.0), false), server);
     assert!(finished.expect("finished").report_error.is_none());
     assert!(!session.is_active());
+    assert_eq!(session.note_user_seek(20.0), Err(SdkError::Stale));
     assert!(sdk
         .local_playback_recovery(token)
         .await
@@ -189,6 +190,7 @@ async fn old_session_cannot_report_or_execute_after_scope_replacement() {
     let current = prepared(&sdk, &mut requests).await;
     assert!(!old.is_active());
     assert!(current.is_active());
+    assert_eq!(old.note_user_seek(20.0), Err(SdkError::Stale));
     assert_eq!(
         old.observe(observation(1, 44.0), true)
             .await
@@ -230,6 +232,61 @@ async fn cancelled_preparation_does_not_leave_a_session_that_blocks_retry() {
 }
 
 const EPISODE: &str = r#"{"Id":"00000000000000000000000000000001","Name":"Episode","Type":"Episode","SeriesId":"00000000000000000000000000000002","SeriesName":"Show","IndexNumber":1,"ParentIndexNumber":1,"OriginalLanguage":"en","UserData":{"Key":"episode","Played":false}}"#;
+
+#[tokio::test]
+async fn explicit_user_seek_preserves_the_requested_marker_until_departure_without_changing_mode() {
+    use crate::playback::IntroSkipMode;
+    let (url, mut requests, _server) = controlled_http_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &url));
+    sdk.set_intro_mode(IntroSkipMode::Automatic)
+        .expect("automatic initial preference");
+    let session = prepared_item(&sdk, &mut requests, EPISODE, true).await;
+    session.note_user_seek(20.0).expect("explicit seek");
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        assert!(matches!(
+            session.note_user_seek(invalid),
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
+    let server = async {
+        request(&mut requests)
+            .await
+            .reply
+            .send("")
+            .expect("started");
+    };
+    let (update, ()) = tokio::join!(session.observe(observation(1, 0.0), false), server);
+    assert!(update.expect("older pre-seek sample").seek_to.is_none());
+    for (sequence, position) in [(2, 20.0), (3, 25.0), (4, 30.0)] {
+        let update = session
+            .observe(observation(sequence, position), false)
+            .await
+            .expect("observed seek stay");
+        assert!(update.seek_to.is_none());
+        assert!(update.skip_prompt.is_none());
+    }
+    assert_eq!(
+        session
+            .observe(observation(5, 15.0), false)
+            .await
+            .expect("reentered marker")
+            .seek_to,
+        Some(30.0)
+    );
+    assert_eq!(
+        session
+            .observe(observation(6, 50.0), false)
+            .await
+            .expect("unrelated credits")
+            .seek_to,
+        Some(60.0)
+    );
+    assert_eq!(
+        sdk.business_preferences().expect("preference").intro_mode,
+        IntroSkipMode::Automatic
+    );
+}
 
 #[tokio::test]
 async fn manual_intro_requires_presentation_and_credit_skip_does_not_advance_an_episode() {

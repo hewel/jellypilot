@@ -236,4 +236,12 @@
   </plurals>
   <string name="player_track_number">Track %1$d</string>
   <string name="player_subtitles_off_description">Do not display subtitles</string>
+  <string name="gesture_seek_seconds">%1$s sec</string>
+  <string name="gesture_release_cancel">Release to cancel</string>
+  <string name="gesture_muted">Muted</string>
+  <string name="gesture_brightness">Brightness</string>
+  <string name="gesture_seek_to">Seek to %1$s</string>
+  <string name="gesture_brightness_value">Picture brightness %1$d%%</string>
+  <string name="gesture_volume_value">Volume %1$d%%</string>
+  <string name="gesture_volume_unavailable">Use your device volume keys</string>
 </resources>

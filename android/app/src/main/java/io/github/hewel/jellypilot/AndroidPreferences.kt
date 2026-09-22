@@ -30,6 +30,7 @@ internal class AndroidPreferences(
     theme = ThemePreference.entries.firstOrNull { it.name == storage.getString("theme", null) } ?: ThemePreference.System,
     language = language(),
     reducedMotion = storage.getBoolean("reduced_motion", false),
+    playerGestures = storage.getBoolean("player_gestures", true),
   )
 
   fun language(): LanguagePreference = when (application.applicationLocales()[0]?.language) {
@@ -41,6 +42,8 @@ internal class AndroidPreferences(
   suspend fun setTheme(value: ThemePreference) = persist { putString("theme", value.name) }
 
   suspend fun setReducedMotion(value: Boolean) = persist { putBoolean("reduced_motion", value) }
+
+  suspend fun setPlayerGestures(value: Boolean) = persist { putBoolean("player_gestures", value) }
 
   @MainThread
   fun setLanguage(value: LanguagePreference) {

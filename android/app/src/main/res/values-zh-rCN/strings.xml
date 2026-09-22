@@ -230,4 +230,12 @@
   </plurals>
   <string name="player_track_number">轨道 %1$d</string>
   <string name="player_subtitles_off_description">不显示字幕</string>
+  <string name="gesture_seek_seconds">%1$s 秒</string>
+  <string name="gesture_release_cancel">松手取消</string>
+  <string name="gesture_muted">静音</string>
+  <string name="gesture_brightness">亮度</string>
+  <string name="gesture_seek_to">跳转到 %1$s</string>
+  <string name="gesture_brightness_value">画面亮度 %1$d%%</string>
+  <string name="gesture_volume_value">音量 %1$d%%</string>
+  <string name="gesture_volume_unavailable">请使用设备音量键</string>
 </resources>

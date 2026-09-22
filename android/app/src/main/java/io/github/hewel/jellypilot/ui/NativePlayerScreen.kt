@@ -21,6 +21,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -32,6 +34,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import io.github.hewel.jellypilot.AppViewModel
 import io.github.hewel.jellypilot.NativePlayback
 import io.github.hewel.jellypilot.PlayerDialogSystemBars
@@ -45,6 +50,7 @@ import kotlinx.coroutines.delay
 internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, back: () -> Unit) {
   val app by model.state.collectAsStateWithLifecycle()
   val snapshot by player.snapshot.collectAsStateWithLifecycle()
+  val gestureSeeking by player.gestureSeeking.collectAsStateWithLifecycle()
   val ready by player.ready.collectAsStateWithLifecycle()
   val error by player.error.collectAsStateWithLifecycle()
   val showControls = stringResource(R.string.show_controls)
@@ -53,8 +59,60 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
   val touchExploration = rememberTouchExploration()
   val paused = snapshot.paused && (snapshot.status == PlayerStatus.READY || snapshot.status == PlayerStatus.BUFFERING)
   val chrome = rememberPlayerChrome(snapshot.generation, paused, phone, touchExploration, playing = snapshot.isPlaying)
-  val controls = chrome.visible
+  var gestureFeedback by remember(snapshot.generation) { mutableStateOf<GestureFeedback?>(null) }
+  val gestureArbitration = remember(snapshot.generation) { PlayerGestureArbitration() }
+  val controls = chrome.visible && gestureFeedback == null
   val panel = chrome.panel
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
+  var foreground by remember(lifecycle) { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+  val windowFocused = LocalWindowInfo.current.isWindowFocused
+  val view = LocalView.current
+  DisposableEffect(lifecycle, model) {
+    val observer = LifecycleEventObserver { _, _ ->
+      foreground = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+      if (!foreground) model.cancelPlaybackGestures()
+    }
+    lifecycle.addObserver(observer)
+    onDispose { lifecycle.removeObserver(observer); model.cancelPlaybackGestures() }
+  }
+  LaunchedEffect(windowFocused, foreground, panel, touchExploration, snapshot.status) {
+    if (!windowFocused || !foreground || panel != null || touchExploration ||
+      snapshot.status == PlayerStatus.IDLE || snapshot.status == PlayerStatus.ENDED || snapshot.error != null) model.cancelPlaybackGestures()
+  }
+  val gestureActions = object : PlayerGestureActions {
+    override fun playback() = GesturePlayback(snapshot.generation, snapshot.positionSeconds, snapshot.durationSeconds,
+      snapshot.seekable && !player.gestureSeekActive, snapshot.isPlaying, snapshot.speed, snapshot.pictureBrightnessPercent,
+      snapshot.pictureBrightnessAvailable, snapshot.volumePercent, snapshot.volumeAvailable, snapshot.muted)
+    override fun toggleChrome() { if (touchExploration) chrome.reveal() else chrome.toggle() }
+    override fun seeking() = model.beginGestureSeek()?.let {
+      chrome.gestureSeeking = true
+      GestureSeekCapture(it.token, it.positionSeconds)
+    }
+    override fun finishSeek(token: Long, target: Double?) { model.finishGestureSeek(token, target); chrome.gestureSeeking = false }
+    override fun seek(target: Double) { model.seekPlayback(target) }
+    override fun speed() = model.beginGestureSpeed()
+    override fun finishSpeed(token: Long) { model.endGestureSpeed(token) }
+    override fun brightness(value: Int) { player.pictureBrightness(value) }
+    override fun volume(value: Int) { model.setPlaybackVolume(value) }
+    override fun restoreVolume(value: Int, muted: Boolean) { player.volume(value); player.mute(muted) }
+    override fun feedback(value: GestureFeedback?) {
+      gestureFeedback = value
+      chrome.gestureFeedback = value != null
+      if (value == null) chrome.interacted()
+    }
+    override fun recognizing(active: Boolean) { chrome.gestureRecognizing = active; if (!active) chrome.interacted() }
+    @Suppress("DEPRECATION")
+    override fun completed(value: GestureFeedback) {
+      val message = when (value) {
+        is GestureFeedback.Step -> view.context.getString(R.string.gesture_seek_seconds, signedSeconds(value.delta))
+        is GestureFeedback.Seek -> view.context.getString(R.string.gesture_seek_to, playbackClock(value.target))
+        is GestureFeedback.Level -> if (!value.brightness && value.value == 0) view.context.getString(R.string.gesture_muted)
+          else view.context.getString(if (value.brightness) R.string.gesture_brightness_value else R.string.gesture_volume_value, value.value)
+        GestureFeedback.Speed -> return
+      }
+      view.announceForAccessibility(message)
+    }
+  }
   var bottomHeight by remember { mutableStateOf(if (phone) 136.dp else 180.dp) }
   val inputMode = LocalInputModeManager.current
   var controlsFocused by remember { mutableStateOf(false) }
@@ -76,7 +134,10 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
       val landscape = maxWidth > maxHeight
       val panelHeight = maxHeight * 0.8f
       val panelWidth = 340.dp.coerceAtMost((maxWidth - 32.dp).coerceAtLeast(0.dp))
-      Box(Modifier.fillMaxSize().onFocusChanged { controlsFocused = it.hasFocus }.focusGroup()) {
+      val gestureBounds = playerGestureBounds(maxWidth.value, maxHeight.value)
+      val feedbackBounds = playerGestureBounds(maxWidth.value, maxHeight.value, minimumEdge = 0f)
+      Box(Modifier.fillMaxSize().observePlayerMultitouch(gestureArbitration)
+        .onFocusChanged { controlsFocused = it.hasFocus }.focusGroup()) {
         AndroidView(
           modifier = Modifier.fillMaxSize(),
           factory = { context -> SurfaceView(context).apply {
@@ -90,9 +151,17 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
           onRelease = { player.detach() },
         )
         val controlsLabel = if (controls) stringResource(R.string.player_hide_controls) else showControls
-        Box(Modifier.matchParentSize().clickable(interactionSource = null, indication = null,
+        if (phone && !touchExploration) PlayerGestureSurface(
+          generation = snapshot.generation,
+          enabled = ready && foreground && windowFocused && panel == null && error == null &&
+            snapshot.status in listOf(PlayerStatus.READY, PlayerStatus.BUFFERING) && snapshot.error == null &&
+            (gestureFeedback != GestureFeedback.Speed || snapshot.isPlaying),
+          shortcuts = app.preferences.playerGestures, label = controlsLabel,
+          bounds = gestureBounds, actions = gestureActions, arbitration = gestureArbitration, modifier = Modifier.matchParentSize(),
+        ) else Box(Modifier.matchParentSize().clickable(interactionSource = null, indication = null,
           onClickLabel = controlsLabel, onClick = { if (touchExploration) chrome.reveal() else chrome.toggle() })
           .semantics { contentDescription = controlsLabel })
+        if (phone) PlayerGestureFeedback(gestureFeedback, feedbackBounds, app.preferences.reducedMotion)
         if (!controls && !phone) {
           Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(72.dp)
             .background(Brush.verticalGradient(listOf(Color.Transparent, PilotPlayerTokens.minimalScrim))))
@@ -120,7 +189,7 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
           Box(Modifier.fillMaxWidth().height(maxOf(if (phone) 152.dp else 230.dp, bottomHeight + if (phone) 16.dp else 40.dp)).align(Alignment.BottomCenter)
             .background(Brush.verticalGradient(*(if (phone) PilotPlayerTokens.phoneBottomScrim else PilotPlayerTokens.bottomScrim).toTypedArray())))
           PlayerFullControls(
-            snapshot, playback, ready, back,
+            snapshot.copy(seekable = snapshot.seekable && !gestureSeeking), playback, ready, back,
             playPause = { if (snapshot.paused) model.playPlayback() else model.pausePlayback(); chrome.interacted() },
             seek = { model.seekPlayback(it); chrome.interacted() }, volume = { model.setPlaybackVolume(it); chrome.interacted() },
             autoSkip = { model.setSessionAutoSkip(it); chrome.interacted() },
@@ -152,7 +221,7 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
           CircularProgressIndicator(Modifier.align(Alignment.Center).size(32.dp))
         }
         val playbackError = error ?: snapshot.error?.message
-        if (playbackError != null) Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 500.dp), color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
+        if (playbackError != null) Surface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 500.dp).reservePlayerOverlayTouchArea(), color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
           Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.playback_error), style = MaterialTheme.typography.titleMedium)
             Text(playbackError, style = MaterialTheme.typography.bodyMedium)
@@ -175,7 +244,7 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
         }
         Column(Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)).padding(top = if (controls) 80.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
           app.error?.let { message ->
-            Snackbar(modifier = Modifier.widthIn(max = 480.dp).padding(horizontal = 16.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            Snackbar(modifier = Modifier.widthIn(max = 480.dp).padding(horizontal = 16.dp).reservePlayerOverlayTouchArea().semantics { liveRegion = LiveRegionMode.Polite },
               dismissAction = { IconButton(onClick = model::dismissError) { PilotIcon(R.drawable.ic_x, stringResource(R.string.close)) } },
             ) { Text(message) }
           }
@@ -242,7 +311,7 @@ private fun SkipUndo(model: AppViewModel, noticeId: Long, modifier: Modifier, ph
     }
   }
   Surface(modifier = modifier.then(if (phone) Modifier.widthIn(max = 264.dp) else Modifier.padding(horizontal = 16.dp).widthIn(max = 360.dp))
-    .onFocusChanged { focused = it.hasFocus }.focusGroup().semantics { liveRegion = LiveRegionMode.Polite },
+    .reservePlayerOverlayTouchArea().onFocusChanged { focused = it.hasFocus }.focusGroup().semantics { liveRegion = LiveRegionMode.Polite },
     color = if (phone) PilotPlayerTokens.phoneFeedback else PilotPlayerTokens.notice,
     contentColor = PilotPlayerTokens.foreground, shape = MaterialTheme.shapes.medium,
   ) {

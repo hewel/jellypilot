@@ -576,6 +576,24 @@ impl PlaybackSession {
         Ok(result)
     }
 
+    /// Records an explicit user seek before the host submits it to the player.
+    /// Automatic skips are suppressed for containing markers until playback
+    /// enters and leaves them; mode and other markers remain unchanged.
+    /// The host must discard any older in-flight observation's returned action.
+    ///
+    /// Returns `InvalidInput` for an invalid position and `Stale` after this
+    /// session ends or loses its active profile/session ownership.
+    pub fn note_user_seek(&self, position_seconds: f64) -> Result<(), SdkError> {
+        checked_seconds_to_ticks(position_seconds).map_err(playback_error)?;
+        self.validate_current()?;
+        let mut state = self.state.lock().map_err(|_| SdkError::Closed)?;
+        if state.ended {
+            return Err(SdkError::Stale);
+        }
+        state.intro.note_user_seek(position_seconds);
+        Ok(())
+    }
+
     pub fn set_intro_mode(&self, mode: IntroSkipMode) -> Result<(), SdkError> {
         self.validate_current()?;
         let mut state = self.state.lock().map_err(|_| SdkError::Closed)?;

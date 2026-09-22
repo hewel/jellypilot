@@ -52,6 +52,17 @@ class MediaSessionStateTest {
     assertEquals(10_000, player.currentPosition)
   }
 
+  @Test fun unavailableSeekAndVolumeCapabilitiesAreNotAdvertisedToSystemControls() = withPlayer { host, player ->
+    assertTrue(player.availableCommands.contains(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM))
+    assertTrue(player.availableCommands.contains(Player.COMMAND_SET_VOLUME))
+    host.publish(host.snapshot.copy(seekable = false, volumeAvailable = false))
+    assertFalse(player.availableCommands.contains(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM))
+    assertFalse(player.availableCommands.contains(Player.COMMAND_SEEK_BACK))
+    assertFalse(player.availableCommands.contains(Player.COMMAND_SEEK_FORWARD))
+    assertFalse(player.availableCommands.contains(Player.COMMAND_SET_VOLUME))
+    assertFalse(player.isCurrentMediaItemSeekable)
+  }
+
   private fun withPlayer(accepted: Boolean = true, test: (SnapshotHost, MpvMedia3Player) -> Unit) {
     val host = SnapshotHost()
     val player = MpvMedia3Player(host, Looper.getMainLooper(), object : PlayerIntentHandler {
@@ -64,7 +75,7 @@ class MediaSessionStateTest {
   private class SnapshotHost : PlayerHost {
     private val listeners = mutableListOf<PlayerHost.Listener>()
     override var snapshot = PlayerSnapshot(status = PlayerStatus.READY, mediaId = "episode-one",
-      generation = 1, positionSeconds = 10.0, durationSeconds = 120.0)
+      generation = 1, positionSeconds = 10.0, durationSeconds = 120.0, seekable = true, volumeAvailable = true)
       private set
     fun publish(value: PlayerSnapshot) {
       snapshot = value

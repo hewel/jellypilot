@@ -122,6 +122,8 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   private var pausedForCache = false
   private var eofReached = false
   private var surfaceAttached = false
+  private data class TemporarySpeed(val token: Long, val generation: Long, val original: Double)
+  private var temporarySpeed: TemporarySpeed? = null
   private val secrets = mutableSetOf<String>()
 
   override val snapshot: PlayerSnapshot
@@ -139,6 +141,10 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
           config.tlsCaFile,
         )
         initializePictureBrightness(context.applicationContext)
+        val volume = MpvJni.nativeGetPropertyString(handle, "volume")?.toDoubleOrNull()
+        if (volume != null && volume.isFinite() && MpvJni.nativeSetPropertyDouble(handle, "volume", volume) >= 0) {
+          mutate { copy(volumeAvailable = true, volumePercent = volume.toInt().coerceIn(0, 100)) }
+        }
         observeProperties()
       } catch (t: Throwable) {
         released = true
@@ -183,6 +189,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     }
     enqueue {
       if (released) return@enqueue
+      if (!eligible) restoreTemporarySpeed()
       val wasEligible = current.admissionEligible
       if (!eligible && current.playWhenReady) {
         // Queued starts are revoked synchronously above. Admission-only policy
@@ -252,6 +259,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     revokePlay()
     enqueue {
       if (released) return@enqueue
+      restoreTemporarySpeed()
       setPaused(true)
       mutate { copy(playWhenReady = false) }
     }
@@ -277,7 +285,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     enqueue {
       when {
         released -> reject("seek", RejectionReason.RELEASED)
-        active?.fileLoaded != true -> reject("seek", RejectionReason.NOT_READY)
+        liveStartedRecord()?.fileLoaded != true || !current.seekable -> reject("seek", RejectionReason.NOT_READY)
         else -> {
           val target = positionSeconds.coerceAtLeast(0.0)
           runCommand("seek", "seek", formatSeconds(target), "absolute+exact")
@@ -301,7 +309,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       if (released) return@enqueue
       val clamped = percent.coerceIn(0, 100)
       if (MpvJni.nativeSetPropertyDouble(handle, "volume", clamped.toDouble()) < 0) {
-        mutate { copy(error = PlayerError.CommandFailed("volume", "mpv rejected the value")) }
+        mutate { copy(volumeAvailable = false, error = PlayerError.CommandFailed("volume", "mpv rejected the value")) }
       }
     }
   }
@@ -324,10 +332,40 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         reject("speed", RejectionReason.NOT_READY)
         return@enqueue
       }
+      restoreTemporarySpeed()
       val clamped = speed.coerceIn(0.25, 4.0)
       if (MpvJni.nativeSetPropertyDouble(handle, "speed", clamped) < 0) {
         mutate { copy(error = PlayerError.CommandFailed("speed", "mpv rejected the value")) }
       }
+    }
+  }
+
+  /** A temporary override is owned by the native media lifetime, independently of Compose disposal. */
+  fun beginTemporarySpeed(token: Long, generation: Long) {
+    enqueue {
+      if (released || !admissionEligible || liveStartedRecord()?.fileLoaded != true ||
+        current.generation != generation || !current.isPlaying || current.paused) return@enqueue
+      restoreTemporarySpeed()
+      val original = MpvJni.nativeGetPropertyString(handle, "speed")?.toDoubleOrNull() ?: return@enqueue
+      if (!original.isFinite() || original == 2.0) return@enqueue
+      temporarySpeed = TemporarySpeed(token, generation, original)
+      if (MpvJni.nativeSetPropertyDouble(handle, "speed", 2.0) < 0) {
+        restoreTemporarySpeed()
+        mutate { copy(error = PlayerError.CommandFailed("speed", "mpv rejected temporary speed")) }
+      }
+    }
+  }
+
+  fun endTemporarySpeed(token: Long) {
+    enqueue { if (!released && temporarySpeed?.token == token) restoreTemporarySpeed() }
+  }
+
+  private fun restoreTemporarySpeed() {
+    val temporary = temporarySpeed ?: return
+    temporarySpeed = null
+    if (current.generation != temporary.generation) return
+    if (MpvJni.nativeSetPropertyDouble(handle, "speed", temporary.original) < 0) {
+      mutate { copy(error = PlayerError.CommandFailed("speed", "Could not restore playback speed")) }
     }
   }
 
@@ -423,6 +461,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
 
   override fun detachSurface() = runBlocking {
     if (released || !surfaceAttached) return@runBlocking
+    restoreTemporarySpeed()
     // Blocks until the mpv core confirms the VO released the ANativeWindow.
     MpvJni.nativeDetachSurface(handle)
     surfaceAttached = false
@@ -455,11 +494,13 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       mutate {
         copy(
           status = PlayerStatus.IDLE,
+          seekable = false,
           playWhenReady = false,
           isPlaying = false,
           paused = true,
           pictureBrightnessPercent = 100,
           pictureBrightnessAvailable = false,
+          volumeAvailable = false,
           speed = 1.0,
           tracks = emptyList(),
           mediaId = null,
@@ -628,6 +669,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
    * idle. A displaced pending load is cancelled — it never reached mpv.
    */
   private fun acceptLoad(request: MediaLoad, revision: Long) {
+    restoreTemporarySpeed()
     if (active != null) {
       pending?.let { emitLoadRejected(it, RejectionReason.CANCELLED) }
       pending = request
@@ -735,6 +777,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     mutate {
       copy(
         status = PlayerStatus.LOADING,
+        seekable = false,
         playWhenReady = wantPlay,
         isPlaying = false,
         paused = startPaused,
@@ -758,6 +801,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       mutate {
         copy(
           status = PlayerStatus.IDLE,
+          seekable = false,
           mediaId = null,
           generation = 0,
           error = PlayerError.LoadFailed(request.mediaId, "loadfile rejected"),
@@ -772,6 +816,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   }
 
   private fun executeStop(preserveSessionSettings: Boolean) {
+    restoreTemporarySpeed()
     // A queued replacement is cancelled outright; the active load's terminal
     // event is deferred until its native lifetime provably ends.
     pending?.let { emitLoadRejected(it, RejectionReason.CANCELLED) }
@@ -784,6 +829,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     mutate {
       copy(
         status = PlayerStatus.IDLE,
+        seekable = false,
         playWhenReady = false,
         isPlaying = false,
         paused = true,
@@ -809,6 +855,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     if (released) return
     when (name) {
       "pause" -> {
+        if (value) restoreTemporarySpeed()
         // Ungated: pause writes issued while a file is still opening (e.g.
         // admission loss during load) must reach the snapshot; FILE_LOADED
         // reconciles desired-vs-actual unconditionally.
@@ -817,6 +864,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       }
       "paused-for-cache" -> {
         val record = liveStartedRecord() ?: return
+        if (value) restoreTemporarySpeed()
         pausedForCache = value
         if (record.fileLoaded && !eofReached) {
           mutate {
@@ -828,6 +876,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         recomputePlaying()
       }
       "core-idle" -> {
+        if (value) restoreTemporarySpeed()
         coreIdle = value
         recomputePlaying()
       }
@@ -839,6 +888,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
           mutate {
             copy(
               status = PlayerStatus.IDLE,
+              seekable = false,
               isPlaying = false,
               tracks = emptyList(),
               mediaId = null,
@@ -849,12 +899,14 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       }
       "eof-reached" -> {
         if (value && !eofReached && liveStartedRecord()?.fileLoaded == true) {
+          restoreTemporarySpeed()
           eofReached = true
           mutate { copy(status = PlayerStatus.ENDED, isPlaying = false) }
           emit(PlayerEvent.NaturalEnd(current.mediaId, current.generation))
         }
       }
       "mute" -> mutate { copy(muted = value) }
+      "seekable" -> if (liveStartedRecord()?.fileLoaded == true) mutate { copy(seekable = value) }
       "seeking" -> Unit // position discontinuity is reflected via time-pos
     }
   }
@@ -950,7 +1002,8 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
           }
           MpvJni.nativeCommand(handle, args.toTypedArray())
         }
-        mutate { copy(status = PlayerStatus.READY, playWhenReady = wantPlay) }
+        mutate { copy(status = PlayerStatus.READY, playWhenReady = wantPlay,
+          seekable = MpvJni.nativeGetPropertyString(handle, "seekable") == "yes") }
         emit(PlayerEvent.FileLoaded(current.mediaId, current.generation))
         refreshTracks()
       }
@@ -965,6 +1018,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     // END_FILE carries the entry id of the file that actually played; only
     // the active record can match. A stray or superseded id is ignored.
     val record = active?.takeIf { it.entryId == playlistEntryId } ?: return
+    restoreTemporarySpeed()
     val mediaId = record.request.mediaId
     val generation = record.request.generation
     pausedForCache = false
@@ -978,6 +1032,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         mutate {
           copy(
             status = PlayerStatus.IDLE,
+            seekable = false,
             isPlaying = false,
             paused = true,
             tracks = emptyList(),
@@ -989,6 +1044,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         mutate {
           copy(
             status = PlayerStatus.IDLE,
+            seekable = false,
             isPlaying = false,
             paused = true,
             tracks = emptyList(),
@@ -1084,6 +1140,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     MpvJni.nativeObserveProperty(handle, "eof-reached", flag)
     MpvJni.nativeObserveProperty(handle, "mute", flag)
     MpvJni.nativeObserveProperty(handle, "seeking", flag)
+    MpvJni.nativeObserveProperty(handle, "seekable", flag)
     MpvJni.nativeObserveProperty(handle, "time-pos", double)
     MpvJni.nativeObserveProperty(handle, "duration", double)
     MpvJni.nativeObserveProperty(handle, "demuxer-cache-duration", double)

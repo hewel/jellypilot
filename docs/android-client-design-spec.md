@@ -267,9 +267,54 @@ Pin and reproduce Rust cross-compilation, UniFFI generation, libmpv and transiti
 
 For each gate record pass/fail/unavailable separately. Missing device, sample, or output evidence is not a pass. Desktop changes require the relevant repository gates from [validation policy](agents/validation.md); Android commands and checks must be added as working dispatcher entries during implementation, not invented here. Documentation-only recording does not require an application build.
 
+## Phone playback gestures and launcher icon — 2026-09-22
+
+The follow-up to the mobile synchronization enables phone picture gestures from the
+[Mobile design](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0).
+Single tap controls chrome visibility; side double taps seek ±10 seconds and accumulate same-side
+taps; horizontal drag previews one seek and latches cancellation after dragging down; vertical
+left/right gestures adjust picture brightness/player volume; center hold temporarily selects 2×.
+Visible controls remain available. The device-local **Player gestures** switch defaults on, and
+the Picture and gestures panel includes an optional, scrollable help page.
+
+Recognition reserves system insets and at least 24dp at each edge. Buttons and entire actionable
+overlays own their hit regions. A common ancestor cancels recognition synchronously when a second
+pointer arrives, including one on a control. Touch exploration retains Full chrome and disables
+custom gestures. Recognition/adjustment suspend auto-hide; feedback uses the compact passive
+Mobile indicators and a 130ms opacity transition, disabled by Reduced motion.
+
+Seek preview captures the playback position and intended paused/playing state, pauses the native
+clock and automatic marker decisions, and commits once on release. Cancellation restores the
+origin. Explicit pause, focus/background loss and media replacement revoke the old transaction's
+permission to resume. Token/generation checks reject stale releases. An explicit seek suppresses
+automatic handling of markers containing its target until that marker is left. Temporary speed
+restores the captured base rate before pause, interruption or replacement. Volume and seeking
+availability are confirmed by the native player and also govern visible and MediaSession controls.
+
+The launcher uses the existing transparent JellyPilot mark over a separate graphite background,
+with adaptive/round and API 33 monochrome resources. The original mark's aspect ratio and protected
+66dp circle are preserved; launcher masks and themed rendering still need human acceptance.
+
+Native subtitles remain in the video compositor. Passive Compose feedback reserves the lower
+64dp picture lane and is behind actionable overlays; arbitrarily positioned ASS subtitles can
+still overlap it. Check unusual subtitle placement, safe areas, large text, brightness/color and
+gesture feel on a real device. Automated interaction/native checks do not establish appearance.
+
+| Follow-up verification | Result |
+| --- | --- |
+| Shared bindings / ARM64 FFI | Regenerated and rebuilt through the dispatcher. |
+| `bun run check` / Rust workspace tests | Passed; 1,391 reported passes, zero failures, one ignored lifecycle helper. |
+| Android host tests / lint | 64 app cases and four player cases passed; lint has zero errors and 55 warnings. |
+| Android native instrumentation | All 34 cases passed on API 35 x86_64 with ARM64 translation, including four gesture transaction cases and the existing admission/lifecycle fixtures. |
+| APK | Debug signature and 16 KB ZIP alignment passed; all 13 ARM64 libraries are uncompressed and have ≥16 KB ELF load alignment. Packaged adaptive/round/monochrome icon references are present. |
+
+Current debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`, **567,013,170 bytes**,
+SHA256 `437a671a66b77d50206d825f4f11692dd493f78a954d0ea41dea154d15c88fa5`.
+Actual 16 KB-page runtime, real-device visuals/audio/HDR and controlled release remain separate.
+
 ## Mobile synchronization verification — 2026-09-22
 
-The phone design synchronization excludes custom playback gestures. It includes the updated Home,
+The preceding phone design synchronization excluded custom playback gestures. It included the updated Home,
 library/search, details and tracks, personal lists, account/settings, two-step server login and
 landscape player. Related inspection fixed season replacement admission, account-to-library
 navigation, unconfirmed MediaSession intents, duplicate MediaSession IDs, and native file
@@ -294,7 +339,7 @@ owners, immersive rotation, and late-event rejection. Shader property/track chec
 proof of brightness, subtitle composition or HDR. Human phone/tablet, real-server, output and
 controlled-release acceptance remain separate; use [the device checklist](android-testing.md).
 
-Final debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`, **566,221,610 bytes**,
+Pre-gesture debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`, **566,221,610 bytes**,
 SHA256 `2d78266825060365d4bb05d4488116fdd0af725074bca27dcbb6e39c99684d4e`.
 It retains native symbols and uses the development signing key.
 

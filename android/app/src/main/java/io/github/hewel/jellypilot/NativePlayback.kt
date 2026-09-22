@@ -35,7 +35,10 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withTimeout
+
+internal data class GestureSeek(val token: Long, val positionSeconds: Double)
 
 /** Android resource owner. Media-server policy and reporting belong to the shared SDK. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -49,6 +52,8 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   private val admitted = AtomicBoolean(false)
   private val handoff = AtomicBoolean(false)
   private val policyLock = Any()
+  // User/admission intent is synchronous; delayed mpv snapshots must not undo a newer pause.
+  private var requestedPlaying = false
   private val audioManager = application.getSystemService(AudioManager::class.java)
   private var hasAudioFocus = false
   private val audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -69,6 +74,15 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     }
   }
   private val commandEpoch = AtomicLong()
+  private val gestureSequence = AtomicLong()
+  private data class SeekPreview(val token: Long, val generation: Long, val epoch: Long,
+    val origin: Double, val resume: Boolean)
+  private val seekPreview = MutableStateFlow<SeekPreview?>(null)
+  private val mutableGestureSeeking = MutableStateFlow(false)
+  val gestureSeeking = mutableGestureSeeking.asStateFlow()
+  private fun setSeekPreview(value: SeekPreview?) { seekPreview.value = value; mutableGestureSeeking.value = value != null }
+  private var speedGesture: Long? = null
+  val gestureSeekActive: Boolean get() = seekPreview.value != null
   private val opening = AtomicReference<CancellationSignal?>()
   private val surfaceLock = Any()
   private var surfaceEpoch = 0L
@@ -126,6 +140,12 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   private fun retire(generation: Long) {
+    synchronized(policyLock) {
+      if (seekPreview.value?.generation == generation) {
+        setSeekPreview(null)
+        commandEpoch.incrementAndGet()
+      }
+    }
     loadWaiters.remove(generation)?.completeExceptionally(IllegalStateException("Native load did not complete"))
     descriptors.remove(generation)?.forEach { it.close() }
     if (pendingLoad == generation) pendingLoad = null
@@ -205,6 +225,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   fun setHandoffBlocked(blocked: Boolean) = synchronized(policyLock) {
+    if (blocked) cancelPlaybackGestures()
     handoff.set(blocked)
     updateAdmissionLocked()
   }
@@ -218,6 +239,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     stillCurrent: () -> Boolean = { true },
     bindGeneration: (Long) -> Unit = {},
   ): Long {
+    synchronized(policyLock) { requestedPlaying = false; cancelPlaybackGestures() }
     val epoch = commandEpoch.incrementAndGet()
     val submitted = CompletableDeferred<Long>()
     if (!ready.value || !admissionEligible || !stillCurrent()) error("Playback is not currently eligible")
@@ -243,6 +265,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       try {
         if (withAudioFocus(epoch) {
           check(stillCurrent()) { "Playback admission changed" }
+          requestedPlaying = !request.startPaused
           current.load(request.copy(generation = epoch))
         }) {
           // The SDK account admission remains held until FileLoaded, not merely load submission.
@@ -270,6 +293,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   private fun load(remote: MediaLocator?, uri: Uri?, subtitle: Uri?) {
+    synchronized(policyLock) { requestedPlaying = false; cancelPlaybackGestures() }
     val epoch = commandEpoch.incrementAndGet()
     if (!ready.value || !admitted.get() || handoff.get() || closed.get()) {
       mutableError.value = application.localizedString(R.string.player_paused_background)
@@ -300,7 +324,10 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       descriptors[epoch] = owned.toList()
       pendingLoad = epoch
       mutableError.value = null
-      if (!withAudioFocus(epoch) { current.load(MediaLoad(source, generation = epoch, externalSubtitles = subtitles)) }) {
+      if (!withAudioFocus(epoch) {
+        requestedPlaying = true
+        current.load(MediaLoad(source, generation = epoch, externalSubtitles = subtitles))
+      }) {
         retire(epoch)
         if (commandEpoch.get() == epoch) mutableError.value = application.localizedString(R.string.player_audio_focus_denied)
       }
@@ -315,19 +342,20 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     } }
   }
 
-  fun play(stillCurrent: () -> Boolean = { true }): Boolean {
+  fun play(stillCurrent: () -> Boolean = { true }, gestureToken: Long? = null): Boolean {
+    if (gestureToken == null) cancelPlaybackGestures()
     val current = host ?: return false
     if (closed.get() || !admitted.get() || handoff.get() || !stillCurrent()) {
       mutableError.value = application.localizedString(R.string.player_paused_background)
       return false
     }
-    val accepted = withAudioFocus { if (stillCurrent()) current.play() }
+    val accepted = withAudioFocus { if (stillCurrent()) { requestedPlaying = true; current.play() } }
     if (!accepted) mutableError.value = application.localizedString(R.string.player_audio_focus_denied)
     return accepted
   }
-  suspend fun resumeMedia(stillCurrent: () -> Boolean): Boolean {
+  suspend fun resumeMedia(gestureToken: Long? = null, stillCurrent: () -> Boolean): Boolean {
     val generation = snapshot.value.generation
-    if (!play(stillCurrent)) return false
+    if (!play(stillCurrent, gestureToken)) return false
     return try {
       withTimeout(10_000) {
         val resumed = snapshot.first { !it.paused || it.generation != generation || !stillCurrent() || !admissionEligible || it.error != null }
@@ -377,21 +405,108 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
   fun pause() {
     synchronized(policyLock) {
+      requestedPlaying = false
+      cancelPlaybackGestures()
       commandEpoch.incrementAndGet()
       opening.get()?.cancel()
       releaseAudioFocus()
       host?.pause()
     }
   }
-  fun seek(seconds: Double) { host?.seekTo(seconds) }
+  fun seek(seconds: Double) = synchronized(policyLock) {
+    if (seekPreview.value == null) { cancelPlaybackGestures(); host?.seekTo(seconds) }
+  }
   fun volume(percent: Int) { host?.setVolume(percent) }
   fun mute(value: Boolean) { host?.setMuted(value) }
-  fun speed(value: Double) { host?.setSpeed(value) }
+  fun speed(value: Double) { synchronized(policyLock) { speedGesture?.let { host?.endTemporarySpeed(it) }; speedGesture = null; host?.setSpeed(value) } }
   fun pictureBrightness(percent: Int) { host?.setPictureBrightness(percent) }
   fun select(kind: TrackKind, id: Int) { host?.selectTrack(kind, id) }
 
+  fun beginGestureSeek(): GestureSeek? = synchronized(policyLock) {
+    if (seekPreview.value != null) return@synchronized null
+    val observed = snapshot.value
+    if (!ready.value || !admissionEligible || !observed.seekable ||
+      observed.status !in listOf(PlayerStatus.READY, PlayerStatus.BUFFERING)) return@synchronized null
+    cancelPlaybackGestures()
+    val token = gestureSequence.incrementAndGet()
+    val epoch = commandEpoch.incrementAndGet()
+    setSeekPreview(SeekPreview(token, observed.generation, epoch, observed.positionSeconds, requestedPlaying))
+    // Retain focus while previewing; this pause is not a new user pause intent.
+    host?.pause()
+    GestureSeek(token, observed.positionSeconds)
+  }
+
+  /** Called inside the coordinator's admitted operation; cancellation can revoke it at any await. */
+  suspend fun finishGestureSeek(token: Long, target: Double?, stillCurrent: () -> Boolean): Boolean {
+    val preview = seekPreview.value?.takeIf { it.token == token } ?: return false
+    // A caller's admission check can itself revoke playback; inspect our receipt after it returns.
+    fun valid(): Boolean = stillCurrent() && seekPreview.value === preview && commandEpoch.get() == preview.epoch &&
+      snapshot.value.generation == preview.generation && admissionEligible
+    val destination = (target?.takeIf { it.isFinite() } ?: preview.origin).coerceAtLeast(0.0)
+      .let { snapshot.value.durationSeconds?.takeIf { end -> end.isFinite() && end > 0 }?.let(it::coerceAtMost) ?: it }
+    try {
+      val submitted = CompletableDeferred<Boolean>()
+      val queued = execute {
+        val current = host
+        val accepted = if (current == null || !valid() || !current.pauseAndConfirm(preview.generation)) false
+        else synchronized(policyLock) {
+          // Cancellation restores the origin under this same lock. A revoked preview
+          // must never enqueue its old target after that restoration.
+          if (!valid()) false else { current.seekTo(destination); true }
+        }
+        submitted.complete(accepted)
+      }
+      if (!queued || !submitted.await()) return false
+      val landed = withTimeout(10_000) {
+        combine(snapshot, seekPreview) { value, active -> value to active }.first { (value, active) ->
+          active !== preview || !valid() || value.error != null ||
+            (value.paused && kotlin.math.abs(value.positionSeconds - destination) <= 0.3)
+        }.first
+      }
+      if (!valid() || landed.error != null) return false
+      return if (preview.resume) resumeMedia(token, ::valid) else true
+    } catch (_: TimeoutCancellationException) {
+      return false
+    } finally {
+      synchronized(policyLock) {
+        if (seekPreview.value === preview) setSeekPreview(null)
+      }
+    }
+  }
+
+  fun beginGestureSpeed(): Long? = synchronized(policyLock) {
+    val observed = snapshot.value
+    if (!ready.value || !admissionEligible || !requestedPlaying || !observed.isPlaying || observed.paused ||
+      observed.speed == 2.0 || seekPreview.value != null || speedGesture != null) return@synchronized null
+    val token = gestureSequence.incrementAndGet()
+    speedGesture = token
+    host?.beginTemporarySpeed(token, observed.generation)
+    token
+  }
+
+  fun endGestureSpeed(token: Long) = synchronized(policyLock) {
+    if (speedGesture == token) { speedGesture = null; host?.endTemporarySpeed(token) }
+  }
+
+  /** System/panel interruption restores the origin and rate but never grants permission to resume. */
+  fun cancelPlaybackGestures() = synchronized(policyLock) {
+    val preview = seekPreview.value
+    setSeekPreview(null)
+    if (preview != null) {
+      requestedPlaying = false
+      commandEpoch.incrementAndGet()
+      host?.pause()
+      if (snapshot.value.generation == preview.generation && snapshot.value.seekable) host?.seekTo(preview.origin)
+      releaseAudioFocus()
+    }
+    speedGesture?.let { host?.endTemporarySpeed(it) }
+    speedGesture = null
+  }
+
   fun stop() {
     synchronized(policyLock) {
+      requestedPlaying = false
+      cancelPlaybackGestures()
       commandEpoch.incrementAndGet()
       opening.get()?.cancel()
       releaseAudioFocus()
@@ -402,6 +517,8 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   suspend fun stopAndWait(preserveSessionSettings: Boolean = false): Boolean {
     if (closed.get()) { released.await(); return true }
     synchronized(policyLock) {
+      requestedPlaying = false
+      cancelPlaybackGestures()
       commandEpoch.incrementAndGet()
       opening.get()?.cancel()
       releaseAudioFocus()
@@ -473,6 +590,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   override fun close() {
+    synchronized(policyLock) { requestedPlaying = false; cancelPlaybackGestures() }
     if (!synchronized(submissionLock) { closed.compareAndSet(false, true) }) return
     admitted.set(false)
     businessIntent = null

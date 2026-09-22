@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Graphite from the existing desktop icon backplate; the launcher owns the mask. -->
+  <color name="launcher_background">#383A3E</color>
+</resources>

@@ -207,7 +207,7 @@ class PlayerPanelInteractionTest {
   }
 
   @Test fun videoPanelPreservesAccessibleVolumeControl() {
-    val snapshot = mutableStateOf(PlayerSnapshot(videoWidth = 1920, videoHeight = 1080, volumePercent = 80))
+    val snapshot = mutableStateOf(PlayerSnapshot(videoWidth = 1920, videoHeight = 1080, volumePercent = 80, volumeAvailable = true))
     var requestedVolume: Int? = null
     compose.setContent {
       PanelHost {
@@ -224,7 +224,7 @@ class PlayerPanelInteractionTest {
   }
 
   @Test fun moreUsesLiveVolumeSkipAndRateWithoutChangingPausedPlayback() {
-    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, paused = true, volumePercent = 70, speed = 1.0))
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, paused = true, volumePercent = 70, volumeAvailable = true, speed = 1.0))
     val playback = mutableStateOf(PlaybackUi(title = "Episode", autoSkipAvailable = true, autoSkipEnabled = true))
     val panel = mutableStateOf(PlayerPanel.More)
     val rates = mutableListOf<Double>()

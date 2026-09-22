@@ -174,19 +174,21 @@ private fun PhonePlayerFullControls(
 @Composable
 private fun PhoneTransport(snapshot: PlayerSnapshot, ready: Boolean, playPause: () -> Unit, seek: (Double) -> Unit) {
   val enabled = ready && snapshot.status != PlayerStatus.IDLE && snapshot.status != PlayerStatus.LOADING
+  val seekEnabled = enabled && snapshot.seekable && snapshot.durationSeconds?.let { it.isFinite() && it > 0 } == true
   val tint = if (enabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled
+  val seekTint = if (seekEnabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled
   Row(horizontalArrangement = Arrangement.spacedBy(40.dp), verticalAlignment = Alignment.CenterVertically) {
-    IconButton(onClick = { seek((snapshot.positionSeconds - 10).coerceAtLeast(0.0)) }, enabled = enabled,
+    IconButton(onClick = { seek((snapshot.positionSeconds - 10).coerceAtLeast(0.0)) }, enabled = seekEnabled,
       modifier = Modifier.size(56.dp)) {
-      PilotIcon(R.drawable.ic_player_rewind_ten, stringResource(R.string.rewind_ten), Modifier.size(32.dp), tint)
+      PilotIcon(R.drawable.ic_player_rewind_ten, stringResource(R.string.rewind_ten), Modifier.size(32.dp), seekTint)
     }
     IconButton(onClick = playPause, enabled = enabled, modifier = Modifier.size(72.dp)) {
       PilotIcon(if (snapshot.paused) R.drawable.ic_player_play else R.drawable.ic_player_pause,
         stringResource(if (snapshot.paused) R.string.play else R.string.pause), Modifier.size(40.dp), tint)
     }
     IconButton(onClick = { seek(snapshot.durationSeconds?.let { (snapshot.positionSeconds + 10).coerceAtMost(it) }
-      ?: snapshot.positionSeconds + 10) }, enabled = enabled, modifier = Modifier.size(56.dp)) {
-      PilotIcon(R.drawable.ic_player_forward_ten, stringResource(R.string.forward_ten), Modifier.size(32.dp), tint)
+      ?: snapshot.positionSeconds + 10) }, enabled = seekEnabled, modifier = Modifier.size(56.dp)) {
+      PilotIcon(R.drawable.ic_player_forward_ten, stringResource(R.string.forward_ten), Modifier.size(32.dp), seekTint)
     }
   }
 }
@@ -210,9 +212,10 @@ internal fun PlayerSessionToggle(checked: Boolean, change: (Boolean) -> Unit) {
 @Composable
 private fun PlayerTransport(snapshot: PlayerSnapshot, ready: Boolean, playPause: () -> Unit, seek: (Double) -> Unit) {
   val enabled = ready && snapshot.status != PlayerStatus.IDLE && snapshot.status != PlayerStatus.LOADING
+  val seekEnabled = enabled && snapshot.seekable && snapshot.durationSeconds?.let { it.isFinite() && it > 0 } == true
   Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
-    IconButton(onClick = { seek((snapshot.positionSeconds - 10).coerceAtLeast(0.0)) }, enabled = enabled, modifier = Modifier.size(48.dp)) {
-      PilotIcon(R.drawable.ic_player_rewind_ten, stringResource(R.string.rewind_ten), tint = if (enabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled)
+    IconButton(onClick = { seek((snapshot.positionSeconds - 10).coerceAtLeast(0.0)) }, enabled = seekEnabled, modifier = Modifier.size(48.dp)) {
+      PilotIcon(R.drawable.ic_player_rewind_ten, stringResource(R.string.rewind_ten), tint = if (seekEnabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled)
     }
     FilledIconButton(onClick = playPause, enabled = enabled, modifier = Modifier.size(56.dp),
       colors = IconButtonDefaults.filledIconButtonColors(containerColor = PilotPlayerTokens.play, contentColor = PilotPlayerTokens.foreground)) {
@@ -220,8 +223,8 @@ private fun PlayerTransport(snapshot: PlayerSnapshot, ready: Boolean, playPause:
         stringResource(if (snapshot.paused) R.string.play else R.string.pause), Modifier.size(22.dp))
     }
     IconButton(onClick = { seek(snapshot.durationSeconds?.let { (snapshot.positionSeconds + 10).coerceAtMost(it) } ?: (snapshot.positionSeconds + 10)) },
-      enabled = enabled, modifier = Modifier.size(48.dp)) {
-      PilotIcon(R.drawable.ic_player_forward_ten, stringResource(R.string.forward_ten), tint = if (enabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled)
+      enabled = seekEnabled, modifier = Modifier.size(48.dp)) {
+      PilotIcon(R.drawable.ic_player_forward_ten, stringResource(R.string.forward_ten), tint = if (seekEnabled) PilotPlayerTokens.foreground else PilotPlayerTokens.disabled)
     }
   }
 }
@@ -238,7 +241,7 @@ private fun PlayerVolume(snapshot: PlayerSnapshot, ready: Boolean, change: (Int)
       }, tint = PilotPlayerTokens.secondary)
     }
     PlayerSlider(snapshot.volumePercent.toFloat(), { change(it.toInt()); dragging(true) },
-      { dragging(false) }, 0f..100f, ready, stringResource(R.string.volume),
+      { dragging(false) }, 0f..100f, ready && snapshot.volumeAvailable, stringResource(R.string.volume),
       Modifier.widthIn(max = 96.dp).weight(1f, fill = false), showThumb = false)
   }
 }
@@ -259,7 +262,7 @@ internal fun PlayerTimeline(
     value = duration?.let { (position ?: snapshot.positionSeconds.toFloat()).coerceIn(0f, it.toFloat()) } ?: 0f,
     change = { position = it; dragging(true) },
     finished = { position?.let { seek(it.toDouble()) }; position = null; dragging(false) },
-    range = 0f..(duration?.toFloat() ?: 1f), enabled = ready && duration != null && snapshot.status != PlayerStatus.LOADING,
+    range = 0f..(duration?.toFloat() ?: 1f), enabled = ready && snapshot.seekable && duration != null && snapshot.status != PlayerStatus.LOADING,
     label = stringResource(R.string.seek), modifier = Modifier.fillMaxWidth(),
     interacting = dragging,
     activeColor = if (phone) PilotPlayerTokens.foreground else null,

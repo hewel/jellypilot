@@ -63,6 +63,13 @@ struct RangeState {
     suppressed: bool,
     /// The most recent observation was inside this range.
     inside: bool,
+    user_seek: Option<UserSeekStay>,
+}
+
+#[derive(Clone, Copy)]
+enum UserSeekStay {
+    AwaitingEntry,
+    Inside,
 }
 
 struct PendingPrompt {
@@ -157,8 +164,25 @@ impl IntroSkipper {
                     notified: false,
                     suppressed: false,
                     inside: false,
+                    user_seek: None,
                 })
                 .collect();
+        }
+    }
+
+    /// Preserve an explicit seek into every range containing its target.
+    /// Automatic skipping stays suppressed until entry is observed and then
+    /// departure is observed. Earlier out-of-range samples cannot end that stay.
+    /// A new seek replaces this suppression without consuming automatic attempts
+    /// or changing manual prompts or the selected mode. Invalid targets do nothing.
+    pub fn note_user_seek(&mut self, position: f64) {
+        if !position.is_finite() || position < 0.0 {
+            return;
+        }
+        for state in &mut self.ranges {
+            state.user_seek = (position >= state.range.start_seconds
+                && position < state.range.end_seconds)
+                .then_some(UserSeekStay::AwaitingEntry);
         }
     }
 
@@ -238,9 +262,11 @@ impl IntroSkipper {
                 .iter()
                 .position(|state| !state.suppressed && contains(state));
         }
-        self.ranges
-            .iter()
-            .position(|state| !state.consumed && contains(state))
+        self.ranges.iter().position(|state| {
+            !state.consumed
+                && contains(state)
+                && (self.mode != IntroSkipMode::Automatic || state.user_seek.is_none())
+        })
     }
 
     fn manual_skip(&mut self, index: usize) -> Option<IntroSkipAction> {
@@ -276,6 +302,11 @@ impl IntroSkipper {
         for index in 0..self.ranges.len() {
             let inside = position >= self.ranges[index].range.start_seconds
                 && position < self.ranges[index].range.end_seconds;
+            self.ranges[index].user_seek = match (self.ranges[index].user_seek, inside) {
+                (Some(UserSeekStay::AwaitingEntry), true) => Some(UserSeekStay::Inside),
+                (Some(UserSeekStay::Inside), false) => None,
+                (stay, _) => stay,
+            };
             if self.ranges[index].inside == inside {
                 continue;
             }
@@ -433,6 +464,82 @@ mod tests {
             Some(IntroSkipAction::Seek(60.0))
         );
         assert_eq!(policy.observe(50.0, now, IntroSkipInput::Position), None);
+    }
+
+    #[test]
+    fn user_seek_suppresses_all_containing_ranges_until_each_observed_departure() {
+        let now = Instant::now();
+        let mut policy = IntroSkipper::new(IntroSkipMode::Automatic);
+        policy.replace_ranges(vec![
+            range(IntroSkipKind::Introduction, 10.0, 30.0),
+            range(IntroSkipKind::Credits, 20.0, 40.0),
+            range(IntroSkipKind::Credits, 50.0, 60.0),
+        ]);
+        policy.note_user_seek(25.0);
+        // Queued pre-seek positions cannot clear suppression before arrival.
+        assert_eq!(policy.observe(0.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(5.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(25.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(26.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(35.0, now, IntroSkipInput::Position), None);
+        // Leaving the intro rearms it without rearming overlapping credits.
+        assert_eq!(
+            policy.observe(25.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(30.0))
+        );
+        assert_eq!(policy.observe(25.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(40.0, now, IntroSkipInput::Position), None);
+        assert_eq!(
+            policy.observe(25.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(40.0))
+        );
+        assert_eq!(
+            policy.observe(50.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(60.0))
+        );
+        assert_eq!(policy.mode(), IntroSkipMode::Automatic);
+    }
+
+    #[test]
+    fn newer_user_seek_replaces_pending_suppression_without_spending_either_range() {
+        let now = Instant::now();
+        let mut policy = policy(IntroSkipMode::Automatic);
+        policy.replace_ranges(vec![
+            range(IntroSkipKind::Introduction, 10.0, 30.0),
+            range(IntroSkipKind::Credits, 50.0, 60.0),
+        ]);
+        policy.note_user_seek(20.0);
+        policy.note_user_seek(55.0);
+        assert_eq!(
+            policy.observe(20.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(30.0))
+        );
+        assert_eq!(policy.observe(55.0, now, IntroSkipInput::Position), None);
+        policy.note_user_seek(40.0);
+        assert_eq!(
+            policy.observe(55.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(60.0))
+        );
+    }
+
+    #[test]
+    fn user_seek_keeps_manual_prompts_and_explicit_skipping_available() {
+        let now = Instant::now();
+        let mut policy = desktop(IntroSkipMode::Manual);
+        policy.note_user_seek(15.0);
+        let token = prompt(&mut policy, now, 15.0);
+        policy.prompt_settled(token, true, now);
+        assert_eq!(
+            policy.observe(15.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+        policy.set_mode(IntroSkipMode::Automatic);
+        assert_eq!(policy.observe(15.0, now, IntroSkipInput::Position), None);
+        policy.update_stays(30.0);
+        assert_eq!(
+            policy.observe(15.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(30.0))
+        );
     }
 
     #[test]

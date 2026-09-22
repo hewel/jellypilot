@@ -1,0 +1,20 @@
+<resources>
+    <string name="player_gestures_picture_title">Picture and gestures</string>
+    <string name="player_gestures_title">Player gestures</string>
+    <string name="player_gestures_visible_controls">On-screen buttons remain available</string>
+    <string name="player_gestures_view_help">View gesture guide</string>
+    <string name="player_gestures_tap_title">Tap the picture</string>
+    <string name="player_gestures_tap_detail">Show or hide controls without changing playback</string>
+    <string name="player_gestures_double_tap_title">Double-tap the left or right side</string>
+    <string name="player_gestures_double_tap_detail">Seek backward or forward 10 seconds</string>
+    <string name="player_gestures_seek_title">Swipe horizontally</string>
+    <string name="player_gestures_seek_detail">Release to seek; drag down and release to cancel</string>
+    <string name="player_gestures_brightness_title">Swipe vertically on the left</string>
+    <string name="player_gestures_brightness_detail">Adjust picture brightness without changing system brightness</string>
+    <string name="player_gestures_volume_title">Swipe vertically on the right</string>
+    <string name="player_gestures_volume_detail">Adjust player volume</string>
+    <string name="player_gestures_hold_title">Hold the center while playing</string>
+    <string name="player_gestures_hold_detail">Temporarily play at 2×; release to restore the previous speed</string>
+    <string name="player_gestures_help_footnote">Avoid buttons and screen edges. Seeking while paused keeps playback paused.</string>
+    <string name="player_gestures_got_it">Got it</string>
+</resources>

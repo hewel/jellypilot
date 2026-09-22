@@ -74,6 +74,7 @@ internal data class PreferencesUi(
   val preferredSubtitleLanguage: String = "",
   val preferOriginalAudio: Boolean = true,
   val rememberSeasonVolume: Boolean = true,
+  val playerGestures: Boolean = true,
 )
 internal data class DetailTrackUi(val index: Int, val label: String, val language: String? = null, val codec: String? = null, val isDefault: Boolean = false, val isExternal: Boolean = false)
 internal data class DetailTracksUi(

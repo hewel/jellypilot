@@ -21,6 +21,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Switch
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -33,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.withFrameNanos
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -58,7 +60,7 @@ import io.github.hewel.jellypilot.player.PlayerStatus
 import io.github.hewel.jellypilot.player.TrackKind
 import java.text.NumberFormat
 
-internal enum class PlayerPanel { Audio, Subtitles, Queue, Video, More, Speed, Picture }
+internal enum class PlayerPanel { Audio, Subtitles, Queue, Video, More, Speed, Picture, GestureHelp }
 
 internal data class PlayerPanelActions(
   val selectTrack: (TrackKind, Int) -> Unit,
@@ -73,6 +75,8 @@ internal data class PlayerPanelActions(
   val setAutoSkip: (Boolean) -> Unit = {},
   val setSpeed: (Double) -> Unit = {},
   val setPictureBrightness: (Int) -> Unit = {},
+  val gesturesEnabled: Boolean = true,
+  val setGesturesEnabled: (Boolean) -> Unit = {},
 )
 
 @Composable
@@ -87,6 +91,7 @@ internal fun PlayerPanelContent(
   restoreRow: PlayerPanel? = null,
   phone: Boolean = false,
 ) {
+  val ui by model.state.collectAsStateWithLifecycle()
   PlayerPanelContent(panel, snapshot, playback, PlayerPanelActions(
     selectTrack = model::selectPlaybackTrack,
     selectEpisode = { model.playItem(it.id, it.played) },
@@ -100,6 +105,8 @@ internal fun PlayerPanelContent(
     setAutoSkip = model::setSessionAutoSkip,
     setSpeed = model.player::speed,
     setPictureBrightness = model.player::pictureBrightness,
+    gesturesEnabled = ui.preferences.playerGestures,
+    setGesturesEnabled = model::setPlayerGestures,
   ), restoreRow = restoreRow, phone = phone)
 }
 
@@ -128,13 +135,14 @@ internal fun PlayerPanelContent(
     PlayerPanel.Video -> if (phone) R.string.player_video_details else R.string.video_options
     PlayerPanel.More -> R.string.player_playback_settings
     PlayerPanel.Speed -> R.string.player_playback_speed
-    PlayerPanel.Picture -> R.string.player_picture
+    PlayerPanel.Picture -> if (phone) R.string.player_gestures_picture_title else R.string.player_picture
+    PlayerPanel.GestureHelp -> R.string.player_gestures_title
   })
   val count = when (panel) {
     PlayerPanel.Audio -> pluralStringResource(R.plurals.player_audio_track_count, tracks.size, tracks.size)
     PlayerPanel.Subtitles -> pluralStringResource(R.plurals.player_subtitle_track_count, tracks.size, tracks.size)
     PlayerPanel.Queue -> playback?.queue?.size?.let { pluralStringResource(R.plurals.items_count, it, it) }
-    PlayerPanel.Video, PlayerPanel.More, PlayerPanel.Speed, PlayerPanel.Picture -> null
+    PlayerPanel.Video, PlayerPanel.More, PlayerPanel.Speed, PlayerPanel.Picture, PlayerPanel.GestureHelp -> null
   }
   val listState = key(panel) { rememberLazyListState() }
   val rowFocus = remember { PlayerPanel.entries.associateWith { FocusRequester() } }
@@ -151,6 +159,10 @@ internal fun PlayerPanelContent(
       listState.scrollToItem(index)
       withFrameNanos { }
       rowFocus[restoreRow]?.requestFocus()
+    } else if (panel == PlayerPanel.Picture && restoreRow == PlayerPanel.GestureHelp) {
+      listState.scrollToItem(2)
+      withFrameNanos { }
+      rowFocus.getValue(PlayerPanel.GestureHelp).requestFocus()
     }
   }
   val remainingTracks by remember(listState) {
@@ -201,7 +213,7 @@ internal fun PlayerPanelContent(
     LazyColumn(
       Modifier.weight(1f).fillMaxWidth().then(if (trackKind != null || panel == PlayerPanel.Speed) Modifier.selectableGroup() else Modifier),
       state = listState,
-      verticalArrangement = Arrangement.spacedBy(if (phone) 4.dp else 8.dp),
+      verticalArrangement = Arrangement.spacedBy(if (phone && panel != PlayerPanel.GestureHelp) 4.dp else 8.dp),
     ) {
       if (trackKind != null) {
         if (trackKind == TrackKind.SUBTITLE) item(key = "subtitles-off") {
@@ -272,7 +284,7 @@ internal fun PlayerPanelContent(
             open = { actions.open(PlayerPanel.Speed) })
         }
         item(key = "picture") {
-          PlayerSettingsRow(stringResource(R.string.player_picture), null,
+          PlayerSettingsRow(stringResource(if (phone) R.string.player_gestures_picture_title else R.string.player_picture), null,
             Modifier.focusRequester(rowFocus.getValue(PlayerPanel.Picture)),
             open = { actions.open(PlayerPanel.Picture) })
         }
@@ -329,6 +341,46 @@ internal fun PlayerPanelContent(
               style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
           }
         }
+        if (phone) {
+          item(key = "player-gestures") {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+              .toggleable(actions.gesturesEnabled, role = Role.Switch, onValueChange = actions.setGesturesEnabled)
+              .heightIn(min = 56.dp).padding(vertical = 4.dp),
+              verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+              Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.player_gestures_title), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.player_gestures_visible_controls), style = MaterialTheme.typography.bodySmall,
+                  color = LocalPilotColors.current.metadata)
+              }
+              Switch(checked = actions.gesturesEnabled, onCheckedChange = null)
+            }
+          }
+          item(key = "gesture-help") {
+            PlayerSettingsRow(stringResource(R.string.player_gestures_view_help), null,
+              Modifier.focusRequester(rowFocus.getValue(PlayerPanel.GestureHelp)),
+              open = { actions.open(PlayerPanel.GestureHelp) })
+          }
+        }
+      } else if (panel == PlayerPanel.GestureHelp) {
+        items(listOf(
+          R.string.player_gestures_tap_title to R.string.player_gestures_tap_detail,
+          R.string.player_gestures_double_tap_title to R.string.player_gestures_double_tap_detail,
+          R.string.player_gestures_seek_title to R.string.player_gestures_seek_detail,
+          R.string.player_gestures_brightness_title to R.string.player_gestures_brightness_detail,
+          R.string.player_gestures_volume_title to R.string.player_gestures_volume_detail,
+          R.string.player_gestures_hold_title to R.string.player_gestures_hold_detail,
+        ), key = { it.first }) { (heading, detail) ->
+          Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(heading), style = MaterialTheme.typography.titleSmall)
+            Text(stringResource(detail), style = MaterialTheme.typography.bodySmall,
+              color = LocalPilotColors.current.metadata)
+          }
+        }
+        item(key = "gesture-help-footnote") {
+          Text(stringResource(R.string.player_gestures_help_footnote), Modifier.padding(top = 4.dp),
+            style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
+        }
       } else {
         item(key = "resolution") {
           Text(stringResource(R.string.video_resolution, snapshot.videoWidth, snapshot.videoHeight),
@@ -339,6 +391,13 @@ internal fun PlayerPanelContent(
             color = LocalPilotColors.current.metadata)
         }
         if (!phone) item(key = "volume") { PlayerPanelVolume(snapshot, actions.setVolume) }
+      }
+    }
+    if (panel == PlayerPanel.GestureHelp) {
+      TextButton(onClick = actions.back ?: actions.close, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.textButtonColors(
+          containerColor = PilotPlayerTokens.phonePanelSelected, contentColor = MaterialTheme.colorScheme.onSurface)) {
+        Text(stringResource(R.string.player_gestures_got_it))
       }
     }
     if (trackKind != null && remainingTracks > 0) {
@@ -397,10 +456,13 @@ private fun PlayerPanelVolume(snapshot: PlayerSnapshot, change: (Int) -> Unit, p
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp)) {
       Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-      Text(stringResource(R.string.player_volume_percent, snapshot.volumePercent),
+      if (snapshot.volumeAvailable) Text(if (snapshot.muted || snapshot.volumePercent == 0) stringResource(R.string.gesture_muted)
+        else stringResource(R.string.player_volume_percent, snapshot.volumePercent),
         style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
     }
-    if (phone) PlayerSlider(snapshot.volumePercent.coerceIn(0, 100).toFloat(), { change(it.toInt()) },
+    if (!snapshot.volumeAvailable) Text(stringResource(R.string.gesture_volume_unavailable),
+      style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
+    else if (phone) PlayerSlider((if (snapshot.muted) 0 else snapshot.volumePercent).coerceIn(0, 100).toFloat(), { change(it.toInt()) },
       finished = {}, range = 0f..100f, enabled = true, label = label, modifier = Modifier.fillMaxWidth(),
       activeColor = PilotPlayerTokens.foreground, thumbSize = 12.dp)
     else Slider(snapshot.volumePercent.coerceIn(0, 100).toFloat(), { change(it.toInt()) },

@@ -155,11 +155,15 @@ data class PlayerSnapshot(
   /** mpv `pause` property. Distinct from [playWhenReady] during admission denial. */
   val paused: Boolean = true,
   val positionSeconds: Double = 0.0,
-  /** Stream duration; null when unknown or not seekable (live). */
+  /** Confirmed demuxer seek capability; false until FILE_LOADED or a live property observation. */
+  val seekable: Boolean = false,
+  /** Stream duration; null when unknown. Seeking capability is reported separately. */
   val durationSeconds: Double? = null,
   /** Demuxer cache end position; null when unknown. */
   val bufferedPositionSeconds: Double? = null,
   val volumePercent: Int = 100,
+  /** The configured mpv software-volume path accepted a property read/write. */
+  val volumeAvailable: Boolean = false,
   val muted: Boolean = false,
   val speed: Double = 1.0,
   /** Confirmed application-owned output gain, not system brightness or calibrated luminance. */

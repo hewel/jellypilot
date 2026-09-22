@@ -286,6 +286,11 @@ impl PlaybackSession {
             })
             .map_err(Into::into)
     }
+    pub fn note_user_seek(&self, position_seconds: f64) -> Result<(), SdkError> {
+        self.inner
+            .note_user_seek(position_seconds)
+            .map_err(Into::into)
+    }
     pub fn set_intro_mode(&self, mode: IntroSkipMode) -> Result<(), SdkError> {
         self.inner.set_intro_mode(mode.into()).map_err(Into::into)
     }

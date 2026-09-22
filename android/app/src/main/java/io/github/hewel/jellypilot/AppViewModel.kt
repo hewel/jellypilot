@@ -885,6 +885,11 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   fun playPlayback() = playback.playPlayback()
   fun pausePlayback() = playback.pausePlayback()
   fun seekPlayback(seconds: Double) = playback.seek(seconds)
+  fun beginGestureSeek(): GestureSeek? = playback.beginGestureSeek()
+  fun finishGestureSeek(token: Long, target: Double?) = playback.finishGestureSeek(token, target)
+  fun beginGestureSpeed(): Long? = playback.beginGestureSpeed()
+  fun endGestureSpeed(token: Long) = playback.endGestureSpeed(token)
+  fun cancelPlaybackGestures() = playback.cancelPlaybackGestures()
   fun setPlaybackVolume(volume: Int) = playback.volume(volume)
   fun selectPlaybackTrack(kind: TrackKind, index: Int) = playback.selectTrack(kind, index)
   fun previousEpisode() = playback.previous()
@@ -957,6 +962,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         try {
           if (value.theme != previous.theme) platformPreferences.setTheme(value.theme)
           if (value.reducedMotion != previous.reducedMotion) platformPreferences.setReducedMotion(value.reducedMotion)
+          if (value.playerGestures != previous.playerGestures) platformPreferences.setPlayerGestures(value.playerGestures)
           if (value.language != previous.language) platformPreferences.setLanguage(value.language)
           withContext(Dispatchers.IO) {
             if (value.startupAutoLogin != previous.startupAutoLogin) sdk.setAutoLogin(value.startupAutoLogin)
@@ -981,6 +987,18 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
           catch (cancelled: CancellationException) { throw cancelled }
           catch (error: Exception) { showError(error) }
         }
+      }
+    }
+  }
+
+  fun setPlayerGestures(enabled: Boolean) {
+    viewModelScope.launch {
+      preferenceWrites.withLock {
+        try {
+          platformPreferences.setPlayerGestures(enabled)
+          mutableState.update { it.copy(preferences = it.preferences.copy(playerGestures = enabled)) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { showError(error) }
       }
     }
   }

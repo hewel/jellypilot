@@ -46,6 +46,9 @@ internal class MediaPlaybackCoordinator(
   private var remoteJob: Job? = null
   @Volatile private var remoteEpoch = 0L
   private var undoSequence = 0L
+  private var seekObservationRevision = 0L
+  private data class GestureTransaction(val entry: Playing, val seek: GestureSeek, val command: Long, var finishing: Boolean = false)
+  private var gestureSeek: GestureTransaction? = null
   @Volatile private var closed = false
   var reportingError = false
     private set
@@ -112,6 +115,7 @@ internal class MediaPlaybackCoordinator(
   }
 
   private fun requestStart(itemId: String, position: PlaybackStartPosition, selection: PlaybackSelection?, originCurrent: () -> Boolean) {
+    cancelPlaybackGestures()
     val command = intent.incrementAndGet()
     preparing?.cancel()
     scope.launch {
@@ -180,7 +184,7 @@ internal class MediaPlaybackCoordinator(
             if (!player.configureMedia(plan.initialVolume?.toInt(), audio, subtitle, stillCurrent)) return false
             selection?.audioStreamIndex?.let { session.rememberTrack("Audio", it) }
             selection?.subtitleStreamIndex?.let { session.rememberTrack("Subtitle", it) }
-            accepted = player.resumeMedia(stillCurrent)
+            accepted = player.resumeMedia(stillCurrent = stillCurrent)
             accepted
           } catch (_: Exception) { false }
           finally { if (!accepted) player.retireMedia() }
@@ -227,6 +231,7 @@ internal class MediaPlaybackCoordinator(
   }
 
   fun stop() {
+    cancelPlaybackGestures()
     intent.incrementAndGet()
     preparing?.cancel()
     current?.finishing = true
@@ -235,6 +240,7 @@ internal class MediaPlaybackCoordinator(
   }
 
   private suspend fun finishCurrent(natural: Boolean, interrupted: Boolean = false, preserveSessionSettings: Boolean = false): String? {
+    cancelPlaybackGestures()
     val entry = current ?: run { player.stopAndWait(preserveSessionSettings); return null }
     entry.finishing = true
     val snapshot = player.snapshot.value
@@ -261,6 +267,7 @@ internal class MediaPlaybackCoordinator(
   fun previous() = adjacent(false)
   fun next() = adjacent(true)
   private fun adjacent(next: Boolean, originCurrent: () -> Boolean = { true }) {
+    cancelPlaybackGestures()
     val entry = current ?: return
     val command = intent.incrementAndGet()
     scope.launch { transitions.withLock {
@@ -274,6 +281,7 @@ internal class MediaPlaybackCoordinator(
 
   fun playPlayback() = resume { true }
   private fun resume(originCurrent: () -> Boolean) {
+    cancelPlaybackGestures()
     val entry = current ?: return
     if (!entry.loaded || entry.finishing) return
     val command = intent.get()
@@ -289,13 +297,87 @@ internal class MediaPlaybackCoordinator(
   }
 
   fun pausePlayback() {
+    cancelPlaybackGestures()
     intent.incrementAndGet()
     preparing?.cancel()
     player.pause()
     current?.let { entry -> scope.launch { observe(entry, true) } }
   }
-  fun seek(seconds: Double) { if (seconds.isFinite() && seconds >= 0 && current?.let { it.loaded && !it.finishing && it.session.isActive() } == true) player.seek(seconds) }
-  fun volume(percent: Int) { if (current?.let { it.loaded && !it.finishing && it.session.isActive() } == true) player.volume(percent.coerceIn(0, 100)) }
+  fun seek(seconds: Double) {
+    if (gestureSeek != null || player.gestureSeekActive) return
+    val entry = current ?: return
+    if (!seconds.isFinite() || seconds < 0 || !entry.loaded || entry.finishing || !entry.session.isActive() || !player.snapshot.value.seekable) return
+    cancelPlaybackGestures()
+    val target = player.snapshot.value.durationSeconds?.let { seconds.coerceAtMost(it) } ?: seconds
+    try {
+      entry.session.noteUserSeek(target)
+      seekObservationRevision++
+      player.seek(target)
+    } catch (_: Exception) { fail() }
+  }
+
+  fun beginGestureSeek(): GestureSeek? {
+    if (gestureSeek != null || player.gestureSeekActive) return null
+    val entry = current ?: return null
+    if (!entry.loaded || entry.finishing || !eligible.get() || !entry.session.isActive()) return null
+    cancelPlaybackGestures()
+    val seek = player.beginGestureSeek() ?: return null
+    try { entry.session.noteUserSeek(seek.positionSeconds) }
+    catch (_: Exception) { player.cancelPlaybackGestures(); return null }
+    seekObservationRevision++
+    gestureSeek = GestureTransaction(entry, seek, intent.get())
+    return seek
+  }
+
+  fun finishGestureSeek(token: Long, target: Double?) {
+    val transaction = gestureSeek?.takeIf { it.seek.token == token && !it.finishing } ?: return
+    transaction.finishing = true
+    seekObservationRevision++
+    scope.launch { transitions.withLock {
+      val entry = transaction.entry
+      val stillCurrent = { gestureSeek === transaction && current === entry && !entry.finishing && canStart(transaction.command) }
+      if (!stillCurrent()) return@withLock
+      try {
+        val destination = (target?.takeIf { it.isFinite() } ?: transaction.seek.positionSeconds).coerceAtLeast(0.0)
+          .let { player.snapshot.value.durationSeconds?.let(it::coerceAtMost) ?: it }
+        entry.session.noteUserSeek(destination)
+        val accepted = withContext(NonCancellable) { entry.session.runAdmitted(object : PlaybackHostOperation {
+          override suspend fun execute(): Boolean = player.finishGestureSeek(token, destination, stillCurrent)
+        }) }
+        if (!accepted && current === entry && entry.session.isActive()) entry.session.noteUserSeek(player.snapshot.value.positionSeconds)
+      } catch (_: Exception) {
+        if (current === entry && entry.session.isActive()) runCatching { entry.session.noteUserSeek(player.snapshot.value.positionSeconds) }
+      } finally {
+        if (gestureSeek === transaction) {
+          gestureSeek = null
+          player.cancelPlaybackGestures()
+        }
+        seekObservationRevision++
+      }
+    } }
+  }
+
+  fun beginGestureSpeed(): Long? {
+    val entry = current ?: return null
+    return if (entry.loaded && !entry.finishing && eligible.get() && entry.session.isActive()) player.beginGestureSpeed() else null
+  }
+  fun endGestureSpeed(token: Long) { player.endGestureSpeed(token) }
+  fun cancelPlaybackGestures() {
+    gestureSeek?.let { transaction ->
+      if (current === transaction.entry && transaction.entry.session.isActive()) {
+        runCatching { transaction.entry.session.noteUserSeek(transaction.seek.positionSeconds) }
+      }
+    }
+    gestureSeek = null
+    seekObservationRevision++
+    player.cancelPlaybackGestures()
+  }
+  fun volume(percent: Int) {
+    if (current?.let { it.loaded && !it.finishing && it.session.isActive() } == true && player.snapshot.value.volumeAvailable) {
+      player.mute(false)
+      player.volume(percent.coerceIn(0, 100))
+    }
+  }
   fun selectTrack(kind: TrackKind, id: Int) {
     val entry = current ?: return
     if (!entry.loaded || !entry.session.isActive()) return
@@ -337,14 +419,15 @@ internal class MediaPlaybackCoordinator(
 
   private suspend fun observe(entry: Playing, force: Boolean) {
     entry.reports.withLock {
-      if (current !== entry || !entry.loaded || entry.finishing) return@withLock
+      if (current !== entry || !entry.loaded || entry.finishing || player.gestureSeekActive) return@withLock
+      val seekRevision = seekObservationRevision
       val snapshot = player.snapshot.value
       if (snapshot.generation != entry.generation.get() || snapshot.status == PlayerStatus.IDLE) return@withLock
       entry.latest = snapshot
       try {
         settleTracks(entry, snapshot)
         val update = entry.session.observe(observation(entry, snapshot), force)
-        if (current !== entry || entry.finishing) return@withLock
+        if (current !== entry || entry.finishing || player.gestureSeekActive || seekObservationRevision != seekRevision) return@withLock
         if (update.reportError != null) reportFailure(true) else if (update.reported) reportingError = false
         if (eligible.get() && entry.session.isActive()) {
           update.seekTo?.let {
@@ -452,6 +535,7 @@ internal class MediaPlaybackCoordinator(
   }
 
   fun setEligible(value: Boolean) {
+    if (!value) cancelPlaybackGestures()
     eligible.set(value)
     player.setEligible(value)
     if (!value) {
@@ -466,6 +550,7 @@ internal class MediaPlaybackCoordinator(
 
   /** Revoke issued starts/resumes before an account operation can later fail and reopen admission. */
   fun blockForHandoff() {
+    cancelPlaybackGestures()
     intent.incrementAndGet()
     preparing?.cancel()
     player.setHandoffBlocked(true)
@@ -548,6 +633,7 @@ internal class MediaPlaybackCoordinator(
   }
 
   override fun close() {
+    cancelPlaybackGestures()
     closed = true
     eligible.set(false)
     intent.incrementAndGet()
