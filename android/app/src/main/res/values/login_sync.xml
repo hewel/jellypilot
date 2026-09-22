@@ -3,7 +3,6 @@
     <string name="login_step">%1$d / 2</string>
     <string name="login_server_hint">Enter the address of your Jellyfin or Emby server.</string>
     <string name="login_account_title">Sign in to your account</string>
-    <string name="login_account_hint">Use an account on this server.</string>
     <string name="login_address_hint">Include the full address, port and path, if any.</string>
     <string name="login_address_help">Need the address? Contact your server administrator.</string>
     <string name="login_account_help">Need help signing in? Contact your server administrator.</string>

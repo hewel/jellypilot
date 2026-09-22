@@ -16,5 +16,4 @@
     <string name="player_gestures_hold_title">播放时长按中央</string>
     <string name="player_gestures_hold_detail">临时 2 倍速，松手恢复原速度</string>
     <string name="player_gestures_help_footnote">避开按钮和屏幕边缘 · 暂停时调整进度仍保持暂停</string>
-    <string name="player_gestures_got_it">知道了</string>
 </resources>

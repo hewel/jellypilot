@@ -24,7 +24,6 @@ import androidx.compose.ui.res.stringResource
 
 internal data class AccountActions(
   val openPage: (AccountPage) -> Unit,
-  val openLists: () -> Unit,
   val activate: (String) -> Unit,
   val disconnect: () -> Unit,
   val signOut: (String, Boolean) -> Unit,
@@ -50,8 +49,6 @@ internal fun AccountOverview(state: AppUiState, actions: AccountActions, connect
       }
       item(key = "destinations") {
         AccountGroup {
-          AccountLink(stringResource(R.string.personal_lists), R.drawable.ic_bookmark, open = actions.openLists)
-          AccountDivider()
           AccountLink(stringResource(R.string.settings), R.drawable.ic_settings) { actions.openPage(AccountPage.Settings) }
         }
       }

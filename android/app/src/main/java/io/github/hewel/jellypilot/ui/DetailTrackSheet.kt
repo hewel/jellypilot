@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.hewel.jellypilot.R
@@ -52,7 +53,10 @@ internal fun DetailTrackSheet(audio: Boolean, tracks: DetailTracksUi?, close: ()
           val selection = if (audio) tracks.selectedAudio else tracks.selectedSubtitle
           LazyColumn(Modifier.weight(1f, fill = false).selectableGroup(), state = list, contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             item(key = "default") { DetailTrackRow(stringResource(R.string.playback_preferences_default), selection == null) { select(null) } }
-            if (!audio) item(key = "off") { DetailTrackRow(stringResource(R.string.subtitles_off), selection == -1, stringResource(R.string.player_subtitles_off_description)) { select(-1) } }
+            if (!audio) item(key = "off") {
+              DetailTrackRow(stringResource(R.string.subtitles_off), selection == -1,
+                minimumHeight = if (enlarged) 64.dp else 56.dp) { select(-1) }
+            }
             items(options, key = { it.index }) { track ->
               val metadata = listOfNotNull(
                 track.language?.takeIf { it.isNotBlank() && !track.label.contains(it, ignoreCase = true) },
@@ -78,8 +82,8 @@ internal fun DetailTrackSheet(audio: Boolean, tracks: DetailTracksUi?, close: ()
 }
 
 @Composable
-private fun DetailTrackRow(label: String, selected: Boolean, metadata: String = "", select: () -> Unit) {
-  TextButton(onClick = select, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).semantics { this.selected = selected; role = Role.RadioButton }, shape = MaterialTheme.shapes.small,
+private fun DetailTrackRow(label: String, selected: Boolean, metadata: String = "", minimumHeight: Dp = 56.dp, select: () -> Unit) {
+  TextButton(onClick = select, modifier = Modifier.fillMaxWidth().heightIn(min = minimumHeight).semantics { this.selected = selected; role = Role.RadioButton }, shape = MaterialTheme.shapes.small,
     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
     colors = ButtonDefaults.textButtonColors(containerColor = if (selected) LocalPilotColors.current.trackSelection else Color.Transparent)) {
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {

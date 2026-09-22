@@ -109,7 +109,6 @@ class PlayerPanelInteractionTest {
       }
     }
     compose.onNodeWithText("Original audio").assertDoesNotExist()
-    compose.onNodeWithText(context.getString(R.string.player_subtitles_off_description)).assertIsDisplayed()
     compose.onNodeWithText(context.getString(R.string.subtitles_off)).assertIsSelected()
     compose.onNodeWithText("English subtitles").performClick().assertIsSelected()
     compose.onNodeWithText(context.getString(R.string.subtitles_off)).performClick().assertIsSelected()
@@ -255,13 +254,13 @@ class PlayerPanelInteractionTest {
     compose.onNodeWithText(context.getString(R.string.player_speed_value, "1.5")).assertIsNotSelected()
   }
 
-  @Test fun nestedAudioBackRestoresMoreRowAndCloseExitsTheWholePanelStack() {
+  @Test fun nestedVideoBackRestoresMoreRowAndCloseExitsTheWholePanelStack() {
     val chrome = PlayerChromeState(visible = true, paused = true).apply { open(PlayerPanel.More) }
-    val snapshot = PlayerSnapshot(paused = true, tracks = listOf(track(41, TrackKind.AUDIO, "Original audio", true)))
+    val snapshot = PlayerSnapshot(paused = true, videoWidth = 1920, videoHeight = 1080)
     compose.setContent {
       PanelHost {
         chrome.panel?.let { panel ->
-          PlayerPanelContent(panel, snapshot, null, PlayerPanelActions(
+          PlayerPanelContent(panel, snapshot, PlaybackUi(title = "Episode", autoSkipAvailable = true), PlayerPanelActions(
             selectTrack = { _, _ -> }, selectEpisode = {}, previousEpisode = {}, nextEpisode = {}, loadMoreEpisodes = {},
             setVolume = {}, close = chrome::close, open = chrome::open,
             back = if (panel != PlayerPanel.More) chrome::back else null,
@@ -269,14 +268,48 @@ class PlayerPanelInteractionTest {
         }
       }
     }
-    compose.onNodeWithText(context.getString(R.string.audio_tracks)).performClick()
-    compose.onNodeWithText("Original audio").assertIsSelected()
+    compose.onNode(hasScrollAction()).performScrollToNode(hasText(context.getString(R.string.player_video_details)))
+    compose.onNodeWithText(context.getString(R.string.player_video_details)).performClick()
+    compose.onNodeWithText(context.getString(R.string.video_resolution, 1920, 1080)).assertIsDisplayed()
     compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
-    compose.onNodeWithText(context.getString(R.string.audio_tracks)).assertIsFocused().performClick()
+    compose.onNodeWithText(context.getString(R.string.player_video_details)).assertIsFocused().performClick()
     compose.onNodeWithContentDescription(context.getString(R.string.close)).performClick()
     compose.runOnIdle {
       assertEquals(null, chrome.panel)
       assertEquals(PlayerPanel.More, chrome.restoreTrigger)
+      assertEquals(true, chrome.visible)
+      assertEquals(true, snapshot.paused)
+    }
+  }
+
+  @Test fun directAudioSelectionCloseAndPlatformBackReturnToAudioWithoutChangingPause() {
+    val chrome = PlayerChromeState(visible = true, paused = true).apply { open(PlayerPanel.Audio) }
+    val snapshot = PlayerSnapshot(paused = true, tracks = listOf(track(41, TrackKind.AUDIO, "Original audio", true)))
+    var selection: Pair<TrackKind, Int>? = null
+    compose.setContent {
+      PanelHost {
+        chrome.panel?.let { panel ->
+          PlayerPanelContent(panel, snapshot, null, actions(
+            selectTrack = { kind, id -> selection = kind to id }, close = chrome::close,
+          ), phone = true)
+        }
+      }
+    }
+    compose.onNodeWithContentDescription(context.getString(R.string.back)).assertDoesNotExist()
+    compose.onNodeWithText("Original audio").assertIsSelected().performClick()
+    compose.runOnIdle {
+      assertEquals(TrackKind.AUDIO to 41, selection)
+      assertEquals(PlayerPanel.Audio, chrome.panel)
+    }
+    compose.onNodeWithContentDescription(context.getString(R.string.close)).performClick()
+    compose.runOnIdle {
+      assertEquals(null, chrome.panel)
+      assertEquals(PlayerPanel.Audio, chrome.restoreTrigger)
+      chrome.restoredFocus()
+      chrome.open(PlayerPanel.Audio)
+      chrome.back()
+      assertEquals(null, chrome.panel)
+      assertEquals(PlayerPanel.Audio, chrome.restoreTrigger)
       assertEquals(true, chrome.visible)
       assertEquals(true, snapshot.paused)
     }

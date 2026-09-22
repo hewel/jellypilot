@@ -235,7 +235,6 @@
     <item quantity="other">%1$d more tracks below</item>
   </plurals>
   <string name="player_track_number">Track %1$d</string>
-  <string name="player_subtitles_off_description">Do not display subtitles</string>
   <string name="gesture_seek_seconds">%1$s sec</string>
   <string name="gesture_release_cancel">Release to cancel</string>
   <string name="gesture_muted">Muted</string>

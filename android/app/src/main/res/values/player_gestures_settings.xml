@@ -16,5 +16,4 @@
     <string name="player_gestures_hold_title">Hold the center while playing</string>
     <string name="player_gestures_hold_detail">Temporarily play at 2×; release to restore the previous speed</string>
     <string name="player_gestures_help_footnote">Avoid buttons and screen edges. Seeking while paused keeps playback paused.</string>
-    <string name="player_gestures_got_it">Got it</string>
 </resources>

@@ -79,7 +79,7 @@ class PlayerGestureSettingsInteractionTest {
     compose.onNodeWithText(text(R.string.player_gestures_view_help)).performClick()
     compose.onNode(hasScrollAction()).performScrollToNode(hasText(text(R.string.player_gestures_hold_detail)))
     compose.onNodeWithText(text(R.string.player_gestures_hold_detail)).assertIsDisplayed()
-    compose.onNodeWithText(text(R.string.player_gestures_got_it)).assertIsDisplayed().performClick()
+    compose.onNodeWithContentDescription(text(R.string.back)).assertIsDisplayed().performClick()
     compose.onNodeWithText(text(R.string.player_gestures_view_help)).assertIsFocused()
     compose.onNodeWithContentDescription(text(R.string.back)).performClick()
     compose.onNodeWithText(text(R.string.player_gestures_picture_title)).assertIsFocused().performClick()

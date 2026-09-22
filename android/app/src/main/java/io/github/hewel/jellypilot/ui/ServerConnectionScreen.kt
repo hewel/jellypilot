@@ -83,7 +83,7 @@ internal fun ServerConnectionScreen(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(stringResource(if (accountStep) R.string.login_account_title else R.string.connect_server),
             Modifier.semantics { heading() }, style = MaterialTheme.typography.headlineMedium.copy(letterSpacing = (-0.56).sp))
-          Text(stringResource(if (accountStep) R.string.login_account_hint else R.string.login_server_hint),
+          if (!accountStep) Text(stringResource(R.string.login_server_hint),
             color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp))
         }
         if (!accountStep) {

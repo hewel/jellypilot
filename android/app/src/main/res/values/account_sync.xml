@@ -6,9 +6,7 @@
   <string name="account_connection_identity">Account %1$s · %2$s</string>
   <string name="account_server_status">%1$s · %2$s</string>
   <string name="account_connected">Connected</string>
-  <string name="account_settings_group">Account</string>
   <string name="account_playback_group">Playback</string>
   <string name="account_general_group">General</string>
-  <string name="account_switch_connection">Switch saved connection</string>
   <string name="account_version">JellyPilot · Version %1$s</string>
 </resources>

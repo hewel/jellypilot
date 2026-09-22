@@ -69,8 +69,8 @@ for eight seconds (extended for focus/accessibility), and does not force Full co
 Landscape selection panels use a 340 dp surface, 16 dp outside margins and corner radius, a
 fixed 16/24 sp heading and back/close controls, and scrolling 56 dp rows that grow with text.
 Selected tracks use neutral fill and a check, including the portrait preplay sheets. Settings
-contains volume, a separate playback-speed page, session skip, picture brightness, current audio
-and video information; nested pages preserve the opening control's focus when closed.
+contains volume, a separate playback-speed page, session skip, picture brightness and video
+information; nested pages preserve the opening control's focus when closed.
 The cinema-only roles in `PilotTheme.kt` use flat translucency without video backdrop blur;
 Material slider input/semantics are retained with custom track/thumb visuals. Human acceptance
 owns fidelity to the reference, subtitle output and actual display-cutout/gesture behavior.
@@ -100,12 +100,23 @@ without inventing a server name or showing an unverified connection as identifie
 
 Home, library controls, poster/episode rows, search and personal-list tabs follow the updated
 spacing and hierarchy. Library menus retain real filtering/sort state. Account overview separates
-user name, server name and address; My Lists and Settings lead to independent pages. Saved
+user name, server name and address; Settings leads to its independent page, while Personal Lists
+remains in the main navigation. Saved
 connection health is distinct from selected profile identity. Settings groups remain scrollable
 with large text and preserve History, local recovery, diagnostics and account management even
 where those inherited capabilities have no dedicated design board. Native semantic color roles
 in `PilotTheme.kt` supply filter, account/settings and neutral track-selection surfaces in both
 themes; this is the Android projection, not a second desktop styling system.
+
+The later 2026-09-22 subtraction pass keeps server/account management in My, removes its
+duplicate Personal Lists shortcut and the duplicate account group in Settings. Player Audio
+remains a direct control, with no duplicate More entry; nested panels restore their actual
+opening control. Gesture Help uses separate header Back and Close actions, without a redundant
+acknowledgment footer. Remove self-evident login/subtitle-off descriptions while preserving
+address requirements, failures and actual track state. Tablet short seasons already display the
+complete episode list without redundant preview-play, expand or episode-search controls.
+The focused five Compose test classes passed 25 tests and Android lint reported zero errors;
+physical-device and visual acceptance remain pending.
 
 The synchronization also fences season queries when replacing pending pagination, so changing
 season immediately starts its first page and late old-season results cannot overwrite it.

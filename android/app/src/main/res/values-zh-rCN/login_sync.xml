@@ -3,7 +3,6 @@
     <string name="login_step">%1$d / 2</string>
     <string name="login_server_hint">输入 Jellyfin 或 Emby 的服务器地址。</string>
     <string name="login_account_title">登录账户</string>
-    <string name="login_account_hint">使用此服务器的账户登录。</string>
     <string name="login_address_hint">填写完整地址，包含端口或路径（如有）。</string>
     <string name="login_address_help">不知道地址？请联系服务器管理员。</string>
     <string name="login_account_help">账户或密码有问题？请联系服务器管理员。</string>

@@ -21,7 +21,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Switch
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -146,14 +145,14 @@ internal fun PlayerPanelContent(
   }
   val listState = key(panel) { rememberLazyListState() }
   val rowFocus = remember { PlayerPanel.entries.associateWith { FocusRequester() } }
-  LaunchedEffect(panel, restoreRow) {
+  LaunchedEffect(panel, restoreRow, phone) {
     if (panel == PlayerPanel.More && restoreRow != null) {
       val skipRow = if (playback?.autoSkipAvailable == true) 1 else 0
       val index = when (restoreRow) {
         PlayerPanel.Speed -> 1
         PlayerPanel.Picture -> 2
         PlayerPanel.Audio -> 3 + skipRow
-        PlayerPanel.Video -> 4 + skipRow
+        PlayerPanel.Video -> (if (phone) 3 else 4) + skipRow
         else -> 0
       }
       listState.scrollToItem(index)
@@ -219,7 +218,7 @@ internal fun PlayerPanelContent(
         if (trackKind == TrackKind.SUBTITLE) item(key = "subtitles-off") {
           PlayerTrackRow(
             title = stringResource(R.string.subtitles_off),
-            metadata = stringResource(R.string.player_subtitles_off_description),
+            metadata = null,
             selected = tracks.none { it.isSelected },
             minimumHeight = if (phone) 56.dp else 52.dp,
             phone = phone,
@@ -301,7 +300,7 @@ internal fun PlayerPanelContent(
             Switch(checked = playback.autoSkipEnabled, onCheckedChange = null)
           }
         }
-        item(key = "audio") {
+        if (!phone) item(key = "audio") {
           val audio = snapshot.tracks.firstOrNull { it.kind == TrackKind.AUDIO && it.isSelected }
           val label = audio?.let { track ->
             track.title?.takeIf { it.isNotBlank() } ?: track.language?.let {
@@ -391,13 +390,6 @@ internal fun PlayerPanelContent(
             color = LocalPilotColors.current.metadata)
         }
         if (!phone) item(key = "volume") { PlayerPanelVolume(snapshot, actions.setVolume) }
-      }
-    }
-    if (panel == PlayerPanel.GestureHelp) {
-      TextButton(onClick = actions.back ?: actions.close, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.textButtonColors(
-          containerColor = PilotPlayerTokens.phonePanelSelected, contentColor = MaterialTheme.colorScheme.onSurface)) {
-        Text(stringResource(R.string.player_gestures_got_it))
       }
     }
     if (trackKind != null && remainingTracks > 0) {

@@ -18,15 +18,6 @@ import io.github.hewel.jellypilot.R
 internal fun AccountSettings(state: AppUiState, open: (AccountPage) -> Unit) {
   LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
     item {
-      SettingsSection(stringResource(R.string.account_settings_group)) {
-        AccountIdentity(state, compact = true)
-        AccountDivider()
-        AccountLink(stringResource(R.string.account_switch_connection)) { open(AccountPage.Connections) }
-        AccountDivider()
-        AccountLink(stringResource(R.string.account_current)) { open(AccountPage.CurrentAccount) }
-      }
-    }
-    item {
       SettingsSection(stringResource(R.string.account_playback_group)) {
         AccountLink(stringResource(R.string.playback_preferences)) { open(AccountPage.Playback) }
         AccountDivider()

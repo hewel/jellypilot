@@ -229,7 +229,6 @@
     <item quantity="other">下方还有 %1$d 条轨道</item>
   </plurals>
   <string name="player_track_number">轨道 %1$d</string>
-  <string name="player_subtitles_off_description">不显示字幕</string>
   <string name="gesture_seek_seconds">%1$s 秒</string>
   <string name="gesture_release_cancel">松手取消</string>
   <string name="gesture_muted">静音</string>

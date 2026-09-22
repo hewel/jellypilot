@@ -41,7 +41,7 @@ class AccountInteractionTest {
   private fun actions(
     activate: (String) -> Unit = {},
     signOut: (String, Boolean) -> Unit = { _, _ -> },
-  ) = AccountActions({}, {}, activate, {}, signOut, {}, {}, {}, {})
+  ) = AccountActions({}, activate, {}, signOut, {}, {}, {}, {})
 
   @Test fun disconnectedSelectionKeepsBothAccountsOnOneServerAndAllowsRetryOrSwitch() {
     val state = mutableStateOf(AppUiState(profiles = listOf(child, parent), selectedProfileKey = parent.key))
@@ -85,7 +85,7 @@ class AccountInteractionTest {
     compose.runOnIdle { assertEquals(listOf(active.key to false, active.key to true), requests) }
   }
 
-  @Test fun shortSettingsWindowWithLargeTextKeepsAccountAndSupportDestinationsReachable() {
+  @Test fun shortSettingsWindowWithLargeTextKeepsPlaybackAndSupportDestinationsReachable() {
     val pages = mutableListOf<AccountPage>()
     compose.setContent {
       MaterialTheme {
@@ -96,11 +96,11 @@ class AccountInteractionTest {
         }
       }
     }
-    listOf(R.string.account_switch_connection, R.string.subtitle_tracks, R.string.diagnostics).forEach { title ->
+    listOf(R.string.playback_preferences, R.string.subtitle_tracks, R.string.diagnostics).forEach { title ->
       // Later groups are not composed until the lazy list reaches them.
       compose.onNode(hasScrollAction()).performScrollToNode(hasText(text(title)))
       compose.onNodeWithText(text(title)).performScrollTo().assertIsDisplayed().performClick()
     }
-    compose.runOnIdle { assertEquals(listOf(AccountPage.Connections, AccountPage.Subtitles, AccountPage.Diagnostics), pages) }
+    compose.runOnIdle { assertEquals(listOf(AccountPage.Playback, AccountPage.Subtitles, AccountPage.Diagnostics), pages) }
   }
 }

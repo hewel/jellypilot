@@ -20,7 +20,7 @@ import io.github.hewel.jellypilot.R
 
 @Composable
 internal fun AccountScreen(state: AppUiState, model: AppViewModel) {
-  val actions = AccountActions(model::openAccountPage, { model.navigate(Destination.Lists) }, model::activate,
+  val actions = AccountActions(model::openAccountPage, model::activate,
     model::disconnect, model::signOut, model::addAccount, model::updatePreferences, model::retryCleanup,
     model::retryWatchlistCleanup)
   Column(Modifier.fillMaxSize()) {
