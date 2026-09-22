@@ -16,13 +16,14 @@ Rust:
   rust test [crate...]
 
 Application:
-  iced run [--smoke] [--release] [--embedded] (env: JELLYPILOT_SMOKE_SIZE=WxH)
+  iced run [--smoke] [--release] [--embedded] [--tv] (env: JELLYPILOT_SMOKE_SIZE=WxH)
   iced build [--release]          (build the official launcher without running it)
   iced hot                       (hot reload via cargo-hot, dev feature)
   iced prepare [--source <checkout>] (exact published fork revision from iced-source.json)
     All maintained Cargo tasks automatically use the same prepared target/vendor iced source.
     --embedded forces the pinned staged libmpv; explicit env overrides must be absolute:
     JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. Linux defaults to Embedded MPV Playback.
+    --tv starts the TV presentation for this launch without changing the saved preference.
   iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>]
     Linux opt-in native probes; gpu/all requires a real readable local media file before startup.
     Fresh run-identified reports: target/native-regression by default. Color acceptance stays human.

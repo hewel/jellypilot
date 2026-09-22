@@ -6,8 +6,8 @@ use overview::overview_layout;
 use super::image_observer::{observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageSpec, ImageStatus};
 use crate::app::detail::{
-  card_image_spec, cast_image_spec, detail_next_up_key, episode_image_spec, hero_image_spec,
-  DETAIL_BACKDROP_KEY, DETAIL_LOGO_KEY,
+  card_image_spec, cast_image_spec, episode_image_spec, hero_image_spec, DETAIL_BACKDROP_KEY,
+  DETAIL_LOGO_KEY,
 };
 use crate::app::item_actions::{self, Message as ItemActionsMessage};
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
@@ -106,22 +106,10 @@ fn detail_ready<'a>(
       DetailContent::Item(item) => item_hero(state, item, skeleton_phase, reduced_motion),
       DetailContent::Show(show) => show_hero(state, show, skeleton_phase, reduced_motion),
     });
-    let (genres, metadata) = match content {
-      DetailContent::Item(item) => (&item.genres, &item.metadata),
-      DetailContent::Show(show) => (&show.genres, &show.metadata),
+    let metadata = match content {
+      DetailContent::Item(item) => &item.metadata,
+      DetailContent::Show(show) => &show.metadata,
     };
-    if !genres.is_empty() || !metadata.creators.is_empty() || !metadata.cast.is_empty() {
-      page = page.push(detail_section(
-        summary(
-          state.palette(),
-          state.kernel.locale,
-          genres,
-          &metadata.creators,
-          &metadata.cast,
-        ),
-        inset,
-      ));
-    }
     match content {
       DetailContent::Item(item) if item.item_type.eq_ignore_ascii_case("episode") => {
         page = page.push(detail_section(
@@ -130,12 +118,6 @@ fn detail_ready<'a>(
         ));
       }
       DetailContent::Show(show) => {
-        if let Some(next) = &show.next_episode {
-          page = page.push(detail_section(
-            next_up_section(state, next, skeleton_phase, reduced_motion),
-            inset,
-          ));
-        }
         page = page.push(detail_section(
           seasons_section(state, show, skeleton_phase, reduced_motion),
           inset,
@@ -145,7 +127,13 @@ fn detail_ready<'a>(
     }
     page = page
       .push(detail_section(
-        cast_section(state, &metadata.cast, skeleton_phase, reduced_motion),
+        cast_section(
+          state,
+          &metadata.cast,
+          &metadata.creators,
+          skeleton_phase,
+          reduced_motion,
+        ),
         inset,
       ))
       .push(detail_section(
@@ -199,6 +187,7 @@ fn item_hero<'a>(
       playback: item
         .can_play
         .then(|| (Playable::Detail(item.clone()), position)),
+      resume_progress: None,
       played: item.played,
       favorite: item.favorite,
       is_episode: item.item_type.eq_ignore_ascii_case("episode"),
@@ -251,6 +240,10 @@ fn show_hero<'a>(
       overview: show.overview.as_deref(),
       playback_label,
       playback,
+      resume_progress: show
+        .next_episode
+        .as_ref()
+        .and_then(|episode| resume_progress_label(state.kernel.locale, episode)),
       played: show.played,
       favorite: show.favorite,
       is_episode: false,
@@ -284,6 +277,7 @@ struct HeroContent<'a> {
   overview: Option<&'a str>,
   playback_label: String,
   playback: Option<(Playable, PlaybackStartPosition)>,
+  resume_progress: Option<String>,
   played: bool,
   favorite: bool,
   is_episode: bool,
@@ -337,6 +331,14 @@ fn hero<'a>(
       content.played,
       content.favorite,
     ));
+    if let Some(progress) = &content.resume_progress {
+      copy = copy.push(
+        text(progress.clone())
+          .size(12)
+          .line_height(Pixels(16.0))
+          .color(state.palette().text.metadata),
+      );
+    }
     column![banner, detail_section(copy.into(), inset)]
       .width(Fill)
       .into()
@@ -725,76 +727,40 @@ fn detail_actions<'a>(
   content.into()
 }
 
-fn summary<'a>(
-  palette: &'static ThemePalette,
-  locale: Localizer,
-  genres: &'a [String],
-  creators: &'a [String],
-  cast: &'a [VideoCastMember],
-) -> Element<'a, Message> {
-  responsive(move |bounds| -> Element<'_, Message> {
-    let mut left = Column::new().spacing(14).width(Fill);
-    if !genres.is_empty() {
-      left = left.push(summary_column(
-        palette,
-        locale.text("detail-genres"),
-        genres.join(" · "),
-      ));
-    }
-    if !creators.is_empty() {
-      left = left.push(summary_column(
-        palette,
-        locale.text("detail-creators"),
-        creators.join(" · "),
-      ));
-    }
-    let names = cast
-      .iter()
-      .take(4)
-      .map(|member| member.name.as_str())
-      .collect::<Vec<_>>()
-      .join(" · ");
-    let names = if cast.len() > 4 {
-      locale.format(
-        "detail-more-people",
-        &[("people", names.into()), ("count", (cast.len() - 4).into())],
-      )
-    } else {
-      names
-    };
-    let right = summary_column(palette, locale.text("detail-cast"), names);
-    if cast.is_empty() {
-      return left.into();
-    }
-    if genres.is_empty() && creators.is_empty() {
-      return right;
-    }
-    if bounds.width < 720.0 {
-      column![left, right].spacing(20).width(Fill).into()
-    } else {
-      row![container(left).width(360), right]
-        .spacing(40)
-        .width(Fill)
-        .into()
-    }
-  })
-  .height(Length::Fit)
-  .into()
-}
-
 fn cast_section<'a>(
   state: &'a State,
   cast: &'a [VideoCastMember],
+  creators: &'a [String],
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let mut content = column![section_title(
+    state.palette(),
+    state.t("detail-cast-heading")
+  )]
+  .spacing(14)
+  .width(Fill);
+  if !creators.is_empty() {
+    content = content.push(
+      column![
+        text(state.t("detail-creators"))
+          .size(12)
+          .line_height(Pixels(16.0))
+          .color(state.palette().text.metadata),
+        text(creators.join(" · "))
+          .size(14)
+          .line_height(Pixels(22.0))
+          .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+          .color(state.palette().text.secondary),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .width(Fill),
+    );
+  }
   if cast.is_empty() {
-    return column![
-      section_title(state.palette(), state.t("detail-cast-heading")),
-      status_surface(state.palette(), state.t("detail-no-cast")),
-    ]
-    .spacing(14)
-    .into();
+    return content
+      .push(status_surface(state.palette(), state.t("detail-no-cast")))
+      .into();
   }
   let mut people = Row::new().spacing(24);
   for (index, member) in cast.iter().enumerate() {
@@ -834,38 +800,16 @@ fn cast_section<'a>(
     }
     people = people.push(person);
   }
-  column![
-    section_title(state.palette(), state.t("detail-cast-heading")),
-    scrollable(people.padding(padding::bottom(12)))
-      .id(iced::widget::Id::new("detail-cast"))
-      .direction(Direction::Horizontal(Scrollbar::new()))
-      .width(Fill)
-      .height(Length::Fit)
-      .style(jellypilot_ui::theme::scrollable),
-  ]
-  .spacing(14)
-  .width(Fill)
-  .into()
-}
-
-fn summary_column(
-  palette: &ThemePalette,
-  label: String,
-  values: String,
-) -> Element<'static, Message> {
-  column![
-    text(label)
-      .size(12)
-      .line_height(Pixels(16.0))
-      .color(palette.text.metadata),
-    text(values)
-      .size(14)
-      .line_height(Pixels(22.0))
-      .color(palette.text.secondary),
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .width(Fill)
-  .into()
+  content
+    .push(
+      scrollable(people.padding(padding::bottom(12)))
+        .id(iced::widget::Id::new("detail-cast"))
+        .direction(Direction::Horizontal(Scrollbar::new()))
+        .width(Fill)
+        .height(Length::Fit)
+        .style(jellypilot_ui::theme::scrollable),
+    )
+    .into()
 }
 
 /// The metadata line: leading facts, the episode's parent series as a
@@ -924,9 +868,8 @@ fn metadata_row<'a>(state: &'a State, metadata: &DetailMetadata) -> Element<'a, 
   line.wrap().vertical_spacing(0.0).into()
 }
 
-/// The Media Specifications row between metadata and overview: one chip per
-/// known fact of the first media source, wrapping at narrow widths. Unknown
-/// fields are omitted rather than invented.
+/// First-source quality facts are plain labels; audio and subtitle summaries
+/// open their track lists. Unknown fields are omitted rather than invented.
 fn media_specs_row<'a>(state: &'a State, info: &'a VideoMediaInfo) -> Option<Element<'a, Message>> {
   let palette = state.palette();
   let locale = state.kernel.locale;
@@ -935,22 +878,11 @@ fn media_specs_row<'a>(state: &'a State, info: &'a VideoMediaInfo) -> Option<Ele
     .align_y(Alignment::Center);
   let mut any = false;
   if let Some(height) = info.video_height.filter(|height| *height > 0) {
-    chips = chips.push(spec_chip(palette, format!("{height}p")));
+    chips = chips.push(spec_label(palette, format!("{height}p")));
     any = true;
   }
   if let Some(range) = nonempty(info.video_range.as_deref()) {
-    chips = chips.push(spec_chip(palette, range.to_owned()));
-    any = true;
-  }
-  if let Some(codec) = nonempty(info.video_codec.as_deref()) {
-    chips = chips.push(spec_chip(palette, codec.to_owned()));
-    any = true;
-  }
-  if let Some(rate) = info
-    .video_frame_rate
-    .filter(|rate| rate.is_finite() && *rate > 0.0)
-  {
-    chips = chips.push(spec_chip(palette, frame_rate_label(rate)));
+    chips = chips.push(spec_label(palette, range.to_owned()));
     any = true;
   }
   // Track facts exist only when the chosen source's stream metadata was
@@ -985,7 +917,7 @@ fn media_specs_row<'a>(state: &'a State, info: &'a VideoMediaInfo) -> Option<Ele
   any.then(|| chips.wrap().vertical_spacing(TOKENS.spacing.s2).into())
 }
 
-/// Frame rate chip text: up to three decimals, trailing zeros trimmed so
+/// Media-information frame rate: up to three decimals, trailing zeros trimmed so
 /// integer rates read "24 fps" rather than "24.000 fps".
 fn frame_rate_label(rate: f32) -> String {
   let rate = format!("{rate:.3}");
@@ -993,28 +925,18 @@ fn frame_rate_label(rate: f32) -> String {
   format!("{rate} fps")
 }
 
-/// A non-interactive specification chip: the Paper 22px row treatment with
-/// 8px horizontal padding and 6px corners.
-fn spec_chip<'a>(palette: &'static ThemePalette, label: String) -> Element<'a, Message> {
+/// A static fact in the 22px row, without the track controls' fill or border.
+fn spec_label<'a>(palette: &'static ThemePalette, label: String) -> Element<'a, Message> {
   container(
     text(label)
       .size(12)
+      .font(HEADING_FONT)
       .line_height(Pixels(16.0))
       .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-      .color(palette.colors.onControl),
+      .color(palette.text.body),
   )
-  .padding([3, 8])
+  .padding([3, 0])
   .align_y(Alignment::Center)
-  .style(move |_| container::Style {
-    background: Some(Background::Color(palette.colors.surfaceContainerHigh)),
-    border: iced::Border {
-      radius: TOKENS.radii.md.into(),
-      color: palette.colors.borderSubtle,
-      width: 1.0,
-      ..iced::Border::default()
-    },
-    ..container::Style::default()
-  })
   .into()
 }
 
@@ -1028,7 +950,7 @@ fn track_chip<'a>(
 ) -> Element<'a, Message> {
   let palette = state.palette();
   if streams.is_empty() {
-    return spec_chip(palette, empty_label);
+    return spec_label(palette, empty_label);
   }
   let summary = track_summary(state.kernel.locale, streams);
   let icon = match menu {
@@ -1252,7 +1174,7 @@ fn media_info_row(
 
 fn video_info_label(info: &VideoMediaInfo) -> Option<String> {
   let mut values = Vec::new();
-  if let Some(height) = info.video_height {
+  if let Some(height) = info.video_height.filter(|height| *height > 0) {
     values.push(format!("{height}p"));
   }
   if let Some(codec) = nonempty(info.video_codec.as_deref()) {
@@ -1260,6 +1182,12 @@ fn video_info_label(info: &VideoMediaInfo) -> Option<String> {
   }
   if let Some(range) = nonempty(info.video_range.as_deref()) {
     values.push(range.to_owned());
+  }
+  if let Some(rate) = info
+    .video_frame_rate
+    .filter(|rate| rate.is_finite() && *rate > 0.0)
+  {
+    values.push(frame_rate_label(rate));
   }
   (!values.is_empty()).then(|| values.join(" "))
 }
@@ -1605,20 +1533,6 @@ fn section_title(palette: &'static ThemePalette, label: String) -> Element<'stat
     .into()
 }
 
-fn next_up_section<'a>(
-  state: &'a State,
-  episode: &'a VideoLibraryItem,
-  skeleton_phase: f32,
-  reduced_motion: bool,
-) -> Element<'a, Message> {
-  column![
-    section_title(state.palette(), state.t("detail-next-up")),
-    episode_card(state, episode, true, skeleton_phase, reduced_motion),
-  ]
-  .spacing(14)
-  .into()
-}
-
 fn episode_list<'a>(
   state: &'a State,
   episodes: &'a [VideoLibraryItem],
@@ -1627,13 +1541,7 @@ fn episode_list<'a>(
 ) -> Element<'a, Message> {
   let mut cards = Column::new().spacing(20).width(Fill);
   for episode in episodes {
-    cards = cards.push(episode_card(
-      state,
-      episode,
-      false,
-      skeleton_phase,
-      reduced_motion,
-    ));
+    cards = cards.push(episode_card(state, episode, skeleton_phase, reduced_motion));
   }
   cards.into()
 }
@@ -1641,7 +1549,6 @@ fn episode_list<'a>(
 fn episode_card<'a>(
   state: &'a State,
   episode: &'a VideoLibraryItem,
-  next_up: bool,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
@@ -1650,16 +1557,11 @@ fn episode_card<'a>(
     let art_width = EPISODE_ART_WIDTH.min(bounds.width);
     let art_height = art_width * EPISODE_ART_HEIGHT / EPISODE_ART_WIDTH;
     let palette = state.palette();
-    let key = if next_up {
-      detail_next_up_key(&episode.id)
-    } else {
-      detail_episode_key(&episode.id)
-    };
     let art = artwork(
       state,
       episode_image_spec(
         &state.full.as_ref().expect("FullUi required").detail.data,
-        key,
+        detail_episode_key(&episode.id),
         episode,
       ),
       &episode.name,
@@ -1833,6 +1735,27 @@ fn episode_metadata(locale: Localizer, episode: &VideoLibraryItem) -> String {
     values.push(date);
   }
   values.join(" · ")
+}
+
+fn resume_progress_label(locale: Localizer, episode: &VideoLibraryItem) -> Option<String> {
+  if !has_resume(episode) {
+    return None;
+  }
+  let position = episode.resume_position_seconds?;
+  let mut values = vec![locale.format(
+    "detail-elapsed",
+    &[("duration", locale.duration(position).into())],
+  )];
+  if let Some(runtime) = episode
+    .runtime_seconds
+    .filter(|runtime| runtime.is_finite() && *runtime > position)
+  {
+    values.push(locale.format(
+      "detail-remaining",
+      &[("duration", locale.duration(runtime - position).into())],
+    ));
+  }
+  Some(values.join(" · "))
 }
 
 fn playback_message(state: &State, item: Playable, position: PlaybackStartPosition) -> Message {
@@ -2115,12 +2038,6 @@ fn detail_skeleton(
     ]
     .spacing(14)
     .width(Fill);
-    let info = row![
-      skeleton_block(content_width.min(360.0), 46, skeleton_phase, reduced_motion),
-      skeleton_block(content_width.min(400.0), 46, skeleton_phase, reduced_motion),
-    ]
-    .spacing(40)
-    .wrap();
     let mut cast = Row::new().spacing(24);
     for _ in 0..6 {
       cast = cast.push(
@@ -2156,7 +2073,6 @@ fn detail_skeleton(
       column![
         banner,
         detail_section(intro.into(), inset),
-        detail_section(info.into(), inset),
         detail_section(cast.into(), inset),
         detail_section(similar.into(), inset),
       ]
@@ -2497,6 +2413,7 @@ mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      tv: Default::default(),
       kernel: Kernel {
         item_actions: Default::default(),
         settings,
@@ -2588,6 +2505,32 @@ mod tests {
       track_summary(state.kernel.locale, &[tracks[0].clone(), tracks[2].clone()]),
       "Commentary +1"
     );
+  }
+
+  #[test]
+  fn technical_video_facts_remain_available_without_top_specifications() {
+    let state = hero_state();
+    let mut info = VideoMediaInfo {
+      container: None,
+      size_bytes: None,
+      bitrate_bps: None,
+      video_codec: Some("HEVC".to_owned()),
+      video_width: None,
+      video_height: None,
+      video_frame_rate: Some(23.976),
+      video_range: None,
+      media_source_count: 1,
+      streams_known: false,
+      audio_streams: Vec::new(),
+      subtitle_streams: Vec::new(),
+    };
+    assert!(media_specs_row(&state, &info).is_none());
+    assert_eq!(video_info_label(&info).as_deref(), Some("HEVC 23.976 fps"));
+
+    for invalid in [0.0, -24.0, f32::NAN, f32::INFINITY] {
+      info.video_frame_rate = Some(invalid);
+      assert_eq!(video_info_label(&info).as_deref(), Some("HEVC"));
+    }
   }
 
   #[test]
@@ -2842,6 +2785,7 @@ mod tests {
                 overview: Some(&overview),
                 playback_label: state.t("detail-play"),
                 playback: None,
+                resume_progress: None,
                 played: false,
                 favorite: false,
                 is_episode,
@@ -2938,6 +2882,38 @@ mod tests {
   }
 
   #[test]
+  fn compact_resume_progress_retains_elapsed_time_without_inventing_a_remaining_duration() {
+    let locale = Localizer::default();
+    let mut episode = episode_with_progress(Some(120.0), None, false);
+    let elapsed = locale.format(
+      "detail-elapsed",
+      &[("duration", locale.duration(120.0).into())],
+    );
+    let remaining = locale.format(
+      "detail-remaining",
+      &[("duration", locale.duration(1_680.0).into())],
+    );
+    assert_eq!(
+      resume_progress_label(locale, &episode),
+      Some(format!("{elapsed} · {remaining}"))
+    );
+    for runtime in [None, Some(120.0), Some(60.0), Some(f64::NAN)] {
+      episode.runtime_seconds = runtime;
+      assert_eq!(
+        resume_progress_label(locale, &episode),
+        Some(elapsed.clone())
+      );
+    }
+    episode.played = true;
+    assert_eq!(resume_progress_label(locale, &episode), None);
+    episode.played = false;
+    for position in [None, Some(0.0), Some(-1.0), Some(f64::NAN)] {
+      episode.resume_position_seconds = position;
+      assert_eq!(resume_progress_label(locale, &episode), None);
+    }
+  }
+
+  #[test]
   fn episode_actions_reflow_and_keep_their_real_playback_start_position() {
     use iced::advanced::{layout, mouse, widget, Layout, Shell};
     use iced::{Event, Rectangle, Size};
@@ -2952,7 +2928,7 @@ mod tests {
       for width in [324.0, 1148.0] {
         for available in [true, false] {
           state.playback.view.engine_available = available;
-          let mut element = episode_card(&state, &episode, false, 0.0, true);
+          let mut element = episode_card(&state, &episode, 0.0, true);
           let mut tree = widget::Tree::new(&element);
           tree.diff(element.as_widget_mut());
           let node = element.as_widget_mut().layout(
@@ -3024,7 +3000,7 @@ mod tests {
       .expanded_episode_ids
       .insert(episode.id.clone());
     for width in [1148.0, 324.0, 1148.0] {
-      let mut element = episode_card(&state, &episode, false, 0.0, true);
+      let mut element = episode_card(&state, &episode, 0.0, true);
       tree.diff(element.as_widget_mut());
       let expanded = element.as_widget_mut().layout(
         &mut tree,
@@ -3050,7 +3026,11 @@ mod tests {
       role: Some("A character with several names and titles".repeat(3)),
       image_id: None,
     }];
-    let node = layout_element(cast_section(&state, &cast, 0.0, true), &renderer, 324.0);
+    let node = layout_element(
+      cast_section(&state, &cast, &[], 0.0, true),
+      &renderer,
+      324.0,
+    );
     assert_eq!(node.size().width, 324.0);
     assert!(node.size().height.is_finite());
     let person = &node.children()[1].children()[0].children()[0];

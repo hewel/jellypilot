@@ -12,6 +12,7 @@ export function icedRunCommand(
   smoke: boolean,
   release: boolean,
   embedded = false,
+  tv = false,
   environment?: Readonly<Record<string, string>>,
 ): CommandSpec {
   return command(
@@ -23,9 +24,10 @@ export function icedRunCommand(
       '--package',
       'jellypilot-launcher',
       ...(release ? ['--release'] : []),
-      ...(smoke || embedded ? ['--'] : []),
+      ...(smoke || embedded || tv ? ['--'] : []),
       ...(smoke ? ['--smoke-test'] : []),
       ...(embedded ? ['--embedded'] : []),
+      ...(tv ? ['--tv'] : []),
     ],
     environment,
   );
@@ -73,12 +75,13 @@ export const runIced = Effect.fn('task.iced')(function* (
   smoke: boolean,
   release: boolean,
   embedded: boolean,
+  tv: boolean,
   environment: Readonly<Record<string, string | undefined>>,
 ) {
   const childEnvironment = embedded
     ? yield* embeddedMpvEnvironment(environment)
     : embeddedMpvPaths(environment);
-  yield* runCommand(icedRunCommand(smoke, release, embedded, childEnvironment)).pipe(
+  yield* runCommand(icedRunCommand(smoke, release, embedded, tv, childEnvironment)).pipe(
     smoke
       ? Effect.catchTag('TaskProcessError', (error: TaskProcessError) =>
           Effect.gen(function* () {

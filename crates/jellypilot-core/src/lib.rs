@@ -40,6 +40,8 @@ pub mod request_gate;
 #[cfg(feature = "portable")]
 pub mod settings;
 pub mod skeleton;
+pub mod tv_navigation;
+pub mod tv_player;
 pub mod undo_notices;
 #[cfg(feature = "portable")]
 pub mod volume_memory;

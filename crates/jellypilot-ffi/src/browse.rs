@@ -24,6 +24,7 @@ impl From<BrowsePreferences> for CorePreferences {
             sort_direction: value.sort_direction.into(),
             played_filter: value.played_filter.into(),
             favorites_only: value.favorites_only,
+            filters: Default::default(),
         }
     }
 }

@@ -8,6 +8,7 @@ detail-resume = Resume
 detail-episode-resume = Resume
 detail-replay = Replay
 detail-remaining = { $duration } remaining
+detail-elapsed = { $duration } played
 detail-continue-episode = Continue { $episode }
 detail-play-episode = Play { $episode }
 detail-back = Back

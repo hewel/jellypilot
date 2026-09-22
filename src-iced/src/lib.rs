@@ -90,14 +90,20 @@ pub(crate) fn parse_smoke_size(input: &str) -> Option<Size> {
 }
 
 fn run_application(
-  smoke: bool,
+  options: runner::RunOptions,
   factory: EmbeddedEngineFactory,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  let runner::RunOptions { smoke, tv } = options;
   tracing::debug!(smoke, "daemon booting");
   let instance = if smoke {
     None
   } else {
-    match instance::acquire() {
+    let activation = if tv {
+      instance::Activation::ShowTv
+    } else {
+      instance::Activation::Show
+    };
+    match instance::acquire(activation) {
       instance::Startup::Existing => return Ok(()),
       instance::Startup::Primary(guard) => Some(guard),
       instance::Startup::Unavailable => None,
@@ -107,7 +113,7 @@ fn run_application(
   jellypilot_ui::fonts::initialize()?;
   let instance = RefCell::new(instance);
   let mut daemon = iced::daemon(
-    move || app::boot(smoke, instance.borrow_mut().take()),
+    move || app::boot(smoke, tv, instance.borrow_mut().take()),
     app::update,
     app::view,
   )

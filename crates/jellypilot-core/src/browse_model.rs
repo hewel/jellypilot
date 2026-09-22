@@ -19,8 +19,8 @@ use crate::{
     LibraryBrowseStatus, LIBRARY_BROWSE_PAGE_SIZE,
 };
 use jellypilot_media_server::{
-    VideoLibraryItem, VideoLibraryPage, VideoLibraryPlayedFilter, VideoLibraryShortcut,
-    VideoLibrarySort, VideoLibrarySortDirection, VideoSearchPage,
+    VideoLibraryFilters, VideoLibraryItem, VideoLibraryPage, VideoLibraryPlayedFilter,
+    VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchPage,
 };
 
 use crate::request_gate::SessionToken;
@@ -74,16 +74,17 @@ impl BrowseDeliveryToken {
 #[derive(Clone, Debug)]
 pub enum BrowseEffect {
     ResetViewport,
-    RequestPage(BrowsePageRequest),
+    RequestPage(Box<BrowsePageRequest>),
     CancelPage { token: BrowseDeliveryToken },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BrowsePreferences {
     pub sort: VideoLibrarySort,
     pub sort_direction: VideoLibrarySortDirection,
     pub played_filter: VideoLibraryPlayedFilter,
     pub favorites_only: bool,
+    pub filters: VideoLibraryFilters,
 }
 
 impl Default for BrowsePreferences {
@@ -93,12 +94,13 @@ impl Default for BrowsePreferences {
             sort_direction: VideoLibrarySortDirection::Ascending,
             played_filter: VideoLibraryPlayedFilter::All,
             favorites_only: false,
+            filters: VideoLibraryFilters::default(),
         }
     }
 }
 
 impl BrowsePreferences {
-    fn identity(self) -> String {
+    fn identity(&self) -> String {
         let sort = match self.sort {
             VideoLibrarySort::Title => "title",
             VideoLibrarySort::RecentlyAdded => "added",
@@ -118,7 +120,18 @@ impl BrowsePreferences {
         } else {
             "all"
         };
-        format!("{sort}:{direction}:{played}:{favorites}")
+        // Length prefixes prevent metadata containing separators from aliasing
+        // another query (for example a country and genre with colons).
+        let country = self.filters.country.as_deref().unwrap_or_default();
+        let genre = self.filters.genre.as_deref().unwrap_or_default();
+        format!(
+            "{sort}:{direction}:{played}:{favorites}:{:?}:{}:{}:{country}:{}:{}:{genre}",
+            self.filters.quality,
+            self.filters.country.is_some(),
+            country.len(),
+            self.filters.genre.is_some(),
+            genre.len()
+        )
     }
 }
 
@@ -302,6 +315,17 @@ impl BrowseModel {
         }
     }
 
+    /// Re-enters a snapshot-backed query from page zero while retaining its
+    /// displayed cards and scroll range. A suspended replacement may belong to
+    /// an evicted provider snapshot, so it cannot be resumed halfway through.
+    pub fn resume_with_refresh(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        let mut effects = self.suspend();
+        self.refresh = None;
+        effects.extend(self.refresh()?);
+        effects.extend(self.resume()?);
+        Ok(effects)
+    }
+
     /// Refreshes the stored query, retaining the complete usable result until replacement.
     pub fn refresh(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
         if self.refresh.is_some() {
@@ -319,7 +343,8 @@ impl BrowseModel {
             suspended: self.suspended,
             ..BrowseResultSet::default()
         };
-        let loads = replacement.configure_with_preferences(source, self.committed.preferences)?;
+        let loads =
+            replacement.configure_with_preferences(source, self.committed.preferences.clone())?;
         let mut effects = self.committed.suspend();
         effects.extend(
             loads
@@ -349,6 +374,7 @@ impl BrowseModel {
             }
         }
         if !found
+            && self.committed.preferences.filters.is_empty()
             && !self.committed.preferences.favorites_only
             && matches!(
                 self.committed.preferences.played_filter,
@@ -386,6 +412,10 @@ impl BrowseModel {
             self.refresh()
         } else if self.refresh.is_some() || self.refresh_failure.is_some() {
             Ok(Vec::new())
+        } else if !self.committed.preferences.filters.is_empty() {
+            // A provider snapshot can expire or be invalidated between pages.
+            // Retrying only the failed continuation can never rebuild it.
+            self.refresh()
         } else {
             self.committed.retry()
         }
@@ -894,14 +924,14 @@ impl BrowseResultSet {
         {
             let token = BrowseDeliveryToken::next()?;
             page.delivery = Some(token);
-            effects.push(BrowseEffect::RequestPage(BrowsePageRequest {
+            effects.push(BrowseEffect::RequestPage(Box::new(BrowsePageRequest {
                 source_id: source_id.clone(),
                 source: source.clone(),
                 token,
                 start_index: page.start_index,
                 limit: page.limit,
-                preferences: self.preferences,
-            }));
+                preferences: self.preferences.clone(),
+            })));
         }
         Ok(effects)
     }
@@ -1009,7 +1039,7 @@ mod tests {
         effects
             .into_iter()
             .find_map(|effect| match effect {
-                BrowseEffect::RequestPage(request) => Some(request),
+                BrowseEffect::RequestPage(request) => Some(*request),
                 BrowseEffect::ResetViewport | BrowseEffect::CancelPage { .. } => None,
             })
             .expect("page request should be emitted")
@@ -1019,7 +1049,7 @@ mod tests {
         effects
             .iter()
             .filter_map(|effect| match effect {
-                BrowseEffect::RequestPage(request) => Some(request.clone()),
+                BrowseEffect::RequestPage(request) => Some(request.as_ref().clone()),
                 BrowseEffect::ResetViewport | BrowseEffect::CancelPage { .. } => None,
             })
             .collect()
@@ -1547,7 +1577,11 @@ mod tests {
         let refetch = request(back);
         assert_eq!(refetch.start_index, LIBRARY_BROWSE_PAGE_SIZE);
 
-        settle_all_requests(&mut model, vec![BrowseEffect::RequestPage(refetch)], TOTAL);
+        settle_all_requests(
+            &mut model,
+            vec![BrowseEffect::RequestPage(Box::new(refetch))],
+            TOTAL,
+        );
         let settled = model
             .set_display_range(0..LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
             .expect("refetched page should now be retained");
@@ -1692,6 +1726,7 @@ mod tests {
             sort_direction: VideoLibrarySortDirection::Descending,
             played_filter: VideoLibraryPlayedFilter::Unplayed,
             favorites_only: true,
+            filters: VideoLibraryFilters::default(),
         };
         let filtered = request(
             model
@@ -1709,6 +1744,121 @@ mod tests {
             VideoLibraryPlayedFilter::Unplayed
         ));
         assert!(filtered.preferences.favorites_only);
+    }
+
+    #[test]
+    fn advanced_filter_changes_reject_old_pages_and_preserve_applied_query_on_refresh() {
+        let mut model = BrowseModel::default();
+        let source = BrowseSource::Library {
+            session: session(),
+            shortcut: shortcut(),
+        };
+        let first = request(model.configure(source.clone()).expect("initial query"));
+        let preferences = BrowsePreferences {
+            filters: VideoLibraryFilters {
+                country: Some("A:B".to_owned()),
+                genre: Some("C".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let filtered = request(
+            model
+                .configure_with_preferences(source.clone(), preferences.clone())
+                .expect("filtered query"),
+        );
+        assert_ne!(first.source_id, filtered.source_id);
+        settle(&mut model, &first, 240, 24);
+        assert!(matches!(model.view(), LibraryBrowseView::Loading));
+        settle(&mut model, &filtered, 1, 1);
+        assert!(model
+            .configure_with_preferences(source.clone(), preferences.clone())
+            .expect("unchanged filter")
+            .is_empty());
+        let refreshed = request(model.refresh().expect("refresh filtered query"));
+        assert_eq!(refreshed.preferences.filters, preferences.filters);
+        assert_eq!(refreshed.source_id, filtered.source_id);
+        let changed = request(
+            model
+                .configure_with_preferences(
+                    source,
+                    BrowsePreferences {
+                        filters: VideoLibraryFilters {
+                            country: Some("A".to_owned()),
+                            genre: Some("B:C".to_owned()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .expect("different metadata with separators"),
+        );
+        assert_ne!(changed.source_id, filtered.source_id);
+        settle(&mut model, &refreshed, 1, 1);
+        assert!(matches!(model.view(), LibraryBrowseView::Loading));
+    }
+
+    #[test]
+    fn filtered_snapshot_reentry_and_failed_continuations_restart_from_zero() {
+        let mut model = BrowseModel::default();
+        let initial = model
+            .configure_with_preferences(
+                BrowseSource::Library {
+                    session: session(),
+                    shortcut: shortcut(),
+                },
+                BrowsePreferences {
+                    filters: VideoLibraryFilters {
+                        genre: Some("Drama".to_owned()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .expect("filtered query");
+        settle_all_requests(&mut model, initial, 240);
+        let later = model.set_display_range(72..96, 240).expect("later window");
+        settle_all_requests(&mut model, later, 240);
+        let before = visible_indexes(&model);
+        let partial = request(model.refresh().expect("refresh"));
+        let unfinished = settle(&mut model, &partial, 240, 24);
+        let obsolete = request(unfinished);
+        model.suspend();
+        let replacement = request(model.resume_with_refresh().expect("return from detail"));
+        assert_eq!(replacement.start_index, 0);
+        assert_ne!(replacement.token, partial.token);
+        assert_eq!(visible_indexes(&model), before);
+        assert!(settle(&mut model, &obsolete, 240, 24).is_empty());
+        let remaining = settle(&mut model, &replacement, 240, 24);
+        settle_all_requests(&mut model, remaining, 240);
+        assert!(!model.is_refreshing());
+        assert_eq!(model.display_range(), Some(72..96));
+
+        let unseen_change = model
+            .apply_user_data_update(&jellypilot_media_server::VideoUserDataUpdate {
+                item_id: "not-loaded".to_owned(),
+                favorite: true,
+                played: false,
+            })
+            .expect("confirmed unseen change");
+        assert_eq!(request(unseen_change.clone()).start_index, 0);
+        settle_all_requests(&mut model, unseen_change, 240);
+        let continuation = request(
+            model
+                .set_display_range(144..168, 240)
+                .expect("continuation"),
+        );
+        assert_ne!(continuation.start_index, 0);
+        model
+            .settle(BrowsePageSettlement {
+                source_id: continuation.source_id,
+                token: continuation.token,
+                result: Err("Provider snapshot invalidated".to_owned()),
+            })
+            .expect("failed continuation");
+        let retry = request(model.retry().expect("retry entire snapshot"));
+        assert_eq!(retry.start_index, 0);
+        assert_eq!(model.display_range(), Some(144..168));
     }
 
     #[test]

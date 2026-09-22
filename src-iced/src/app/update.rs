@@ -5,7 +5,7 @@
 
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
-use jellypilot_core::config::{AppMode, IntroMode, Settings};
+use jellypilot_core::config::{AppMode, IntroMode, Settings, UiMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::LanguagePreference;
 use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
@@ -38,6 +38,8 @@ struct SettingsPlaybackSnapshot {
   intro_mode: IntroMode,
   remember_season_volume: bool,
   prefer_original_audio: bool,
+  auto_next_episode: bool,
+  progress_sync_seconds: u64,
   playback_target_name: Option<String>,
   app_mode: AppMode,
 }
@@ -51,6 +53,8 @@ impl SettingsPlaybackSnapshot {
       intro_mode: settings.intro_mode(),
       remember_season_volume: settings.remember_season_volume(),
       prefer_original_audio: settings.prefer_original_audio(),
+      auto_next_episode: settings.auto_next_episode(),
+      progress_sync_seconds: settings.progress_sync_seconds(),
       playback_target_name: settings.playback_target_name().map(str::to_owned),
       app_mode: settings.app_mode(),
     }
@@ -211,6 +215,26 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
   Task::none()
 }
 
+fn select_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
+  if state.shell.quit_requested
+    || accounts::content_mutations_blocked(&state.kernel)
+    || accounts::blocking_modal(&state.accounts)
+  {
+    return Task::none();
+  }
+  if let Err(error) = state.kernel.settings.set_ui_mode(mode) {
+    state.kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Config,
+      error.to_string(),
+    );
+    return state
+      .kernel
+      .show_toast(NoticeLevel::Error, UiText::new("presentation-save-failed"));
+  }
+  shell::apply_ui_mode(state, mode)
+}
+
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   let session = state.kernel.request_gate.current_session();
   let client = state.kernel.client.as_ref().map(std::sync::Arc::as_ptr);
@@ -221,6 +245,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   {
     super::item_actions::sync_scope(&mut state.kernel);
     state.kernel.undo.clear();
+    state.tv = Default::default();
   }
   if was_fullscreen && !state.shell.player_fullscreen {
     playback::cancel_slider_drags(&mut state.playback);
@@ -231,6 +256,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   let list_playback_task = super::list_playback::sync(state);
   let fullscreen_task = shell::reconcile_player_fullscreen(state);
   super::embedded_player::reconcile(state);
+  let tv_return = shell::reconcile_tv_playback(state);
+  let tv_task = super::tv::reconcile(state);
   if let Some(full) = state.full.as_mut() {
     state
       .image_diagnostics
@@ -253,12 +280,28 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     collections_task,
     list_playback_task,
     fullscreen_task,
+    tv_task,
+    tv_return,
     state.image_diagnostics.schedule(),
   ])
 }
 
-fn route_message(state: &mut State, message: Message) -> Task<Message> {
+pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    Message::Tv(message) => super::tv::update(state, message),
+    Message::UiModeSelected(mode) => select_ui_mode(state, mode),
+    Message::TvLaunch => {
+      if state.shell.quit_requested
+        || accounts::content_mutations_blocked(&state.kernel)
+        || accounts::blocking_modal(&state.accounts)
+      {
+        return Task::done(Message::Window(WindowMessage::ShowRequested(None)));
+      }
+      Task::batch([
+        shell::apply_ui_mode(state, UiMode::Tv),
+        Task::done(Message::Window(WindowMessage::ShowRequested(None))),
+      ])
+    }
     Message::EmbeddedPlayer(message) => super::embedded_player::update(state, message),
     Message::Collections(message) => super::collections::update(state, message),
     Message::UiLanguageSelected(preference) => select_ui_language(state, preference),
@@ -449,7 +492,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
           state.shell.quit_requested,
         ) {
           // Navigation mutates state before the admitted playback task runs.
-          if crate::embedded::enabled() {
+          if crate::embedded::enabled() || state.tv_mode() {
             tasks.push(shell::navigate(state, Destination::NowPlaying));
           }
           tasks.push(play);
@@ -632,6 +675,16 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message)
     }
     Message::Settings(message @ (SettingsMessage::Open | SettingsMessage::OpenAccounts)) => {
+      if state.tv_mode() {
+        return super::tv::settings::open_category(
+          state,
+          if matches!(message, SettingsMessage::OpenAccounts) {
+            super::tv::settings::Category::Account
+          } else {
+            super::tv::settings::Category::Playback
+          },
+        );
+      }
       if !state.shell.settings_open {
         state.shell.settings_focus_return = if matches!(message, SettingsMessage::OpenAccounts) {
           shell::ACCOUNT_TRIGGER_ID
@@ -654,6 +707,10 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       ))
     }
     Message::Settings(SettingsMessage::Close) => {
+      if state.tv_mode() {
+        super::tv::settings::close(state);
+        return Task::none();
+      }
       accounts::hide(&mut state.accounts);
       shell::close_settings(state);
       iced::widget::operation::focus(state.shell.settings_focus_return)
@@ -671,6 +728,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
         || settings_after.subtitle_languages != settings_before.subtitle_languages
         || settings_after.remember_season_volume != settings_before.remember_season_volume
         || settings_after.prefer_original_audio != settings_before.prefer_original_audio
+        || settings_after.progress_sync_seconds != settings_before.progress_sync_seconds
       {
         tasks.push(playback::apply_playback_configuration(
           &mut state.playback,
@@ -685,13 +743,19 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
           state.shell.quit_requested,
         ));
       }
+      if settings_after.auto_next_episode != settings_before.auto_next_episode {
+        state
+          .playback
+          .session
+          .set_auto_next_episode(settings_after.auto_next_episode);
+      }
       if settings_after.playback_target_name != settings_before.playback_target_name {
         tasks.push(playback::refinalize_playback_target(
           &mut state.playback,
           &mut state.kernel,
         ));
       }
-      if settings_after.app_mode != settings_before.app_mode {
+      if !state.tv_mode() && settings_after.app_mode != settings_before.app_mode {
         tasks.push(shell::apply_app_mode(state, settings_after.app_mode));
       }
 
@@ -747,7 +811,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       let return_to_source =
         super::embedded_player::after_playback(state, playback_update.transition.controller);
       let task = playback_update.task;
-      let task = if crate::embedded::enabled()
+      let task = if (crate::embedded::enabled() || state.tv_mode())
         && !had_playback
         && state.playback.view.now_playing.is_some()
         && state.app_mode() == AppMode::Full
@@ -957,6 +1021,7 @@ pub(crate) mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      tv: Default::default(),
       system_theme: iced::theme::Mode::None,
       motion: Default::default(),
       image_diagnostics: Default::default(),
@@ -2099,6 +2164,197 @@ pub(crate) mod tests {
       SettingsStore::for_test(path.clone()),
       TestSettingsFile(path),
     )
+  }
+
+  #[test]
+  fn tv_launch_temporarily_expands_control_only_without_changing_saved_capability_or_session() {
+    let (mut settings, _file) = isolated_settings("tv-control-only");
+    settings.set_app_mode(AppMode::ControlOnly).unwrap();
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.full = None;
+    state.shell.destination = Destination::NowPlaying;
+    let session = state.kernel.request_gate.current_session();
+    let controller_generation = state.playback.view.lifecycle.replacement_generation;
+    drop(update(&mut state, Message::TvLaunch));
+    assert!(state.tv_mode());
+    assert_eq!(state.app_mode(), AppMode::Full);
+    assert!(state.full.is_some());
+    assert_eq!(
+      state.kernel.settings.snapshot().app_mode(),
+      AppMode::ControlOnly
+    );
+    assert_eq!(state.kernel.settings.snapshot().ui_mode(), UiMode::Desktop);
+    assert_eq!(state.kernel.request_gate.current_session(), session);
+    assert_eq!(
+      state.playback.view.lifecycle.replacement_generation,
+      controller_generation
+    );
+
+    drop(update(&mut state, Message::UiModeSelected(UiMode::Desktop)));
+    assert!(!state.tv_mode());
+    assert_eq!(state.app_mode(), AppMode::ControlOnly);
+    assert!(state.full.is_none());
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+    assert_eq!(state.kernel.request_gate.current_session(), session);
+  }
+
+  #[test]
+  fn tv_preference_failure_keeps_the_running_presentation_and_saved_capability() {
+    let (mut settings, file) = isolated_settings("tv-save-failure");
+    settings.set_app_mode(AppMode::ControlOnly).unwrap();
+    fs::write(&file.0, "invalid JSON").unwrap();
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.full = None;
+    drop(update(&mut state, Message::UiModeSelected(UiMode::Tv)));
+    assert!(!state.tv_mode());
+    assert!(state.full.is_none());
+    assert_eq!(state.app_mode(), AppMode::ControlOnly);
+    assert_eq!(
+      state.kernel.active_toast.as_ref().unwrap().message.id(),
+      "presentation-save-failed"
+    );
+    assert_eq!(fs::read_to_string(&file.0).unwrap(), "invalid JSON");
+  }
+
+  #[test]
+  fn entering_tv_preserves_visible_playback_from_control_only_and_fullscreen_detail() {
+    for control_only in [false, true] {
+      let (mut settings, _file) = isolated_settings(if control_only {
+        "tv-playing-control"
+      } else {
+        "tv-playing-detail"
+      });
+      if control_only {
+        settings.set_app_mode(AppMode::ControlOnly).unwrap();
+      }
+      let mut state = test_state();
+      state.kernel.settings = settings;
+      state.playback.view.lifecycle.playback_active = true;
+      state.shell.destination = if control_only {
+        Destination::NowPlaying
+      } else {
+        Destination::Detail("movie".into())
+      };
+      state.shell.player_fullscreen = !control_only;
+      if control_only {
+        state.full = None;
+      }
+      let session = state.kernel.request_gate.current_session();
+      drop(shell::apply_ui_mode(&mut state, UiMode::Tv));
+      assert_eq!(state.shell.destination, Destination::NowPlaying);
+      assert!(state.playback.view.lifecycle.playback_active);
+      assert_eq!(state.kernel.request_gate.current_session(), session);
+    }
+  }
+
+  #[test]
+  fn tv_roundtrip_preserves_the_desktop_full_size_stashed_by_control_only() {
+    let (mut settings, _file) = isolated_settings("tv-geometry");
+    settings.set_app_mode(AppMode::ControlOnly).unwrap();
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.full = None;
+    state.shell.window_id = Some(iced::window::Id::unique());
+    state.shell.window_size = iced::Size::new(480.0, 760.0);
+    let desktop = iced::Size::new(1400.0, 900.0);
+    state.shell.full_window_size = Some(desktop);
+    drop(shell::apply_ui_mode(&mut state, UiMode::Tv));
+    state.shell.window_size = iced::Size::new(1920.0, 1080.0);
+    drop(shell::apply_ui_mode(&mut state, UiMode::Desktop));
+    assert_eq!(state.app_mode(), AppMode::ControlOnly);
+    assert_eq!(state.shell.full_window_size, Some(desktop));
+  }
+
+  #[tokio::test]
+  async fn second_instance_tv_launch_still_shows_the_window_with_an_account_modal() {
+    use iced::futures::StreamExt;
+    let mut state = test_state();
+    drop(update(
+      &mut state,
+      Message::Account(accounts::Message::AddAccount),
+    ));
+    assert!(accounts::blocking_modal(&state.accounts));
+    let session = state.kernel.request_gate.current_session();
+    let task = update(&mut state, Message::TvLaunch);
+    let mut stream = iced_runtime::task::into_stream(task).expect("activation remains scheduled");
+    let mut show = false;
+    while let Some(action) = stream.next().await {
+      show |= matches!(
+        action,
+        iced_runtime::Action::Output(Message::Window(WindowMessage::ShowRequested(None)))
+      );
+    }
+    assert!(show);
+    assert!(!state.tv_mode());
+    assert!(accounts::blocking_modal(&state.accounts));
+    assert_eq!(state.kernel.request_gate.current_session(), session);
+  }
+
+  #[test]
+  fn explicit_tv_selection_persists_without_replacing_full_browser_or_account() {
+    let (settings, file) = isolated_settings("tv-persist");
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.full.as_mut().unwrap().browse.search_input = "retained search".into();
+    let session = state.kernel.request_gate.current_session();
+    drop(update(&mut state, Message::UiModeSelected(UiMode::Tv)));
+    assert!(state.tv_mode());
+    assert_eq!(
+      state.full.as_ref().unwrap().browse.search_input,
+      "retained search"
+    );
+    assert_eq!(state.kernel.request_gate.current_session(), session);
+    let saved: Settings = serde_json::from_str(&fs::read_to_string(&file.0).unwrap()).unwrap();
+    assert_eq!(saved.ui_mode(), UiMode::Tv);
+    assert_eq!(saved.app_mode(), AppMode::Full);
+  }
+
+  #[test]
+  fn tv_selection_does_not_adopt_an_external_app_mode_before_allocating_browse_state() {
+    let (mut settings, file) = isolated_settings("tv-external-mode");
+    settings.set_app_mode(AppMode::ControlOnly).unwrap();
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.full = None;
+    state.shell.destination = Destination::NowPlaying;
+    let mut external = SettingsStore::for_test(file.0.clone());
+    external.set_app_mode(AppMode::Full).unwrap();
+    drop(update(&mut state, Message::UiModeSelected(UiMode::Tv)));
+    assert!(state.tv_mode());
+    assert!(state.full.is_some());
+    assert_eq!(
+      state.kernel.settings.snapshot().app_mode(),
+      AppMode::ControlOnly
+    );
+    let disk: Settings = serde_json::from_str(&fs::read_to_string(&file.0).unwrap()).unwrap();
+    assert_eq!(disk.app_mode(), AppMode::Full);
+    assert_eq!(disk.ui_mode(), UiMode::Tv);
+  }
+
+  #[test]
+  fn tv_returns_to_source_after_playback_ends_but_waits_for_automatic_next() {
+    let mut state = test_state();
+    state.shell.ui_mode = UiMode::Tv;
+    state.kernel.connection = ConnectionPhase::Connected;
+    drop(shell::navigate(&mut state, Destination::NowPlaying));
+    state.playback.view.lifecycle.retain_presentation = true;
+    state.playback.view.lifecycle.replacing = true;
+    state.playback.view.lifecycle.settled = false;
+    drop(shell::reconcile_tv_playback(&mut state));
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+
+    state.playback.view.lifecycle.retain_presentation = false;
+    state.playback.view.lifecycle.replacing = false;
+    state.playback.view.lifecycle.settled = true;
+    drop(shell::reconcile_tv_playback(&mut state));
+    assert_eq!(state.shell.destination, Destination::Home);
+
+    state.shell.destination = Destination::NowPlaying;
+    state.shell.navigation_stack.clear();
+    drop(shell::reconcile_tv_playback(&mut state));
+    assert_eq!(state.shell.destination, Destination::Home);
   }
 
   #[test]

@@ -31,9 +31,17 @@ use super::state::{NoticeLevel, State, ToastNotice};
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let base = if state.kernel.connection == ConnectionPhase::Connected {
-    shell::view(state)
+    if state.tv_mode() {
+      super::tv::view(state)
+    } else {
+      shell::view(state)
+    }
   } else {
-    login::view(state)
+    if state.tv_mode() {
+      super::tv::account::login_view(state)
+    } else {
+      login::view(state)
+    }
   };
   // Preserve the browser's layout and widget state while native video fills the window.
   let base = container(base)
@@ -52,12 +60,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let layers = if state.shell.player_fullscreen {
     stack![concealed(base), player::embedded(state)]
   } else {
-    let base: Element<'_, Message> = if account::modal_open(state) {
-      inert(base)
+    let modal_open = if state.tv_mode() {
+      super::tv::account::modal_open(state)
     } else {
-      base.into()
+      account::modal_open(state)
     };
-    stack![base, account::modal_layer(state)]
+    let base: Element<'_, Message> = if modal_open { inert(base) } else { base.into() };
+    let account = if state.tv_mode() {
+      super::tv::account::modal_layer(state)
+    } else {
+      account::modal_layer(state)
+    };
+    stack![base, account]
   }
   .width(Fill)
   .height(Fill);

@@ -18,7 +18,7 @@ use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{overlay, Shell};
 use iced::widget::{scrollable, Space};
-use iced::{Element, Event, Length, Point, Rectangle, Size, Theme, Vector};
+use iced::{Element, Event, Length, Padding, Point, Rectangle, Size, Theme, Vector};
 
 use crate::tokens::TOKENS;
 
@@ -137,6 +137,31 @@ where
     Message: 'a,
     Builder: Fn(usize) -> Element<'a, Message>,
 {
+    artwork_grid_with_overflow(
+        item_count,
+        metrics,
+        viewport,
+        column_gap,
+        Padding::ZERO,
+        cell_builder,
+    )
+}
+
+/// Like [`artwork_grid`], with a bounded pointer region for artwork that expands
+/// outside its fixed slot. Original neighboring slots retain input precedence,
+/// and the actual child still decides whether its visible bounds accept input.
+pub fn artwork_grid_with_overflow<'a, Message, Builder>(
+    item_count: usize,
+    metrics: ArtworkGridMetrics,
+    viewport: ArtworkGridViewport,
+    column_gap: f32,
+    visual_overflow: Padding,
+    cell_builder: Builder,
+) -> Element<'a, Message>
+where
+    Message: 'a,
+    Builder: Fn(usize) -> Element<'a, Message>,
+{
     if metrics.columns == 0 {
         return Space::new().into();
     }
@@ -155,6 +180,7 @@ where
         item_count,
         metrics,
         column_gap,
+        visual_overflow,
     })
 }
 
@@ -167,6 +193,7 @@ struct ArtworkGrid<'a, Message, Renderer = iced::Renderer> {
     item_count: usize,
     metrics: ArtworkGridMetrics,
     column_gap: f32,
+    visual_overflow: Padding,
 }
 
 /// Grid animation state; `motion` holds the per-item position maps.
@@ -197,6 +224,22 @@ impl<Message, Renderer> ArtworkGrid<'_, Message, Renderer> {
             .enumerate()
             .rev()
             .find(|(_, child)| child.bounds().contains(point))
+            .or_else(|| {
+                layout.children().enumerate().rev().find(|(_, child)| {
+                    let bounds = child.bounds();
+                    Rectangle {
+                        x: bounds.x - self.visual_overflow.left,
+                        y: bounds.y - self.visual_overflow.top,
+                        width: bounds.width
+                            + self.visual_overflow.left
+                            + self.visual_overflow.right,
+                        height: bounds.height
+                            + self.visual_overflow.top
+                            + self.visual_overflow.bottom,
+                    }
+                    .contains(point)
+                })
+            })
             .map(|(slot, _)| self.first_item + slot)
     }
 }
@@ -866,6 +909,7 @@ mod tests {
             item_count: 100,
             metrics: ArtworkGridMetrics::for_width(width),
             column_gap: COLUMN_GAP,
+            visual_overflow: iced::Padding::ZERO,
         }
     }
 
@@ -927,6 +971,99 @@ mod tests {
             ),
             vec![1]
         );
+    }
+
+    #[test]
+    fn tv_focus_growth_accepts_visible_edges_without_stealing_neighbor_or_clipped_input() {
+        use super::artwork_grid_with_overflow;
+        use crate::widgets::tv_focus;
+        use iced::advanced::{
+            layout, mouse, renderer, renderer::Headless, shell, widget::Tree, Layout, Shell,
+        };
+        use iced::{Alignment, Event, Padding, Point, Rectangle, Size};
+
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            renderer::Settings::default(),
+            Some("tiny-skia"),
+        ))
+        .expect("software renderer");
+        let metrics = ArtworkGridMetrics {
+            columns: 2,
+            cell_width: 100.0,
+            cell_height: 150.0,
+            row_height: 174.0,
+        };
+        let mut grid = artwork_grid_with_overflow(
+            2,
+            metrics,
+            ArtworkGridViewport {
+                offset_y: 0.0,
+                height: 400.0,
+            },
+            24.0,
+            Padding {
+                top: 18.0,
+                left: 8.0,
+                right: 80.0,
+                bottom: 0.0,
+            },
+            |index| {
+                tv_focus::focus(index == 0, move |progress| {
+                    iced::widget::button(iced::widget::space())
+                        .padding(0)
+                        .width(100.0 * (1.0 + progress * 0.03))
+                        .height(150.0 * (1.0 + progress * 0.03))
+                        .on_press(index)
+                        .into()
+                })
+                .frame(Size::new(100.0, 150.0), Alignment::Center, Alignment::End)
+                .into()
+            },
+        );
+        let mut tree = Tree::new(&grid);
+        tree.diff(grid.as_widget_mut());
+        let node = grid
+            .as_widget_mut()
+            .layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(224.0, 400.0)),
+            )
+            .move_to(Point::new(20.0, 20.0));
+        for (point, viewport, expected) in [
+            (
+                Point::new(19.0, 18.0),
+                Rectangle::with_size(Size::new(400.0, 400.0)),
+                vec![0],
+            ),
+            (
+                Point::new(145.0, 21.0),
+                Rectangle::with_size(Size::new(400.0, 400.0)),
+                vec![1],
+            ),
+            (
+                Point::new(19.0, 18.0),
+                Rectangle::new(Point::new(20.0, 20.0), Size::new(224.0, 400.0)),
+                vec![],
+            ),
+        ] {
+            let mut bus = shell::Bus::new();
+            for event in [
+                mouse::Event::ButtonPressed(mouse::Button::Left),
+                mouse::Event::ButtonReleased(mouse::Button::Left),
+            ] {
+                grid.as_widget_mut().update(
+                    &mut tree,
+                    &Event::Mouse(event),
+                    Layout::new(&node),
+                    mouse::Cursor::Available(point),
+                    &renderer,
+                    &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
+                    &viewport,
+                );
+            }
+            assert_eq!(bus.into_iter().collect::<Vec<_>>(), expected);
+        }
     }
 
     #[test]

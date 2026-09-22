@@ -10,10 +10,10 @@ use jellypilot_core::browse_window::visible_display_range;
 use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
-use jellypilot_media_server::VideoLibrarySortDirection;
+use jellypilot_media_server::{VideoLibraryFilters, VideoLibrarySortDirection};
 use jellypilot_sdk::browse::{BrowseWork, Browser};
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::widgets::artwork_grid::ArtworkGridViewport;
+use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
 use super::artwork::{ImageCollection, ImageSpec};
 use super::kernel::Kernel;
@@ -47,7 +47,10 @@ pub struct Surface {
   pub sort_menu_open: bool,
   pub search_input: String,
   pub filters: Option<BrowseFilterSettings>,
+  pub advanced_filters: VideoLibraryFilters,
   pub mode: ViewMode,
+  /// The active presentation supplies its measured geometry; absent for desktop.
+  pub presentation_grid: Option<ArtworkGridMetrics>,
   alternate_scroll: Option<ScrollSnapshot>,
 }
 
@@ -63,7 +66,9 @@ impl Default for Surface {
       sort_menu_open: false,
       search_input: String::new(),
       filters: None,
+      advanced_filters: VideoLibraryFilters::default(),
       mode: ViewMode::Grid,
+      presentation_grid: None,
       alternate_scroll: None,
     }
   }
@@ -86,6 +91,7 @@ pub(crate) struct Snapshot {
   grid_viewport: Option<ArtworkGridViewport>,
   scroll_id: iced::widget::Id,
   filters: Option<BrowseFilterSettings>,
+  advanced_filters: VideoLibraryFilters,
   search_input: String,
   mode: ViewMode,
   alternate_scroll: Option<ScrollSnapshot>,
@@ -103,6 +109,7 @@ pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> 
     grid_viewport: surface.grid_viewport,
     scroll_id: surface.scroll_id.clone(),
     filters: surface.filters,
+    advanced_filters: surface.advanced_filters.clone(),
     search_input: submitted_query.unwrap_or(&surface.search_input).to_owned(),
     mode: surface.mode,
     alternate_scroll: surface.alternate_scroll.take(),
@@ -114,6 +121,8 @@ pub(crate) fn restore(
   kernel: &mut Kernel,
   snapshot: Snapshot,
   window_size: iced::Size,
+  source: Option<BrowseSource>,
+  allow_advanced_filters: bool,
 ) -> Task<Message> {
   begin_artwork_view(surface);
   // Replacing the browser drops the previous owner, cancelling its requests.
@@ -122,11 +131,30 @@ pub(crate) fn restore(
   surface.grid_viewport = snapshot.grid_viewport;
   surface.scroll_id = snapshot.scroll_id;
   surface.filters = snapshot.filters;
+  surface.advanced_filters = snapshot.advanced_filters;
   surface.search_input = snapshot.search_input;
   surface.mode = snapshot.mode;
   surface.alternate_scroll = snapshot.alternate_scroll;
   surface.sort_menu_open = false;
-  let work = match surface.browser.resume() {
+  if allow_advanced_filters && normalize_tv_filters(surface, kernel) {
+    // A desktop snapshot can carry criteria with no controls in the TV toolbar.
+    surface.browser.reset();
+    return start(surface, kernel, source);
+  }
+  if !allow_advanced_filters && surface.advanced_filters != VideoLibraryFilters::default() {
+    surface.advanced_filters = VideoLibraryFilters::default();
+    surface.browser.reset();
+    return start(surface, kernel, source);
+  }
+  let resumed = if surface.advanced_filters.is_empty() {
+    surface.browser.resume()
+  } else {
+    if let Some(client) = &kernel.client {
+      client.library().invalidate_filter_catalog();
+    }
+    surface.browser.resume_with_refresh()
+  };
+  let work = match resumed {
     Ok(work) => work,
     Err(error) => {
       kernel.diagnostics.record(
@@ -147,6 +175,23 @@ pub(crate) fn restore(
     sync_scroll_window(surface, kernel, window_size),
     prepare_artwork(surface),
   ])
+}
+
+/// Keep the TV toolbar truthful without writing over desktop saved preferences.
+pub(crate) fn normalize_tv_filters(surface: &mut Surface, kernel: &Kernel) -> bool {
+  use jellypilot_media_server::VideoLibraryPlayedFilter;
+  let original = surface
+    .filters
+    .unwrap_or_else(|| kernel.settings.snapshot().browse_filters());
+  let played = match original.played_filter() {
+    VideoLibraryPlayedFilter::Played => VideoLibraryPlayedFilter::All,
+    value => value,
+  };
+  let filters = original
+    .with_favorites_only(false)
+    .with_played_filter(played);
+  surface.filters = Some(filters);
+  filters != original
 }
 
 /// `source` is the router-resolved browse source for the current destination
@@ -322,6 +367,24 @@ pub fn update(
   }
 }
 
+/// Commits a TV filter draft as one query change. The browse model resets the
+/// viewport before requesting the first page and rejects old-query deliveries.
+pub(crate) fn apply_advanced_filters(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  source: Option<BrowseSource>,
+  filters: VideoLibraryFilters,
+) -> Task<Message> {
+  if !matches!(source, Some(BrowseSource::Library { .. })) || surface.advanced_filters == filters {
+    return Task::none();
+  }
+  surface.advanced_filters = filters;
+  if let Some(client) = &kernel.client {
+    client.library().invalidate_filter_catalog();
+  }
+  start(surface, kernel, source)
+}
+
 fn persist_filters(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -371,7 +434,10 @@ pub fn start(
   let filters = *surface
     .filters
     .get_or_insert_with(|| kernel.settings.snapshot().browse_filters());
-  let preferences = BrowsePreferences::from(filters);
+  let preferences = BrowsePreferences {
+    filters: surface.advanced_filters.clone(),
+    ..BrowsePreferences::from(filters)
+  };
   let work = match surface
     .browser
     .configure(kernel.client.clone(), source, preferences)
@@ -423,7 +489,9 @@ pub(crate) fn sync_scroll_window(
   };
   let total = *total_record_count;
   let class = SizeClass::from_width(window_size.width);
-  let metrics = browse_metrics(grid_available_width(window_size.width, class), surface.mode);
+  let metrics = surface.presentation_grid.unwrap_or_else(|| {
+    browse_metrics(grid_available_width(window_size.width, class), surface.mode)
+  });
   let viewport = surface.grid_viewport(window_size);
   let range = visible_display_range(
     viewport.offset_y,
@@ -432,6 +500,15 @@ pub(crate) fn sync_scroll_window(
     metrics.row_height,
     total,
   );
+  set_display_range(surface, kernel, range)
+}
+
+/// Both presentations share the SDK request/cancellation and artwork ownership boundary.
+pub(crate) fn set_display_range(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  range: std::ops::Range<u32>,
+) -> Task<Message> {
   // Metadata-only peek: the hot scroll path must not clone the window's
   // items via `display_range()` just to compare the range.
   if surface.browser.model().peek_display_range().as_ref() == Some(&range) {
@@ -461,6 +538,11 @@ fn sync_view(surface: &mut Surface) {
 
 /// Refreshes the model's stored query without releasing usable image demand.
 pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  if !surface.browser.model().is_refreshing() {
+    if let Some(client) = &kernel.client {
+      client.library().invalidate_filter_catalog();
+    }
+  }
   let work = match surface.browser.refresh() {
     Ok(work) => work,
     Err(error) => {
@@ -572,6 +654,7 @@ pub(crate) fn leave_view(surface: &mut Surface) {
 pub(crate) fn reset(surface: &mut Surface) {
   leave_view(surface);
   surface.filters = None;
+  surface.advanced_filters = VideoLibraryFilters::default();
 }
 
 #[cfg(test)]
@@ -641,6 +724,69 @@ mod tests {
       session: kernel.request_gate.current_session(),
       query: query.to_owned(),
     }
+  }
+
+  #[tokio::test]
+  async fn advanced_filters_restore_in_tv_and_restart_unfiltered_in_desktop() {
+    let (mut surface, mut kernel, _fixture) = fixture_surface();
+    let source = BrowseSource::Library {
+      session: kernel.request_gate.current_session(),
+      shortcut: jellypilot_media_server::VideoLibraryShortcut {
+        id: "movies".to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: None,
+        artwork_image_id: None,
+      },
+    };
+    let filters = VideoLibraryFilters {
+      country: Some("Japan".to_owned()),
+      ..Default::default()
+    };
+    drop(apply_advanced_filters(
+      &mut surface,
+      &mut kernel,
+      Some(source.clone()),
+      filters.clone(),
+    ));
+    let identity = surface
+      .browser
+      .model()
+      .identity()
+      .expect("filtered query")
+      .to_owned();
+    surface.viewport.offset_y = 600.0;
+    let saved = snapshot(&mut surface, None);
+    leave_view(&mut surface);
+    drop(restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      Some(source.clone()),
+      true,
+    ));
+    assert_eq!(surface.advanced_filters, filters);
+    assert_eq!(surface.browser.model().identity(), Some(identity.as_str()));
+    assert_eq!(surface.viewport.offset_y, 600.0);
+    let saved = snapshot(&mut surface, None);
+    leave_view(&mut surface);
+    let task = restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      Some(source),
+      false,
+    );
+    assert_eq!(surface.advanced_filters, VideoLibraryFilters::default());
+    assert_ne!(surface.browser.model().identity(), Some(identity.as_str()));
+    assert_eq!(surface.viewport.offset_y, 0.0);
+    assert!(matches!(surface.view, LibraryBrowseView::Loading));
+    assert!(
+      iced_runtime::task::into_stream(task).is_some(),
+      "desktop restore requests its first unfiltered page"
+    );
   }
 
   #[tokio::test]
@@ -717,7 +863,14 @@ mod tests {
     ));
     let saved = snapshot(&mut surface, Some("retained query"));
     leave_view(&mut surface);
-    drop(restore(&mut surface, &mut kernel, saved, window_size()));
+    drop(restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      None,
+      true,
+    ));
     assert_eq!(surface.mode, ViewMode::List);
     assert_eq!(surface.viewport.offset_y, 810.0);
     assert_eq!(surface.scroll_id, list_id);
@@ -786,9 +939,15 @@ mod tests {
       .expect("cancelled refresh still settles");
     assert!(!saved.browser.model().is_current_settlement(&departed));
 
-    let mut restore_stream =
-      iced_runtime::task::into_stream(restore(&mut surface, &mut kernel, saved, window_size()))
-        .expect("restore resumes page work");
+    let mut restore_stream = iced_runtime::task::into_stream(restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      None,
+      true,
+    ))
+    .expect("restore resumes page work");
     let settlements = fixture
       .run_stream(&mut restore_stream, |_| FixtureReply::Failure)
       .await
@@ -889,7 +1048,14 @@ mod tests {
       failure,
     ));
     let saved = snapshot(&mut surface, Some("empty"));
-    drop(restore(&mut surface, &mut kernel, saved, window_size()));
+    drop(restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      None,
+      true,
+    ));
     assert!(matches!(surface.view, LibraryBrowseView::Empty));
     assert!(surface.browser.model().refresh_failure().is_some());
     let scroll_id = surface.scroll_id.clone();

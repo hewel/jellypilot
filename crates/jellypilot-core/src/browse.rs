@@ -48,6 +48,7 @@ pub async fn fetch_browse_page(
                         sort_direction: preferences.sort_direction,
                         played_filter: preferences.played_filter,
                         favorites_only: preferences.favorites_only,
+                        filters: preferences.filters,
                     })
                     .await
                     .map_err(|error| error.to_string())?
@@ -112,6 +113,7 @@ pub fn browse_preferences(
         sort_direction,
         played_filter,
         favorites_only,
+        filters: Default::default(),
     }
 }
 

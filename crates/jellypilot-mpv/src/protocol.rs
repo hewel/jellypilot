@@ -104,6 +104,10 @@ impl MpvCommand {
     Self::new(vec!["set_property".into(), "volume".into(), volume.into()])
   }
 
+  pub fn set_speed(speed: f64) -> Self {
+    Self::new(vec!["set_property".into(), "speed".into(), speed.into()])
+  }
+
   /// Set mute state.
   pub fn set_mute(muted: bool) -> Self {
     Self::new(vec!["set_property".into(), "mute".into(), muted.into()])

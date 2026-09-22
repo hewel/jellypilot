@@ -8,6 +8,7 @@ detail-resume = 继续播放
 detail-episode-resume = 继续播放
 detail-replay = 重看
 detail-remaining = 剩余 { $duration }
+detail-elapsed = 已播放 { $duration }
 detail-continue-episode = 继续播放 { $episode }
 detail-play-episode = 播放 { $episode }
 detail-back = 返回

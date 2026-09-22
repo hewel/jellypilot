@@ -922,6 +922,9 @@ pub(crate) fn initialize_playback(
   quit_requested: bool,
 ) {
   surface.session = PlaybackSession::default();
+  surface
+    .session
+    .set_auto_next_episode(kernel.settings.snapshot().auto_next_episode());
   refresh_view(surface, kernel);
   surface.retained_player_bar = None;
   surface.notice = None;
@@ -971,6 +974,10 @@ pub(crate) fn initialize_playback(
 fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
   if let Some(options) = crate::embedded::options() {
     return PlaybackControllerConfig::default()
+      .with_embedded_preferences(settings.mpv_args())
+      .with_progress_report_interval(std::time::Duration::from_secs(
+        settings.progress_sync_seconds(),
+      ))
       .with_subtitle_languages(settings.subtitle_languages().to_vec())
       .with_embedded_ipc(options.ipc.clone())
       .with_volume_memory_enabled(settings.remember_season_volume())
@@ -978,6 +985,9 @@ fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
       .with_original_audio_enabled(settings.prefer_original_audio());
   }
   let config = PlaybackControllerConfig::default()
+    .with_progress_report_interval(std::time::Duration::from_secs(
+      settings.progress_sync_seconds(),
+    ))
     .with_extra_args(configured_mpv_args(settings))
     .with_volume_memory_enabled(settings.remember_season_volume())
     .with_subtitle_languages(settings.subtitle_languages().to_vec())

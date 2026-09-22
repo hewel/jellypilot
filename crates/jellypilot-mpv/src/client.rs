@@ -549,6 +549,12 @@ impl MpvClient {
     Ok(())
   }
 
+  /// Set playback speed. The controller validates its supported range.
+  pub(crate) async fn set_speed(&self, speed: f64) -> Result<(), MpvError> {
+    self.send(MpvCommand::set_speed(speed)).await?;
+    Ok(())
+  }
+
   /// Set mute state.
   pub async fn set_mute(&self, muted: bool) -> Result<(), MpvError> {
     self.send(MpvCommand::set_mute(muted)).await?;

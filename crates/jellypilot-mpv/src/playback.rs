@@ -55,11 +55,31 @@ pub struct PlaybackControllerConfig {
   demuxer_cache_dir: Option<PathBuf>,
   volume_memory_disabled: bool,
   embedded_ipc: Option<PathBuf>,
+  embedded_preferences: Vec<String>,
   original_audio_enabled: bool,
   subtitle_languages: Vec<String>,
+  progress_report_interval: Option<Duration>,
 }
 
 impl PlaybackControllerConfig {
+  /// Apply supported decoder/cache preferences when the embedded host loads its next file.
+  ///
+  /// Only the generated `--hwdec=auto-safe|no` and supported cache-size arguments
+  /// are accepted. Process arguments and comma-separated values never become load options.
+  #[must_use]
+  pub fn with_embedded_preferences(mut self, args: &[String]) -> Self {
+    self.embedded_preferences = per_file_preferences(args);
+    self
+  }
+
+  /// Passive progress cadence; transport changes and stopping still report immediately.
+  #[must_use]
+  pub fn with_progress_report_interval(mut self, interval: Duration) -> Self {
+    self.progress_report_interval =
+      Some(interval.clamp(Duration::from_secs(1), Duration::from_secs(60)));
+    self
+  }
+
   /// Use the application's already-initialized embedded host.
   #[must_use]
   pub fn with_embedded_ipc(mut self, path: PathBuf) -> Self {
@@ -407,10 +427,12 @@ pub struct PlaybackController {
   server: Arc<dyn PlaybackServer>,
   mpv: MpvClient,
   configured_mpv_args: Vec<String>,
+  per_file_preferences: Vec<String>,
   active: Option<ActivePlayback>,
   active_transport_matches_mpv: bool,
   last_transport: PlayerState,
   last_progress_report_at: Option<Instant>,
+  progress_report_interval: Duration,
   load_event_boundary: LoadEventBoundary,
   pending_client_messages: Vec<String>,
   /// Fullscreen flag captured when a playback-owned process ended, applied
@@ -455,6 +477,7 @@ impl PlaybackController {
     server: Arc<JellyfinClient>,
     config: PlaybackControllerConfig,
   ) -> Result<Self, PlaybackError> {
+    let embedded = config.embedded_ipc.is_some();
     let mpv = if let Some(path) = config.embedded_ipc {
       MpvClient::embedded(path)
     } else {
@@ -470,9 +493,15 @@ impl PlaybackController {
     }
 
     let mut controller = Self::from_mpv(server, mpv, config.extra_args);
+    if embedded {
+      controller.per_file_preferences = config.embedded_preferences;
+    }
     controller.subtitle_languages = config.subtitle_languages;
     controller.volume_memory_enabled = !config.volume_memory_disabled;
     controller.original_audio_enabled = config.original_audio_enabled;
+    controller.progress_report_interval = config
+      .progress_report_interval
+      .unwrap_or(PASSIVE_PROGRESS_REPORT_INTERVAL);
     Ok(controller)
   }
 
@@ -498,14 +527,17 @@ impl PlaybackController {
     mpv: MpvClient,
     configured_mpv_args: Vec<String>,
   ) -> Self {
+    let per_file_preferences = per_file_preferences(&configured_mpv_args);
     Self {
       server,
       mpv,
       configured_mpv_args,
+      per_file_preferences,
       active: None,
       active_transport_matches_mpv: false,
       last_transport: PlayerState::default(),
       last_progress_report_at: None,
+      progress_report_interval: PASSIVE_PROGRESS_REPORT_INTERVAL,
       load_event_boundary: LoadEventBoundary::Settled,
       pending_client_messages: Vec::new(),
       pending_fullscreen: None,
@@ -637,6 +669,14 @@ impl PlaybackController {
         .await;
     }
     self.original_audio_enabled = config.original_audio_enabled;
+    self.per_file_preferences = if config.embedded_ipc.is_some() {
+      config.embedded_preferences
+    } else {
+      per_file_preferences(&config.extra_args)
+    };
+    self.progress_report_interval = config
+      .progress_report_interval
+      .unwrap_or(PASSIVE_PROGRESS_REPORT_INTERVAL);
     self.subtitle_languages = config.subtitle_languages;
     if config.embedded_ipc.is_none() {
       let mpv_path = match config.mpv_path {
@@ -702,6 +742,9 @@ impl PlaybackController {
       }
       ControllerCommand::SetVolume(volume) => {
         ControllerSettlement::Controlled(self.set_volume(volume).await)
+      }
+      ControllerCommand::SetSpeed(speed) => {
+        ControllerSettlement::Controlled(self.set_speed(speed).await)
       }
       ControllerCommand::SetMuted(muted) => {
         ControllerSettlement::Controlled(self.set_muted(muted).await)
@@ -981,7 +1024,7 @@ impl PlaybackController {
     let warnings = if passive_progress_report_due(
       self.last_progress_report_at,
       Instant::now(),
-      PASSIVE_PROGRESS_REPORT_INTERVAL,
+      self.progress_report_interval,
     ) {
       warning_for_reporting(
         self.report_progress_now(&transport).await,
@@ -1148,6 +1191,39 @@ impl PlaybackController {
     Ok(self.control_outcome(transport, reporting))
   }
 
+  /// Set playback speed and confirm that MPV accepted the requested value.
+  ///
+  /// This does not change the paused state. Presentations should use
+  /// [`StatisticsReader::controls`] for the observed speed, including changes
+  /// originating outside the application.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error without active playback, for a non-finite speed or one
+  /// outside 0.25 through 4.0, or if MPV cannot confirm the change.
+  pub async fn set_speed(&mut self, speed: f64) -> Result<PlaybackOutcome, PlaybackError> {
+    self.require_active()?;
+    if !speed.is_finite() || !(0.25..=4.0).contains(&speed) {
+      return Err(PlaybackError::MpvControlFailed);
+    }
+    self
+      .mpv
+      .set_speed(speed)
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)?;
+    match self.mpv.get_property("speed").await {
+      Ok(PropertyValue::Number(observed))
+        if observed.is_finite() && (observed - speed).abs() <= f64::EPSILON => {}
+      _ => return Err(PlaybackError::MpvControlFailed),
+    }
+    let transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
+    self.record_transport(&transport);
+    Ok(self.control_outcome(transport, true))
+  }
+
   /// Set MPV mute state idempotently.
   ///
   /// # Errors
@@ -1250,6 +1326,11 @@ impl PlaybackController {
       &resolved.active.now_playing.play_method,
       &self.configured_mpv_args,
     );
+    for preference in &self.per_file_preferences {
+      let name = preference.split('=').next().unwrap_or_default();
+      file_options.retain(|option| option.split('=').next() != Some(name));
+      file_options.push(preference.clone());
+    }
     // Per-file pause prevents profiles and loadfile options from exposing audio
     // before the final accepted volume and temporary mute have been restored.
     file_options.push("pause=yes".to_owned());
@@ -2275,6 +2356,37 @@ fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -
     .collect()
 }
 
+// `loadfile` receives comma-separated options. Admit complete, known-safe values,
+// never a general option prefix, so a saved process argument cannot inject a file option.
+// A later process-only value retires an earlier supported value instead of being
+// overridden again at every load.
+fn per_file_preferences(args: &[String]) -> Vec<String> {
+  let mut hwdec = None;
+  let mut cache = None;
+  for argument in args {
+    let Some(option) = argument.strip_prefix("--") else {
+      continue;
+    };
+    let name = option.split('=').next().unwrap_or_default();
+    match name {
+      "hwdec" => hwdec = matches!(option, "hwdec=auto-safe" | "hwdec=no").then_some(option),
+      "demuxer-max-bytes" => {
+        cache = matches!(
+          option,
+          "demuxer-max-bytes=128MiB"
+            | "demuxer-max-bytes=256MiB"
+            | "demuxer-max-bytes=512MiB"
+            | "demuxer-max-bytes=1GiB"
+        )
+        .then_some(option)
+      }
+      "no-hwdec" => hwdec = None,
+      _ => {}
+    }
+  }
+  hwdec.into_iter().chain(cache).map(str::to_owned).collect()
+}
+
 #[cfg(test)]
 mod tests {
   use std::sync::atomic::{AtomicBool, Ordering};
@@ -2583,6 +2695,7 @@ mod tests {
     time_pos: f64,
     duration: f64,
     volume: f64,
+    speed: f64,
     muted: bool,
     requested_generation: String,
     loaded_generation: String,
@@ -2599,6 +2712,7 @@ mod tests {
         time_pos: 0.0,
         duration: 1_500.0,
         volume: 100.0,
+        speed: 1.0,
         muted: false,
         requested_generation: "0".to_owned(),
         loaded_generation: "0".to_owned(),
@@ -2995,6 +3109,7 @@ mod tests {
           }
           Some("pause") => state.paused = value.as_bool().unwrap_or(state.paused),
           Some("volume") => state.volume = value.as_f64().unwrap_or(state.volume),
+          Some("speed") => state.speed = value.as_f64().unwrap_or(state.speed),
           Some("mute") => state.muted = value.as_bool().unwrap_or(state.muted),
           Some("fullscreen") => state.fullscreen = value.as_bool().unwrap_or(state.fullscreen),
           Some("aid") => state.audio_track = value.as_i64().unwrap_or(state.audio_track),
@@ -3041,6 +3156,7 @@ mod tests {
           Some("time-pos") => serde_json::json!(state.time_pos),
           Some("duration") => serde_json::json!(state.duration),
           Some("volume") => serde_json::json!(state.volume),
+          Some("speed") => serde_json::json!(state.speed),
           Some("mute") => serde_json::json!(state.muted),
           Some("fullscreen") => serde_json::json!(state.fullscreen),
           Some("track-list") => {
@@ -3091,6 +3207,257 @@ mod tests {
     let mpv = InMemoryMpv::new().await;
     let controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
     (controller, mpv)
+  }
+
+  #[test]
+  fn decoder_and_cache_preferences_reach_each_load_without_importing_process_options() {
+    run_async(async {
+      for embedded in [false, true] {
+        let client = if embedded {
+          MpvClient::embedded(PathBuf::from("unused-fixture-ipc"))
+        } else {
+          MpvClient::new(None)
+        };
+        let mpv = InMemoryMpv::connect(client).await;
+        let mut controller = PlaybackController::from_server(
+          Arc::new(MockPlaybackServer::new()),
+          mpv.client.clone(),
+          Vec::new(),
+        );
+        for (index, cache) in ["128MiB", "256MiB", "512MiB", "1GiB"]
+          .into_iter()
+          .enumerate()
+        {
+          let hwdec = if index % 2 == 0 { "auto-safe" } else { "no" };
+          let args = vec![
+            "--script=/tmp/untrusted.lua".to_owned(),
+            "--audio-spdif=ac3,dts".to_owned(),
+            "--hwdec=no,script=/tmp/injected.lua".to_owned(),
+            "--demuxer-max-bytes=1GiB\npause=no".to_owned(),
+            format!("--hwdec={hwdec}"),
+            format!("--demuxer-max-bytes={cache}"),
+          ];
+          let config = if embedded {
+            PlaybackControllerConfig::default()
+              .with_embedded_ipc(PathBuf::from("unused-fixture-ipc"))
+              .with_embedded_preferences(&args)
+          } else {
+            PlaybackControllerConfig::default()
+              .with_mpv_path(PathBuf::from("unused-fixture-mpv"))
+              .with_extra_args(args)
+          };
+          controller
+            .configure_for_next_start(config)
+            .await
+            .expect("next-load configuration");
+          assert_eq!(
+            mpv
+              .received_commands()
+              .iter()
+              .filter(|command| command[0] == "loadfile")
+              .count(),
+            index,
+            "a preference update must not reload the currently playing file"
+          );
+          let _ = controller
+            .play(
+              library_item("Episode").into(),
+              PlaybackStartPosition::Beginning,
+            )
+            .await
+            .expect("accepted load");
+          let commands = mpv.received_commands();
+          let load = commands
+            .iter()
+            .rev()
+            .find(|command| command[0] == "loadfile")
+            .expect("actual MPV loadfile command");
+          let options = load[4]
+            .as_str()
+            .expect("serialized per-file options")
+            .split(',')
+            .collect::<Vec<_>>();
+          assert!(options.contains(&format!("hwdec={hwdec}").as_str()));
+          assert!(options.contains(&format!("demuxer-max-bytes={cache}").as_str()));
+          assert_eq!(
+            options
+              .iter()
+              .filter(|option| option.starts_with("demuxer-max-bytes="))
+              .count(),
+            1
+          );
+          assert!(
+            options.contains(&"cache-on-disk=yes"),
+            "other direct-play cache defaults remain"
+          );
+          assert!(
+            options.contains(&"pause=yes"),
+            "accepted-load pause fencing remains"
+          );
+          assert!(options.iter().all(|option| !option.starts_with("script=")
+            && !option.starts_with("audio-spdif=")
+            && !option.contains('\n')));
+        }
+        if !embedded {
+          controller
+            .configure_for_next_start(
+              PlaybackControllerConfig::default()
+                .with_mpv_path(PathBuf::from("unused-fixture-mpv"))
+                .with_extra_args(vec![
+                  "--hwdec=no".to_owned(),
+                  "--hwdec=vaapi".to_owned(),
+                  "--demuxer-max-bytes=512MiB".to_owned(),
+                  "--demuxer-max-bytes=768MiB".to_owned(),
+                ]),
+            )
+            .await
+            .expect("custom process preferences");
+          let _ = controller
+            .play(
+              library_item("Episode").into(),
+              PlaybackStartPosition::Beginning,
+            )
+            .await
+            .expect("load with custom process preferences");
+          let commands = mpv.received_commands();
+          let load = commands
+            .iter()
+            .rev()
+            .find(|command| command[0] == "loadfile")
+            .expect("actual load");
+          let options = load[4].as_str().expect("file options");
+          assert!(
+            !options.split(',').any(
+              |option| option.starts_with("hwdec=") || option.starts_with("demuxer-max-bytes=")
+            ),
+            "earlier safe values must not override the user's later process-only preference"
+          );
+        }
+      }
+    });
+  }
+
+  #[test]
+  fn configured_passive_cadence_preserves_immediate_transport_and_stop_reports() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("unused-fixture-mpv"))
+            .with_progress_report_interval(Duration::from_secs(30)),
+        )
+        .await
+        .expect("report cadence");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      let reports = || server.reports.lock().expect("reports").progress.len();
+      let initial = reports();
+      controller.last_progress_report_at = Some(Instant::now() - Duration::from_secs(15));
+      let _ = controller.refresh().await;
+      assert_eq!(
+        reports(),
+        initial,
+        "a 30s preference must not report at the former 10s cadence"
+      );
+      controller.last_progress_report_at = Some(Instant::now() - Duration::from_secs(31));
+      let _ = controller.refresh().await;
+      assert_eq!(reports(), initial + 1);
+      let _ = controller.refresh().await;
+      assert_eq!(
+        reports(),
+        initial + 1,
+        "the successful report starts a fresh interval"
+      );
+      let _ = controller.set_paused(true).await.expect("pause");
+      assert_eq!(
+        reports(),
+        initial + 2,
+        "transport changes still report immediately"
+      );
+      controller
+        .configure_for_next_start(
+          PlaybackControllerConfig::default()
+            .with_mpv_path(PathBuf::from("unused-fixture-mpv"))
+            .with_progress_report_interval(Duration::from_secs(3)),
+        )
+        .await
+        .expect("shorter cadence");
+      controller.last_progress_report_at = Some(Instant::now() - Duration::from_secs(4));
+      let _ = controller.refresh().await;
+      assert_eq!(
+        reports(),
+        initial + 3,
+        "updated cadence applies to the same controller"
+      );
+      let _ = controller.stop().await.expect("stop");
+      assert_eq!(server.stop_item_ids(), vec!["item-1".to_owned()]);
+    });
+  }
+
+  #[test]
+  fn speed_change_preserves_pause_and_rejects_invalid_or_unconfirmed_values() {
+    run_async(async {
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      let _ = controller
+        .play(
+          library_item("Movie").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start movie");
+      let _ = controller.set_paused(true).await.expect("pause movie");
+      let hold = Arc::new(AtomicBool::new(true));
+      let outcome = controlled_playback(
+        controller
+          .execute(ControllerCommand::SetSpeed(1.5), hold.clone())
+          .await,
+      );
+      assert!(outcome.snapshot.transport.paused);
+      assert!(matches!(
+        mpv
+          .client
+          .get_property("speed")
+          .await
+          .expect("observed speed"),
+        PropertyValue::Number(1.5)
+      ));
+
+      let before = mpv.received_commands().len();
+      for speed in [f64::NAN, f64::INFINITY, -1.0, 0.0, 0.24, 4.01] {
+        assert!(matches!(
+          controller
+            .execute(ControllerCommand::SetSpeed(speed), hold.clone())
+            .await,
+          ControllerSettlement::Controlled(Err(PlaybackError::MpvControlFailed))
+        ));
+      }
+      assert_eq!(
+        mpv.received_commands().len(),
+        before,
+        "invalid requests stay off the wire"
+      );
+
+      *mpv.fail_command.lock().expect("failure command") = Some(vec![
+        serde_json::json!("get_property"),
+        serde_json::json!("speed"),
+      ]);
+      assert!(
+        matches!(
+          controller
+            .execute(ControllerCommand::SetSpeed(2.0), hold)
+            .await,
+          ControllerSettlement::Controlled(Err(PlaybackError::MpvControlFailed))
+        ),
+        "an accepted write alone does not confirm the observed speed"
+      );
+    });
   }
 
   /// The command an explicit (non-continuation) start dispatches through

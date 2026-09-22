@@ -359,7 +359,13 @@ fn settle(
   let outcome = match result {
     Ok(outcome) => outcome,
     Err(_) if matches!(origin, Origin::Undo(_)) => return Task::none(),
-    Err(error) => return report_failure(state, receipt.item_id(), receipt.action(), origin, error),
+    Err(error) => {
+      let tv = super::tv::lists::item_settled(state, &receipt, origin, false);
+      return Task::batch([
+        tv,
+        report_failure(state, receipt.item_id(), receipt.action(), origin, error),
+      ]);
+    }
   };
   let Some(full) = state.full.as_mut() else {
     // Writes outlive Full-mode presentation. Restored surfaces load their own data.
@@ -394,7 +400,8 @@ fn settle(
       snapshot.records,
     ),
   };
-  Task::batch([task, super::undo::restore_captured_focus(state, focus)])
+  let tv = super::tv::lists::item_settled(state, &receipt, origin, true);
+  Task::batch([task, tv, super::undo::restore_captured_focus(state, focus)])
 }
 
 fn report_failure(

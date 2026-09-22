@@ -30,6 +30,28 @@ pub struct PlaybackChapter {
   pub title: Option<String>,
 }
 
+/// Observed transport capabilities and speed for one verified playing entry.
+/// Missing or malformed properties remain unavailable, never inferred from
+/// media metadata or a submitted command.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlaybackControls {
+  /// MPV playlist identity verified before and after sampling.
+  pub playlist_entry_id: Option<i64>,
+  /// Actual positive playback speed multiplier reported by MPV.
+  pub speed: Option<f64>,
+  /// Positive duration reported by MPV, without a media-server fallback.
+  pub duration_seconds: Option<f64>,
+  /// Whether MPV considers the file seekable, including cache-only seeking.
+  pub seekable: Option<bool>,
+  /// True when seeking is only available because of the demuxer cache.
+  /// Whole-file seeking requires `seekable == Some(true)` and this field to
+  /// be `Some(false)`; unknown capabilities must not enable it.
+  pub partially_seekable: Option<bool>,
+  /// Actual cached regions, sorted by start without filling gaps. These do
+  /// not limit ordinary seeking when the source itself is fully seekable.
+  pub buffered_ranges: Vec<(f64, f64)>,
+}
+
 /// A coherent statistics sample for one playing file.
 ///
 /// `playlist_entry_id` identifies the MPV playlist entry the sample describes.
@@ -221,6 +243,39 @@ impl StatisticsReader {
       return Err(MpvError::MediaChanged);
     }
     Ok(seekable_ranges(&decode_json(Some(value))))
+  }
+
+  /// Read speed and real seek capabilities without sampling decoder statistics.
+  ///
+  /// MPV's `seekable` includes sources seekable only inside the cache. The
+  /// separate `partially-seekable` property preserves that distinction.
+  /// Unavailable properties remain `None`; unavailable cache metadata yields
+  /// no ranges. This reader never changes player state.
+  ///
+  /// # Errors
+  ///
+  /// Returns transport failures or [`MpvError::MediaChanged`] if the playing
+  /// entry changes during the read.
+  pub async fn controls(&self) -> Result<PlaybackControls, MpvError> {
+    let before = self.playing_entry_id().await?;
+    let (speed, duration, seekable, partially_seekable, cache) = tokio::try_join!(
+      property(&self.mpv, "speed"),
+      property(&self.mpv, "duration"),
+      property(&self.mpv, "seekable"),
+      property(&self.mpv, "partially-seekable"),
+      property(&self.mpv, "demuxer-cache-state"),
+    )?;
+    if before != self.playing_entry_id().await? {
+      return Err(MpvError::MediaChanged);
+    }
+    Ok(PlaybackControls {
+      playlist_entry_id: before,
+      speed: as_f64(speed).filter(|speed| *speed > 0.0),
+      duration_seconds: as_f64(duration).filter(|duration| *duration > 0.0),
+      seekable: as_bool(seekable),
+      partially_seekable: as_bool(partially_seekable),
+      buffered_ranges: seekable_ranges(&decode_json(cache)),
+    })
   }
 
   /// Read real chapter starts and optional titles, sorted by start time.
@@ -811,6 +866,68 @@ mod tests {
       "expected MediaChanged, got {result:?}"
     );
 
+    drop(reader);
+    peer.await.expect("peer task should finish");
+  }
+
+  #[tokio::test]
+  async fn controls_preserve_cache_only_seekability_and_discontinuous_ranges() {
+    let mut properties = populated_properties();
+    properties.extend([
+      ("speed".to_owned(), serde_json::json!(1.5)),
+      ("duration".to_owned(), serde_json::json!(1_800.0)),
+      ("seekable".to_owned(), serde_json::json!(true)),
+      ("partially-seekable".to_owned(), serde_json::json!(true)),
+    ]);
+    let (reader, peer) = spawn_peer(properties, VecDeque::from([playing_playlist(42)])).await;
+    assert_eq!(
+      reader.controls().await.expect("controls"),
+      PlaybackControls {
+        playlist_entry_id: Some(42),
+        speed: Some(1.5),
+        duration_seconds: Some(1_800.0),
+        seekable: Some(true),
+        partially_seekable: Some(true),
+        buffered_ranges: vec![(0.0, 60.0), (45.0, 90.0), (120.0, 240.0)],
+      }
+    );
+    drop(reader);
+    peer.await.expect("peer task should finish");
+  }
+
+  #[tokio::test]
+  async fn controls_leave_malformed_or_unavailable_capabilities_unknown() {
+    let (reader, peer) = spawn_peer(
+      HashMap::from([
+        ("speed".to_owned(), serde_json::json!(-1.0)),
+        ("duration".to_owned(), serde_json::json!(-1.0)),
+        ("seekable".to_owned(), serde_json::json!("yes")),
+      ]),
+      VecDeque::from([playing_playlist(42)]),
+    )
+    .await;
+    assert_eq!(
+      reader.controls().await.expect("controls"),
+      PlaybackControls {
+        playlist_entry_id: Some(42),
+        ..PlaybackControls::default()
+      }
+    );
+    drop(reader);
+    peer.await.expect("peer task should finish");
+  }
+
+  #[tokio::test]
+  async fn controls_reject_media_replaced_mid_query() {
+    let (reader, peer) = spawn_peer(
+      populated_properties(),
+      VecDeque::from([playing_playlist(42), playing_playlist(43)]),
+    )
+    .await;
+    assert!(matches!(
+      reader.controls().await,
+      Err(MpvError::MediaChanged)
+    ));
     drop(reader);
     peer.await.expect("peer task should finish");
   }

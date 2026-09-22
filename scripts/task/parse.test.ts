@@ -18,11 +18,12 @@ describe('parseCli', () => {
       check: true,
       crates: [],
     });
-    expect(parseCli(['iced', 'run', '--smoke', '--release'])).toEqual({
+    expect(parseCli(['iced', 'run', '--smoke', '--release', '--tv'])).toEqual({
       _tag: 'iced',
       smoke: true,
       release: true,
       embedded: false,
+      tv: true,
     });
     expect(parseCli(['iced', 'hot'])).toEqual({ _tag: 'icedHot' });
   });
@@ -119,6 +120,8 @@ describe('parseCli', () => {
     expect(() => parseCli(['iced', 'hot', '--embedded'])).toThrow();
     expect(() => parseCli(['iced', 'run', '--embedded', 'false'])).toThrow();
     expect(() => parseCli(['iced', 'run', '--embedded=false'])).toThrow();
+    expect(() => parseCli(['iced', 'run', '--tv=false'])).toThrow();
+    expect(() => parseCli(['iced', 'hot', '--tv'])).toThrow();
   });
 
   test('parses monitor process options with defaults and explicit overrides', () => {

@@ -29,6 +29,9 @@ impl std::fmt::Debug for Message {
     match self {
       Self::Window(message) => formatter.debug_tuple("Window").field(message).finish(),
       Self::Shell(_) => formatter.write_str("Shell"),
+      Self::Tv(_) => formatter.write_str("Tv"),
+      Self::UiModeSelected(mode) => formatter.debug_tuple("UiModeSelected").field(mode).finish(),
+      Self::TvLaunch => formatter.write_str("TvLaunch"),
       Self::PersonalLists(_) => formatter.write_str("PersonalLists"),
       Self::Collections(_) => formatter.write_str("Collections"),
       Self::ItemActions(_) => formatter.write_str("ItemActions"),
@@ -70,6 +73,10 @@ impl std::fmt::Debug for Message {
 
 #[derive(Clone)]
 pub enum Message {
+  Tv(super::tv::Message),
+  UiModeSelected(jellypilot_core::config::UiMode),
+  /// A one-launch TV request, including activation of an existing process.
+  TvLaunch,
   Window(WindowMessage),
   Shell(ShellMessage),
   PersonalLists(super::personal_lists::PersonalListsMessage),
@@ -249,6 +256,13 @@ pub enum SettingsMessage {
   SaveMpvPath,
   MpvArgsChanged(String),
   SaveMpvArgs,
+  MpvOptionSelected {
+    name: &'static str,
+    value: &'static str,
+  },
+  AutoNextEpisodeChanged(bool),
+  ProgressSyncSecondsSelected(u64),
+  LocalPreferenceSelected(jellypilot_core::config::LocalPreference),
   PlaybackTargetNameChanged(String),
   SavePlaybackTargetName,
   TmdbApiKeyChanged(String),
@@ -264,7 +278,10 @@ pub enum SettingsMessage {
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleLanguageAdded(String),
-  SubtitleLanguageMoved { index: usize, offset: i32 },
+  SubtitleLanguageMoved {
+    index: usize,
+    offset: i32,
+  },
   SubtitleLanguageRemoved(usize),
   BeginShortcutCapture(ShortcutKind),
   ShortcutCaptured(String),

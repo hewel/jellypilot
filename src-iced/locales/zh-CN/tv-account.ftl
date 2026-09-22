@@ -1,0 +1,15 @@
+tv-account-password-optional = 密码（可选）
+tv-account-enter = 选择以输入
+tv-account-show-password = 显示密码
+tv-account-hide-password = 隐藏密码
+tv-account-desktop = 返回桌面
+tv-account-watchlist-delete = 已选择删除本地待看列表。
+tv-account-watchlist-keep = 将保留本地待看列表。
+tv-entry-shift = 大小写
+tv-entry-space = 空格
+tv-entry-delete = 删除
+tv-entry-keyboard = 键盘输入
+tv-entry-help = 使用遥控器屏幕键盘，或选择“键盘输入”使用键盘和输入法。按返回键退出，不会提交。
+tv-search-title = 搜索媒体库
+tv-search-placeholder = 电影或剧集名称
+tv-search-submit = 搜索

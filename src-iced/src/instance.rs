@@ -16,9 +16,34 @@ use interprocess::local_socket::{prelude::*, ListenerOptions, Stream};
 use tokio::sync::{mpsc, Mutex};
 
 const ACTIVATION: &[u8] = b"show\n";
+const TV_ACTIVATION: &[u8] = b"tvui\n";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Activation {
+  Show,
+  ShowTv,
+}
+
+impl Activation {
+  fn message(self) -> &'static [u8] {
+    match self {
+      Self::Show => ACTIVATION,
+      Self::ShowTv => TV_ACTIVATION,
+    }
+  }
+
+  fn from_message(message: &[u8]) -> Option<Self> {
+    match message {
+      ACTIVATION => Some(Self::Show),
+      TV_ACTIVATION => Some(Self::ShowTv),
+      _ => None,
+    }
+  }
+}
+
 #[derive(Clone)]
 pub(crate) struct ActivationChannel {
-  pub(crate) receiver: Arc<Mutex<mpsc::UnboundedReceiver<()>>>,
+  pub(crate) receiver: Arc<Mutex<mpsc::UnboundedReceiver<Activation>>>,
 }
 impl PartialEq for ActivationChannel {
   fn eq(&self, _other: &Self) -> bool {
@@ -80,7 +105,7 @@ impl Drop for Guard {
   }
 }
 
-pub(crate) fn acquire() -> Startup {
+pub(crate) fn acquire(activation: Activation) -> Startup {
   let (raw_name, unix_path) = match socket_identity() {
     Ok(name) => name,
     Err(error) => {
@@ -108,7 +133,7 @@ pub(crate) fn acquire() -> Startup {
 
   match Stream::connect(name) {
     Ok(mut stream) => {
-      if let Err(error) = stream.write_all(ACTIVATION) {
+      if let Err(error) = stream.write_all(activation.message()) {
         tracing::warn!(%error, "could not activate existing JellyPilot instance");
       }
       return Startup::Existing;
@@ -184,7 +209,7 @@ pub(crate) fn acquire() -> Startup {
 
 fn accept_loop(
   listener: interprocess::local_socket::Listener,
-  sender: mpsc::UnboundedSender<()>,
+  sender: mpsc::UnboundedSender<Activation>,
   stop: Arc<AtomicBool>,
 ) {
   // Blocking accept keeps an idle instance at zero wakeups; Guard::drop wakes
@@ -201,10 +226,17 @@ fn accept_loop(
           continue;
         }
         let mut message = [0; ACTIVATION.len()];
+        let mut received = 0;
         let deadline = std::time::Instant::now() + Duration::from_millis(250);
         let read = loop {
-          match stream.read_exact(&mut message) {
-            Ok(()) => break true,
+          match stream.read(&mut message[received..]) {
+            Ok(0) => break false,
+            Ok(count) => {
+              received += count;
+              if received == message.len() {
+                break true;
+              }
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
               if std::time::Instant::now() >= deadline || stop.load(Ordering::Acquire) {
                 break false;
@@ -214,8 +246,8 @@ fn accept_loop(
             Err(_) => break false,
           }
         };
-        if read && is_show_message(&message) {
-          let _ = sender.send(());
+        if let Some(activation) = read.then(|| Activation::from_message(&message)).flatten() {
+          let _ = sender.send(activation);
         }
       }
       Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -232,10 +264,6 @@ fn stale_connect_error(error: &io::Error) -> bool {
     error.kind(),
     io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused | io::ErrorKind::AddrNotAvailable
   )
-}
-
-fn is_show_message(message: &[u8]) -> bool {
-  message == ACTIVATION
 }
 
 fn socket_identity() -> io::Result<(String, Option<PathBuf>)> {
@@ -274,10 +302,44 @@ mod tests {
   use super::*;
 
   #[test]
-  fn activation_message_is_exactly_show_line() {
-    assert!(is_show_message(b"show\n"));
-    assert!(!is_show_message(b"show"));
-    assert!(!is_show_message(b"quit\n"));
+  fn instance_socket_delivers_presentation_intent_and_ignores_malformed_messages() {
+    let socket = format!("jellypilot-instance-test-{}", std::process::id());
+    #[cfg(unix)]
+    let socket = std::env::temp_dir().join(socket);
+    #[cfg(unix)]
+    let name = socket.clone().to_fs_name::<GenericFilePath>().unwrap();
+    #[cfg(not(unix))]
+    let name = socket.to_ns_name::<GenericNamespaced>().unwrap();
+    let listener = ListenerOptions::new()
+      .name(name.clone())
+      .create_sync()
+      .unwrap();
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let thread = thread::spawn(move || accept_loop(listener, sender, thread_stop));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_time()
+      .build()
+      .unwrap();
+
+    for invalid in [b"show".as_slice(), b"quit\n".as_slice()] {
+      let mut stream = Stream::connect(name.clone()).unwrap();
+      stream.write_all(invalid).unwrap();
+    }
+    for activation in [Activation::ShowTv, Activation::Show] {
+      let mut stream = Stream::connect(name.clone()).unwrap();
+      stream.write_all(activation.message()).unwrap();
+      let received = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(2), receiver.recv()).await });
+      assert_eq!(received.unwrap(), Some(activation));
+    }
+
+    stop.store(true, Ordering::Release);
+    let _ = Stream::connect(name);
+    thread.join().unwrap();
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(socket);
   }
 
   #[test]

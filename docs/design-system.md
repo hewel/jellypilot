@@ -4,6 +4,16 @@ JellyPilot uses a desktop-first design system: a Neon Indigo accent over Charcoa
 
 The design system lives in `crates/jellypilot-ui`: tokens in `tokens.rs` (`TOKENS`), variant enums in `variants.rs`, and the widget catalog in `widgets/`. Views under `src-iced/src/app/view/` compose those pieces; they never invent new token values.
 
+The scoped [TV presentation](tv-design-spec.md) uses the same native renderer and shared
+resources with its own `jellypilot-ui` TV geometry and Catalog styles. The updated TV
+focus treatment uses a light `#E8E9ED` fill, `#17181C` foreground and `#494B54` secondary
+text for controls, retaining independent selection indicators. Posters grow 3% from
+their bottom center inside fixed slots, with a 2px light edge and viewport clearance.
+Primary transport grows from 80px to 84px; seek emphasis is confined to the track and
+thumb. Interruptible 175ms transitions honor reduced motion. These rules apply only to
+TV; desktop controls and the saved desktop theme retain their own contracts. Visual
+acceptance on a television remains human.
+
 **2026-09-06 Sidebar surface revision: implemented; human visual acceptance pending.** The scoped rules below describe the Sidebar and Account Popover treatment. Existing default tokens and unrelated surfaces are unchanged; see the [native Sidebar specification](sidebar-design-spec.md#appearance) for geometry and pending human acceptance.
 
 ## Principles
@@ -25,7 +35,7 @@ Every container has a semantic surface role (`SurfaceVariant`, styled by `widget
 | `Raised` | `surfaceContainerHigh` | `lg` (8) | `raised_high` | Standalone floating card: the login card |
 | `Floating` | `surfaceContainerHigh` | `lg` (8) | `raised_high` + 1px `outlineVariant` edge | Layered floating cards: popovers, modal cards, toasts (with severity fills), floating prompts (Skip Intro) |
 
-Inline content (home hero and action cards, detail episode/next-up/summary rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
+Inline content (home hero and action cards, detail episode rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
 
 ## Shell Hairlines and Structural Boundaries
 
@@ -266,7 +276,7 @@ Human acceptance (pending): check normal, fullscreen, and Control-Only embedded 
 Accepted native target: all eight sections in the [Paper Settings reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/2ZF-0), with the [shared switch reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/4-0/3ZR-0). Paper remains unchanged; human visual acceptance is pending.
 
 - Settings always uses the normal floating layout in both App Modes and at every window size, targeting 1080×700 and constrained to the available window with 24px outer margins. Its scoped 16px radius and `surface` content background do not retarget other dialogs. Retain the semantic high shadow, neutral 1px edge, live backdrop blur, and existing dismissal/focus behavior.
-- The full-height 208px navigation uses `surfaceVariant`, 12px vertical / 10px horizontal padding, and 6px row gaps. Selected rows use `primaryContainer` with `secondary` content. Remove the large Settings header and redundant section titles. The pinned navigation footer stacks accurate, wrapping save guidance above a 40px-high Close / Esc action; section navigation scrolls independently in short windows so Close remains reachable.
+- The full-height 208px navigation uses `surfaceVariant`, 12px vertical / 10px horizontal padding, and 6px row gaps. Selected rows use `primaryContainer` with `secondary` content. Remove the large Settings header and redundant section titles. The pinned navigation footer contains a 40px-high Close / Esc action, without global auto-save guidance; section navigation scrolls independently in short windows so Close remains reachable.
 - Content uses 20px vertical / 24px horizontal padding with 20px group separation. Settings groups are flat on the panel surface, not nested Canvas cards. Field/save pairs, subtitle-priority rows, shortcuts, appearance segments, diagnostics, and account management follow their corresponding reference hierarchy.
 - There is no compact header, section picker, full-window Settings, or alternate account arrangement. The 208px left navigation remains beside content that fills the remaining width. The right pane scrolls vertically only: never give it a fixed desktop width or move trailing controls outside the viewport behind horizontal scrolling. Control-Only retains Now Playing inert beneath the same dialog and exposed backdrop.
 - Every existing setting remains available, including settings absent from Paper. Preserve field Save/Enter handling, immediate selections, validation, persistence failures, backend restart requirements, account safeguards, and shortcut capture. Never claim all changes auto-save. Keep real connection and remote-control states instead of reference sample data.
@@ -405,15 +415,15 @@ Human acceptance: check windowed/fullscreen video proportions, 1099/900/768/400p
 - Back sits 18px from the top/left, with native 10px blur sampled from the same full hero frame, a scoped 40% canvas tint, and no decorative border. Its localized label, keyboard focus and disabled behavior remain sharp and independent of the blur.
 - Metadata, overview and actions live **below** the hero on Canvas. Sections start with 28px top spacing and 36px horizontal insets; content widths below 600px use 18px insets. Metadata is 14px/18px; the overview is 16px/24px. Actions use the 36px M tier with 10px inter-button spacing and wrap instead of disappearing.
 - Overview disclosure measures actual shaped text, clamps to two lines with an end fade, and exposes More/Less only on overflow. Expanding text moves subsequent content without resizing the hero. These prose-disclosure links are not primary action buttons.
-- Summary information uses a 360px genre/creator column and a remaining-width cast summary separated by 40px, stacking when narrow. The summary lists four real cast credits plus a localized remaining count.
-- Series pages retain Next Up and replace the horizontal season-button strip with one 32px Season Pill and a bounded, keyboard-operable popover. Choosing the current season closes the menu without reloading; changing seasons preserves exact server IDs. Pending season loads disable selection, and leaving/reloading Detail closes the menu.
-- The episode reference contains series-level sample copy; production episode pages keep the actual episode identity and existing current-season neighbor navigation rather than presenting that sample as real data. Next Up remains series-only. Movies have no episode shelf. All three types include Cast and Similar; file-level media information remains available after those core sections.
+- The 2026-09-22 subtraction revision removes the duplicate genre/cast summary. Keep the complete Cast section and unique creator information there.
+- Series pages use the main playback action for the real Next Up target, with compact played/remaining progress when known; no duplicate Next Up card appears below. The season control is one 32px Season Pill and a bounded, keyboard-operable popover. Choosing the current season closes the menu without reloading; changing seasons preserves exact server IDs. Pending season loads disable selection, and leaving/reloading Detail closes the menu.
+- The episode reference contains series-level sample copy; production episode pages keep the actual episode identity and existing current-season neighbor navigation rather than presenting that sample as real data. Next Up resolution remains series-only. Movies have no episode shelf. All three types include Cast and Similar; file-level media information remains available after those core sections.
 - Episode rows are flat, with 300×169 artwork, 20px between lanes, 16px titles, 12px metadata and 12px/20px two-line overviews. Below 720px content width, rows stack without losing actions. Play, Resume and Replay retain their actual playback start semantics. Watched rows show a check; in-progress artwork carries the reference's **4px** progress rail, a Detail-specific exception to the older generic 6px target.
 - Cast cells are 96px wide with 72px round portraits, 24px spacing, wrapped 12px names/roles, and honest missing-art placeholders. Jellyfin and Emby supply real names, roles and tagged portrait references; no reference assets or fabricated credits are bundled. Each credit has a separate visibility slot even when multiple roles share an image, while the underlying image cache remains shared.
 - Similar cards are 150×225 posters with 18px spacing and real title/year/type metadata. Both Cast and Similar scroll horizontally, retain measured visibility admission, and show explicit empty states. Decorative outlines and placeholders preserve the requested image box; they must not inflate an unbounded scroll layout.
 - Premiere dates preserve the server's calendar date rather than shifting midnight through the desktop time zone. Missing dates, portraits and roles remain absent or use the established empty presentation.
 
-Human acceptance: compare a movie, series and episode against the references in both themes; check hero crop/logo/scrims, below-hero copy, season popover and its dismissal, Next Up only on series, Play/Resume/Replay, long-text disclosure, real cast photos/roles, horizontal shelves, and narrow-width reflow. Headless tests exercise layout and pointer/state behavior; they do not establish visual acceptance.
+Human acceptance: compare a movie, series and episode against the references in both themes; check hero crop/logo/scrims, below-hero copy, season popover and its dismissal, one main series playback action with truthful progress, Play/Resume/Replay, long-text disclosure, real cast photos/roles, horizontal shelves, and narrow-width reflow. Headless tests exercise layout and pointer/state behavior; they do not establish visual acceptance.
 
 ### 2026-09-15 Media Specifications and Parent Series Navigation
 
@@ -428,7 +438,7 @@ Human acceptance: compare a movie, series and episode against the references in 
 
 #### Specifications Row and Track Popovers
 
-- Order the summary as resolution, dynamic range, video codec, frame rate, audio and subtitles, between item metadata and overview. Use actual server facts, never the reference's sample values.
+- The 2026-09-22 summary contains resolution and dynamic range as unboxed static text, followed by interactive audio and subtitle controls, between item metadata and overview. Video codec and frame rate remain in Complete Media Information. Use actual server facts, never the reference's sample values.
 - Audio and subtitle summaries prefer a track explicitly marked default in the source metadata, otherwise the first track in server order. This choice does not resolve user preferences or predict the track the backend will play.
 - `+N` counts the other tracks of that type in the same source, not additional languages or tracks from other versions. Do not merge tracks sharing a language; each remains a separate entry.
 - Clicking the entire audio or subtitle chip opens its read-only track list. Preserve real language, format and default-track information. The Paper selected-row highlight and checkmark are deliberately not adopted: a default marker is metadata, not a selected playback state.
@@ -455,4 +465,4 @@ Human acceptance: compare a movie, series and episode against the references in 
 
 The desktop implementation and shared media-info/FFI contracts are delivered; Paper references remain unchanged. Headless regressions cover provider metadata boundaries, default-first summaries, long-text layout, keyboard popover behavior, and originating-season navigation through retry and history restoration. Workspace checks/tests and the isolated native first-frame smoke gate pass; these checks do not establish visual acceptance. No new ADR is needed for these presentation and information-ownership rules.
 
-Human acceptance: compare all three detail types in both themes and at narrow widths; check truthful resolution/range/codec/frame-rate summaries, default-first track summaries and `+N` counts, same-language tracks, missing/default-less metadata, confirmed no-subtitle versus unavailable data, multi-source disclosure, long read-only popovers and keyboard dismissal, complete bottom-information alignment, and absent series-wide specifications. From a non-first-season episode opened through home, search or Personal Lists, check the series-name link, top-of-series arrival with the originating season selected, missing-parent/season fallbacks, and unchanged Back, Next Up and playback behavior.
+Human acceptance: compare all three detail types in both themes and at narrow widths; check truthful resolution/range summaries and complete codec/frame-rate information, default-first track summaries and `+N` counts, same-language tracks, missing/default-less metadata, confirmed no-subtitle versus unavailable data, multi-source disclosure, long read-only popovers and keyboard dismissal, complete bottom-information alignment, and absent series-wide specifications. From a non-first-season episode opened through home, search or Personal Lists, check the series-name link, top-of-series arrival with the originating season selected, missing-parent/season fallbacks, and unchanged Back, Next Up and playback behavior.

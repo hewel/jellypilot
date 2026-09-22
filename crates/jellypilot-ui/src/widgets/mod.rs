@@ -25,6 +25,8 @@ pub mod sidebar;
 pub mod skeleton;
 pub mod switch;
 pub mod tracked_slider;
+pub mod tv_focus;
+pub mod tv_player;
 
 pub use control_button::{control_button, ControlButton};
 pub use poster_card::{poster_card, PosterCard};

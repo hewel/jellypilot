@@ -24,6 +24,7 @@ export type TaskCommand =
       readonly smoke: boolean;
       readonly release: boolean;
       readonly embedded: boolean;
+      readonly tv: boolean;
     }
   | { readonly _tag: 'mpvBuild'; readonly source: string | null }
   | { readonly _tag: 'packageWindows'; readonly runtimeDirectory: string }
@@ -235,13 +236,15 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     let smoke = false;
     let release = false;
     let embedded = false;
+    let tv = false;
     for (const argument of rest) {
       if (argument === '--smoke') smoke = true;
       else if (argument === '--release') release = true;
       else if (argument === '--embedded') embedded = true;
+      else if (argument === '--tv') tv = true;
       else unknownOption('iced run', argument);
     }
-    return { _tag: command, smoke, release, embedded };
+    return { _tag: command, smoke, release, embedded, tv };
   }
   throw new Error(`Unknown task command: ${command}`);
 }

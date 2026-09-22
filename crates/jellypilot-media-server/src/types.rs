@@ -140,7 +140,7 @@ pub struct LibraryLatestRow {
 }
 
 /// Supported video library browse families.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub enum VideoLibraryKind {
   #[serde(rename = "movies")]
   Movies,
@@ -160,6 +160,53 @@ pub struct VideoLibraryPageRequest {
   pub sort_direction: VideoLibrarySortDirection,
   pub played_filter: VideoLibraryPlayedFilter,
   pub favorites_only: bool,
+  #[serde(default)]
+  pub filters: VideoLibraryFilters,
+}
+
+/// Metadata filters are combined with each other and the user's played/favorite filters.
+#[derive(Debug, Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryFilters {
+  pub quality: Option<VideoLibraryQuality>,
+  pub country: Option<String>,
+  pub genre: Option<String>,
+}
+
+impl VideoLibraryFilters {
+  pub fn is_empty(&self) -> bool {
+    self.quality.is_none()
+      && self
+        .country
+        .as_ref()
+        .is_none_or(|value| value.trim().is_empty())
+      && self
+        .genre
+        .as_ref()
+        .is_none_or(|value| value.trim().is_empty())
+  }
+}
+
+/// Width-based raster classes retain cropped cinema releases in their nominal class.
+/// HD starts at 1280 pixels, Full HD at 1920, and UHD at 3840. Height is a fallback
+/// only when width is absent. Dolby Vision additionally requires UHD and a valid
+/// Dolby Vision marker on the same video stream. Series do not aggregate episodes.
+#[derive(Debug, Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoLibraryQuality {
+  Hd,
+  FullHd,
+  Uhd,
+  DolbyVision,
+}
+
+/// Available metadata values from the complete, current user's scoped library.
+#[derive(Debug, Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryFilterOptions {
+  pub qualities: Vec<VideoLibraryQuality>,
+  pub countries: Vec<String>,
+  pub genres: Vec<String>,
 }
 
 /// Supported Library Browser sort options.

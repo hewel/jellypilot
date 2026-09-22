@@ -122,6 +122,45 @@ fn update_settings(
       }
       Task::none()
     }
+    SettingsMessage::LocalPreferenceSelected(preference) => {
+      let refresh_cache = matches!(
+        preference,
+        jellypilot_core::config::LocalPreference::ImageCache(_)
+      );
+      let hdr = match &preference {
+        jellypilot_core::config::LocalPreference::HdrOutput(output) => Some(*output),
+        _ => None,
+      };
+      let result = kernel.settings.set_local_preference(preference);
+      if finish_settings_mutation(surface, kernel, result) {
+        if refresh_cache {
+          kernel
+            .artwork_adapter
+            .set_disk_cache_enabled(kernel.settings.snapshot().image_cache_enabled());
+        }
+        if let Some(output) = hdr {
+          crate::embedded::set_hdr_output(output);
+        }
+      }
+      Task::none()
+    }
+    SettingsMessage::MpvOptionSelected { name, value } => {
+      let result = kernel.settings.set_mpv_option(name, value);
+      if finish_settings_mutation(surface, kernel, result) {
+        surface.view.mpv_args_input = kernel.settings.snapshot().mpv_args().join(" ");
+      }
+      Task::none()
+    }
+    SettingsMessage::AutoNextEpisodeChanged(enabled) => {
+      let result = kernel.settings.set_auto_next_episode(enabled);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
+    SettingsMessage::ProgressSyncSecondsSelected(seconds) => {
+      let result = kernel.settings.set_progress_sync_seconds(seconds);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
     SettingsMessage::PlaybackTargetNameChanged(value) => {
       surface.view.playback_target_name_input = value;
       clear_settings_feedback(surface);

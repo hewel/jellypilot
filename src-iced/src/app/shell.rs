@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use iced::Task;
 use jellypilot_core::browse_model::BrowseSource;
-use jellypilot_core::config::AppMode;
+use jellypilot_core::config::{AppMode, UiMode};
 use jellypilot_core::skeleton::skeleton_phase_at;
 use jellypilot_media_server::VideoLibraryItem;
 
@@ -150,6 +150,10 @@ pub fn profile_action_id(index: usize, action: &str) -> String {
 /// Shell surface slice: the window and navigation state behind the shell
 /// frame (sidebar, content routing, toast layer).
 pub struct Surface {
+  /// Presentation is independent of the persisted Full/Control-Only capability.
+  pub ui_mode: UiMode,
+  pub(crate) desktop_window_size: Option<iced::Size>,
+  pub(crate) desktop_full_window_size: Option<iced::Size>,
   pub smoke: bool,
   /// The live window, when the daemon currently owns one.
   pub window_id: Option<iced::window::Id>,
@@ -199,6 +203,9 @@ pub struct Surface {
 impl Surface {
   pub fn new(smoke: bool) -> Self {
     Self {
+      ui_mode: UiMode::Desktop,
+      desktop_window_size: None,
+      desktop_full_window_size: None,
       smoke,
       window_id: None,
       pending_window_id: None,
@@ -361,6 +368,100 @@ fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
   })
 }
 
+fn presentation_window_mode(mode: UiMode) -> iced::window::Mode {
+  match mode {
+    UiMode::Desktop => iced::window::Mode::Windowed,
+    UiMode::Tv => iced::window::Mode::Fullscreen,
+  }
+}
+
+/// Switch presentation while retaining the account and the live player.
+pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
+  if state.shell.ui_mode == mode {
+    return Task::none();
+  }
+  let previous_mode = state.app_mode();
+  let previous_size = state.shell.window_size;
+  let previous_full_size = state.shell.full_window_size;
+  let player_was_visible = state.playback.view.lifecycle.playback_active
+    && (previous_mode == AppMode::ControlOnly
+      || state.shell.player_fullscreen
+      || state.shell.destination == Destination::NowPlaying);
+  state.shell.ui_mode = mode;
+  close_settings(state);
+  state.shell.account_popover_open = false;
+  state.shell.compact_search_open = false;
+  state.shell.player_fullscreen = false;
+  state.playback.audio_menu_open = false;
+  state.playback.subtitle_menu_open = false;
+  state.playback.queue_menu_open = false;
+  super::playback::cancel_slider_drags(&mut state.playback);
+  let mut tasks = Vec::new();
+  if previous_mode != state.app_mode() {
+    tasks.push(apply_app_mode(state, state.app_mode()));
+  }
+  match mode {
+    UiMode::Tv => {
+      state.shell.desktop_window_size = Some(previous_size);
+      state.shell.desktop_full_window_size = previous_full_size;
+      let source = browse_source(state);
+      if matches!(source, Some(BrowseSource::Library { .. })) {
+        if let Some(full) = state.full.as_mut() {
+          if browse::normalize_tv_filters(&mut full.browse, &state.kernel) {
+            tasks.push(browse::start(&mut full.browse, &mut state.kernel, source));
+          }
+        }
+      }
+      if player_was_visible {
+        tasks.push(navigate(state, Destination::NowPlaying));
+      } else if !matches!(
+        state.shell.destination,
+        Destination::Home
+          | Destination::Library { .. }
+          | Destination::Search(_)
+          | Destination::Detail(_)
+          | Destination::PersonalLists(
+            super::personal_lists::Route::Watchlist | super::personal_lists::Route::Favorites
+          )
+      ) && !(state.shell.destination == Destination::NowPlaying
+        && state.playback.view.lifecycle.playback_active)
+      {
+        tasks.push(navigate(state, Destination::Home));
+      }
+      if let Some(id) = state.shell.window_id {
+        tasks.push(
+          Task::batch([
+            iced::window::set_resizable(id, true),
+            iced::window::set_max_size(id, None),
+          ])
+          .chain(iced::window::set_mode(id, iced::window::Mode::Fullscreen)),
+        );
+      }
+    }
+    UiMode::Desktop => {
+      state.shell.full_window_size = state.shell.desktop_full_window_size.take();
+      tasks.push(super::tv::leave(state));
+      let source = browse_source(state);
+      if let Some(full) = state.full.as_mut() {
+        tasks.push(browse::apply_advanced_filters(
+          &mut full.browse,
+          &mut state.kernel,
+          source,
+          Default::default(),
+        ));
+      }
+      let geometry = mode_geometry(state.app_mode(), state.shell.desktop_window_size.take());
+      if let Some(id) = state.shell.window_id {
+        tasks.push(
+          iced::window::set_mode(id, iced::window::Mode::Windowed)
+            .chain(window_geometry_task(geometry)),
+        );
+      }
+    }
+  }
+  Task::batch(tasks)
+}
+
 /// App-mode switch routine, invoked by the top-level router when the App Mode
 /// setting changes. It lives here because it mutates this surface's
 /// destination stack and drives the window (ADR 0029). Entering Control-Only
@@ -430,11 +531,14 @@ pub(crate) fn exit_player_fullscreen(state: &mut State) -> Task<Message> {
     .window_id
     .filter(|_| state.shell.images_visible)
     .map_or_else(Task::none, |id| {
-      iced::window::set_mode(id, iced::window::Mode::Windowed)
+      iced::window::set_mode(id, presentation_window_mode(state.shell.ui_mode))
     })
 }
 
 pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
+  if state.tv_mode() {
+    return Task::none();
+  }
   if state.shell.player_fullscreen {
     return exit_player_fullscreen(state);
   }
@@ -464,6 +568,31 @@ pub(crate) fn reconcile_player_fullscreen(state: &mut State) -> Task<Message> {
     exit_player_fullscreen(state)
   } else {
     Task::none()
+  }
+}
+
+/// A TV player has no surrounding desktop navigation once its session ends.
+/// Keep it through automatic-next/replacement work, then restore the source.
+pub(crate) fn reconcile_tv_playback(state: &mut State) -> Task<Message> {
+  let lifecycle = &state.playback.view.lifecycle;
+  if !state.tv_mode()
+    || state.shell.destination != Destination::NowPlaying
+    || state.kernel.connection != jellypilot_auth::login::ConnectionPhase::Connected
+    || state.shell.quit_requested
+    || super::accounts::content_mutations_blocked(&state.kernel)
+    || lifecycle.playback_active
+    || lifecycle.retain_presentation
+    || lifecycle.replacing
+    || !lifecycle.settled
+    || state.playback.view.busy
+    || playback::play_pending(&state.playback)
+  {
+    return Task::none();
+  }
+  if state.shell.navigation_stack.is_empty() {
+    navigate(state, Destination::Home)
+  } else {
+    navigate_back(state)
   }
 }
 
@@ -578,7 +707,11 @@ pub fn update(
             // while `full_window_size` is only stashed across an App Mode
             // switch and would reset a resized Full window to the default.
             let geometry = mode_geometry(
-              kernel.settings.snapshot().app_mode(),
+              if surface.ui_mode == UiMode::Tv {
+                AppMode::Full
+              } else {
+                kernel.settings.snapshot().app_mode()
+              },
               Some(surface.window_size),
             );
             let (id, open) = iced::window::open(crate::app::window_settings(geometry));
@@ -601,7 +734,7 @@ pub fn update(
           surface.pending_close = None;
           surface.player_fullscreen = false;
           surface.images_visible = true;
-          iced::window::set_mode(id, iced::window::Mode::Windowed)
+          iced::window::set_mode(id, presentation_window_mode(surface.ui_mode))
             .chain(iced::window::gain_focus(id))
         }
         Some(id) if surface.window_id == Some(id) => {
@@ -1034,6 +1167,7 @@ pub(crate) fn close_settings(state: &mut State) {
 }
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
   let destination = state.shell.destination.clone();
+  let allow_advanced_filters = state.tv_mode();
   let source = match &destination {
     Destination::Library { .. } | Destination::Search(_) => browse_source(state),
     _ => None,
@@ -1065,6 +1199,8 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
         &mut state.kernel,
         *snapshot,
         state.shell.window_size,
+        source,
+        allow_advanced_filters,
       ),
       PageState::Detail(snapshot) => {
         let Destination::Detail(item_id) = &destination else {
@@ -1094,12 +1230,17 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } => {
       full.browse.filters = None;
+      full.browse.advanced_filters = Default::default();
+      if allow_advanced_filters {
+        browse::normalize_tv_filters(&mut full.browse, &state.kernel);
+      }
       full.browse.search_input.clear();
       browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Search(query) => {
       full.browse.search_input = query;
       full.browse.filters = None;
+      full.browse.advanced_filters = Default::default();
       browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Detail(item_id) => {

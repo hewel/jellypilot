@@ -473,6 +473,28 @@ For each of **SDR**, **HDR10**, and **Dolby Vision Profile 5**:
 7. **Control playback**: Use responsive on-screen player controls, keyboard shortcuts, the player bar, system tray, or remote media server sessions. Open the episode queue to jump anywhere in the current season.
 8. **Switch app modes**: Toggle between Full library mode and Control-Only mode (a compact standalone controller window) in Settings.
 
+**TV mode** is available under **Settings → Appearance → Enter TV mode**. It opens a
+full-screen interface for a computer connected to a television, including Search,
+Home, Library, Detail, Personal Lists, playback and Settings. Use the arrow keys, Enter
+to confirm, and Esc/Backspace to return; a remote that sends those keyboard keys works
+through the same input path. Hold Enter on a media card to open its actions; the Menu
+key or Shift+F10 opens the same menu. Login and search support an on-screen keyboard
+and native keyboard/IME entry.
+Choose **Return to desktop** in the TV navigation to leave. The in-app choice is saved.
+`jellypilot --tv` (or `bun run task iced run --tv`) enters TV for that launch, including
+when the application is already running, without changing the saved presentation.
+TV temporarily makes full browsing available even if the desktop is configured for
+Control-Only; leaving TV restores that desktop preference.
+
+Video inside the TV interface requires Embedded MPV Playback. TV mode does not change
+the selected Playback Backend; External MPV continues to open its own player window.
+TV Settings reuse the same accounts and preferences as desktop. Decoder and playback
+cache changes apply to the next media load; external audio passthrough applies to the
+next MPV process. Unsupported image enhancement, display refresh-rate switching and
+embedded audio passthrough have explicit explanations. Native gamepad input and
+HDMI-CEC adapters are separate from keyboard-style remote support.
+See the [TV implementation contract](docs/tv-design-spec.md) for input and acceptance.
+
 **Season volume memory** is enabled by default under **Settings → Playback**. Player volume
 adjustments are remembered per season on this device, separately for each server and account.
 The next episode, a manually selected episode, or a later session restores that season's volume

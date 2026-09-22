@@ -312,6 +312,8 @@ fn focus_target(state: &State, context: FocusContext) -> Option<String> {
     || state.shell.quit_requested
     || state.shell.settings_open
     || super::view::account::modal_open(state)
+    || (state.tv_mode()
+      && (!super::tv::browse_focus_visible(state) || super::tv::player::active(state)))
     || accounts::content_mutations_blocked(&state.kernel)
   {
     return None;
@@ -399,6 +401,8 @@ pub(crate) fn reconcile(state: &mut State) {
     || state.shell.player_fullscreen
     || state.shell.settings_open
     || super::view::account::modal_open(state)
+    || (state.tv_mode()
+      && (!super::tv::browse_focus_visible(state) || super::tv::player::active(state)))
   {
     0
   } else {

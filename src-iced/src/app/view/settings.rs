@@ -175,19 +175,11 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
   .min_height(40.0)
   .id("settings-close")
   .on_press(Message::Settings(SettingsMessage::Close));
-  column![
-    text(locale.text("shell-settings-save-hint"))
-      .size(TOKENS.font_sizes.s12)
-      .width(Fill)
-      .style(|theme| text::Style {
-        color: Some(palette(theme).text.metadata),
-      }),
-    container(close).width(Fill).align_x(Alignment::End),
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .padding(TOKENS.spacing.s2)
-  .width(Fill)
-  .into()
+  container(close)
+    .padding(TOKENS.spacing.s2)
+    .width(Fill)
+    .align_x(Alignment::End)
+    .into()
 }
 
 const fn settings_icon(section: SettingsSection) -> Icon {
@@ -628,6 +620,19 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   column![
     language_row(state),
+    choice_row(
+      palette,
+      state.t("presentation-tv-title"),
+      Some(state.t("presentation-tv-help")),
+      control_button(
+        Some(Icon::Tv),
+        Some(state.t("presentation-enter-tv")),
+        ButtonVariant::Tonal
+      )
+      .id("settings-enter-tv")
+      .on_press(Message::UiModeSelected(jellypilot_core::config::UiMode::Tv))
+      .into(),
+    ),
     choice_row(
       palette,
       state.t("settings-appearance"),

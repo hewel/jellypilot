@@ -242,6 +242,10 @@ pub(super) fn active(state: &State) -> bool {
       || state.app_mode() == AppMode::ControlOnly)
 }
 
+fn presentation_active(state: &State) -> bool {
+  active(state) || (state.tv_mode() && super::tv::player::active(state))
+}
+
 fn menu_open(state: &State) -> bool {
   state.playback.audio_menu_open
     || state.playback.subtitle_menu_open
@@ -323,7 +327,7 @@ pub(super) fn reconcile(state: &mut State) {
     &mut state.shell.embedded_player,
     state.playback.view.lifecycle.replacement_generation,
   );
-  let active = active(state);
+  let active = presentation_active(state);
   if !active
     || controls_blocked(state)
     || !super::view::player::embedded_options_available(state, state.shell.window_size.width)
@@ -361,8 +365,10 @@ pub(super) fn reconcile(state: &mut State) {
   }
   // Information keeps its statistics demand while the rest of the chrome is
   // allowed to auto-hide; buffer-only sampling still follows the controls.
-  let visible =
-    active && (controls_visible(state) || state.shell.embedded_player.information_open) && !blocked;
+  let visible = active
+    && ((!state.tv_mode() && controls_visible(state))
+      || state.shell.embedded_player.information_open)
+    && !blocked;
   let generation = state.playback.view.lifecycle.replacement_generation;
   let replacing = state.playback.view.lifecycle.replacing;
   reconcile_observation(
@@ -513,7 +519,7 @@ fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, paused: bo
 }
 
 pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
-  if !active(state) {
+  if !presentation_active(state) {
     return Subscription::none();
   }
   let surface = &state.shell.embedded_player;
@@ -525,9 +531,11 @@ pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
     .chain(surface.minimal_deadline)
     .chain(surface.feedback.as_ref().map(|(_, deadline)| *deadline))
     .min();
-  let wake = deadline.map_or_else(Subscription::none, |deadline| {
-    Subscription::run_with(deadline, wake_stream)
-  });
+  let wake = deadline
+    .filter(|_| !state.tv_mode())
+    .map_or_else(Subscription::none, |deadline| {
+      Subscription::run_with(deadline, wake_stream)
+    });
   let observation = match (surface.observation, state.playback.controller.as_ref()) {
     (Some(demand), Some(controller)) => Subscription::run_with(
       ObservationSubscription {
@@ -699,7 +707,7 @@ pub(super) fn keyboard(event: Event, status: event::Status) -> Option<AppMessage
 }
 
 pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
-  if !active(state) {
+  if !presentation_active(state) && !matches!(message, Message::InformationDismissed) {
     return Task::none();
   }
   let now = Instant::now();
@@ -932,7 +940,7 @@ fn dispatch(state: &mut State, intent: PlaybackIntent) -> super::playback::Playb
 
 /// Navigation consumes the session's accepted outcome, never a raw controller message.
 pub(super) fn after_playback(state: &mut State, acceptance: ControllerAcceptance) -> bool {
-  if !crate::embedded::enabled() {
+  if !crate::embedded::enabled() && !state.tv_mode() {
     return false;
   }
   let surface = &mut state.shell.embedded_player;

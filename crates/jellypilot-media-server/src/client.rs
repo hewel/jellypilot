@@ -65,7 +65,11 @@ pub struct JellyfinClient {
   authenticated_http: Client,
   image_http: Client,
   state: Arc<RwLock<ClientState>>,
+  filter_catalog: Arc<library_filters::Cache>,
 }
+
+#[path = "client/library_filters.rs"]
+mod library_filters;
 
 #[path = "client/server_probe.rs"]
 mod server_probe;
@@ -148,6 +152,7 @@ struct ClientState {
   remote_control_warning: Option<String>,
   server_url: Option<String>,
   access_token: Option<String>,
+  authentication_epoch: u64,
   user_id: Option<String>,
   user_name: Option<String>,
   server_name: Option<String>,
@@ -161,6 +166,7 @@ struct ClientState {
 
 impl ClientState {
   fn replace_access_token(&mut self, token: Option<String>) {
+    self.authentication_epoch = self.authentication_epoch.wrapping_add(1);
     if let Some(mut previous) = self.access_token.take() {
       previous.zeroize();
     }
@@ -200,6 +206,7 @@ impl JellyfinClient {
     let device_id = format!("{}{}", DEVICE_ID_PREFIX, Uuid::new_v4());
 
     Self {
+      filter_catalog: Arc::default(),
       authenticated_http: Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(Self::reject_redirect_policy())
@@ -216,6 +223,7 @@ impl JellyfinClient {
         remote_control_warning: None,
         server_url: None,
         access_token: None,
+        authentication_epoch: 0,
         user_id: None,
         user_name: None,
         server_name: None,
@@ -2014,7 +2022,9 @@ impl JellyfinClient {
 
   /// Report playback stopped.
   async fn report_playback_stop(&self, info: &PlaybackStopInfo) -> Result<(), JellyfinError> {
-    self.post_empty("/Sessions/Playing/Stopped", info).await
+    self.post_empty("/Sessions/Playing/Stopped", info).await?;
+    self.library().invalidate_filter_catalog();
+    Ok(())
   }
 
   /// Report session capabilities to Jellyfin via HTTP.
@@ -2731,6 +2741,9 @@ impl<'a> JellyfinLibrary<'a> {
     &self,
     request: VideoLibraryPageRequest,
   ) -> Result<VideoLibraryPage, JellyfinError> {
+    if !request.filters.is_empty() {
+      return library_filters::browse(self.client, request).await;
+    }
     if self.client.provider() == MediaServerProvider::Emby {
       return self.emby_browse_video(request).await;
     }
@@ -3769,6 +3782,7 @@ impl<'a> JellyfinLibrary<'a> {
       .map_err(|err| JellyfinClient::openapi_error("Mark unplayed", err))?,
     };
 
+    self.invalidate_filter_catalog();
     Ok(map_video_user_data_update(item_id, user_data))
   }
 }
@@ -4371,6 +4385,7 @@ impl<'a> JellyfinLibrary<'a> {
       .request_without_body::<emby_api::models::UserItemDataDto>(method, &path)
       .await?;
 
+    self.invalidate_filter_catalog();
     Ok(map_emby_video_user_data_update(item_id, user_data))
   }
 }
@@ -9597,6 +9612,7 @@ mod tests {
         sort_direction: VideoLibrarySortDirection::Descending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
+        filters: VideoLibraryFilters::default(),
       })
       .await
       .expect("movies page should load from generated item listing endpoint");
@@ -9611,6 +9627,7 @@ mod tests {
         sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
+        filters: VideoLibraryFilters::default(),
       })
       .await
       .expect("shows page should load from generated item listing endpoint");
@@ -9625,6 +9642,7 @@ mod tests {
         sort_direction: VideoLibrarySortDirection::Descending,
         played_filter: VideoLibraryPlayedFilter::Played,
         favorites_only: true,
+        filters: VideoLibraryFilters::default(),
       })
       .await
       .expect("filtered movies page should load from generated item listing endpoint");
@@ -10104,6 +10122,7 @@ mod tests {
         sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
+        filters: VideoLibraryFilters::default(),
       })
       .await
       .expect_err("missing library id should return a clear command error");
@@ -11499,6 +11518,7 @@ mod tests {
         sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::Unplayed,
         favorites_only: true,
+        filters: VideoLibraryFilters::default(),
       })
       .await
       .expect("Emby movies browse should map item pages");

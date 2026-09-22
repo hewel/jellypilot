@@ -1,0 +1,15 @@
+tv-account-password-optional = Password (optional)
+tv-account-enter = Select to enter
+tv-account-show-password = Show password
+tv-account-hide-password = Hide password
+tv-account-desktop = Return to desktop
+tv-account-watchlist-delete = Local watchlist deletion is selected.
+tv-account-watchlist-keep = The local watchlist will be kept.
+tv-entry-shift = Shift
+tv-entry-space = Space
+tv-entry-delete = Delete
+tv-entry-keyboard = Keyboard
+tv-entry-help = Use the remote keyboard, or choose Keyboard to type with a keyboard or IME. Back returns without submitting.
+tv-search-title = Search your library
+tv-search-placeholder = Movie or series title
+tv-search-submit = Search

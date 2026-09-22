@@ -20,18 +20,28 @@ pub mod state;
 mod subscriptions;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod tv;
 pub(crate) mod undo;
 mod update;
 mod view;
 
 use iced::{Subscription, Task, Theme};
-use jellypilot_core::config::AppMode;
+use jellypilot_core::config::{AppMode, UiMode};
 
 pub use message::Message;
 pub use state::State;
 
-pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Task<Message>) {
+pub fn boot(
+  smoke: bool,
+  tv: bool,
+  instance: Option<crate::instance::Guard>,
+) -> (State, Task<Message>) {
   let mut state = State::boot(smoke);
+  if tv {
+    state.shell.ui_mode = UiMode::Tv;
+    state.full.get_or_insert_with(state::FullUi::default);
+    state.shell.destination = state::Destination::Home;
+  }
   state.instance = instance;
   state.kernel.tray = if crate::regression::active() {
     match crate::tray::Tray::new(state.kernel.locale) {
@@ -53,11 +63,12 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
     tray.sync(&state.playback.view, false, state.kernel.locale);
   }
 
-  let start_hidden = crate::should_start_hidden(
-    state.kernel.settings.snapshot().start_minimized(),
-    state.kernel.tray.is_some(),
-    smoke,
-  );
+  let start_hidden = !state.tv_mode()
+    && crate::should_start_hidden(
+      state.kernel.settings.snapshot().start_minimized(),
+      state.kernel.tray.is_some(),
+      smoke,
+    );
   if start_hidden {
     state.shell.images_visible = false;
     playback::suspend_artwork(&mut state.playback);

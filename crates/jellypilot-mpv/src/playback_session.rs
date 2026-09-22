@@ -44,6 +44,8 @@ pub enum PlaybackIntent {
   SetPaused(bool),
   Seek(f64),
   SetVolume(f64),
+  /// Set playback speed in the supported range 0.25 through 4.0.
+  SetSpeed(f64),
   SetMuted(bool),
   SelectAudioTrack(i64),
   SelectSubtitleTrack(Option<i64>),
@@ -127,6 +129,7 @@ pub enum ControllerCommand {
   ToggleFullscreen,
   Seek(f64),
   SetVolume(f64),
+  SetSpeed(f64),
   SetMuted(bool),
   SelectAudioTrack(i64),
   SelectSubtitleTrack(Option<i64>),
@@ -180,6 +183,7 @@ impl ControllerCommand {
       | Self::ToggleFullscreen
       | Self::Seek(_)
       | Self::SetVolume(_)
+      | Self::SetSpeed(_)
       | Self::SetMuted(_) => ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
     }
   }
@@ -396,6 +400,7 @@ pub struct PlaybackSession {
   /// automatic adjacent/end-file advancement stays parked until an explicit
   /// play intent lifts it (ADR 0043).
   suspended: bool,
+  auto_next_episode: bool,
   playback_admitted: bool,
   /// The session-owned intro prompt text is on the controller's OSD; only a
   /// dedicated clear may retire it so unrelated feedback is never clobbered.
@@ -426,6 +431,7 @@ impl Default for PlaybackSession {
       cleanup_pending: false,
       quitting: false,
       suspended: false,
+      auto_next_episode: true,
       playback_admitted: true,
       prompt_osd: false,
       replacing: false,
@@ -435,6 +441,15 @@ impl Default for PlaybackSession {
 }
 
 impl PlaybackSession {
+  /// Controls natural-end advancement; an explicit Next command stays available.
+  pub fn set_auto_next_episode(&mut self, enabled: bool) {
+    self.auto_next_episode = enabled;
+  }
+
+  /// The effective mode of this playback session, including temporary UI choices.
+  pub fn intro_mode(&self) -> IntroSkipMode {
+    self.intro.mode()
+  }
   pub fn handle(&mut self, input: PlaybackInput, now: Instant) -> PlaybackStep {
     let generation = self.replacement_generation;
     let mut step = match input {
@@ -603,6 +618,15 @@ impl PlaybackSession {
         self.enqueue(ControllerRequest::controlled(
           RequestKind::Volume,
           ControllerCommand::SetVolume(volume),
+        ))
+      }
+      PlaybackIntent::SetSpeed(speed) => {
+        if self.snapshot.is_none() || self.replacing {
+          return PlaybackStep::ignored();
+        }
+        self.enqueue(ControllerRequest::controlled(
+          RequestKind::Speed,
+          ControllerCommand::SetSpeed(speed),
         ))
       }
       PlaybackIntent::SetMuted(muted) => {
@@ -989,6 +1013,7 @@ impl PlaybackSession {
         // the next one waits for an explicit play intent.
         if self.playback_admitted
           && !self.suspended
+          && self.auto_next_episode
           && self.adjacent.item(AdjacentDirection::Next).is_some()
         {
           return self.play_adjacent(AdjacentDirection::Next).effects;
@@ -1418,6 +1443,7 @@ enum RequestKind {
   Fullscreen,
   Seek,
   Volume,
+  Speed,
   Muted,
   AudioTrack,
   SubtitleTrack,
@@ -1921,8 +1947,10 @@ mod tests {
 
     for intent in [
       PlaybackIntent::SetVolume(10.0),
+      PlaybackIntent::SetSpeed(1.25),
       PlaybackIntent::Seek(2.0),
       PlaybackIntent::SetVolume(20.0),
+      PlaybackIntent::SetSpeed(1.5),
     ] {
       let queued = session.handle(PlaybackInput::Intent(Box::new(intent)), now);
       assert!(queued.effects.is_empty());
@@ -1965,9 +1993,24 @@ mod tests {
     );
     assert!(matches!(command, ControllerCommand::SetVolume(20.0)));
 
+    let (speed_id, command) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+            id: volume_id,
+            settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
+              snapshot: snapshot("episode-1", "Episode", 2.0),
+              warnings: Vec::new(),
+            })),
+          })),
+          now,
+        )
+        .effects,
+    );
+    assert!(matches!(command, ControllerCommand::SetSpeed(1.5)));
     let drained = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id: volume_id,
+        id: speed_id,
         settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
           snapshot: snapshot("episode-1", "Episode", 2.0),
           warnings: Vec::new(),
@@ -2111,6 +2154,11 @@ mod tests {
         .effects,
     );
 
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetSpeed(1.5))),
+      now,
+    );
+
     let queued = session.handle(
       PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-2", "Second")),
@@ -2122,6 +2170,14 @@ mod tests {
     );
     assert!(queued.effects.is_empty());
     assert!(queued.transition.replacement_accepted);
+    let late_speed = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetSpeed(2.0))),
+      now,
+    );
+    assert_eq!(
+      late_speed.transition.controller,
+      ControllerAcceptance::Ignored
+    );
 
     let dispatched = session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
@@ -2138,6 +2194,10 @@ mod tests {
     assert!(!dispatched.transition.replacement_accepted);
     let (_, command) = controller_effect(dispatched.effects);
     assert!(matches!(command, ControllerCommand::Start { .. }));
+    assert!(
+      session.pending.is_empty(),
+      "outgoing speed controls must not reach the replacement"
+    );
   }
 
   #[test]
@@ -2424,6 +2484,61 @@ mod tests {
     ));
     assert!(session.view().now_playing.is_some());
     assert_eq!(session.view().notice, None);
+  }
+
+  #[test]
+  fn disabling_auto_next_retires_natural_end_but_preserves_explicit_next() {
+    for explicit_next in [false, true] {
+      let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+      session.set_auto_next_episode(false);
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+          id: adjacent_id(&auxiliary, AdjacentDirection::Next),
+          direction: AdjacentDirection::Next,
+          result: Ok(Some(media_item("episode-2", "Second"))),
+        })),
+        now,
+      );
+      if explicit_next {
+        let step = session.handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+            AdjacentDirection::Next,
+          ))),
+          now,
+        );
+        assert!(step.transition.replacement_accepted);
+        let (_, command) = controller_effect(step.effects);
+        assert!(
+          matches!(command, ControllerCommand::Start { item: Playable::Media(MediaItem { id, .. }), .. } if id == "episode-2")
+        );
+      } else {
+        let (id, _) = controller_effect(
+          session
+            .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+            .effects,
+        );
+        let step = session.handle(
+          PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+            id,
+            settlement: ControllerSettlement::Refreshed {
+              outcome: PlaybackRefreshOutcome {
+                snapshot: snapshot("episode-1", "Episode", 1_500.0),
+                state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+                warnings: Vec::new(),
+              },
+              client_messages: Vec::new(),
+            },
+          })),
+          now,
+        );
+        assert!(!step.transition.replacement_accepted);
+        assert!(
+          step.effects.is_empty(),
+          "disabled auto-next must not issue a next load"
+        );
+        assert!(session.view().now_playing.is_none());
+      }
+    }
   }
 
   #[test]

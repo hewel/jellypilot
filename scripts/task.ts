@@ -45,8 +45,8 @@ const program = Effect.try({
       Match.when({ _tag: 'lint' }, ({ fix }) => runLint(fix)),
       Match.when({ _tag: 'typecheck' }, () => runTypecheck()),
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
-      Match.when({ _tag: 'iced' }, ({ smoke, release, embedded }) =>
-        runIced(smoke, release, embedded, process.env),
+      Match.when({ _tag: 'iced' }, ({ smoke, release, embedded, tv }) =>
+        runIced(smoke, release, embedded, tv, process.env),
       ),
       Match.when({ _tag: 'mpvBuild' }, ({ source }) => buildMpv(source)),
       Match.when({ _tag: 'packageWindows' }, ({ runtimeDirectory }) =>

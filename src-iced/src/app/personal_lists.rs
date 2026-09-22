@@ -918,6 +918,56 @@ fn change_page(
   }
 }
 
+/// Loads a bounded metadata window covering the visible TV carousel range.
+/// Overlap retains every visible poster when focus crosses a request boundary.
+/// Favorites keep their old window until the new, generation-fenced read settles.
+pub(crate) fn load_window(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  runtime: &Runtime,
+  kind: Kind,
+  visible: std::ops::Range<usize>,
+) -> Task<Message> {
+  let Some(scope) = current_scope(surface, kernel) else {
+    return Task::none();
+  };
+  let page = match kind {
+    Kind::Favorites => &mut surface.favorites,
+    Kind::Watchlist => &mut surface.watchlist,
+    Kind::History => return Task::none(),
+  };
+  if page.loading || page.total == 0 {
+    return Task::none();
+  }
+  let start = visible.start.min(page.total.saturating_sub(1));
+  let end = visible.end.max(start + 1).min(page.total);
+  if page.offset <= start && page.offset.saturating_add(PAGE_SIZE) >= end {
+    return Task::none();
+  }
+  let offset = start
+    .saturating_sub(PAGE_SIZE / 3)
+    .max(end.saturating_sub(PAGE_SIZE))
+    .min(page.total.saturating_sub(PAGE_SIZE));
+  let previous_offset = page.offset;
+  page.offset = offset;
+  match kind {
+    Kind::Favorites => {
+      let task = load_favorites(surface, kernel, runtime, scope);
+      surface.favorites.offset = previous_offset;
+      task
+    }
+    Kind::Watchlist => load_watchlist_metadata(surface, kernel, runtime, scope),
+    Kind::History => Task::none(),
+  }
+}
+
+pub(crate) fn watchlist_index(surface: &Surface, item_id: &str) -> Option<usize> {
+  surface
+    .watchlist_records
+    .iter()
+    .position(|record| record.item_id() == item_id)
+}
+
 /// Clears the inline mutation error when the coordinator admits a write.
 /// In-flight reads stay viable: a failed write leaves their data current, and
 /// an accepted write supersedes pending reads with fresh generations.
@@ -1029,6 +1079,7 @@ fn remove_entry(page: &mut ListPage, item_id: &str) {
   }
   page.entries.retain(|entry| entry.id != item_id);
   page.total = page.total.saturating_sub(1);
+  page.known_total = Some(page.total);
   page.offset = page
     .offset
     .min((page.total.saturating_sub(1) / PAGE_SIZE) * PAGE_SIZE);
@@ -1256,10 +1307,11 @@ fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
   ]
   .into_iter()
   .flat_map(|(kind, page)| {
-    page
-      .entries
-      .iter()
-      .filter_map(move |entry| artwork_spec(kind, entry))
+    page.entries.iter().flat_map(move |entry| {
+      [artwork_spec(kind, entry), tv_artwork_spec(kind, entry)]
+        .into_iter()
+        .flatten()
+    })
   })
   .collect::<Vec<_>>();
   surface.artwork.retain(&specs);
@@ -1305,6 +1357,13 @@ fn list_artwork_image_id(item: &VideoLibraryItem) -> Option<&str> {
   } else {
     item.artwork_image_id.as_deref()
   }
+}
+
+/// TV presents both collections as posters, including saved episodes.
+pub(crate) fn tv_artwork_spec(kind: Kind, entry: &ListEntry) -> Option<ImageSpec> {
+  let mut spec = artwork_spec(Kind::Favorites, entry)?;
+  spec.key = format!("tv-{}", artwork_key(kind, &entry.id));
+  Some(spec)
 }
 
 fn begin_artwork_view(surface: &mut Surface) {

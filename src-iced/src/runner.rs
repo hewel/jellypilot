@@ -1,3 +1,10 @@
+#[derive(Clone, Copy)]
+pub(crate) struct RunOptions {
+  pub smoke: bool,
+  /// One-launch TV override; persisted presentation is changed only by the UI.
+  pub tv: bool,
+}
+
 /// Tees tracing output into the process-wide support-log buffer (Settings →
 /// Diagnostics exports it) while preserving the existing stderr stream.
 struct LogTee;
@@ -35,7 +42,10 @@ pub(super) fn run(
   let arguments: Vec<_> = std::env::args().collect();
   crate::regression::initialize(&arguments)?;
   let result = crate::run_application(
-    arguments.iter().any(|argument| argument == "--smoke-test"),
+    RunOptions {
+      smoke: arguments.iter().any(|argument| argument == "--smoke-test"),
+      tv: arguments.iter().any(|argument| argument == "--tv"),
+    },
     factory,
   );
   crate::embedded::cleanup();

@@ -101,6 +101,28 @@ impl<'de> Deserialize<'de> for AppMode {
     }
 }
 
+/// Presentation preference, independent of the application's playback capabilities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiMode {
+    #[default]
+    Desktop,
+    Tv,
+}
+
+impl<'de> Deserialize<'de> for UiMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some(mode) if mode.eq_ignore_ascii_case("tv") => Self::Tv,
+            _ => Self::Desktop,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoginPrefill {
     server_url: String,
@@ -235,6 +257,7 @@ impl From<BrowseFilterSettings> for BrowsePreferences {
             sort_direction: settings.sort_direction,
             played_filter: settings.played_filter,
             favorites_only: settings.favorites_only,
+            filters: Default::default(),
         }
     }
 }
@@ -299,6 +322,10 @@ pub struct Settings {
     auto_login: bool,
     #[serde(default)]
     intro_mode: IntroMode,
+    #[serde(default = "default_auto_login")]
+    auto_next_episode: bool,
+    #[serde(default = "default_progress_sync_seconds")]
+    progress_sync_seconds: u64,
     /// Profile-scoped per-series Intro Skipper choices (ADR 0045). Records
     /// exist only while a choice differs from the global `intro_mode`; a
     /// global change clears every record that now matches, across all scopes.
@@ -310,6 +337,8 @@ pub struct Settings {
     ui_language: LanguagePreference,
     #[serde(default)]
     app_mode: AppMode,
+    #[serde(default)]
+    ui_mode: UiMode,
     #[serde(default)]
     playback_backend: PlaybackBackend,
     #[serde(default)]
@@ -370,10 +399,13 @@ impl Default for Settings {
             username: String::new(),
             auto_login: default_auto_login(),
             intro_mode: IntroMode::Automatic,
+            auto_next_episode: true,
+            progress_sync_seconds: default_progress_sync_seconds(),
             series_intro_modes: Vec::new(),
             theme_mode: ThemeMode::System,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
+            ui_mode: UiMode::Desktop,
             playback_backend: PlaybackBackend::default(),
             hdr_output: HdrOutput::default(),
             settings_revision: CURRENT_SETTINGS_REVISION,
@@ -414,6 +446,17 @@ impl Settings {
     pub const fn intro_mode(&self) -> IntroMode {
         self.intro_mode
     }
+    pub const fn auto_next_episode(&self) -> bool {
+        self.auto_next_episode
+    }
+
+    pub const fn progress_sync_seconds(&self) -> u64 {
+        match self.progress_sync_seconds {
+            3 | 5 | 10 | 30 => self.progress_sync_seconds,
+            _ => default_progress_sync_seconds(),
+        }
+    }
+
     pub const fn theme_mode(&self) -> ThemeMode {
         self.theme_mode
     }
@@ -422,6 +465,10 @@ impl Settings {
     }
     pub const fn app_mode(&self) -> AppMode {
         self.app_mode
+    }
+
+    pub const fn ui_mode(&self) -> UiMode {
+        self.ui_mode
     }
 
     pub const fn playback_backend(&self) -> PlaybackBackend {
@@ -548,6 +595,63 @@ impl From<ConfigError> for SettingsMutationError {
     }
 }
 
+/// Preferences that can be committed without adopting unrelated disk edits live.
+/// Presentation-owned callers use this boundary when account and backend lifecycle
+/// changes must remain explicit. Existing generic setters keep their merge contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalPreference {
+    IntroMode(IntroMode),
+    ThemeMode(ThemeMode),
+    AutoLogin(bool),
+    PlaybackBackend(PlaybackBackend),
+    HdrOutput(HdrOutput),
+    SubtitleLanguages(Vec<String>),
+    ImageCache(bool),
+    RememberSeasonVolume(bool),
+    PreferOriginalAudio(bool),
+    ReducedMotion(bool),
+}
+
+fn apply_local_preference(
+    settings: &mut Settings,
+    preference: &LocalPreference,
+) -> Result<(), SettingsMutationError> {
+    match preference {
+        LocalPreference::IntroMode(mode) => {
+            settings.intro_mode = *mode;
+            settings
+                .series_intro_modes
+                .retain(|record| record.mode != *mode);
+        }
+        LocalPreference::ThemeMode(mode) => settings.theme_mode = *mode,
+        LocalPreference::AutoLogin(enabled) => settings.auto_login = *enabled,
+        LocalPreference::PlaybackBackend(backend) => settings.playback_backend = *backend,
+        LocalPreference::HdrOutput(output) => settings.hdr_output = *output,
+        LocalPreference::SubtitleLanguages(languages) => {
+            let languages: Vec<_> = languages
+                .iter()
+                .map(|language| language.trim().to_ascii_lowercase())
+                .collect();
+            for (index, language) in languages.iter().enumerate() {
+                if !valid_subtitle_language(language) {
+                    return Err(SettingsMutationError::InvalidSubtitleLanguage);
+                }
+                if languages[..index].contains(language) {
+                    return Err(SettingsMutationError::DuplicateSubtitleLanguage);
+                }
+            }
+            settings.subtitle_languages = languages;
+        }
+        LocalPreference::ImageCache(enabled) => settings.image_cache_enabled = *enabled,
+        LocalPreference::RememberSeasonVolume(enabled) => {
+            settings.remember_season_volume = *enabled
+        }
+        LocalPreference::PreferOriginalAudio(enabled) => settings.prefer_original_audio = *enabled,
+        LocalPreference::ReducedMotion(enabled) => settings.reduced_motion = *enabled,
+    }
+    Ok(())
+}
+
 pub struct SettingsStore {
     path: PathBuf,
     settings: Settings,
@@ -633,19 +737,10 @@ impl SettingsStore {
     /// that now matches it — across all profile scopes — in the same atomic
     /// write, so overrides pinned to the new global never resurrect.
     pub fn set_intro_mode(&mut self, mode: IntroMode) -> Result<bool, SettingsMutationError> {
-        self.update(|settings| {
-            settings.intro_mode = mode;
-            settings
-                .series_intro_modes
-                .retain(|record| record.mode != mode);
-            Ok(())
-        })
+        self.update(|settings| apply_local_preference(settings, &LocalPreference::IntroMode(mode)))
     }
     pub fn set_theme_mode(&mut self, mode: ThemeMode) -> Result<bool, SettingsMutationError> {
-        self.update(|settings| {
-            settings.theme_mode = mode;
-            Ok(())
-        })
+        self.update(|settings| apply_local_preference(settings, &LocalPreference::ThemeMode(mode)))
     }
 
     /// Persists against the latest disk settings, but commits only the live language.
@@ -707,8 +802,7 @@ impl SettingsStore {
 
     pub fn set_auto_login(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.auto_login = enabled;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::AutoLogin(enabled))
         })
     }
     pub fn set_app_mode(&mut self, mode: AppMode) -> Result<bool, SettingsMutationError> {
@@ -718,20 +812,37 @@ impl SettingsStore {
         })
     }
 
+    /// Persists against the latest disk settings, but commits only the live presentation.
+    /// Returns whether the live preference changed, even if disk already matched.
+    pub fn set_ui_mode(&mut self, mode: UiMode) -> Result<bool, SettingsMutationError> {
+        let (mut candidate, missing) = match read_from(&self.path) {
+            Ok(settings) => (settings, false),
+            Err(ConfigError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                (self.settings.clone(), true)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if missing || candidate.ui_mode != mode {
+            candidate.ui_mode = mode;
+            save_to(&self.path, &candidate)?;
+        }
+        let changed = self.settings.ui_mode != mode;
+        self.settings.ui_mode = mode;
+        Ok(changed)
+    }
+
     pub fn set_playback_backend(
         &mut self,
         backend: PlaybackBackend,
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.playback_backend = backend;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::PlaybackBackend(backend))
         })
     }
 
     pub fn set_hdr_output(&mut self, output: HdrOutput) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.hdr_output = output;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::HdrOutput(output))
         })
     }
 
@@ -746,6 +857,78 @@ impl SettingsStore {
         let args = parse_mpv_args(args);
         self.update(|settings| {
             settings.mpv_args = args;
+            Ok(())
+        })
+    }
+
+    /// Changes one supported MPV preference without splitting or rewriting other arguments.
+    pub fn set_mpv_option(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<bool, SettingsMutationError> {
+        let supported = match name {
+            "hwdec" => matches!(value, "auto-safe" | "no"),
+            "demuxer-max-bytes" => matches!(value, "128MiB" | "256MiB" | "512MiB" | "1GiB"),
+            "audio-spdif" => matches!(value, "" | "ac3,dts,eac3,truehd,dts-hd"),
+            _ => false,
+        };
+        if !supported {
+            return Err(ConfigError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported MPV preference",
+            ))
+            .into());
+        }
+        self.update_isolated(|settings| {
+            let mut arguments = settings.mpv_args.iter().peekable();
+            let mut retained = Vec::with_capacity(settings.mpv_args.len() + 1);
+            while let Some(argument) = arguments.next() {
+                let Some(option) = argument.strip_prefix("--") else {
+                    retained.push(argument.clone());
+                    continue;
+                };
+                let (key, separate) = option
+                    .split_once('=')
+                    .map_or((option, true), |(key, _)| (key, false));
+                if key == name {
+                    if separate
+                        && arguments
+                            .peek()
+                            .is_some_and(|value| !value.starts_with('-'))
+                    {
+                        arguments.next();
+                    }
+                } else {
+                    retained.push(argument.clone());
+                }
+            }
+            retained.push(format!("--{name}={value}"));
+            settings.mpv_args = retained;
+            Ok(())
+        })
+    }
+
+    pub fn set_auto_next_episode(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
+        self.update_isolated(|settings| {
+            settings.auto_next_episode = enabled;
+            Ok(())
+        })
+    }
+
+    pub fn set_progress_sync_seconds(
+        &mut self,
+        seconds: u64,
+    ) -> Result<bool, SettingsMutationError> {
+        if !matches!(seconds, 3 | 5 | 10 | 30) {
+            return Err(ConfigError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported progress interval",
+            ))
+            .into());
+        }
+        self.update_isolated(|settings| {
+            settings.progress_sync_seconds = seconds;
             Ok(())
         })
     }
@@ -793,21 +976,8 @@ impl SettingsStore {
         &mut self,
         languages: Vec<String>,
     ) -> Result<bool, SettingsMutationError> {
-        let languages: Vec<_> = languages
-            .into_iter()
-            .map(|language| language.trim().to_ascii_lowercase())
-            .collect();
-        for (index, language) in languages.iter().enumerate() {
-            if !valid_subtitle_language(language) {
-                return Err(SettingsMutationError::InvalidSubtitleLanguage);
-            }
-            if languages[..index].contains(language) {
-                return Err(SettingsMutationError::DuplicateSubtitleLanguage);
-            }
-        }
-        self.update(move |settings| {
-            settings.subtitle_languages = languages;
-            Ok(())
+        self.update(|settings| {
+            apply_local_preference(settings, &LocalPreference::SubtitleLanguages(languages))
         })
     }
 
@@ -892,8 +1062,7 @@ impl SettingsStore {
         enabled: bool,
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.image_cache_enabled = enabled;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::ImageCache(enabled))
         })
     }
 
@@ -902,8 +1071,7 @@ impl SettingsStore {
         enabled: bool,
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.remember_season_volume = enabled;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::RememberSeasonVolume(enabled))
         })
     }
 
@@ -922,15 +1090,13 @@ impl SettingsStore {
         enabled: bool,
     ) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.prefer_original_audio = enabled;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::PreferOriginalAudio(enabled))
         })
     }
 
     pub fn set_reduced_motion(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
-            settings.reduced_motion = enabled;
-            Ok(())
+            apply_local_preference(settings, &LocalPreference::ReducedMotion(enabled))
         })
     }
 
@@ -942,6 +1108,39 @@ impl SettingsStore {
             settings.library_filters = filters;
             Ok(())
         })
+    }
+
+    /// Saves a preference atomically while keeping unrelated live settings unchanged.
+    pub fn set_local_preference(
+        &mut self,
+        preference: LocalPreference,
+    ) -> Result<bool, SettingsMutationError> {
+        self.update_isolated(|settings| apply_local_preference(settings, &preference))
+    }
+
+    /// Apply the same explicit preference to disk and live snapshots independently.
+    /// Unrelated edits from another process remain on disk until their own lifecycle applies them.
+    fn update_isolated(
+        &mut self,
+        mutation: impl Fn(&mut Settings) -> Result<(), SettingsMutationError>,
+    ) -> Result<bool, SettingsMutationError> {
+        let mut live = self.settings.clone();
+        mutation(&mut live)?;
+        let (mut disk, missing) = match read_from(&self.path) {
+            Ok(settings) => (settings, false),
+            Err(ConfigError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                (self.settings.clone(), true)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let previous_disk = disk.clone();
+        mutation(&mut disk)?;
+        if missing || disk != previous_disk {
+            save_to(&self.path, &disk)?;
+        }
+        let changed = live != self.settings;
+        self.settings = live;
+        Ok(changed)
     }
 
     fn update(
@@ -961,6 +1160,10 @@ impl SettingsStore {
         self.settings = candidate;
         Ok(changed)
     }
+}
+
+const fn default_progress_sync_seconds() -> u64 {
+    10
 }
 
 fn default_key_next_episode() -> String {
@@ -1266,6 +1469,66 @@ mod tests {
     }
 
     #[test]
+    fn tv_preferences_preserve_disk_siblings_without_adopting_them_live() {
+        let path = test_path("tv-isolated-preferences");
+        let initial = Settings::default();
+        save_to(&path, &initial).unwrap();
+        let mut store = store_at(path.clone(), initial.clone());
+        let mut external = initial.clone();
+        external.app_mode = AppMode::ControlOnly;
+        external.playback_backend = PlaybackBackend::External;
+        external.username = "other-process".to_owned();
+        external.mpv_args = vec!["--sub-font=Source Sans 3".to_owned()];
+        save_to(&path, &external).unwrap();
+        store.set_mpv_option("hwdec", "no").unwrap();
+        store.set_auto_next_episode(false).unwrap();
+        store.set_progress_sync_seconds(3).unwrap();
+        store
+            .set_local_preference(LocalPreference::ReducedMotion(true))
+            .unwrap();
+        assert_eq!(store.snapshot().app_mode(), initial.app_mode());
+        assert_eq!(
+            store.snapshot().playback_backend(),
+            initial.playback_backend()
+        );
+        assert_eq!(store.snapshot().login_prefill(), initial.login_prefill());
+        assert_eq!(store.snapshot().mpv_args(), &["--hwdec=no"]);
+        let disk = load_from(&path).unwrap();
+        assert_eq!(disk.app_mode(), external.app_mode());
+        assert_eq!(disk.playback_backend(), external.playback_backend());
+        assert_eq!(disk.mpv_args(), &["--sub-font=Source Sans 3", "--hwdec=no"]);
+        assert!(!disk.auto_next_episode());
+        assert_eq!(disk.progress_sync_seconds(), 3);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mpv_preference_replaces_duplicate_and_separate_options_without_losing_other_arguments() {
+        let path = test_path("tv-mpv-option");
+        let initial = Settings {
+            mpv_args: vec![
+                "--title".to_owned(),
+                "hwdec".to_owned(),
+                "--hwdec".to_owned(),
+                "auto".to_owned(),
+                "--sub-font=Source Sans 3".to_owned(),
+                "--hwdec=vaapi".to_owned(),
+            ],
+            ..Settings::default()
+        };
+        save_to(&path, &initial).unwrap();
+        let mut store = store_at(path.clone(), initial);
+        store.set_mpv_option("hwdec", "no").unwrap();
+        assert_eq!(
+            store.snapshot().mpv_args(),
+            &["--title", "hwdec", "--sub-font=Source Sans 3", "--hwdec=no"]
+        );
+        assert!(store.set_mpv_option("hwdec", "no,pause=no").is_err());
+        assert!(store.set_progress_sync_seconds(0).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn volume_memory_setting_recovers_legacy_values_and_persists_independently() {
         let path = test_path("season-volume-setting");
         let expected = remembered_settings();
@@ -1409,10 +1672,13 @@ mod tests {
             username: "alice".to_owned(),
             auto_login: false,
             intro_mode: IntroMode::Manual,
+            auto_next_episode: true,
+            progress_sync_seconds: default_progress_sync_seconds(),
             series_intro_modes: Vec::new(),
             theme_mode: ThemeMode::Dark,
             ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
+            ui_mode: UiMode::Desktop,
             tmdb_api_key: Some("tmdb-key".to_owned()),
             playback_backend: PlaybackBackend::External,
             hdr_output: HdrOutput::On,
@@ -1696,6 +1962,61 @@ mod tests {
         .unwrap();
 
         assert_eq!(load_from(&path).unwrap().app_mode(), AppMode::Full);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ui_mode_recovers_old_settings_and_persists_without_changing_capabilities() {
+        let path = test_path("ui-mode");
+        let expected = remembered_settings();
+        for invalid in [
+            None,
+            Some(serde_json::json!("cinema")),
+            Some(serde_json::json!(true)),
+        ] {
+            let mut value = serde_json::to_value(&expected).unwrap();
+            let object = value.as_object_mut().unwrap();
+            if let Some(invalid) = invalid {
+                object.insert("ui_mode".to_owned(), invalid);
+            } else {
+                object.remove("ui_mode");
+            }
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            let recovered = load_from(&path).unwrap();
+            assert_eq!(recovered, expected);
+            let mut store = store_at(path.clone(), recovered);
+            assert!(store.set_ui_mode(UiMode::Tv).unwrap());
+            assert!(!store.set_ui_mode(UiMode::Tv).unwrap());
+            let mut tv_settings = expected.clone();
+            tv_settings.ui_mode = UiMode::Tv;
+            assert_eq!(load_from(&path).unwrap(), tv_settings);
+            assert!(store.set_ui_mode(UiMode::Desktop).unwrap());
+            assert_eq!(load_from(&path).unwrap(), expected);
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ui_mode_save_preserves_independent_disk_and_live_capabilities() {
+        let path = test_path("ui-mode-isolated-commit");
+        for disk_mode in [UiMode::Desktop, UiMode::Tv] {
+            let mut live = remembered_settings();
+            let mut disk = live.clone();
+            disk.ui_mode = disk_mode;
+            disk.app_mode = AppMode::Full;
+            disk.playback_backend = PlaybackBackend::Embedded;
+            disk.username = "disk-user".to_owned();
+            save_to(&path, &disk).unwrap();
+            let mut store = store_at(path.clone(), live.clone());
+
+            assert!(store.set_ui_mode(UiMode::Tv).unwrap());
+
+            live.ui_mode = UiMode::Tv;
+            disk.ui_mode = UiMode::Tv;
+            assert_eq!(store.snapshot(), &live);
+            assert_eq!(load_from(&path).unwrap(), disk);
+            assert!(!store.set_ui_mode(UiMode::Tv).unwrap());
+        }
         fs::remove_file(path).unwrap();
     }
 

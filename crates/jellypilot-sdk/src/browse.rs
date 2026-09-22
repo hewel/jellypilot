@@ -128,6 +128,12 @@ impl Browser {
         Ok(self.execute(effects, true))
     }
 
+    /// Restores a provider snapshot query through a fresh replacement window.
+    pub fn resume_with_refresh(&mut self) -> Result<BrowseWork, LibraryBrowseCoreError> {
+        let effects = self.model.resume_with_refresh()?;
+        Ok(self.execute(effects, true))
+    }
+
     pub fn refresh(&mut self) -> Result<BrowseWork, LibraryBrowseCoreError> {
         let before = self.model.is_refreshing();
         let effects = self.model.refresh()?;
@@ -191,7 +197,7 @@ impl Browser {
                     let cancel = CancellationToken::new();
                     self.requests.insert(request.token, cancel.clone());
                     work.requests.push(PageRequest {
-                        request,
+                        request: *request,
                         client: self.client.clone(),
                         cancel,
                     });

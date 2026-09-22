@@ -60,6 +60,61 @@ fn connected_state() -> State {
   state
 }
 
+#[test]
+fn hidden_tv_notices_keep_their_remaining_undo_time() {
+  use crate::app::tv;
+  use jellypilot_core::config::UiMode;
+  use jellypilot_core::tv_navigation::Input;
+
+  for surface in ["settings", "search", "player", "menu"] {
+    let mut state = connected_state();
+    state.shell.ui_mode = UiMode::Tv;
+    state.shell.window_id = Some(iced::window::Id::unique());
+    state.shell.window_size = iced::Size::new(1920.0, 1080.0);
+    state.kernel.undo.push(Removal::Favorite {
+      item_id: "removed".into(),
+      name: "Removed film".into(),
+    });
+    reconcile(&mut state);
+    let id = state.kernel.undo.next_id;
+    assert_eq!(state.kernel.undo.queue.visible().collect::<Vec<_>>(), [id]);
+    state.kernel.undo.queue.advance(Duration::from_secs(1));
+    let remaining = state.kernel.undo.queue.next_expiration().unwrap() - Duration::from_secs(1);
+
+    match surface {
+      "settings" => state.tv.settings.open = true,
+      "search" => state.tv.search.open = true,
+      "player" => {
+        state.shell.destination = Destination::NowPlaying;
+        state.playback.view.lifecycle.playback_active = true;
+      }
+      "menu" => drop(tv::lists::open_menu(&mut state, item("other"))),
+      _ => unreachable!(),
+    }
+    reconcile(&mut state);
+    assert_eq!(state.kernel.undo.queue.visible().count(), 0, "{surface}");
+    let hidden_until = Duration::from_secs(61);
+    assert!(state.kernel.undo.queue.advance(hidden_until).is_empty());
+    assert!(state.kernel.undo.queue.contains(id));
+
+    state.tv.settings.open = false;
+    state.tv.search.open = false;
+    state.playback.view.lifecycle.playback_active = false;
+    drop(tv::lists::input(&mut state, Input::Back));
+    reconcile(&mut state);
+    assert_eq!(state.kernel.undo.queue.visible().collect::<Vec<_>>(), [id]);
+    assert_eq!(
+      state.kernel.undo.queue.next_expiration(),
+      Some(hidden_until + remaining),
+      "{surface} must preserve the remaining visible exposure"
+    );
+    assert_eq!(
+      state.kernel.undo.queue.advance(hidden_until + remaining),
+      [id]
+    );
+  }
+}
+
 fn item(id: &str) -> VideoLibraryItem {
   VideoLibraryItem {
     id: id.to_owned(),

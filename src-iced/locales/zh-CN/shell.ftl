@@ -5,7 +5,6 @@ shell-search-placeholder = 搜索电影和剧集…
 shell-clear-search = 清空搜索
 shell-refreshing = 正在刷新…
 shell-control-mode = 控制模式
-shell-settings-save-hint = 应用更改时将自动保存。
 shell-library-refresh-failed = 无法刷新媒体库：{ $details }
 shell-library-unavailable = 所选媒体库已更改或不再可访问，已返回首页。
 shell-account-change-lists = 正在切换账户，请稍候再修改个人列表。

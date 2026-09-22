@@ -32,6 +32,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     Subscription::run_with(state.kernel.sdk_handoff.clone(), account_handoff_stream),
   ];
   subscriptions.push(super::embedded_player::subscription(state));
+  if state.tv_mode() {
+    subscriptions.push(super::tv::subscription(state));
+  }
   if !state.kernel.undo.notices.is_empty() {
     subscriptions.push(
       time::every(Duration::from_millis(100)).map(|_| Message::Undo(super::undo::Message::Tick)),
@@ -54,7 +57,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     );
   }
   if state.shell.window_id.is_some() && state.shell.pending_close.is_none() {
-    if state.settings.view.shortcut_capture.is_some() {
+    if state.tv_mode() {
+      subscriptions.push(event::listen_with(|event, status, _| {
+        super::tv::keyboard(event, status)
+      }));
+    } else if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
     } else {
       if state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
@@ -388,14 +395,14 @@ fn instance_event_stream(
 ) -> impl Stream<Item = Message> {
   let channel = channel.clone();
   iced::stream::channel(1, async move |mut output| loop {
-    let Some(()) = channel.receiver.lock().await.recv().await else {
+    let Some(activation) = channel.receiver.lock().await.recv().await else {
       break;
     };
-    if output
-      .send(Message::Window(WindowMessage::ShowRequested(None)))
-      .await
-      .is_err()
-    {
+    let message = match activation {
+      crate::instance::Activation::Show => Message::Window(WindowMessage::ShowRequested(None)),
+      crate::instance::Activation::ShowTv => Message::TvLaunch,
+    };
+    if output.send(message).await.is_err() {
       break;
     }
   })

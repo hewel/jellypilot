@@ -621,6 +621,7 @@ pub struct FullUi {
 }
 
 pub struct State {
+  pub(crate) tv: super::tv::Surface,
   pub kernel: Kernel,
   pub image_diagnostics: super::artwork::ImageDiagnostics,
   /// Latest OS light/dark mode report; `None` until the boot one-shot task
@@ -652,7 +653,10 @@ impl State {
       .map(|_| UiText::new("startup-settings-load-failed"));
     login.auto_login_attempted = smoke;
     let settings_view = SettingsState::from_settings(settings.snapshot());
-    let full_ui = (settings.snapshot().app_mode() == AppMode::Full).then(FullUi::default);
+    let ui_mode = settings.snapshot().ui_mode();
+    let full_ui = (settings.snapshot().app_mode() == AppMode::Full
+      || ui_mode == jellypilot_core::config::UiMode::Tv)
+      .then(FullUi::default);
     let mut diagnostics = Diagnostics::default();
     if let Some(error) = &settings_error {
       diagnostics.record(DiagnosticLevel::Error, DiagnosticCategory::Config, error);
@@ -676,6 +680,7 @@ impl State {
     let (sdk, sdk_handoff) = kernel::account_runtime(&auth_store, &watchlist);
 
     let mut state = Self {
+      tv: Default::default(),
       image_diagnostics: Default::default(),
       system_theme: iced::theme::Mode::None,
       motion: Default::default(),
@@ -720,6 +725,7 @@ impl State {
       watchlist,
       accounts: crate::app::accounts::Surface::new(),
     };
+    state.shell.ui_mode = ui_mode;
     // Control-Only boots straight into the full-window Now Playing root; the
     // Library Browser destinations stay unreachable (router guard).
     if state.app_mode() == AppMode::ControlOnly {
@@ -773,6 +779,9 @@ impl State {
   /// Effective UI theme mode: the explicit setting, or the OS mode while the
   /// setting is `System` (an unreported OS mode falls back to Dark).
   pub fn theme_mode(&self) -> UiThemeMode {
+    if self.tv_mode() {
+      return UiThemeMode::Dark;
+    }
     match self.kernel.settings.snapshot().theme_mode() {
       ThemeMode::Dark => UiThemeMode::Dark,
       ThemeMode::Light => UiThemeMode::Light,
@@ -795,7 +804,15 @@ impl State {
   /// Persisted app mode: Full (Library Browser shell) or Control-Only
   /// (compact Now Playing controller).
   pub fn app_mode(&self) -> AppMode {
-    self.kernel.settings.snapshot().app_mode()
+    if self.tv_mode() {
+      AppMode::Full
+    } else {
+      self.kernel.settings.snapshot().app_mode()
+    }
+  }
+
+  pub(crate) fn tv_mode(&self) -> bool {
+    self.shell.ui_mode == jellypilot_core::config::UiMode::Tv
   }
 
   /// Dismisses the kernel toast and clears the playback surface's notice;
