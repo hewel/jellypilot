@@ -1,0 +1,26 @@
+<resources>
+    <string name="login_add_server">添加服务器</string>
+    <string name="login_step">%1$d / 2</string>
+    <string name="login_server_hint">输入 Jellyfin 或 Emby 的服务器地址。</string>
+    <string name="login_account_title">登录账户</string>
+    <string name="login_account_hint">使用此服务器的账户登录。</string>
+    <string name="login_address_hint">填写完整地址，包含端口或路径（如有）。</string>
+    <string name="login_address_help">不知道地址？请联系服务器管理员。</string>
+    <string name="login_account_help">账户或密码有问题？请联系服务器管理员。</string>
+    <string name="login_preserves_account">添加新连接不会退出当前账户</string>
+    <string name="login_connecting">正在连接…</string>
+    <string name="login_reconnect">重新连接</string>
+    <string name="login_signing_in">正在登录…</string>
+    <string name="login_connected">已连接</string>
+    <string name="login_change_server">更改</string>
+    <string name="login_show_password">显示</string>
+    <string name="login_hide_password">隐藏</string>
+    <string name="login_choose_provider">选择服务器类型</string>
+    <string name="login_invalid_address">请输入包含 http:// 或 https:// 的完整服务器地址。</string>
+    <string name="login_connection_failed">无法连接此服务器。请检查地址、网络及服务器是否在线。</string>
+    <string name="login_connection_lost">与服务器的连接已断开，请检查网络后重试。</string>
+    <string name="login_credentials_failed">用户名或密码不正确，请检查后重试。</string>
+    <string name="login_public_info_restricted">此服务器限制公开信息访问。你可以选择服务器类型并手动登录。</string>
+    <string name="login_manual_continue">手动登录</string>
+    <string name="login_server_unverified">服务器信息受限</string>
+</resources>

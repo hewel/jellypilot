@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -30,6 +32,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.hewel.jellypilot.R
 import io.github.hewel.jellypilot.player.PlayerHost
 import io.github.hewel.jellypilot.player.PlayerSnapshot
+import io.github.hewel.jellypilot.player.PlayerStatus
 import io.github.hewel.jellypilot.player.PlayerTrack
 import io.github.hewel.jellypilot.player.TrackKind
 import org.junit.Assert.assertEquals
@@ -47,7 +50,7 @@ class PlayerPanelInteractionTest {
 
   @Test fun audioSelectionUsesMpvIdentityAndKeepsThePanelOpen() {
     val snapshot = mutableStateOf(PlayerSnapshot(tracks = listOf(
-      track(41, TrackKind.AUDIO, "Original audio", selected = true),
+      track(41, TrackKind.AUDIO, "Original audio", selected = true).copy(isDefault = true),
       track(208, TrackKind.AUDIO, "Commentary"),
       track(9, TrackKind.SUBTITLE, "English subtitles"),
     )))
@@ -63,13 +66,14 @@ class PlayerPanelInteractionTest {
             })
           },
           close = { closes++ },
-        ))
+        ), phone = true)
       }
     }
     compose.onNodeWithText("English subtitles").assertDoesNotExist()
     compose.onNodeWithText("Original audio").assertIsSelected()
     compose.onNodeWithText("Commentary").performClick().assertIsSelected()
     compose.onNodeWithText("Original audio").assertIsNotSelected()
+    compose.onNodeWithText(context.getString(R.string.player_track_default), substring = true).assertIsDisplayed()
     compose.onNodeWithContentDescription(context.getString(R.string.close)).assertIsDisplayed()
     compose.runOnIdle {
       assertEquals(listOf(TrackKind.AUDIO to 208), choices)
@@ -217,6 +221,111 @@ class PlayerPanelInteractionTest {
     compose.onNodeWithContentDescription(context.getString(R.string.volume))
       .performSemanticsAction(SemanticsActions.SetProgress) { it(35f) }
     compose.runOnIdle { assertEquals(35, requestedVolume) }
+  }
+
+  @Test fun moreUsesLiveVolumeSkipAndRateWithoutChangingPausedPlayback() {
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, paused = true, volumePercent = 70, speed = 1.0))
+    val playback = mutableStateOf(PlaybackUi(title = "Episode", autoSkipAvailable = true, autoSkipEnabled = true))
+    val panel = mutableStateOf(PlayerPanel.More)
+    val rates = mutableListOf<Double>()
+    compose.setContent {
+      PanelHost {
+        PlayerPanelContent(panel.value, snapshot.value, playback.value, PlayerPanelActions(
+          selectTrack = { _, _ -> }, selectEpisode = {}, previousEpisode = {}, nextEpisode = {}, loadMoreEpisodes = {},
+          setVolume = { snapshot.value = snapshot.value.copy(volumePercent = it) }, close = {}, open = { panel.value = it },
+          setAutoSkip = { playback.value = playback.value.copy(autoSkipEnabled = it) },
+          setSpeed = { rates += it; snapshot.value = snapshot.value.copy(speed = it) },
+        ), phone = true)
+      }
+    }
+    compose.onNodeWithContentDescription(context.getString(R.string.volume))
+      .performSemanticsAction(SemanticsActions.SetProgress) { it(35f) }
+    compose.onNodeWithText(context.getString(R.string.player_volume_percent, 35)).assertExists()
+    compose.onNodeWithText(context.getString(R.string.player_auto_skip_full)).performClick()
+    compose.onNodeWithText(context.getString(R.string.player_playback_speed)).performClick()
+    compose.onNodeWithText(context.getString(R.string.player_speed_value, "1.5")).performClick().assertIsSelected()
+    compose.runOnIdle {
+      assertEquals(listOf(1.5), rates)
+      assertEquals(false, playback.value.autoSkipEnabled)
+      assertEquals(true, snapshot.value.paused)
+      // A remote/native observation is authoritative after the local request.
+      snapshot.value = snapshot.value.copy(speed = 2.0)
+    }
+    compose.onNodeWithText(context.getString(R.string.player_speed_value, "2")).assertIsSelected()
+    compose.onNodeWithText(context.getString(R.string.player_speed_value, "1.5")).assertIsNotSelected()
+  }
+
+  @Test fun nestedAudioBackRestoresMoreRowAndCloseExitsTheWholePanelStack() {
+    val chrome = PlayerChromeState(visible = true, paused = true).apply { open(PlayerPanel.More) }
+    val snapshot = PlayerSnapshot(paused = true, tracks = listOf(track(41, TrackKind.AUDIO, "Original audio", true)))
+    compose.setContent {
+      PanelHost {
+        chrome.panel?.let { panel ->
+          PlayerPanelContent(panel, snapshot, null, PlayerPanelActions(
+            selectTrack = { _, _ -> }, selectEpisode = {}, previousEpisode = {}, nextEpisode = {}, loadMoreEpisodes = {},
+            setVolume = {}, close = chrome::close, open = chrome::open,
+            back = if (panel != PlayerPanel.More) chrome::back else null,
+          ), restoreRow = chrome.restoreRow, phone = true)
+        }
+      }
+    }
+    compose.onNodeWithText(context.getString(R.string.audio_tracks)).performClick()
+    compose.onNodeWithText("Original audio").assertIsSelected()
+    compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
+    compose.onNodeWithText(context.getString(R.string.audio_tracks)).assertIsFocused().performClick()
+    compose.onNodeWithContentDescription(context.getString(R.string.close)).performClick()
+    compose.runOnIdle {
+      assertEquals(null, chrome.panel)
+      assertEquals(PlayerPanel.More, chrome.restoreTrigger)
+      assertEquals(true, chrome.visible)
+      assertEquals(true, snapshot.paused)
+    }
+  }
+
+  @Test fun pictureUsesConfirmedNativeValueAndDisablesUnavailableAdjustmentWithoutResuming() {
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.READY, paused = true, speed = 1.5,
+      pictureBrightnessAvailable = true, pictureBrightnessPercent = 80))
+    val requests = mutableListOf<Int>()
+    compose.setContent {
+      PanelHost {
+        PlayerPanelContent(PlayerPanel.Picture, snapshot.value, null,
+          actions().copy(setPictureBrightness = { requests += it }), phone = true)
+      }
+    }
+    val brightness = context.getString(R.string.player_picture_brightness)
+    compose.onNodeWithContentDescription(brightness)
+      .performSemanticsAction(SemanticsActions.SetProgress) { it(35f) }
+    compose.runOnIdle {
+      assertEquals(listOf(35), requests)
+      assertEquals(true, snapshot.value.paused)
+      assertEquals(1.5, snapshot.value.speed, 0.0)
+    }
+    // The request is not treated as confirmation; only observed native state changes the label.
+    compose.onNodeWithText(context.getString(R.string.player_volume_percent, 80)).assertIsDisplayed()
+    compose.runOnIdle { snapshot.value = snapshot.value.copy(pictureBrightnessPercent = 35) }
+    compose.onNodeWithText(context.getString(R.string.player_volume_percent, 35)).assertIsDisplayed()
+    compose.runOnIdle { snapshot.value = snapshot.value.copy(pictureBrightnessAvailable = false) }
+    compose.onNodeWithContentDescription(brightness).assertIsNotEnabled()
+    compose.onNodeWithText(context.getString(R.string.player_picture_unavailable)).assertIsDisplayed()
+  }
+
+  @Test fun pictureAndSpeedWaitForTheLoadedFileBeforeAcceptingCommands() {
+    val snapshot = mutableStateOf(PlayerSnapshot(status = PlayerStatus.LOADING, pictureBrightnessAvailable = true))
+    val panel = mutableStateOf(PlayerPanel.Picture)
+    compose.setContent {
+      PanelHost { PlayerPanelContent(panel.value, snapshot.value, null, actions(), phone = true) }
+    }
+    val brightness = context.getString(R.string.player_picture_brightness)
+    val rate = context.getString(R.string.player_speed_value, "1.5")
+    compose.onNodeWithContentDescription(brightness).assertIsNotEnabled()
+    compose.runOnIdle { panel.value = PlayerPanel.Speed }
+    compose.onNodeWithText(rate).assertIsNotEnabled()
+    compose.runOnIdle { snapshot.value = snapshot.value.copy(status = PlayerStatus.BUFFERING) }
+    compose.onNodeWithText(rate).assertIsEnabled()
+    compose.runOnIdle { panel.value = PlayerPanel.Picture }
+    compose.onNodeWithContentDescription(brightness).assertIsEnabled()
+    compose.runOnIdle { snapshot.value = snapshot.value.copy(status = PlayerStatus.IDLE) }
+    compose.onNodeWithContentDescription(brightness).assertIsNotEnabled()
   }
 
   @Composable private fun PanelHost(content: @Composable () -> Unit) {

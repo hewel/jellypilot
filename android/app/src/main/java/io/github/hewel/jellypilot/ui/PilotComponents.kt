@@ -43,7 +43,7 @@ internal fun Artwork(artwork: ArtworkUi?, title: String?, modifier: Modifier, ro
 }
 
 @Composable
-internal fun Poster(item: MediaUi, modifier: Modifier = Modifier, selected: Boolean? = null, enabled: Boolean = true, open: () -> Unit) {
+internal fun Poster(item: MediaUi, modifier: Modifier = Modifier, selected: Boolean? = null, enabled: Boolean = true, titleLines: Int = 1, open: () -> Unit) {
   val enlarged = LocalDensity.current.fontScale > 1.3f
   Column(
     modifier.clip(MaterialTheme.shapes.medium).clickable(enabled = enabled, onClick = open).semantics(mergeDescendants = true) {
@@ -63,18 +63,18 @@ internal fun Poster(item: MediaUi, modifier: Modifier = Modifier, selected: Bool
         }
       } else if (item.played) PilotIcon(R.drawable.ic_circle_check, stringResource(R.string.watched), Modifier.align(Alignment.TopEnd).padding(6.dp), tint = MaterialTheme.colorScheme.tertiary)
     }
-    Text(item.title, minLines = 2, maxLines = if (enlarged) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
-    Text(mediaCaption(item), maxLines = if (enlarged) 3 else 1, overflow = TextOverflow.Ellipsis, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
+    Text(item.title, minLines = titleLines, maxLines = if (enlarged) Int.MAX_VALUE else titleLines, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+    Text(mediaCaption(item), maxLines = 1, overflow = TextOverflow.Ellipsis, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
   }
 }
 
 @Composable
-internal fun PosterPlaceholder(modifier: Modifier = Modifier) {
+internal fun PosterPlaceholder(modifier: Modifier = Modifier, titleLines: Int = 1) {
   val titleHeight = with(LocalDensity.current) { MaterialTheme.typography.labelLarge.lineHeight.toDp() }
   val metadataHeight = with(LocalDensity.current) { MaterialTheme.typography.labelSmall.lineHeight.toDp() }
   Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh))
-    Spacer(Modifier.height(titleHeight * 2))
+    Spacer(Modifier.height(titleHeight * titleLines))
     Spacer(Modifier.height(metadataHeight))
   }
 }
@@ -129,20 +129,20 @@ internal fun EmptyState(title: String, hint: String? = null, action: String? = n
 @Composable
 internal fun SectionHeading(title: String, action: String? = null, onAction: () -> Unit = {}) {
   Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.sectionHeading)
     if (action != null) TextButton(onClick = onAction, modifier = Modifier.heightIn(min = 48.dp)) { Text(action) }
   }
 }
 
 @Composable
-internal fun MediaLogo(artwork: ArtworkUi, title: String, modifier: Modifier = Modifier) {
+internal fun MediaLogo(artwork: ArtworkUi, title: String, modifier: Modifier = Modifier, width: androidx.compose.ui.unit.Dp = 208.dp, height: androidx.compose.ui.unit.Dp = 67.dp, maxTitleLines: Int = Int.MAX_VALUE) {
   val context = LocalContext.current
   val request = remember(context, artwork) {
     ImageRequest.Builder(context).data(artwork).diskCacheKey(artwork.cacheKey).memoryCacheKey(artwork.cacheKey).build()
   }
   var loaded by remember(artwork) { mutableStateOf(false) }
   Box(modifier) {
-    if (!loaded) Text(title, color = Color.White, style = MaterialTheme.typography.headlineLarge)
-    AsyncImage(request, title, Modifier.fillMaxWidth().height(90.dp), contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, onSuccess = { loaded = true })
+    if (!loaded) Text(title, color = Color.White, style = MaterialTheme.typography.headlineLarge, maxLines = maxTitleLines, overflow = TextOverflow.Ellipsis)
+    AsyncImage(request, title, Modifier.widthIn(max = width).fillMaxWidth().height(height), contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, onSuccess = { loaded = true })
   }
 }

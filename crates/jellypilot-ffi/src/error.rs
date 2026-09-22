@@ -15,6 +15,7 @@ pub enum SdkError {
     Authentication { reason: String },
     Storage { reason: String },
     Request { reason: String },
+    ServerInfoRestricted,
     Cancelled,
     Stale,
     NoActiveProfile,
@@ -31,6 +32,9 @@ impl fmt::Display for SdkError {
             | Self::Authentication { reason: message }
             | Self::Storage { reason: message }
             | Self::Request { reason: message } => formatter.write_str(message),
+            Self::ServerInfoRestricted => {
+                formatter.write_str("public server information requires authentication")
+            }
             Self::Cancelled => formatter.write_str("the operation was cancelled"),
             Self::Stale => {
                 formatter.write_str("the profile scope changed before the result was committed")
@@ -61,6 +65,7 @@ impl From<jellypilot_sdk::SdkError> for SdkError {
             }
             jellypilot_sdk::SdkError::Storage(message) => Self::Storage { reason: message },
             jellypilot_sdk::SdkError::Request(message) => Self::Request { reason: message },
+            jellypilot_sdk::SdkError::ServerInfoRestricted => Self::ServerInfoRestricted,
             jellypilot_sdk::SdkError::Cancelled => Self::Cancelled,
             jellypilot_sdk::SdkError::Stale => Self::Stale,
             jellypilot_sdk::SdkError::NoActiveProfile => Self::NoActiveProfile,

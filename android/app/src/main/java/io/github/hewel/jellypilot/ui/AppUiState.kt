@@ -56,7 +56,8 @@ internal enum class PersonalListKind(@StringRes val title: Int) { Watchlist(R.st
 internal enum class PlayedFilter(@StringRes val title: Int) { All(R.string.all_media), Played(R.string.watched), Unplayed(R.string.unwatched) }
 internal enum class LibrarySort(@StringRes val title: Int) { DateAdded(R.string.latest_media), Title(R.string.sort_title), Year(R.string.sort_year) }
 internal enum class AccountPage(@StringRes val title: Int) {
-  Overview(R.string.account), Connections(R.string.saved_connections), Appearance(R.string.appearance),
+  Overview(R.string.account), Settings(R.string.settings), CurrentAccount(R.string.account_current),
+  Connections(R.string.saved_connections), Appearance(R.string.appearance), Subtitles(R.string.subtitle_tracks),
   Playback(R.string.playback_preferences), Storage(R.string.storage), History(R.string.watch_history), Diagnostics(R.string.diagnostics),
 }
 internal enum class ThemePreference(@StringRes val title: Int) { System(R.string.follow_system), Dark(R.string.dark_theme), Light(R.string.light_theme) }
@@ -102,7 +103,7 @@ internal data class PlaybackUi(
   val canNext: Boolean = false,
 )
 internal data class LibraryUi(val id: String, val title: String)
-internal data class ProfileUi(val key: String, val name: String, val server: String, val provider: String, val active: Boolean)
+internal data class ProfileUi(val key: String, val name: String, val server: String, val provider: String, val active: Boolean, val url: String = "")
 
 /** Lifecycle of one SDK browse session, mirrored from `BrowseStatus`. */
 internal enum class BrowseUiStatus { Inactive, Loading, Empty, Ready, Failed }
@@ -133,6 +134,16 @@ internal data class BrowserUi(
   val loadedEnd: UInt get() = visibleStart + slots.size.toUInt()
   val hasContent: Boolean get() = slots.any { it != null }
 }
+
+internal enum class LoginStep { Server, Account }
+
+internal data class LoginServerUi(
+  val name: String?,
+  val address: String,
+  val jellyfin: Boolean,
+  val providerKnown: Boolean = true,
+  val providerSelected: Boolean = true,
+)
 
 /** A projection for Compose; operation tokens, active scopes and user-data decisions stay in Rust. */
 internal data class AppUiState(
@@ -186,4 +197,13 @@ internal data class AppUiState(
   val loginUsername: String = "",
   val loginJellyfin: Boolean = true,
   val loginRemember: Boolean = true,
+  val loginStep: LoginStep = LoginStep.Server,
+  val loginIdentity: LoginServerUi? = null,
+  /** Memory-only form input; never copied into SavedInstanceState or login prefill. */
+  val loginPassword: String = "",
+  val loginError: String? = null,
+  val loginConnectionLost: Boolean = false,
+  val loginPublicInfoRestricted: Boolean = false,
+  /** Candidate adoption is atomic; Back cancels network work before this short commit phase. */
+  val loginCommitting: Boolean = false,
 )

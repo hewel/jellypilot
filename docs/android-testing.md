@@ -40,6 +40,8 @@ decoding, physical audio, HDR, or 16 KB-page runtime evidence.
 that the Home navigation is available, and repeats after Activity recreation. It changes only
 the test process's AppCompat mode, not the device's system setting. Playback tests that replace
 the Activity content with a test Surface do not cover this theme, font, and app-shell boundary.
+It also follows History's Browse Library action from an account subpage and checks that bottom
+navigation returns, survives recreation, and leaves the account Back stack intact.
 For startup/theme changes, run it explicitly:
 
 ```bash
@@ -60,7 +62,35 @@ Use a phone-sized emulator/device that honors orientation requests for this regr
 `PlayerTimelineInteractionTest` checks that incoming playback positions cannot replace an active
 drag preview, a completed drag/accessible seek commits once, and unknown durations disable seek.
 `PlayerPanelInteractionTest` covers live track selection, subtitle Off, queue navigation/paging,
-volume semantics, and scrolling lists with 200% text. These tests do not establish visual fidelity.
+volume/brightness semantics, speed selection, and scrolling lists with 200% text.
+`PlayerChromeInteractionTest` uses a controlled Compose clock for playing/paused control visibility,
+slider interaction and panel dismissal. These tests do not establish visual fidelity.
+`SignInInteractionTest`, `AccountInteractionTest` and `LibraryControlsInteractionTest` exercise
+the two-step form, optional password, saved-profile identity, destructive-action confirmation,
+library selection/sorting, and narrow/large-text navigation. `MediaSessionStateTest` checks the
+public Media3 Player API after rejected seek, admission loss, terminal failure and generation
+replacement, including reconciliation of previously accepted but unconfirmed commands.
+
+`LoginFlowTest` uses an isolated SDK and local HTTP server through real UniFFI: public identity
+probing, proxy paths/ports, optional empty password, authentication versus connection errors,
+public-info 403 with explicit provider selection and successful Emby login, and cancellation on
+Back/address changes. The fixture never accesses saved real accounts.
+`SeasonSelectionTest` holds an old season's page response while switching seasons, then verifies
+new queries start at zero and late responses cannot overwrite the selected season or closed detail.
+`PictureSettingsBoundaryTest` exercises the packaged shader controls on actual libmpv: brightness
+clamping/readback, unchanged paused state and selected subtitles, settings retained across continuous
+media replacement, explicit-exit resets, and initialization failure when the shader cannot be staged.
+The HTTP playback fixture also checks retention through the coordinator's real stop/load path.
+Natural-end automatic episode advance retains settings by the same contract, but that branch has
+source-review evidence only in this revision. The tests do not measure
+pixels, subtitle brightness, physical screen brightness or SDR/HDR appearance; those remain human
+checks. Tests with no Surface establish property/lifecycle behavior only.
+`PreparedPlaybackBoundaryTest` additionally creates two resource owners in one process, checks their
+distinct MediaSessions initialize, and verifies releasing one leaves the other ready.
+Native file observations are accepted only while the started load still owns the visible
+generation. The picture-settings stop/replacement fixture also checks that late native callbacks
+cannot revive Ready after stop, and queued brightness/speed commands are rejected after retirement.
+
 `BrowserContinuationTest` opens an isolated synthetic library through the real UniFFI bindings,
 registers `nextSnapshot` on `Main.immediate`, then changes the displayed range synchronously.
 It checks that repeated range changes return and deliver the matching snapshot instead of
@@ -75,10 +105,15 @@ test account whose Favorites and Played flags can be changed deliberately.
 
 1. Connect to Jellyfin and Emby using their supported login methods. Verify remembered accounts,
    temporary login, reconnect, account switch, disconnect, sign-out, and optional local Watchlist
-   deletion. Failed authentication must leave existing playback intact.
+   deletion. Failed authentication must leave existing playback intact. Check the full-screen
+   server → account flow, real server name/type, nondefault ports and proxy paths, empty password,
+   Back during a delayed connection/login, failed-login password retention, and clearing the
+   password when editing the address or exiting. No stale request should activate an account.
 2. Check Home, both personal lists, Library and Search in light/dark/system themes and English/
    Simplified Chinese. Inspect narrow and tablet windows, large text, touch targets, keyboard
    focus and TalkBack. Search/back and detail/back must retain the source filter and position.
+   Verify library title/filter/sort menus, independent Settings navigation, and switching back to
+   Home/Library after opening an account subpage. Change seasons rapidly while a page is loading.
 3. Remove one and several Watchlist/Favorites entries, undo within the feedback period, and
    simulate a failed server write. Hide a History record and undo it; server progress and Played
    must remain unchanged. Unavailable saved media must remain removable.
@@ -94,15 +129,23 @@ test account whose Favorites and Played flags can be changed deliberately.
    player switches to landscape, rotation retains playback, and exit restores the prior orientation
    policy. Verify both landscape directions and the device's rotation-lock behavior.
    Status and gesture/navigation bars should disappear during playback, including while track
-   panels are open; an edge swipe should reveal them temporarily. Compare the bottom controls,
-   thin timeline, minimal pause indicator and inset track panels with the Mobile player design.
+   panels are open; an edge swipe should reveal them temporarily. Compare the phone's central
+   transport, top Back/Settings, bottom metadata/track controls and timeline with the September 22
+   Mobile design. Minimal should contain only the picture. Pausing reveals controls; hiding them
+   and tapping again must remain paused. Controls must stay visible while holding a slider or
+   using TalkBack. Check Settings → speed/brightness, nested Back/Close focus restoration, and
+   compact bottom-right skip/Undo feedback. Custom double-tap/swipe/hold playback gestures are
+   intentionally excluded; ordinary taps, sliders and Android edge navigation remain available.
 7. Reclaim the process during playback, reopen, and explicitly restore the local position as a
    new session. Check this separately from server Continue Watching. Send remote start/control
    commands while visible, backgrounded, locked and switching accounts; stale commands must not
    start later.
 8. Check representative SDR, HDR10 and metadata-confirmed Dolby Vision Profile 5 media, real
    audio output and styled subtitles. Record correct HDR output or SDR mapping on each supported
-   device rather than inferring it from a decoder name. Test diagnostics export and cache clear.
+   device rather than inferring it from a decoder name. Change picture brightness from 100% to
+   20% while paused/playing: only video should dim, subtitles and controls should remain unchanged,
+   system brightness should stay fixed, and a new playback session should start at 100%.
+   Test diagnostics export and cache clear.
 
 Keep pass/fail/unavailable explicit. Activity recreation does not prove process-loss recovery;
 successful decoding does not prove correct color; a debug APK does not prove signed upgrades.

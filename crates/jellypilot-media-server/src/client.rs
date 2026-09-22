@@ -66,6 +66,9 @@ pub struct JellyfinClient {
   image_http: Client,
   state: Arc<RwLock<ClientState>>,
 }
+
+#[path = "client/server_probe.rs"]
+mod server_probe;
 /// Login/session lifecycle interface for the Jellyfin HTTP adapter.
 pub struct JellyfinLogin<'a> {
   client: &'a JellyfinClient,
@@ -1032,6 +1035,7 @@ impl JellyfinClient {
     }
 
     let mut auth_failures = Vec::new();
+    let mut credentials_rejected = false;
 
     for candidate in candidates {
       match self.authenticate_emby_at_base(&candidate, creds).await {
@@ -1043,16 +1047,14 @@ impl JellyfinClient {
           return Ok((candidate, auth, info));
         }
         Err(JellyfinError::AuthFailed(message)) => {
+          credentials_rejected = true;
           auth_failures.push(format!("{candidate}: {message}"));
         }
         Err(err) => auth_failures.push(format!("{candidate}: {err}")),
       }
     }
 
-    if auth_failures
-      .iter()
-      .any(|failure| failure.contains("HTTP 401 Unauthorized"))
-    {
+    if credentials_rejected {
       return Err(JellyfinError::AuthFailed(format!(
         "Password authentication failed. {}",
         auth_failures.join("; ")

@@ -44,7 +44,7 @@ internal fun HomeScreen(state: AppUiState, model: AppViewModel, scroll: LazyList
           ImmersiveHero(featured[page], false, model, dots = {
             if (featured.size > 1) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 16.dp)) {
               repeat(featured.size) { index ->
-                Box(Modifier.size(if (index == pager.currentPage) 7.dp else 5.dp).clip(CircleShape).background(Color.White.copy(alpha = if (index == pager.currentPage) 1f else 0.35f)))
+                Box(Modifier.width(if (index == pager.currentPage) 16.dp else 6.dp).height(6.dp).clip(CircleShape).background(Color.White.copy(alpha = if (index == pager.currentPage) 1f else 0.35f)))
               }
             }
           })
@@ -99,7 +99,7 @@ internal fun HomeScreen(state: AppUiState, model: AppViewModel, scroll: LazyList
 
 @Composable
 private fun ContinueCard(item: MediaUi, model: AppViewModel) {
-  Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+  Column(Modifier.width(170.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Box(Modifier.clip(MaterialTheme.shapes.medium).clickable { model.showDetail(item.id) }) {
       Artwork(item.backdrop ?: item.artwork, item.title, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
       FilledIconButton(
@@ -107,9 +107,9 @@ private fun ContinueCard(item: MediaUi, model: AppViewModel) {
         modifier = Modifier.align(Alignment.Center),
         colors = IconButtonDefaults.filledIconButtonColors(containerColor = LocalPilotColors.current.playerScrim, contentColor = Color.White),
       ) { PilotIcon(R.drawable.ic_player_play, playbackLabel(item)) }
-      if (item.progress > 0f) LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter), drawStopIndicator = {})
+      if (item.progress > 0f) LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter), drawStopIndicator = {})
     }
-    Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+    Text(item.title, maxLines = if (LocalDensity.current.fontScale > 1.3f) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
     Text(mediaCaption(item), maxLines = 1, overflow = TextOverflow.Ellipsis, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
   }
 }
@@ -120,7 +120,7 @@ internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, 
   val fontScale = LocalDensity.current.fontScale
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     val wide = maxWidth >= 600.dp
-    val minimum = if (wide) 400.dp else if (detail) 440.dp else 480.dp
+    val minimum = if (wide) 400.dp else if (detail && maxWidth < 360.dp) 492.dp else if (detail) 440.dp else 480.dp
     Box(Modifier.fillMaxWidth().heightIn(min = minimum)) {
       Artwork(item.backdrop ?: item.artwork, null, Modifier.matchParentSize().clickable { model.showDetail(item.actionItemId) }, rounded = false)
       Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent, Color.Black.copy(alpha = 0.8f), Color.Black.copy(alpha = 0.85f)))))
@@ -131,24 +131,26 @@ internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, 
         verticalArrangement = Arrangement.Bottom,
       ) {
         Spacer(Modifier.height(if (fontScale > 1.3f) 16.dp else if (detail) 28.dp else 48.dp))
-        if (item.logo != null) MediaLogo(item.logo, item.title, Modifier.widthIn(max = if (wide) 320.dp else 240.dp).heightIn(min = 90.dp))
+        if (item.logo != null) MediaLogo(item.logo, item.title, Modifier.fillMaxWidth().widthIn(max = 680.dp),
+          width = if (wide) 320.dp else if (detail && item.itemType.equals("Movie", true)) 240.dp else 208.dp,
+          height = if (detail && item.itemType.equals("Movie", true)) 74.dp else 67.dp, maxTitleLines = if (detail) Int.MAX_VALUE else 2)
         else Text(item.title, color = Color.White, style = if (wide) MaterialTheme.typography.displayMedium else MaterialTheme.typography.headlineLarge,
           maxLines = if (detail) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
           modifier = Modifier.widthIn(max = 680.dp).semantics { contentDescription = item.title })
-        if (item.quality.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
           item.quality.filterNot { detail && it == item.audioLabel }.forEach { quality ->
-            if (quality == "4K" || quality == "4K UHD") Surface(shape = MaterialTheme.shapes.extraSmall, color = Color.Transparent, contentColor = Color.White, border = BorderStroke(1.dp, Color.White.copy(alpha = 0.65f))) {
-              Text(quality, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp))
-            } else Text(quality, color = Color.White, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 4.dp))
+            Box(Modifier.heightIn(min = if (detail) 48.dp else 24.dp), contentAlignment = Alignment.Center) {
+              if (quality == "4K" || quality == "4K UHD") Surface(shape = MaterialTheme.shapes.extraSmall, color = Color.Transparent, contentColor = Color.White, border = BorderStroke(1.dp, Color.White.copy(alpha = 0.65f))) {
+                Text(quality, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp))
+              } else Text(quality, color = Color.White, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 4.dp))
+            }
           }
-        }
-        if (detail && item.playable) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          if (onAudio != null) TextButton(onClick = onAudio, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
+          if (detail && item.playable && onAudio != null) TextButton(onClick = onAudio, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 4.dp), colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
             PilotIcon(R.drawable.ic_headphones)
             Spacer(Modifier.width(6.dp))
             Text(item.audioLabel ?: stringResource(R.string.audio_tracks), style = MaterialTheme.typography.labelSmall)
           }
-          if (onSubtitles != null) TextButton(onClick = onSubtitles, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
+          if (detail && item.playable && onSubtitles != null) TextButton(onClick = onSubtitles, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 4.dp), colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
             PilotIcon(R.drawable.ic_subtitles)
             Spacer(Modifier.width(6.dp))
             Text(item.subtitleLabel ?: stringResource(R.string.subtitle_tracks), style = MaterialTheme.typography.labelSmall)
@@ -177,9 +179,9 @@ internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
   val tracks = state.detailTracks?.takeIf { it.targetId == detail.playTargetId }
   val preferencesLabel = stringResource(R.string.playback_preferences_default)
   val hero = detail.copy(
-    audioLabel = tracks?.let { value -> value.audio.firstOrNull { it.index == value.selectedAudio }?.label } ?: preferencesLabel,
+    audioLabel = tracks?.let { value -> value.audio.firstOrNull { it.index == value.selectedAudio }?.label } ?: detail.audioLabel ?: preferencesLabel,
     subtitleLabel = if (tracks?.selectedSubtitle == -1) stringResource(R.string.subtitles_off)
-      else tracks?.let { value -> value.subtitles.firstOrNull { it.index == value.selectedSubtitle }?.label } ?: preferencesLabel,
+      else tracks?.let { value -> value.subtitles.firstOrNull { it.index == value.selectedSubtitle }?.label } ?: detail.subtitleLabel ?: preferencesLabel,
   )
   var expanded by rememberSaveable(detail.id) { mutableStateOf(false) }
   var audioSheet by rememberSaveable(detail.id) { mutableStateOf<Boolean?>(null) }
@@ -200,6 +202,7 @@ internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
     if (detail.genres.isNotEmpty()) item { Text(detail.genres.joinToString(" · "), Modifier.padding(horizontal = 16.dp), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall) }
     if (detail.overview.isNotBlank()) item(key = "overview") {
       Column(Modifier.padding(horizontal = 16.dp)) {
+        Text(stringResource(R.string.overview), style = MaterialTheme.typography.sectionHeading, modifier = Modifier.padding(bottom = 8.dp))
         Text(detail.overview, color = LocalPilotColors.current.body, style = MaterialTheme.typography.bodyMedium, maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
         TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) { Text(stringResource(if (expanded) R.string.collapse else R.string.expand)) }
       }
@@ -234,23 +237,27 @@ internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
     }
   }
   audioSheet?.let { audio ->
-    DetailTrackSheet(audio, state.detailTracks, { audioSheet = null }, model::loadDetailTracks,
+    DetailTrackSheet(audio, tracks, { audioSheet = null }, model::loadDetailTracks,
       if (audio) model::selectDetailAudio else model::selectDetailSubtitle)
   }
 }
 
 @Composable
 internal fun EpisodeRow(item: MediaUi, model: AppViewModel) {
+  BoxWithConstraints {
+  val narrow = maxWidth < 360.dp || LocalDensity.current.fontScale > 1.3f
   Row(Modifier.fillMaxWidth().clickable { model.showDetail(item.id) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-    Box(Modifier.width(96.dp)) {
+    Box(Modifier.width(if (narrow) 88.dp else 120.dp)) {
       Artwork(item.backdrop ?: item.artwork, null, Modifier.fillMaxWidth().aspectRatio(16f / 10f))
-      if (item.progress > 0f) LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter), drawStopIndicator = {})
+      if (item.progress > 0f) LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.BottomCenter), drawStopIndicator = {})
     }
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       item.episodeCode?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary) }
       Text(item.title, style = MaterialTheme.typography.labelLarge)
-      Text(mediaCaption(item), style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
+      Text(mediaCaption(item.copy(episodeCode = null)), style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
+      if (!narrow && item.overview.isNotBlank()) Text(item.overview, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = LocalPilotColors.current.metadata)
     }
     IconButton(onClick = { model.playItem(item.id, item.played) }, enabled = item.playable) { PilotIcon(R.drawable.ic_player_play, playbackLabel(item)) }
+  }
   }
 }

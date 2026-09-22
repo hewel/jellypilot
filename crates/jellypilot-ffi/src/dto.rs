@@ -36,6 +36,24 @@ pub struct SdkConfig {
     pub device_name: String,
 }
 
+/// Public identity verified before sign-in; provider can require user selection.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ServerIdentity {
+    pub server_url: String,
+    pub server_name: String,
+    pub provider: Option<Provider>,
+}
+
+impl From<jellypilot_sdk::ServerIdentity> for ServerIdentity {
+    fn from(identity: jellypilot_sdk::ServerIdentity) -> Self {
+        Self {
+            server_url: identity.server_url,
+            server_name: identity.server_name,
+            provider: identity.provider.map(Provider::from),
+        }
+    }
+}
+
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ProviderCapabilities {
     pub quick_connect: bool,

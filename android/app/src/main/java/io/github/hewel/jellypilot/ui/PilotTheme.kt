@@ -62,10 +62,13 @@ private val LightColors = lightColorScheme(
 )
 
 @Immutable
-internal data class PilotColors(val body: Color, val metadata: Color, val sidebar: Color, val favorite: Color, val action: Color = Color(0xFF4F46E5), val playerScrim: Color = Color(0xB3000000), val insetMetadata: Color = body)
-private val DarkPilot = PilotColors(Color(0xFFD4D4D8), Color(0xFFA1A1AA), Color(0xFF0F1016), Color(0xFFF87171), insetMetadata = Color(0xFFA1A1AA))
-private val LightPilot = PilotColors(Color(0xFF475569), Color(0xFF64748B), Color(0xFFF1F5F9), Color(0xFFE11D48))
+internal data class PilotColors(val body: Color, val metadata: Color, val sidebar: Color, val favorite: Color, val action: Color = Color(0xFF4F46E5), val playerScrim: Color = Color(0xB3000000), val insetMetadata: Color = body, val filterSurface: Color = sidebar, val switchOff: Color = metadata, val accountSurface: Color = sidebar, val settingsSurface: Color = sidebar, val trackSelection: Color = sidebar)
+private val DarkPilot = PilotColors(Color(0xFFD4D4D8), Color(0xFFA1A1AA), Color(0xFF0F1016), Color(0xFFF87171), insetMetadata = Color(0xFFA1A1AA), filterSurface = DarkColors.surfaceContainer, switchOff = DarkColors.surfaceContainerHighest, accountSurface = DarkColors.surfaceContainer, settingsSurface = DarkColors.surfaceContainerLow, trackSelection = Color.White.copy(alpha = 0.06f))
+private val LightPilot = PilotColors(Color(0xFF475569), Color(0xFF64748B), Color(0xFFF1F5F9), Color(0xFFE11D48), filterSurface = LightColors.surfaceContainerLow, switchOff = LightColors.outline, accountSurface = LightColors.surface, settingsSurface = LightColors.surface, trackSelection = LightColors.surfaceContainerHigh)
 internal val LocalPilotColors = staticCompositionLocalOf { LightPilot }
+
+internal val Typography.sectionHeading: TextStyle
+  get() = titleLarge.copy(fontSize = 18.sp, lineHeight = 24.sp)
 
 // Cinema-only roles from Paper Mobile. Flat translucency avoids blurring the video Surface.
 internal object PilotPlayerTokens {
@@ -82,6 +85,14 @@ internal object PilotPlayerTokens {
   val backdrop = Color.Black.copy(alpha = 0.5f)
   val back = Color(0xFF0A0B0E).copy(alpha = 0.4f)
   val play = DarkColors.primary.copy(alpha = 0.65f)
+  val phoneVeil = Color.Black.copy(alpha = 0.18f)
+  val phonePanelSelected = Color.White.copy(alpha = 0.06f)
+  val phoneFeedback = Color.Black.copy(alpha = 0.7f)
+  val phoneRail = Color.White.copy(alpha = 0.25f)
+  val phoneTopScrim = listOf(0f to Color.Black.copy(alpha = 0.4f), 0.25f to Color.Black.copy(alpha = 0.3f),
+    0.5f to Color.Black.copy(alpha = 0.15f), 0.75f to Color.Black.copy(alpha = 0.04f), 1f to Color.Transparent)
+  val phoneBottomScrim = listOf(0f to Color.Transparent, 0.25f to Color.Black.copy(alpha = 0.14f),
+    0.5f to Color.Black.copy(alpha = 0.42f), 0.75f to Color.Black.copy(alpha = 0.64f), 1f to Color.Black.copy(alpha = 0.76f))
   val topScrim = Color(0xFF0A0B0E).copy(alpha = 0.65f)
   val bottomScrim = listOf(0f to Color.Transparent, 0.35f to Color.Black.copy(alpha = 0.22f),
     0.65f to Color.Black.copy(alpha = 0.55f), 1f to Color.Black.copy(alpha = 0.82f))
@@ -112,7 +123,7 @@ internal fun PilotTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composa
       headlineMedium = style(28, 36, FontWeight.Bold), headlineSmall = style(24, 32, FontWeight.Bold),
       titleLarge = style(20, 28, FontWeight.SemiBold), titleMedium = style(16, 24, FontWeight.SemiBold),
       titleSmall = style(14, 20, FontWeight.SemiBold), bodyLarge = style(16, 24),
-      bodyMedium = style(14, 20), bodySmall = style(12, 18),
+      bodyMedium = style(14, 20), bodySmall = style(12, 16),
       labelLarge = style(14, 20, FontWeight.SemiBold), labelMedium = style(12, 16, FontWeight.Medium),
       labelSmall = style(12, 16, FontWeight.Medium),
     )

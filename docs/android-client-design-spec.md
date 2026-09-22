@@ -1,6 +1,6 @@
 # Android Client Design Specification
 
-_Status: Accepted design, 2026-09-14; mobile product implementation added on 2026-09-21. Current validation and pending acceptance are recorded below. The user deferred physical-device testing of this implementation until completion; the earlier bring-up device pass does not validate these new flows._
+_Status: Accepted design, 2026-09-14; mobile product implementation added on 2026-09-21 and synchronized with the 2026-09-22 Mobile design. Validation and pending acceptance are recorded below. The user deferred physical-device testing until completion; the earlier bring-up device pass does not validate these new flows._
 
 Architecture: [ADR 0042](adr/0042-native-android-frontend-and-shared-sdk.md). Domain terminology: [CONTEXT.md](../CONTEXT.md). Visual source: [Paper, Media Streamer / Mobile](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/5UF-0). Repository investigation used `22555b4`; the earlier proposal cited `92fba0e3` and is not current implementation evidence.
 
@@ -51,29 +51,74 @@ multi-window or on [large screens](https://developer.android.com/develop/adaptiv
 
 Playback uses immersive system bars, including track-selection windows: status and navigation
 bars are hidden, edge swipes reveal transient bars, and leaving playback restores browsing bars.
-The Mobile player follows the [landscape control reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/627-0):
-top title and session-skip capsule, bottom metadata/remaining time, a 4 dp timeline with a 14 dp
-thumb, then volume / 56 dp transport / queue-audio-subtitle-video groups. Narrow windows wrap
-the control groups instead of shrinking their 48 dp Android touch targets. Previous/next episode
-actions remain available in the queue. Minimal is the initial state; playing and paused share
-the edge progress line, with a 72 dp pause indicator when paused. No synthetic chapter markers
-are drawn when the player has no chapter data.
+The phone player follows the 2026-09-22 [landscape control reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/627-0).
+Full controls have transparent Back and Settings targets at the top, borderless central
+back-ten-seconds / play-pause / forward-ten-seconds controls (56/72/56 dp), and bottom title,
+episode, queue/audio/subtitle entries, timeline and elapsed/remaining time. The timeline has a
+4 dp rail and 12 dp thumb. Android targets remain at least 48 dp; large text and narrow windows
+adapt without removing actions. Previous/next episode actions remain available in the queue.
+The prior tablet transport layout remains separate from this phone revision.
+
+Phone Minimal is a clean picture, with no progress line or pause badge. Tapping empty picture
+toggles controls without changing playback. Pausing reveals Full; explicit dismissal can hide it
+again while remaining paused. Full hides after three seconds of actual playback, but never during
+slider interaction, an open panel, or accessibility focus. No synthetic chapter markers are drawn
+when the player has no chapter data. Automatic-skip Undo appears at bottom right, remains actionable
+for eight seconds (extended for focus/accessibility), and does not force Full controls to appear.
 
 Landscape selection panels use a 340 dp surface, 16 dp outside margins and corner radius, a
-fixed heading/close control, and scrolling track rows. Typography expands with system font size.
+fixed 16/24 sp heading and back/close controls, and scrolling 56 dp rows that grow with text.
+Selected tracks use neutral fill and a check, including the portrait preplay sheets. Settings
+contains volume, a separate playback-speed page, session skip, picture brightness, current audio
+and video information; nested pages preserve the opening control's focus when closed.
 The cinema-only roles in `PilotTheme.kt` use flat translucency without video backdrop blur;
 Material slider input/semantics are retained with custom track/thumb visuals. Human acceptance
 owns fidelity to the reference, subtitle output and actual display-cutout/gesture behavior.
 
+Manual picture brightness is an application-owned OUTPUT shader multiplying video RGB from
+20–100%, after video color mapping and before subtitle overlay. It does not change system/window
+brightness, dim controls or subtitles, or expose user shaders/configuration. It defaults to 100%;
+brightness and speed stay with the open player during continuous media replacement and reset on
+exit. This is a signal multiplier, not calibrated screen luminance or
+HDR acceptance. Custom double-tap, swipe and long-press playback gestures, their HUD, help and
+preferences are excluded from this design synchronization at the user's request.
+
 A prototype entry is not automatic feature authorization. In particular, the current “快捷键” entry must not become a dead settings item: the implemented Android settings navigation must omit or revise it to match the standard-input-only decision. Likewise “MPV” does not authorize arbitrary configuration. Missing prototype pages do not silently remove inherited business capabilities. Paper itself was not modified in this design session; final visual acceptance is human-owned.
 
-### Mobile design integration checkpoint — 2026-09-21
+### Mobile design synchronization — 2026-09-22
+
+The current snapshot adds full-screen server connection and account login as two steps. The
+public server probe preserves ports and reverse-proxy paths, reports actual server identity,
+and never sends saved credentials or changes the active profile. Explicit product metadata can
+identify Jellyfin/Emby; otherwise the account step asks for the server type. Password remains
+optional and memory-only: failed attempts retain it, while changing address, exiting the flow,
+or successful activation clears it. Back cancels outstanding requests; old completions cannot
+activate a profile. Authentication refusal and an unreachable server have different feedback.
+When public information is restricted (HTTP 401/403), an explicit manual-login action requires
+the user to choose the server type. It preserves Emby's supported password-authentication fallback
+without inventing a server name or showing an unverified connection as identified.
+
+Home, library controls, poster/episode rows, search and personal-list tabs follow the updated
+spacing and hierarchy. Library menus retain real filtering/sort state. Account overview separates
+user name, server name and address; My Lists and Settings lead to independent pages. Saved
+connection health is distinct from selected profile identity. Settings groups remain scrollable
+with large text and preserve History, local recovery, diagnostics and account management even
+where those inherited capabilities have no dedicated design board. Native semantic color roles
+in `PilotTheme.kt` supply filter, account/settings and neutral track-selection surfaces in both
+themes; this is the Android projection, not a second desktop styling system.
+
+The synchronization also fences season queries when replacing pending pagination, so changing
+season immediately starts its first page and late old-season results cannot overwrite it.
+MediaSession discards unconfirmed play/seek intents on admission loss, generation replacement
+and terminal states, preventing those intents from reappearing in a later session.
+
+### Earlier mobile design integration checkpoint — 2026-09-21
 
 The user identified the mobile design as substantially settled and approved implementation with
 all recommended choices below. Physical-device testing is deferred until the complete Android
 implementation is ready. These decisions do not claim implementation or visual acceptance.
 
-The current [Paper Mobile page](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0)
+At that checkpoint the [Paper Mobile page](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0)
 contains 40 interface boards and one interaction guide. Its companion design package defines
 mobile interaction and shared playback/list behavior; historical handoff notes are subordinate to
 those current specifications. Phone navigation is Home / Personal Lists / Library / Account,
@@ -222,7 +267,38 @@ Pin and reproduce Rust cross-compilation, UniFFI generation, libmpv and transiti
 
 For each gate record pass/fail/unavailable separately. Missing device, sample, or output evidence is not a pass. Desktop changes require the relevant repository gates from [validation policy](agents/validation.md); Android commands and checks must be added as working dispatcher entries during implementation, not invented here. Documentation-only recording does not require an application build.
 
-## Mobile implementation and verification — 2026-09-21
+## Mobile synchronization verification — 2026-09-22
+
+The phone design synchronization excludes custom playback gestures. It includes the updated Home,
+library/search, details and tracks, personal lists, account/settings, two-step server login and
+landscape player. Related inspection fixed season replacement admission, account-to-library
+navigation, unconfirmed MediaSession intents, duplicate MediaSession IDs, and native file
+observations arriving after visible playback state was retired. A stopped file's cache event
+can no longer change an empty snapshot back to Ready; late picture/speed commands cannot change
+the reset values. Each player owner has its own MediaSession ID and coordinates readiness with
+resource closure.
+
+| Check | Result and scope |
+| --- | --- |
+| `bun run check` / `bun run task rust test` | Passed across the maintained shared/desktop workspaces; 1,387 reported test passes, zero failures, one ignored helper exercised by lifecycle tests. No desktop startup boundary changed. |
+| Android bindings and ARM64 Rust build | Regenerated from the final shared API and cross-compiled through the dispatcher. |
+| Android host tests | 40 app/Compose/Media3 cases and four player cases passed. |
+| `:app:lintDebug` | Passed with zero errors and 56 warnings. |
+| `:app:connectedDebugAndroidTest` | All 30 cases passed on API 35 x86_64 with `libndk_translation` ARM64 support. A final two-case native picture/settings rerun also passed after tightening rejection of commands after stop. |
+| APK packaging | Debug signature, 16 KB ZIP alignment, and all 13 ARM64 libraries' uncompressed packaging and ≥16 KB ELF load alignment passed. Actual 16 KB-page runtime remains unverified. |
+
+The HTTP/native fixtures verify public-probe restrictions and password-login fallback, cancellation
+without replacing the active account, real season switching, playback/report/resume, picture-setting
+readback and retention through continuous replacement, explicit-exit reset, independent resource
+owners, immersive rotation, and late-event rejection. Shader property/track checks are not a visual
+proof of brightness, subtitle composition or HDR. Human phone/tablet, real-server, output and
+controlled-release acceptance remain separate; use [the device checklist](android-testing.md).
+
+Final debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`, **566,221,610 bytes**,
+SHA256 `2d78266825060365d4bb05d4488116fdd0af725074bca27dcbb6e39c99684d4e`.
+It retains native symbols and uses the development signing key.
+
+## Earlier mobile implementation and verification — 2026-09-21
 
 The Android product now includes the four-destination phone shell, adaptive tablet rail,
 immersive Home and details, retained Library/Search state, seasons and episodes, preplay and
@@ -243,7 +319,7 @@ Unexpected native termination preserves recovery, unlike explicit exit or natura
 Remote commands and system media controls use the same session path. Android skip Undo switches
 only that session to Manual.
 
-| Current check | Evidence |
+| Check recorded on 2026-09-21 | Evidence |
 | --- | --- |
 | `bun run check` | Passed: 27 dispatcher tests and maintained Rust formatting/clippy. |
 | `bun run task rust test` | 1,343 passed, zero failed, one ignored helper invoked by lifecycle tests. |
@@ -258,7 +334,7 @@ Focused independent source review covered native admission/cleanup, profile tran
 terminal events, cross-profile Undo, partial collection operations and interruption recovery.
 The identified issues were fixed; runtime tests remain separate evidence.
 
-The current artifact is a debug-signed development APK, version `2.2.2-android-preview`, retaining
+The artifact recorded for that pass was a debug-signed development APK, version `2.2.2-android-preview`, retaining
 native symbols: `android/app/build/outputs/apk/debug/app-debug.apk`, 564,620,403 bytes,
 SHA256 `217213b48adf3bf2ceb75653d63c139d7b9c86df9fcef2003cd19b08c26e4657`.
 The final UI edits also passed `:app:lintDebug`; the APK was rebuilt by the final instrumentation

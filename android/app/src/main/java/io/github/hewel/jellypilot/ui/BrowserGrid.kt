@@ -43,6 +43,8 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
       if (range != null) model.setBrowserDisplayRange(browser.generation, range.first.toUInt(), range.second.toUInt())
     }
   }
+  BoxWithConstraints(Modifier.fillMaxSize()) {
+  val titleLines = if (maxWidth < 360.dp) 2 else 1
   when {
     browser.status == BrowseUiStatus.Failed && !browser.hasContent -> {
       Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -85,9 +87,10 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
               browser.slots.getOrNull((absolute - browser.visibleStart).toInt())
             } else null
           }
-          if (slot != null) Poster(slot) { model.showDetail(slot.id) } else PosterPlaceholder()
+          if (slot != null) Poster(slot, titleLines = titleLines) { model.showDetail(slot.id) } else PosterPlaceholder(titleLines = titleLines)
         }
       }
     }
+  }
   }
 }

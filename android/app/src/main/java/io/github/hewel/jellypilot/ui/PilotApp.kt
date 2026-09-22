@@ -49,7 +49,10 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
       }
     }
   }
-  BackHandler(state.detail != null || state.showPlayer || state.destination == Destination.Search || state.accountPage != AccountPage.Overview) { model.back() }
+  BackHandler(state.showSignIn || state.detail != null || state.showPlayer || state.destination == Destination.Search ||
+    (state.destination == Destination.Account && state.accountPage != AccountPage.Overview)) {
+    if (state.showSignIn) model.loginBack() else model.back()
+  }
   val dark = when (state.preferences.theme) {
     ThemePreference.System -> isSystemInDarkTheme()
     ThemePreference.Dark -> true
@@ -57,10 +60,16 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
   }
   PilotTheme(dark = dark) {
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-      if (state.showPlayer) playerContent()
+      if (state.showSignIn) ServerConnectionScreen(
+        state, model::loginBack, model::changeLoginServer, model::changeLoginUsername,
+        model::changeLoginPassword, model::changeLoginRemember, model::changeLoginProvider,
+        model::connectLoginServer, model::submitLogin, model::submitQuickConnect, model::continueLoginManually,
+      )
+      else if (state.showPlayer) playerContent()
       else BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         val rail = maxWidth >= 600.dp
-        val pushed = state.detail != null || state.destination == Destination.Search || state.accountPage != AccountPage.Overview
+        val pushed = state.detail != null || state.destination == Destination.Search ||
+          (state.destination == Destination.Account && state.accountPage != AccountPage.Overview)
         val immersive = state.detail != null || (state.destination == Destination.Home && state.activeName != null)
         Row(Modifier.fillMaxSize()) {
           if (rail) Navigation(navigationDestination, true, model::navigate)
@@ -75,7 +84,8 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
               }
             }
             Box(Modifier.weight(1f)) {
-              val routeKey = state.detail?.let { "detail:${it.id}" } ?: "${state.destination}:${state.accountPage}"
+              val routeKey = state.detail?.let { "detail:${it.id}" }
+                ?: if (state.destination == Destination.Account) "${state.destination}:${state.accountPage}" else state.destination.name
               routeState.SaveableStateProvider("$scopeKey:$routeKey") {
               when {
                 state.detail != null -> DetailScreen(state, model)
@@ -98,7 +108,6 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
           }
         }
       }
-      if (state.showSignIn) SignInSheet(state, model::cancelLogin, model::signIn, model::quickConnect)
     }
   }
 }

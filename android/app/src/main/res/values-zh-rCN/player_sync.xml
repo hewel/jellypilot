@@ -1,0 +1,19 @@
+<resources>
+  <string name="player_track_default">默认</string>
+    <string name="player_settings">设置</string>
+    <string name="player_audio">音轨</string>
+    <string name="player_episodes">选集</string>
+    <string name="player_subtitles">字幕</string>
+    <string name="player_playback_settings">播放设置</string>
+    <string name="player_playback_speed">播放速度</string>
+    <string name="player_picture">画面</string>
+    <string name="player_picture_brightness">画面亮度</string>
+    <string name="player_picture_only">仅调整视频画面</string>
+    <string name="player_picture_unavailable">暂时无法调整画面。</string>
+    <string name="player_video_details">视频详情</string>
+    <string name="player_auto_skip_full">自动跳过片头片尾</string>
+    <string name="player_session_only">仅本次播放</string>
+    <string name="player_speed_value">%1$s×</string>
+    <string name="player_volume_percent">%1$d%%</string>
+    <string name="player_hide_controls">隐藏控件</string>
+</resources>

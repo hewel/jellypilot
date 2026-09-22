@@ -21,8 +21,11 @@ pub enum SdkError {
     Authentication(String),
     /// Protected credential or local persistence failed.
     Storage(String),
-    /// An authenticated server request failed.
+    /// A server request or public server discovery failed.
     Request(String),
+    /// Public discovery requires authentication. No identity was verified;
+    /// the caller may offer explicit provider selection and manual sign-in.
+    ServerInfoRestricted,
     /// The operation's token was cancelled.
     Cancelled,
     /// The issuing profile scope ended before the result was committed.
@@ -46,6 +49,9 @@ impl fmt::Display for SdkError {
             | Self::Authentication(message)
             | Self::Storage(message)
             | Self::Request(message) => formatter.write_str(message),
+            Self::ServerInfoRestricted => {
+                formatter.write_str("public server information requires authentication")
+            }
             Self::Cancelled => formatter.write_str("the operation was cancelled"),
             Self::Stale => {
                 formatter.write_str("the profile scope changed before the result was committed")

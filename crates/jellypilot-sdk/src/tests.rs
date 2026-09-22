@@ -6,6 +6,7 @@ mod browse;
 mod history;
 mod playback;
 mod product;
+mod server_probe;
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

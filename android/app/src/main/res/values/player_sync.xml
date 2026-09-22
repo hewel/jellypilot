@@ -1,0 +1,19 @@
+<resources>
+  <string name="player_track_default">Default</string>
+    <string name="player_settings">Settings</string>
+    <string name="player_audio">Audio</string>
+    <string name="player_episodes">Episodes</string>
+    <string name="player_subtitles">Subtitles</string>
+    <string name="player_playback_settings">Playback settings</string>
+    <string name="player_playback_speed">Playback speed</string>
+    <string name="player_picture">Picture</string>
+    <string name="player_picture_brightness">Picture brightness</string>
+    <string name="player_picture_only">Adjusts the video picture only</string>
+    <string name="player_picture_unavailable">Picture adjustment is unavailable.</string>
+    <string name="player_video_details">Video details</string>
+    <string name="player_auto_skip_full">Automatically skip intros and credits</string>
+    <string name="player_session_only">This playback session only</string>
+    <string name="player_speed_value">%1$s×</string>
+    <string name="player_volume_percent">%1$d%%</string>
+    <string name="player_hide_controls">Hide controls</string>
+</resources>

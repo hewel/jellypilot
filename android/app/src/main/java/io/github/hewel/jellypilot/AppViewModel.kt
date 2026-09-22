@@ -23,9 +23,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import io.github.hewel.jellypilot.player.*
 
-internal class AppViewModel(application: Application) : AndroidViewModel(application) {
+internal class AppViewModel(application: Application, private val sdk: JellypilotSdk) : AndroidViewModel(application) {
+  constructor(application: Application) : this(application, (application as JellyPilotApplication).sdk)
+
   private val app = application as JellyPilotApplication
-  private val sdk = app.sdk
   private val platformPreferences = AndroidPreferences(app)
   val player = app.player
   private val mutableState = MutableStateFlow(AppUiState())
@@ -64,6 +65,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   private var libraries = emptyList<VideoLibraryShortcut>()
   private var watchlistIds = emptySet<String>()
   private var searchSource = Destination.Home
+  private val accountPageHistory = ArrayDeque<AccountPage>()
   private data class DetailPage(val item: MediaUi, val children: List<MediaUi>, val seasonId: String?, val hasMore: Boolean, val tracks: DetailTracksUi?)
   private val details = ArrayDeque<DetailPage>()
   private data class RetainedBrowser(val session: BrowseSession, val generation: Long, val ui: BrowserUi)
@@ -97,7 +99,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     viewModelScope.launch {
       try {
         val prefill = withContext(Dispatchers.IO) { sdk.loginPrefill() }
-        mutableState.update { it.copy(loginServer = prefill.serverUrl, loginUsername = prefill.username, loginJellyfin = prefill.provider == Provider.JELLYFIN, loginRemember = prefill.remember) }
+        mutableState.update { if (it.showSignIn) it else it.copy(loginServer = prefill.serverUrl, loginUsername = prefill.username, loginJellyfin = prefill.provider == Provider.JELLYFIN, loginRemember = prefill.remember) }
         refreshPreferences()
         val saved = sdk.savedProfiles()
         refreshIdentity(saved.profiles)
@@ -130,8 +132,8 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   fun dismissError() { mutableState.update { it.copy(error = null) } }
   fun dismissNotice() { mutableState.update { it.copy(notice = null) } }
   fun addAccount() {
-    if (rejectWhileCleanupPending()) return
-    mutableState.update { it.copy(showSignIn = true, error = null) }
+    if (state.value.loginBusy || rejectWhileCleanupPending()) return
+    mutableState.update { it.copy(showSignIn = true, loginStep = LoginStep.Server, loginIdentity = null, loginPassword = "", loginError = null, loginConnectionLost = false, loginPublicInfoRestricted = false, error = null) }
   }
   fun openPlayer() {
     if (sdk.contentMutationsBlocked()) {
@@ -154,8 +156,9 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       resumeBrowser()
     } else if (state.value.destination == Destination.Search) {
       navigate(searchSource)
-    } else if (state.value.accountPage != AccountPage.Overview) {
-      openAccountPage(AccountPage.Overview)
+    } else if (state.value.destination == Destination.Account && state.value.accountPage != AccountPage.Overview) {
+      val previous = accountPageHistory.removeLastOrNull() ?: AccountPage.Overview
+      mutableState.update { it.copy(accountPage = previous) }
     }
   }
 
@@ -178,12 +181,90 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   fun cancelLogin() {
+    if (state.value.loginCommitting) return
+    cancelLoginRequest()
+    mutableState.update { it.copy(showSignIn = false, loginStep = LoginStep.Server, loginIdentity = null, loginPassword = "", loginError = null, loginConnectionLost = false, loginPublicInfoRestricted = false) }
+  }
+
+  private fun cancelLoginRequest() {
     ++authGeneration
     quickSession?.cancel()
     quickSession?.destroy()
     quickSession = null
     loginJob?.cancel()
-    mutableState.update { it.copy(loginBusy = loginJob != null, quickConnectCode = null, showSignIn = false) }
+    // Keep admission closed until this job's finally block has finished, including
+    // a non-cancellable saved-account teardown already past its commit boundary.
+    mutableState.update { it.copy(loginBusy = loginJob != null, quickConnectCode = null) }
+  }
+
+  fun loginBack() {
+    if (state.value.loginCommitting) return
+    if (state.value.loginStep == LoginStep.Account) {
+      cancelLoginRequest()
+      mutableState.update { it.copy(loginStep = LoginStep.Server, loginError = null, loginConnectionLost = false) }
+    } else cancelLogin()
+  }
+
+  fun changeLoginServer(value: String) {
+    if (state.value.loginBusy || state.value.loginServer == value) return
+    mutableState.update { it.copy(loginServer = value, loginIdentity = null, loginPassword = "", loginError = null, loginConnectionLost = false, loginPublicInfoRestricted = false) }
+  }
+  fun changeLoginUsername(value: String) {
+    if (!state.value.loginBusy) mutableState.update { it.copy(loginUsername = value, loginError = null) }
+  }
+  fun changeLoginPassword(value: String) {
+    if (!state.value.loginBusy) mutableState.update { it.copy(loginPassword = value, loginError = null) }
+  }
+  fun changeLoginRemember(value: Boolean) {
+    if (!state.value.loginBusy) mutableState.update { it.copy(loginRemember = value) }
+  }
+  fun changeLoginProvider(jellyfin: Boolean) {
+    if (state.value.loginBusy || state.value.loginIdentity?.providerKnown != false) return
+    mutableState.update { it.copy(loginJellyfin = jellyfin, loginIdentity = it.loginIdentity?.copy(jellyfin = jellyfin, providerSelected = true), loginError = null) }
+  }
+
+  fun continueLoginManually() {
+    val input = state.value
+    if (input.loginBusy || !input.loginPublicInfoRestricted || input.loginStep != LoginStep.Server) return
+    mutableState.update { it.copy(loginStep = LoginStep.Account, loginError = null, loginConnectionLost = false,
+      loginIdentity = LoginServerUi(null, it.loginServer.trim(), it.loginJellyfin, providerKnown = false, providerSelected = false)) }
+  }
+
+  fun connectLoginServer() {
+    val input = state.value
+    if (input.loginBusy || input.loginServer.isBlank() || rejectWhileCleanupPending()) return
+    val generation = ++authGeneration
+    mutableState.update { it.copy(loginBusy = true, loginError = null, loginConnectionLost = false, loginPublicInfoRestricted = false) }
+    loginJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+      try {
+        val identity = sdk.probeServer(input.loginServer)
+        if (generation != authGeneration) return@launch
+        mutableState.update { it.copy(loginBusy = false, loginStep = LoginStep.Account,
+          loginJellyfin = identity.provider?.let { provider -> provider == Provider.JELLYFIN } ?: it.loginJellyfin,
+          loginIdentity = LoginServerUi(identity.serverName, identity.serverUrl, identity.provider?.let { provider -> provider == Provider.JELLYFIN } ?: it.loginJellyfin, identity.provider != null)) }
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) { if (generation == authGeneration) showLoginError(error, connecting = true) }
+      finally {
+        if (loginJob === currentCoroutineContext().job) {
+          loginJob = null
+          mutableState.update { it.copy(loginBusy = false) }
+        }
+      }
+    }
+    loginJob?.start()
+  }
+
+  fun submitLogin() {
+    val input = state.value
+    val identity = input.loginIdentity ?: return
+    if (!identity.providerSelected) return
+    signIn(identity.jellyfin, identity.address, input.loginUsername, input.loginPassword, input.loginRemember)
+  }
+
+  fun submitQuickConnect() {
+    val input = state.value
+    val identity = input.loginIdentity ?: return
+    if (identity.providerSelected && identity.jellyfin) quickConnect(identity.address, input.loginRemember)
   }
 
   /** Explains why playback and writes stay blocked until sign-out cleanup is retried. */
@@ -199,9 +280,12 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   fun signIn(jellyfin: Boolean, server: String, username: String, password: String, remember: Boolean) {
-    if (rejectWhileCleanupPending()) return
+    if (state.value.loginBusy || rejectWhileCleanupPending()) return
+    mutableState.update { it.copy(loginUsername = username, loginRemember = remember) }
     accountOperation {
       val candidate = sdk.passwordLogin(if (jellyfin) Provider.JELLYFIN else Provider.EMBY, server, username, password)
+      try { currentCoroutineContext().ensureActive() }
+      catch (cancelled: CancellationException) { candidate.discard(); candidate.destroy(); throw cancelled }
       activateCandidate(candidate, remember)
       withContext(Dispatchers.IO) { sdk.saveLoginPrefill(server, username, if (jellyfin) Provider.JELLYFIN else Provider.EMBY, remember) }
     }
@@ -252,38 +336,46 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   private suspend fun activateCandidate(candidate: ProfileCandidate, remember: Boolean) = withContext(NonCancellable) {
+    mutableState.update { it.copy(loginCommitting = true) }
     var activated = false
     try {
       playback.blockForHandoff()
       val outcome = sdk.activateCandidate(candidate, remember)
       activated = true
       connectionChanged()
-      mutableState.update { it.copy(showSignIn = false, quickConnectCode = null) }
+      mutableState.update { it.copy(showSignIn = false, quickConnectCode = null, loginPassword = "", loginIdentity = null, loginError = null, loginStep = LoginStep.Server, loginConnectionLost = false, loginPublicInfoRestricted = false) }
       if (outcome.persistenceWarning != null) {
         mutableState.update { it.copy(error = app.localizedString(R.string.sdk_activated_persistence_failed)) }
       }
     } finally {
       if (!activated) candidate.discard()
       candidate.destroy()
+      mutableState.update { it.copy(loginCommitting = false) }
     }
   }
 
   private fun accountOperation(action: suspend () -> Unit) {
     if (state.value.loginBusy) return
-    ++authGeneration
-    mutableState.update { it.copy(loginBusy = true, error = null) }
+    val generation = ++authGeneration
+    mutableState.update { it.copy(loginBusy = true, error = null, loginError = null) }
     loginJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
       try { action() }
       catch (cancelled: CancellationException) { throw cancelled }
-      catch (error: Exception) { showError(error) }
+      catch (error: Exception) {
+        if (generation == authGeneration) {
+          if (state.value.showSignIn) showLoginError(error) else showError(error)
+        }
+      }
       finally {
         // A failed sign-out teardown leaves the SDK mutation block in place
         // for the cleanup retry; only a settled operation may unblock.
         player.setHandoffBlocked(sdk.contentMutationsBlocked())
         playback.profileChanged()
-        loginJob = null
-        val cleanupPending = sdk.signOutCleanupPending()
-        mutableState.update { it.copy(loginBusy = false, signOutCleanupPending = cleanupPending) }
+        if (loginJob === currentCoroutineContext().job) {
+          loginJob = null
+          val cleanupPending = sdk.signOutCleanupPending()
+          mutableState.update { it.copy(loginBusy = false, signOutCleanupPending = cleanupPending) }
+        }
       }
     }
     loginJob?.start()
@@ -292,7 +384,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   fun quickConnect(server: String, remember: Boolean) {
     if (state.value.loginBusy || rejectWhileCleanupPending()) return
     val generation = ++authGeneration
-    mutableState.update { it.copy(loginBusy = true, error = null) }
+    mutableState.update { it.copy(loginBusy = true, error = null, loginError = null) }
     try {
       quickSession = sdk.startQuickConnect(server, object : QuickConnectListener {
         override fun onCode(code: String) {
@@ -315,7 +407,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
                 activateCandidate(outcome.candidate, remember)
                 withContext(Dispatchers.IO) { sdk.saveLoginPrefill(server, sdk.activeProfile()?.userName.orEmpty(), Provider.JELLYFIN, remember) }
               }
-              is QuickConnectOutcome.Failed -> showError(outcome.error)
+              is QuickConnectOutcome.Failed -> showLoginError(outcome.error)
               QuickConnectOutcome.Cancelled -> Unit
             }
           }
@@ -323,8 +415,27 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
       })
     } catch (error: Exception) {
       mutableState.update { it.copy(loginBusy = false) }
-      showError(error)
+      showLoginError(error)
     }
+  }
+
+  private fun showLoginError(error: Throwable, connecting: Boolean = false) {
+    if (error is SdkException.Cancelled || error is SdkException.Stale) return
+    val connectionLost = error is SdkException.Request
+    val publicInfoRestricted = connecting && error is SdkException.ServerInfoRestricted
+    val resource = when {
+      publicInfoRestricted -> R.string.login_public_info_restricted
+      connecting && error is SdkException.InvalidInput -> R.string.login_invalid_address
+      connecting -> R.string.login_connection_failed
+      error is SdkException.Authentication -> R.string.login_credentials_failed
+      connectionLost -> R.string.login_connection_lost
+      error is SdkException.Storage -> R.string.sdk_storage_failed
+      error is SdkException.HandoffAborted -> R.string.sdk_handoff_failed
+      error is SdkException.InvalidInput -> R.string.sdk_invalid_input
+      else -> R.string.sdk_request_failed
+    }
+    mutableState.update { it.copy(loginError = app.localizedString(resource), loginConnectionLost = connectionLost,
+      loginPublicInfoRestricted = if (connecting) publicInfoRestricted else it.loginPublicInfoRestricted) }
   }
 
   private suspend fun refreshIdentity(saved: List<SavedProfile>? = null) {
@@ -334,7 +445,8 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     try {
       val snapshot = sdk.savedProfiles()
       val profiles = (saved ?: snapshot.profiles).map { profile ->
-        ProfileUi(profile.key, profile.title, profile.serverUrl, if (profile.provider == Provider.JELLYFIN) "Jellyfin" else "Emby", profile.key == active?.key)
+        val provider = if (profile.provider == Provider.JELLYFIN) "Jellyfin" else "Emby"
+        ProfileUi(profile.key, profile.userName, profile.serverName?.takeIf { it.isNotBlank() } ?: provider, provider, profile.key == active?.key, profile.serverUrl)
       }
       mutableState.update { it.copy(profiles = profiles, selectedProfileKey = snapshot.lastActivatedKey) }
     } catch (cancelled: CancellationException) { throw cancelled }
@@ -342,6 +454,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   private suspend fun connectionChanged(saved: List<SavedProfile>? = null) {
+    accountPageHistory.clear()
     cancelQuery()
     closeBrowserSession()
     closeRetainedBrowsers()
@@ -359,7 +472,7 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
     batchWriteIds = emptySet()
     details.clear()
     searchText = ""
-    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, activeProfileKey = sdk.activeProfile()?.key, showPlayer = false, playbackUi = null, listBusy = false, listUndo = null, historyBusy = false, historyUndo = null, detailTracks = null, items = emptyList(), featured = emptyList(), homeRows = emptyList(), listItems = emptyList(), historyItems = emptyList(), listCount = 0, favoriteCount = 0, recovery = null, browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "") }
+    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, activeProfileKey = sdk.activeProfile()?.key, showPlayer = false, playbackUi = null, listBusy = false, listUndo = null, historyBusy = false, historyUndo = null, detailTracks = null, items = emptyList(), featured = emptyList(), homeRows = emptyList(), listItems = emptyList(), historyItems = emptyList(), listCount = 0, favoriteCount = 0, recovery = null, browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "", accountPage = AccountPage.Overview) }
     refreshIdentity(saved)
     playback.profileChanged()
     refreshRecovery()
@@ -898,21 +1011,30 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   fun selectSeason(id: String) {
-    if (state.value.selectedSeasonId == id) return
+    val current = state.value
+    val detail = current.detail ?: return
+    if (detail.itemType != "Series" || current.selectedSeasonId == id) return
     mutableState.update { it.copy(selectedSeasonId = id, detailItems = emptyList(), episodesHaveMore = true) }
-    loadMoreEpisodes()
+    // A new season replaces the pending query even while its previous page is loading.
+    loadEpisodes(detail.id, id, 0)
   }
 
   fun loadMoreEpisodes() {
-    val detail = state.value.detail ?: return
-    if (detail.itemType != "Series" || state.value.busy) return
-    val start = state.value.detailItems.size
-    val season = state.value.selectedSeasonId
+    val current = state.value
+    val detail = current.detail ?: return
+    if (detail.itemType != "Series" || current.busy || !current.episodesHaveMore) return
+    loadEpisodes(detail.id, current.selectedSeasonId, current.detailItems.size)
+  }
+
+  private fun loadEpisodes(seriesId: String, season: String?, start: Int) {
     query { token, scope, base ->
-      val page = sdk.seasonEpisodesPage(token, VideoSeasonEpisodesPageRequest(detail.id, season, null, start, 50))
+      val page = sdk.seasonEpisodesPage(token, VideoSeasonEpisodesPageRequest(seriesId, season, null, start, 50))
       currentCoroutineContext().ensureActive()
       val items = page.episodes.map { presented(media(it, scope), base) }
-      mutableState.update { it.copy(detailItems = (it.detailItems + items).distinctBy { item -> item.id }, episodesHaveMore = page.hasMore) }
+      mutableState.update {
+        if (it.detail?.id != seriesId || it.selectedSeasonId != season) it
+        else it.copy(detailItems = (it.detailItems + items).distinctBy { item -> item.id }, episodesHaveMore = page.hasMore)
+      }
     }
   }
 
@@ -962,6 +1084,9 @@ internal class AppViewModel(application: Application) : AndroidViewModel(applica
   }
 
   fun openAccountPage(page: AccountPage) {
+    if (state.value.accountPage == page) return
+    if (page == AccountPage.Overview) accountPageHistory.clear()
+    else accountPageHistory.addLast(state.value.accountPage)
     mutableState.update { it.copy(accountPage = page) }
     if (page == AccountPage.History) loadHistory(reset = true)
   }

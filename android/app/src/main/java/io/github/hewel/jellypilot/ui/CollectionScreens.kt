@@ -3,17 +3,14 @@
 package io.github.hewel.jellypilot.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -37,46 +34,8 @@ import kotlinx.coroutines.delay
 
 @Composable
 internal fun LibraryScreen(state: AppUiState, model: AppViewModel, grid: LazyGridState) {
-  var sortOpen by remember { mutableStateOf(false) }
   Column(Modifier.fillMaxSize()) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Column(Modifier.weight(1f)) {
-        Text(state.libraries.firstOrNull { it.id == state.libraryId }?.title ?: stringResource(R.string.library), style = MaterialTheme.typography.headlineSmall)
-        Text(pluralStringResource(if (state.libraryPlayed != PlayedFilter.All || state.libraryFavorites) R.plurals.filtered_count else R.plurals.items_count, state.browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt(), state.browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt()), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
-      }
-      Box {
-        TextButton(onClick = { sortOpen = true }) {
-          PilotIcon(R.drawable.ic_sort_descending)
-          Spacer(Modifier.width(6.dp))
-          Text(stringResource(state.librarySort.title))
-        }
-        DropdownMenu(sortOpen, { sortOpen = false }) {
-          LibrarySort.entries.forEach { sort -> DropdownMenuItem(text = { Text(stringResource(sort.title)) }, onClick = { model.setLibrarySort(sort); sortOpen = false }, trailingIcon = { if (sort == state.librarySort) PilotIcon(R.drawable.ic_check) }) }
-        }
-      }
-      IconButton(onClick = { model.navigate(Destination.Search) }) { PilotIcon(R.drawable.ic_search, stringResource(R.string.search)) }
-    }
-    if (state.libraries.size > 1) LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      items(state.libraries, key = { it.id }) { library -> FilterChip(state.libraryId == library.id, { model.selectLibrary(library.id) }, label = { Text(library.title) }) }
-    }
-    val enlarged = LocalDensity.current.fontScale > 1.3f
-    FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Row(Modifier.then(if (enlarged) Modifier.fillMaxWidth() else Modifier).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainer)) {
-        PlayedFilter.entries.forEach { filter ->
-          Box(Modifier.then(if (enlarged) Modifier.weight(1f) else Modifier).heightIn(min = 48.dp).selectable(state.libraryPlayed == filter, role = Role.RadioButton, onClick = { model.setLibraryFilters(filter, state.libraryFavorites) }).padding(4.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.clip(MaterialTheme.shapes.small).background(if (state.libraryPlayed == filter) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent).padding(horizontal = 12.dp, vertical = 8.dp)) {
-              Text(stringResource(filter.title), style = MaterialTheme.typography.labelMedium, color = if (state.libraryPlayed == filter) MaterialTheme.colorScheme.onPrimaryContainer else LocalPilotColors.current.body)
-            }
-          }
-        }
-      }
-      Row(Modifier.heightIn(min = 48.dp).toggleable(state.libraryFavorites, role = Role.Switch, onValueChange = { model.setLibraryFilters(state.libraryPlayed, it) }), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.only_favorites), style = MaterialTheme.typography.labelMedium)
-        Box(Modifier.width(28.dp).height(16.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (state.libraryFavorites) LocalPilotColors.current.action else MaterialTheme.colorScheme.outline)) {
-          Box(Modifier.align(if (state.libraryFavorites) Alignment.CenterEnd else Alignment.CenterStart).padding(2.dp).size(12.dp).clip(androidx.compose.foundation.shape.CircleShape).background(androidx.compose.ui.graphics.Color.White))
-        }
-      }
-    }
+    LibraryControls(state, model::selectLibrary, model::setLibrarySort, model::setLibraryFilters) { model.navigate(Destination.Search) }
     BrowserGrid(state.browser, model, grid)
   }
 }
@@ -98,7 +57,11 @@ internal fun SearchScreen(state: AppUiState, model: AppViewModel, grid: LazyGrid
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { model.search(state.searchQuery) }),
       )
     }
-    Text(pluralStringResource(R.plurals.items_count, state.browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt(), state.browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt()), Modifier.padding(16.dp), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
+    if (state.searchQuery.isNotBlank()) Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      Text(stringResource(R.string.browse_search_results, state.searchQuery), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+      val count = state.browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt()
+      Text(pluralStringResource(R.plurals.items_count, count, count), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
+    }
     when {
       state.searchQuery.isBlank() -> EmptyState(stringResource(R.string.search_empty), stringResource(R.string.search_empty_hint), icon = R.drawable.ic_search)
       state.browser.status == BrowseUiStatus.Empty -> EmptyState(stringResource(R.string.search_no_results, state.searchQuery), stringResource(R.string.search_no_results_hint), stringResource(R.string.clear_query), icon = R.drawable.ic_search, onAction = { model.search("") })
@@ -165,15 +128,26 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
       Text(stringResource(if (managing) { if (state.selectedList == PersonalListKind.Watchlist) R.string.manage_watchlist else R.string.manage_favorites } else R.string.personal_lists), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
       TextButton(onClick = { managing = !managing; selected = emptyList() }, enabled = state.listItems.isNotEmpty() && !state.listBusy) { Text(stringResource(if (managing) R.string.done else R.string.manage)) }
     }
-    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       PersonalListKind.entries.forEach { kind ->
-        FilterChip(state.selectedList == kind, { managing = false; selected = emptyList(); actions.selectList(kind) }, label = {
-          Text("${stringResource(kind.title)}  ${if (kind == PersonalListKind.Watchlist) state.listCount else state.favoriteCount}")
-        })
+        val active = state.selectedList == kind
+        Surface(
+          modifier = Modifier.weight(1f).heightIn(min = 48.dp).clip(MaterialTheme.shapes.medium)
+            .selectable(active, role = Role.Tab) { managing = false; selected = emptyList(); actions.selectList(kind) },
+          shape = MaterialTheme.shapes.medium,
+          color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+          border = if (active) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.secondary) else null,
+        ) {
+          Text("${stringResource(kind.title)}  ${if (kind == PersonalListKind.Watchlist) state.listCount else state.favoriteCount}",
+            Modifier.padding(horizontal = 12.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyLarge,
+            color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else LocalPilotColors.current.body,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
       }
     }
     if (state.listBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-    Box(Modifier.weight(1f)) {
+    BoxWithConstraints(Modifier.weight(1f)) {
+      val titleLines = if (maxWidth < 360.dp) 2 else 1
       if (state.listItems.isEmpty() && !state.listBusy) EmptyState(
         stringResource(if (state.selectedList == PersonalListKind.Watchlist) R.string.empty_watchlist else R.string.empty_favorites),
         stringResource(if (state.selectedList == PersonalListKind.Watchlist) R.string.empty_watchlist_hint else R.string.empty_favorites_hint),
@@ -186,7 +160,7 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
       ) {
         items(state.listItems, key = { it.id }) { item ->
           val focus = remember(item.id) { focusers.getOrPut(item.id) { FocusRequester() } }
-          Poster(item, Modifier.focusRequester(focus), if (managing) item.id in selected else null, enabled = !managing || !state.listBusy) {
+          Poster(item, Modifier.focusRequester(focus), if (managing) item.id in selected else null, enabled = !managing || !state.listBusy, titleLines = titleLines) {
             if (managing) selected = if (item.id in selected) selected - item.id else selected + item.id
             else actions.openItem(item.id)
           }

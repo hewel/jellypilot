@@ -21,6 +21,26 @@ import org.junit.runner.RunWith
 /** Exercises the physical admission boundary without screenshots or timing sleeps. */
 @RunWith(AndroidJUnit4::class)
 class PreparedPlaybackBoundaryTest {
+  @Test fun overlappingResourceOwnersHaveIndependentMediaSessionsAndDisposal() = runBlocking {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val first = NativePlayback(context)
+    val second = NativePlayback(context)
+    try {
+      withTimeout(25_000) { first.ready.first { it } }
+      withTimeout(25_000) { second.ready.first { it } }
+      assertNull(first.error.value)
+      assertNull(second.error.value)
+      first.close()
+      assertTrue(withTimeout(25_000) { first.stopAndWait() })
+      assertTrue("disposing another owner must not revoke this session", second.ready.value)
+      assertNull(second.error.value)
+    } finally {
+      first.close()
+      second.close()
+      withTimeout(25_000) { first.stopAndWait(); second.stopAndWait() }
+    }
+  }
+
   @Test fun completedNativeDisposalAllowsFurtherStopAndHandoffRetries() = runBlocking {
     val isolated = NativePlayback(InstrumentationRegistry.getInstrumentation().targetContext)
     try {

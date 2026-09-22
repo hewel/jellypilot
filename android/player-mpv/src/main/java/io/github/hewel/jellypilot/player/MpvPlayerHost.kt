@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import java.io.File
+import kotlin.math.roundToInt
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 
@@ -52,8 +54,16 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     override fun onEndFile(playlistEntryId: Long, reason: Int, error: Int) =
       enqueue { applyEndFile(playlistEntryId, reason, error) }
 
-    override fun onLog(prefix: String, level: Int, text: String) =
-      enqueue { emit(PlayerEvent.LogMessage(prefix, level, redact(text))) }
+    override fun onLog(prefix: String, level: Int, text: String) = enqueue {
+      // This host has exactly one application-owned shader. A shader failure must not
+      // leave an apparently working brightness slider after libplacebo disables the pass.
+      if (!released && level <= 30 && text.contains("shader", ignoreCase = true) &&
+        (text.contains("failed", ignoreCase = true) || text.contains("error", ignoreCase = true))) {
+        mutate { copy(pictureBrightnessAvailable = false,
+          error = PlayerError.CommandFailed("pictureBrightness", "Video adjustment shader failed")) }
+      }
+      emit(PlayerEvent.LogMessage(prefix, level, redact(text)))
+    }
   }
 
   @Volatile
@@ -128,8 +138,11 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
           config.cacheDir,
           config.tlsCaFile,
         )
+        initializePictureBrightness(context.applicationContext)
         observeProperties()
       } catch (t: Throwable) {
+        released = true
+        if (handle != 0L) { MpvJni.nativeDestroy(handle); handle = 0 }
         failure = t
       } finally {
         latch.countDown()
@@ -273,12 +286,12 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     }
   }
 
-  override fun stop() {
+  override fun stop(preserveSessionSettings: Boolean) {
     if (ifReleased("stop")) return
     revokePlay()
     enqueue {
       if (released) return@enqueue
-      executeStop()
+      executeStop(preserveSessionSettings)
     }
   }
 
@@ -307,10 +320,67 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     if (ifReleased("speed")) return
     enqueue {
       if (released) return@enqueue
+      if (liveStartedRecord()?.fileLoaded != true) {
+        reject("speed", RejectionReason.NOT_READY)
+        return@enqueue
+      }
       val clamped = speed.coerceIn(0.25, 4.0)
       if (MpvJni.nativeSetPropertyDouble(handle, "speed", clamped) < 0) {
         mutate { copy(error = PlayerError.CommandFailed("speed", "mpv rejected the value")) }
       }
+    }
+  }
+
+  override fun setPictureBrightness(percent: Int) {
+    if (ifReleased("pictureBrightness")) return
+    enqueue {
+      if (released) return@enqueue
+      if (liveStartedRecord()?.fileLoaded != true) {
+        reject("pictureBrightness", RejectionReason.NOT_READY)
+        return@enqueue
+      }
+      if (!current.pictureBrightnessAvailable || !writePictureBrightness(percent.coerceIn(20, 100))) {
+        mutate { copy(error = PlayerError.CommandFailed("pictureBrightness", "mpv rejected video adjustment")) }
+      }
+    }
+  }
+
+  private fun initializePictureBrightness(context: Context) {
+    val shader = File(config.cacheDir, "picture-dim.glsl")
+    shader.parentFile?.mkdirs()
+    context.assets.open("shaders/picture-dim.glsl").use { input ->
+      shader.outputStream().use { output -> input.copyTo(output) }
+    }
+    // OUTPUT runs after color management and before target overlays in the pinned
+    // gpu-next renderer. Keep subtitles separate instead of dimming the whole Surface.
+    check(MpvJni.nativeSetPropertyString(handle, "blend-subtitles", "no") >= 0)
+    check(MpvJni.nativeSetPropertyString(handle, "glsl-shaders", shader.path) >= 0)
+    check(writePictureBrightness(100)) { "Could not initialize video brightness" }
+    mutate { copy(pictureBrightnessAvailable = true) }
+  }
+
+  private fun writePictureBrightness(percent: Int): Boolean {
+    val gain = percent / 100.0
+    if (MpvJni.nativeSetPropertyString(handle, "glsl-shader-opts", "picture-dim/gain=$gain") < 0) return false
+    return readPictureBrightness() == percent
+  }
+
+  private fun readPictureBrightness(): Int? {
+    val options = MpvJni.nativeGetPropertyString(handle, "glsl-shader-opts") ?: return null
+    val gain = options.split(',').firstOrNull { it.startsWith("picture-dim/gain=") }
+      ?.substringAfter('=')?.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.2..1.0 } ?: return null
+    val percent = (gain * 100).roundToInt()
+    mutate { copy(pictureBrightnessPercent = percent) }
+    return percent
+  }
+
+  private fun resetPictureSettings() {
+    val brightnessReset = writePictureBrightness(100)
+    val speedReset = MpvJni.nativeSetPropertyDouble(handle, "speed", 1.0) >= 0
+    val speed = MpvJni.nativeGetPropertyString(handle, "speed")?.toDoubleOrNull()
+    if (speed != null) mutate { copy(speed = speed) }
+    if (!brightnessReset || !speedReset || speed != 1.0) {
+      mutate { copy(error = PlayerError.CommandFailed("pictureSettings", "Could not reset playback settings")) }
     }
   }
 
@@ -388,6 +458,9 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
           playWhenReady = false,
           isPlaying = false,
           paused = true,
+          pictureBrightnessPercent = 100,
+          pictureBrightnessAvailable = false,
+          speed = 1.0,
           tracks = emptyList(),
           mediaId = null,
           generation = 0,
@@ -698,11 +771,12 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     active = LoadRecord(request, entryId, recordSecrets, revision)
   }
 
-  private fun executeStop() {
+  private fun executeStop(preserveSessionSettings: Boolean) {
     // A queued replacement is cancelled outright; the active load's terminal
     // event is deferred until its native lifetime provably ends.
     pending?.let { emitLoadRejected(it, RejectionReason.CANCELLED) }
     pending = null
+    if (!preserveSessionSettings) resetPictureSettings()
     beginTeardown()
     eofReached = false
     pausedForCache = false
@@ -742,9 +816,9 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         recomputePlaying()
       }
       "paused-for-cache" -> {
-        if (active?.started != true) return
+        val record = liveStartedRecord() ?: return
         pausedForCache = value
-        if (active?.fileLoaded == true && !eofReached) {
+        if (record.fileLoaded && !eofReached) {
           mutate {
             copy(
               status = if (value) PlayerStatus.BUFFERING else PlayerStatus.READY,
@@ -758,7 +832,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         recomputePlaying()
       }
       "idle-active" -> {
-        if (value && active?.fileLoaded == true) {
+        if (value && liveStartedRecord()?.fileLoaded == true) {
           // mpv went idle without an END_FILE we acted on; reflect the unload
           // in the snapshot. The record stays active: its real END_FILE (or
           // release) still delivers the terminal retirement.
@@ -774,7 +848,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         }
       }
       "eof-reached" -> {
-        if (value && !eofReached && active?.fileLoaded == true) {
+        if (value && !eofReached && liveStartedRecord()?.fileLoaded == true) {
           eofReached = true
           mutate { copy(status = PlayerStatus.ENDED, isPlaying = false) }
           emit(PlayerEvent.NaturalEnd(current.mediaId, current.generation))
@@ -785,8 +859,14 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     }
   }
 
+  /** Teardown keeps the native record until END_FILE, after its visible state has already retired. */
+  private fun liveStartedRecord(): LoadRecord? = active?.takeIf {
+    it.started && !it.endQueued && current.status != PlayerStatus.IDLE &&
+      current.generation == it.request.generation && current.mediaId == it.request.mediaId
+  }
+
   private fun applyLongProperty(name: String, value: Long) {
-    if (released || active?.started != true) return
+    if (released || liveStartedRecord() == null) return
     when (name) {
       "video-params/w" -> mutate { copy(videoWidth = value.toInt()) }
       "video-params/h" -> mutate { copy(videoHeight = value.toInt()) }
@@ -799,15 +879,15 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       // File-scoped observations only apply while their file is the live
       // started one; a queued callback from an outgoing file must not
       // decorate the replacement's state.
-      "time-pos" -> if (active?.started == true) {
+      "time-pos" -> if (liveStartedRecord() != null) {
         mutate { copy(positionSeconds = value.coerceAtLeast(0.0)) }
       }
-      "duration" -> if (active?.started == true) {
+      "duration" -> if (liveStartedRecord() != null) {
         mutate {
           copy(durationSeconds = if (value.isFinite() && value >= 0.0) value else null)
         }
       }
-      "demuxer-cache-duration" -> if (active?.started == true) {
+      "demuxer-cache-duration" -> if (liveStartedRecord() != null) {
         mutate {
           copy(
             bufferedPositionSeconds =
@@ -823,7 +903,12 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   private fun applyStringProperty(name: String, value: String) = Unit
 
   private fun applyNoneProperty(name: String) {
-    if (released || active?.started != true) return
+    if (released) return
+    if (name == "glsl-shader-opts") {
+      readPictureBrightness()
+      return
+    }
+    if (liveStartedRecord() == null) return
     when (name) {
       "track-list", "aid", "vid", "sid" -> refreshTracks()
     }
@@ -846,7 +931,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
         // it belongs to the live started record. A queued callback from a
         // file that already ended finds no started record and is dropped, so
         // it can neither decorate new state nor attach new subtitles.
-        val record = active?.takeIf { it.started && !it.endQueued } ?: return
+        val record = liveStartedRecord() ?: return
         record.fileLoaded = true
         // Reconcile desired-vs-actual pause. Play intent parked while loading
         // only unpause when admission still holds; an explicit pause or an
@@ -918,7 +1003,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   }
 
   private fun recomputePlaying() {
-    val playing = !current.paused && !coreIdle && !pausedForCache &&
+    val playing = liveStartedRecord()?.fileLoaded == true && !current.paused && !coreIdle && !pausedForCache &&
       (current.status == PlayerStatus.READY || current.status == PlayerStatus.BUFFERING)
     if (playing != current.isPlaying) {
       mutate { copy(isPlaying = playing) }
@@ -926,7 +1011,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   }
 
   private fun refreshTracks() {
-    if (active?.fileLoaded != true) return
+    if (liveStartedRecord()?.fileLoaded != true) return
     val count = MpvJni.nativeGetPropertyString(handle, "track-list/count")?.toIntOrNull() ?: return
     val tracks = buildList {
       for (i in 0 until count) {
@@ -1004,6 +1089,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     MpvJni.nativeObserveProperty(handle, "demuxer-cache-duration", double)
     MpvJni.nativeObserveProperty(handle, "volume", double)
     MpvJni.nativeObserveProperty(handle, "speed", double)
+    MpvJni.nativeObserveProperty(handle, "glsl-shader-opts", none)
     MpvJni.nativeObserveProperty(handle, "track-list", none)
     MpvJni.nativeObserveProperty(handle, "video-params/w", int64)
     MpvJni.nativeObserveProperty(handle, "video-params/h", int64)

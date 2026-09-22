@@ -150,9 +150,23 @@ class MediaServerPlaybackTest {
           assertTrue(preparations.all { !it.getBoolean("EnableTranscoding") })
           assertTrue("the original selected source must reach native HTTP", server.originalSourceRequests.get() >= 2)
 
+          // Choosing media while the player stays open follows the same stop/load path as next episode.
+          withContext(Dispatchers.Main) { coordinator.pausePlayback() }
+          withTimeout(10_000) { player.snapshot.first { it.paused && !it.playWhenReady } }
+          player.pictureBrightness(40)
+          player.speed(1.5)
+          val adjusted = withTimeout(10_000) { player.snapshot.first { it.pictureBrightnessPercent == 40 && it.speed == 1.5 } }
+          assertTrue("manual picture settings keep playback paused", adjusted.paused)
+          withContext(Dispatchers.Main) { coordinator.play(PlaybackFixture.ITEM, true) }
+          val replaced = withTimeout(30_000) { player.snapshot.first { it.generation != adjusted.generation && it.isPlaying } }
+          assertEquals("same-player replacement retains picture brightness", 40, replaced.pictureBrightnessPercent)
+          assertEquals("same-player replacement retains playback speed", 1.5, replaced.speed, 0.0)
+          server.awaitReport("/Sessions/Playing", 3)
+
           withContext(Dispatchers.Main) { coordinator.stop() }
-          server.awaitReport("/Sessions/Playing/Stopped", 2)
+          server.awaitReport("/Sessions/Playing/Stopped", 3)
           withTimeout(10_000) { playback.first { it == null } }
+          withTimeout(10_000) { player.snapshot.first { it.pictureBrightnessPercent == 100 && it.speed == 1.0 } }
           assertTrue("coordinator must not report an error", errors.isEmpty())
           assertTrue("the fixture must cover every requested endpoint", server.unexpectedPaths.isEmpty())
         } finally { token.cancel(); token.destroy() }

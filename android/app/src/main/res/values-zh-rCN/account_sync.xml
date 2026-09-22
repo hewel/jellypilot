@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="account_current">当前账户</string>
+  <string name="account_add_connection">添加服务器连接</string>
+  <string name="account_current_connection">当前连接</string>
+  <string name="account_connection_identity">账户 %1$s · %2$s</string>
+  <string name="account_server_status">%1$s · %2$s</string>
+  <string name="account_connected">已连接</string>
+  <string name="account_settings_group">账户</string>
+  <string name="account_playback_group">播放</string>
+  <string name="account_general_group">通用</string>
+  <string name="account_switch_connection">切换已保存连接</string>
+  <string name="account_version">JellyPilot · 版本 %1$s</string>
+</resources>

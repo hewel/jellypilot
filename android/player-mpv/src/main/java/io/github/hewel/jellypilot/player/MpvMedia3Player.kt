@@ -89,6 +89,13 @@ class MpvMedia3Player(
 
   override fun onSnapshot(snapshot: PlayerSnapshot) {
     applicationHandler.post {
+      // Accepted intents may still be revoked by the business owner before
+      // reaching mpv. Optimism belongs only to this eligible live generation.
+      if (this.snapshot.generation != snapshot.generation || !snapshot.admissionEligible ||
+        snapshot.status == PlayerStatus.IDLE || snapshot.status == PlayerStatus.ENDED || snapshot.error != null) {
+        pendingPlayWhenReady = null
+        pendingSeekPositionMs = null
+      }
       this.snapshot = snapshot
       if (pendingPlayWhenReady == snapshot.playWhenReady) {
         pendingPlayWhenReady = null
@@ -225,6 +232,7 @@ class MpvMedia3Player(
   override fun handleStop(): ListenableFuture<*> {
     val accepted = intentHandler.onPlayerIntent(PlayerIntent.Stop)
     pendingPlayWhenReady = if (accepted) false else null
+    if (accepted) pendingSeekPositionMs = null
     return Futures.immediateVoidFuture()
   }
 
@@ -244,8 +252,8 @@ class MpvMedia3Player(
     positionMs: Long,
     seekCommand: Int,
   ): ListenableFuture<*> {
-    pendingSeekPositionMs = positionMs
-    intentHandler.onPlayerIntent(PlayerIntent.SeekTo(positionMs))
+    val accepted = intentHandler.onPlayerIntent(PlayerIntent.SeekTo(positionMs))
+    pendingSeekPositionMs = if (accepted) positionMs else null
     return Futures.immediateVoidFuture()
   }
 

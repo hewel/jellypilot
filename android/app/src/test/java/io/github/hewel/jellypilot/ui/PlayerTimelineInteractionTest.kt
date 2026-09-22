@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -75,5 +76,36 @@ class PlayerTimelineInteractionTest {
     }
     slider.assertIsNotEnabled()
     compose.onNodeWithText("—").assertExists()
+  }
+
+  @Test fun holdingTheTimelineWithoutMovingKeepsPhoneControlsUntilRelease() {
+    val snapshot = PlayerSnapshot(status = PlayerStatus.READY, paused = false, durationSeconds = 100.0, positionSeconds = 50.0)
+    compose.setContent {
+      val chrome = rememberPlayerChrome(1L, paused = false, phone = true, touchExploration = false)
+      LaunchedEffect(Unit) { chrome.reveal() }
+      MaterialTheme {
+        if (chrome.visible) Column(Modifier.width(500.dp)) {
+          PlayerTimeline(snapshot, true, { chrome.dragging = it }, {})
+        }
+      }
+    }
+    settleTimeline()
+    val slider = compose.onNodeWithContentDescription(seekLabel)
+    slider.performTouchInput { down(center) }
+    settleTimeline()
+    compose.mainClock.advanceTimeBy(3_100)
+    settleTimeline()
+    slider.assertExists()
+    slider.performTouchInput { up() }
+    settleTimeline()
+    compose.mainClock.advanceTimeBy(3_100)
+    settleTimeline()
+    slider.assertDoesNotExist()
+  }
+
+  private fun settleTimeline() {
+    compose.mainClock.autoAdvance = true
+    compose.waitForIdle()
+    compose.mainClock.autoAdvance = false
   }
 }

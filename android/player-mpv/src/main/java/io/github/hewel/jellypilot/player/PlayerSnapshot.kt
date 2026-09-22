@@ -162,6 +162,9 @@ data class PlayerSnapshot(
   val volumePercent: Int = 100,
   val muted: Boolean = false,
   val speed: Double = 1.0,
+  /** Confirmed application-owned output gain, not system brightness or calibrated luminance. */
+  val pictureBrightnessPercent: Int = 100,
+  val pictureBrightnessAvailable: Boolean = false,
   val tracks: List<PlayerTrack> = emptyList(),
   val videoWidth: Int = 0,
   val videoHeight: Int = 0,

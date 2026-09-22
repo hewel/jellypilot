@@ -59,8 +59,10 @@ internal class MediaPlaybackCoordinator(
           val command = intent.get()
           launch { transitions.withLock {
             if (current !== entry || entry.finishing || intent.get() != command) return@withLock
-            val next = finishCurrent(true)
-            if (next != null && canStart(command) && eligible.get()) start(next, PlaybackStartPosition.Beginning, null, command) { true }
+            val next = finishCurrent(true, preserveSessionSettings = true)
+            if (next != null && canStart(command) && eligible.get()) {
+              start(next, PlaybackStartPosition.Beginning, null, command, continueSession = true) { true }
+            } else player.stopAndWait()
           } }
         }
         is PlayerEvent.PlaybackStopped -> if (event.generation == entry.generation.get() && !entry.finishing && entry.loaded) {
@@ -122,18 +124,23 @@ internal class MediaPlaybackCoordinator(
 
   private fun canStart(command: Long): Boolean = !closed && eligible.get() && intent.get() == command && !sdk.contentMutationsBlocked()
 
-  private suspend fun start(itemId: String, position: PlaybackStartPosition, selection: PlaybackSelection?, command: Long, restoring: Boolean = false, originCurrent: () -> Boolean) {
+  private suspend fun start(itemId: String, position: PlaybackStartPosition, selection: PlaybackSelection?, command: Long,
+    restoring: Boolean = false, continueSession: Boolean = false, originCurrent: () -> Boolean) {
     var token: OperationToken? = null
     var created: Playing? = null
     try {
-      if (!canStart(command) || !originCurrent()) return
+      if (!canStart(command) || !originCurrent()) {
+        if (continueSession) player.stopAndWait()
+        return
+      }
+      val preserveSettings = continueSession || current != null
       if (current != null) {
-        finishCurrent(false)
+        finishCurrent(false, preserveSessionSettings = preserveSettings)
         if (current != null) return
-      } else if (!player.stopAndWait()) {
+      } else if (!player.stopAndWait(preserveSessionSettings = preserveSettings)) {
         fail(); return
       }
-      if (!canStart(command) || !originCurrent()) return
+      if (!canStart(command) || !originCurrent()) { player.stopAndWait(); return }
       token = sdk.newOperationToken()
       preparing = token
       val session = sdk.preparePlayback(token, itemId, position, selection ?: PlaybackSelection(null, null, null))
@@ -190,10 +197,14 @@ internal class MediaPlaybackCoordinator(
       scope.launch { loadEpisodeContext(entry) }
       onRecoveryChanged()
     } catch (cancelled: CancellationException) {
-      withContext(NonCancellable) { if (current === created && created != null) finishCurrent(false, interrupted = created.restoring) }
+      withContext(NonCancellable) {
+        if (current === created && created != null) finishCurrent(false, interrupted = created.restoring)
+        else if (current == null) player.stopAndWait()
+      }
       throw cancelled
     } catch (_: Exception) {
       if (current === created && created != null) finishCurrent(false, interrupted = created.restoring)
+      else if (current == null) player.stopAndWait()
       if (canStart(command)) fail()
     } finally {
       if (preparing === token) preparing = null
@@ -223,12 +234,12 @@ internal class MediaPlaybackCoordinator(
     scope.launch { transitions.withLock { finishCurrent(false) } }
   }
 
-  private suspend fun finishCurrent(natural: Boolean, interrupted: Boolean = false): String? {
-    val entry = current ?: run { player.stopAndWait(); return null }
+  private suspend fun finishCurrent(natural: Boolean, interrupted: Boolean = false, preserveSessionSettings: Boolean = false): String? {
+    val entry = current ?: run { player.stopAndWait(preserveSessionSettings); return null }
     entry.finishing = true
     val snapshot = player.snapshot.value
     if (snapshot.generation == entry.generation.get() && snapshot.status != PlayerStatus.IDLE) entry.latest = snapshot
-    if (!player.stopAndWait()) { entry.finishing = false; fail(); return null }
+    if (!player.stopAndWait(preserveSessionSettings)) { entry.finishing = false; fail(); return null }
     var next: String? = null
     try {
       entry.reports.withLock {

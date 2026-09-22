@@ -61,6 +61,18 @@ pub(crate) struct ServerInfo {
   pub id: String,
 }
 
+/// Public identity discovered without authenticating or changing a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerIdentity {
+  /// Resolved API base, retaining the server's port and reverse-proxy prefix.
+  pub server_url: String,
+  /// Server-configured display name, never inferred from its URL.
+  pub server_name: String,
+  /// Present only when the server explicitly identifies a supported product.
+  /// Older/ambiguous responses require the user to select a provider.
+  pub provider: Option<MediaServerProvider>,
+}
+
 /// Connection state exposed to frontend.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

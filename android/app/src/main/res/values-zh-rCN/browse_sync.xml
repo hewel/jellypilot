@@ -1,0 +1,5 @@
+<resources>
+  <string name="browse_search_results">搜索结果：“%1$s”</string>
+  <string name="browse_track_default">默认</string>
+  <string name="browse_track_external">外挂</string>
+</resources>

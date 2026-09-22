@@ -191,6 +191,17 @@ impl JellypilotSdk {
             .map_err(SdkError::from)
     }
 
+    /// Resolves public server identity without credentials or profile changes.
+    /// A missing provider requires explicit selection; cancelling the waiter
+    /// cancels this read-only request.
+    pub async fn probe_server(&self, server_url: String) -> Result<ServerIdentity, SdkError> {
+        self.sdk
+            .probe_server(server_url)
+            .await
+            .map(ServerIdentity::from)
+            .map_err(SdkError::from)
+    }
+
     /// Authenticates with a password and returns a validated candidate.
     /// The active profile is untouched until `activate_candidate`.
     pub async fn password_login(

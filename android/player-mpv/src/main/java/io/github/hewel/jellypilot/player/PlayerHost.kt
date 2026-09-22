@@ -102,7 +102,8 @@ interface PlayerHost {
   fun seekTo(positionSeconds: Double)
 
   /** Stops and unloads the current media; always accepted. */
-  fun stop()
+  /** Stops media; only a continuous in-player media replacement preserves brightness and speed. */
+  fun stop(preserveSessionSettings: Boolean = false)
 
   /** Sets output volume 0–100 percent. */
   fun setVolume(percent: Int)
@@ -111,6 +112,9 @@ interface PlayerHost {
 
   /** Sets playback speed multiplier (clamped to 0.25–4.0). */
   fun setSpeed(speed: Double)
+
+  /** Dims video output only, from 20–100% signal gain; subtitles and UI stay independent. */
+  fun setPictureBrightness(percent: Int)
 
   /**
    * Selects a track by mpv id (see [PlayerTrack.mpvId]), deselects with

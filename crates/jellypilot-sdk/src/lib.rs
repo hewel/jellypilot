@@ -55,6 +55,7 @@ pub use error::SdkError;
 pub use history::{DesktopHistoryPage, HistoryPage, HistoryRemoval};
 pub use hooks::SdkHooks;
 pub use image::LibraryImageTarget;
+pub use jellypilot_media_server::ServerIdentity;
 pub use preferences::{BusinessPreferences, LoginPrefill};
 pub use quick_connect::{QuickConnectListener, QuickConnectOutcome, QuickConnectSession};
 pub use watchlist::WatchlistRemoval;

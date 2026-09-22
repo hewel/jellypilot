@@ -40,7 +40,7 @@ class MainActivity : AppCompatActivity() {
         ThemePreference.Dark -> true
         ThemePreference.Light -> false
       }
-      val immersive = state.showPlayer || state.detail != null || (state.destination == Destination.Home && state.activeName != null)
+      val immersive = !state.showSignIn && (state.showPlayer || state.detail != null || (state.destination == Destination.Home && state.activeName != null))
       SideEffect {
         WindowCompat.getInsetsController(window, window.decorView).apply {
           isAppearanceLightStatusBars = !dark && !immersive

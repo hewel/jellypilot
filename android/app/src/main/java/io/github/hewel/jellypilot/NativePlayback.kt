@@ -19,6 +19,7 @@ import io.github.hewel.jellypilot.player.*
 import java.io.File
 import java.security.KeyStore
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -73,6 +74,8 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   private var surfaceEpoch = 0L
   @Volatile private var host: MpvPlayerHost? = null
   private var mediaSession: MediaSession? = null
+  // A replacement owner can initialize before the previous main-thread session has released.
+  private val mediaSessionId = "jellypilot-${UUID.randomUUID()}"
   private var media3: MpvMedia3Player? = null
   private val descriptors = mutableMapOf<Long, List<ParcelFileDescriptor>>()
   private data class StopWaiter(val generations: MutableSet<Long>, val completion: CompletableDeferred<Boolean>)
@@ -173,12 +176,18 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
         synchronized(surfaceLock) { host = created }
         synchronized(policyLock) { updateAdmissionLocked() }
         if (closed.get()) return@execute
-        mutableReady.value = true
         main.post {
           if (!closed.get()) {
-            val adapter = MpvMedia3Player(created, Looper.getMainLooper(), this)
-            media3 = adapter
-            mediaSession = MediaSession.Builder(application, adapter).build()
+            try {
+              val adapter = MpvMedia3Player(created, Looper.getMainLooper(), this)
+              media3 = adapter
+              mediaSession = MediaSession.Builder(application, adapter).setId(mediaSessionId).build()
+              synchronized(submissionLock) { if (!closed.get()) mutableReady.value = true }
+            } catch (_: Exception) {
+              // This callback runs after the native initializer's try/catch has returned.
+              mutableError.value = application.localizedString(R.string.player_initialization_failed)
+              close()
+            }
           }
         }
       } catch (_: Exception) {
@@ -378,6 +387,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   fun volume(percent: Int) { host?.setVolume(percent) }
   fun mute(value: Boolean) { host?.setMuted(value) }
   fun speed(value: Double) { host?.setSpeed(value) }
+  fun pictureBrightness(percent: Int) { host?.setPictureBrightness(percent) }
   fun select(kind: TrackKind, id: Int) { host?.selectTrack(kind, id) }
 
   fun stop() {
@@ -389,7 +399,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     }
   }
 
-  suspend fun stopAndWait(): Boolean {
+  suspend fun stopAndWait(preserveSessionSettings: Boolean = false): Boolean {
     if (closed.get()) { released.await(); return true }
     synchronized(policyLock) {
       commandEpoch.incrementAndGet()
@@ -402,10 +412,14 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
       val generations = descriptors.keys.toMutableSet()
       pendingLoad?.let(generations::add)
       current?.snapshot?.takeIf { it.status != PlayerStatus.IDLE }?.let { generations.add(it.generation) }
-      if (generations.isEmpty()) receipt.complete(true)
+      if (generations.isEmpty()) {
+        // An already unloaded file may still carry the current player-session settings.
+        current?.stop(preserveSessionSettings)
+        receipt.complete(true)
+      }
       else {
         stopWaiters += StopWaiter(generations, receipt)
-        current?.stop()
+        current?.stop(preserveSessionSettings)
       }
     }
     if (!queued) { released.await(); return true }

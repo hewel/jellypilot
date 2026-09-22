@@ -1,0 +1,5 @@
+<resources>
+  <string name="browse_search_results">Search results for “%1$s”</string>
+  <string name="browse_track_default">Default</string>
+  <string name="browse_track_external">External</string>
+</resources>

@@ -21,7 +21,8 @@ use jellypilot_auth::{
     AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary, SavedProfilesSnapshot,
     SensitiveSavedSession,
 };
-use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider};
+use jellypilot_media_server::{Credentials, JellyfinClient, JellyfinError, MediaServerProvider};
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::{ActiveProfile, ProfileCandidate, Sdk, SdkError, SdkInner};
 
@@ -95,6 +96,34 @@ impl Drop for AccountHandoff {
 }
 
 impl Sdk {
+    /// Reads a server's public identity without credentials or profile changes.
+    ///
+    /// An ambiguous provider stays `None` and requires explicit selection.
+    /// Dropping the caller future cancels its request on the SDK runtime.
+    pub async fn probe_server(
+        &self,
+        server_url: String,
+    ) -> Result<jellypilot_media_server::ServerIdentity, SdkError> {
+        self.inner.check_open()?;
+        let client = self.new_client()?;
+        let work = AbortOnDropHandle::new(self.inner.handle.spawn(async move {
+            client
+                .login()
+                .probe_server(&server_url)
+                .await
+                .map_err(|error| match error {
+                    JellyfinError::InvalidUrl(reason) => SdkError::InvalidInput(reason),
+                    JellyfinError::ServerInfoRestricted => SdkError::ServerInfoRestricted,
+                    _ => SdkError::Request(
+                        "The server's public information could not be verified".to_owned(),
+                    ),
+                })
+        }));
+        let result = work.await.map_err(|_| SdkError::Closed)?;
+        self.inner.check_open()?;
+        result
+    }
+
     /// Saved profiles plus the only profile eligible for startup restore.
     pub async fn saved_profiles(&self) -> Result<SavedProfilesSnapshot, SdkError> {
         self.inner.check_open()?;
@@ -138,9 +167,16 @@ impl Sdk {
             .login()
             .authenticate(&credentials)
             .await
-            .map_err(|error| SdkError::Authentication(error.to_string()))?;
+            .map_err(|error| match error {
+                JellyfinError::AuthFailed(_) => SdkError::Authentication(
+                    "The server rejected the supplied credentials".to_owned(),
+                ),
+                _ => SdkError::Request("The sign-in request could not be completed".to_owned()),
+            })?;
         let candidate = ValidatedProfileCandidate::from_authenticated_client(Arc::new(client))
-            .map_err(|error| SdkError::Authentication(error.to_string()))?;
+            .map_err(|_| {
+                SdkError::Request("The server returned an invalid sign-in response".to_owned())
+            })?;
         Ok(ProfileCandidate::new(candidate))
     }
 

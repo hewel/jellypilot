@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
@@ -32,7 +33,7 @@ class DetailTrackInteractionTest {
 
   @Test fun selectionUsesProviderIndexAndExplicitOffRemainsDistinctFromPreferences() {
     val state = mutableStateOf(DetailTracksUi("episode", subtitles = listOf(
-      DetailTrackUi(41, "English · SRT"), DetailTrackUi(208, "简体中文 · ASS"),
+      DetailTrackUi(41, "English · SRT", isDefault = true), DetailTrackUi(208, "简体中文 · ASS"),
     )))
     val choices = mutableListOf<Int?>()
     compose.setContent {
@@ -44,6 +45,7 @@ class DetailTrackInteractionTest {
       }
     }
     compose.onNodeWithText("简体中文 · ASS").performClick().assertIsSelected()
+    compose.onNodeWithText("English · SRT").assertIsNotSelected()
     compose.onNodeWithText(context.getString(R.string.subtitles_off)).performClick().assertIsSelected()
     compose.onNodeWithText(context.getString(R.string.playback_preferences_default)).performClick().assertIsSelected()
     compose.runOnIdle { assertEquals(listOf(208, -1, null), choices) }
@@ -63,5 +65,22 @@ class DetailTrackInteractionTest {
     compose.onNodeWithText("Audio track 40").performClick().assertIsSelected()
     compose.onNodeWithContentDescription(context.getString(R.string.close)).assertIsDisplayed()
     compose.runOnIdle { assertEquals(280, selected.value) }
+  }
+
+  @Test fun failedTrackFetchKeepsRetryReachableAndDoesNotOfferStaleTracks() {
+    val state = mutableStateOf(DetailTracksUi("episode", error = "Track request failed"))
+    var selected: Int? = null
+    compose.setContent {
+      MaterialTheme {
+        DetailTrackSheet(true, state.value, {}, {
+          state.value = DetailTracksUi("episode", audio = listOf(DetailTrackUi(73, "Commentary", codec = "aac", isExternal = true)))
+        }) { selected = it }
+      }
+    }
+    compose.onNodeWithText("Track request failed").assertIsDisplayed()
+    compose.onNodeWithText(context.getString(R.string.playback_preferences_default)).assertDoesNotExist()
+    compose.onNodeWithText(context.getString(R.string.retry)).performClick()
+    compose.onNodeWithText("Commentary").performClick()
+    compose.runOnIdle { assertEquals(73, selected) }
   }
 }
