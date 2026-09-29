@@ -150,6 +150,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for BackGlass<'_> {
             bounds: layout.bounds(),
             border: iced::Border {
               radius: TOKENS.radii.xl.into(),
+              smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
               ..iced::Border::default()
             },
             ..renderer::Quad::default()

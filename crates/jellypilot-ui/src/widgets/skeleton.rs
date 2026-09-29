@@ -124,7 +124,7 @@ fn skeleton_style_with_radius(
     container::Style {
         background: Some(Background::Color(background)),
         border: Border {
-            smoothing: 0.0,
+            smoothing: super::container::SURFACE_SMOOTHING,
             radius,
             color: Color::TRANSPARENT,
             width: 0.0,
@@ -152,7 +152,7 @@ fn skeleton_panel_style(
     container::Style {
         background: Some(Background::Color(background_color)),
         border: Border {
-            smoothing: 0.0,
+            smoothing: super::container::SURFACE_SMOOTHING,
             radius,
             color: Color::TRANSPARENT,
             width: 0.0,

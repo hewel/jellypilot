@@ -73,7 +73,9 @@ pub fn progress(theme: &Theme) -> progress_bar::Style {
 pub fn poster_placeholder(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette(theme).colors.surfaceContainerHigh.into()),
-        border: Border::default().rounded(TOKENS.radii.xl),
+        border: Border::default()
+            .rounded(TOKENS.radii.xl)
+            .smoothing(super::container::SURFACE_SMOOTHING),
         ..container::Style::default()
     }
 }
