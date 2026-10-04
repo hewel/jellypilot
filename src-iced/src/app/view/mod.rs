@@ -9,6 +9,7 @@ mod login;
 mod modal_dismiss;
 pub(crate) mod motion;
 mod personal_lists;
+pub(crate) mod playback_tools;
 pub(crate) mod player;
 mod player_info;
 pub(crate) mod scroll_memory;
@@ -79,12 +80,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .height(Fill);
   let layers: Element<'_, Message> = layers.into();
   let layers = stack![
-    if state.playback.viewing_queue.open && !state.tv_mode() {
+    if (state.playback.viewing_queue.open || super::playback::tools::is_open(state))
+      && !state.tv_mode()
+    {
       inert(layers)
     } else {
       layers
     },
     viewing_queue::layer(state),
+    playback_tools::layer(state),
   ]
   .width(Fill)
   .height(Fill);

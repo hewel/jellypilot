@@ -1,5 +1,8 @@
 //! Framework-independent external MPV playback for the native GTK shell.
 
+pub mod tools;
+use tools::{PlaybackToolsView, SubtitleRole};
+
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
@@ -241,6 +244,8 @@ pub struct TrackInfo {
   pub title: Option<String>,
   pub language: Option<String>,
   pub selected: bool,
+  pub codec: Option<String>,
+  pub subtitle_role: Option<SubtitleRole>,
   /// Provider media-stream index corresponding to this MPV track, when known.
   pub provider_index: Option<i32>,
 }
@@ -278,6 +283,7 @@ pub struct NowPlayingItem {
 pub struct PlaybackSnapshot {
   pub now_playing: Option<NowPlayingItem>,
   pub transport: PlayerState,
+  pub tools: PlaybackToolsView,
 }
 
 /// Non-fatal work that could not be completed after media started playing.
@@ -464,6 +470,8 @@ pub struct PlaybackController {
   /// command's unpause even after a later admission minted a fresh one
   /// (ADR 0043); external MPV never receives a lease.
   presentation_hold: Option<Arc<AtomicBool>>,
+  tools: PlaybackToolsView,
+  tools_playlist_entry: Option<i64>,
 }
 
 impl PlaybackController {
@@ -579,6 +587,8 @@ impl PlaybackController {
       volume_preference: None,
       volume_preference_revision: 0,
       presentation_hold: None,
+      tools: PlaybackToolsView::default(),
+      tools_playlist_entry: None,
     }
   }
 
@@ -773,6 +783,13 @@ impl PlaybackController {
       ControllerCommand::SelectSubtitleTrack(id) => {
         ControllerSettlement::TrackSelected(self.select_subtitle_track(id).await)
       }
+      ControllerCommand::PlaybackTool { file, action } => {
+        let (tools, seeked) = self.execute_tool(file, action).await;
+        ControllerSettlement::ToolApplied {
+          tools,
+          seeked: seeked.map(Box::new),
+        }
+      }
       ControllerCommand::ShowText { text, duration_ms } => {
         ControllerSettlement::OsdShown(self.show_text(&text, duration_ms).await)
       }
@@ -940,29 +957,78 @@ impl PlaybackController {
       .active
       .as_ref()
       .ok_or(PlaybackError::NoActivePlayback)?;
+    let file = self.tools.file;
     let selection = mpv_subtitle_selection(id);
+    let before = self.tracks().await?;
     let provider_index = match selection {
-      MpvSubtitleSelection::Track(id) => self
-        .tracks()
-        .await?
+      MpvSubtitleSelection::Track(id) => before
         .iter()
         .find(|track| track.track_type == "sub" && track.id == id)
         .and_then(|track| track.provider_index)
         .ok_or(PlaybackError::TrackUnavailable)?,
       MpvSubtitleSelection::Value(_) => -1,
     };
+    let primary_id = match selection {
+      MpvSubtitleSelection::Track(id) => Some(id),
+      _ => None,
+    };
+    let target_text = before
+      .iter()
+      .any(|track| Some(track.id) == primary_id && track.is_text_subtitle());
+    let secondary_conflict = before.iter().any(|track| {
+      track.subtitle_role == Some(SubtitleRole::Secondary)
+        && (!target_text || Some(track.id) == primary_id)
+    });
+    if let Some(file) = file {
+      self
+        .check_tool_file(file)
+        .await
+        .map_err(|_| PlaybackError::TrackUnavailable)?;
+    }
+    if secondary_conflict {
+      self
+        .mpv
+        .set_property_string("file-local-options/secondary-sid", "no")
+        .await
+        .map_err(|_| PlaybackError::MpvControlFailed)?;
+      if !matches!(
+        self.mpv.get_property("secondary-sid").await,
+        Ok(PropertyValue::Bool(false))
+      ) {
+        return Err(PlaybackError::MpvControlFailed);
+      }
+    }
+    if let Some(file) = file {
+      self
+        .check_tool_file(file)
+        .await
+        .map_err(|_| PlaybackError::TrackUnavailable)?;
+    }
     match selection {
       MpvSubtitleSelection::Track(id) => self.mpv.set_subtitle_track(id).await,
       MpvSubtitleSelection::Value(value) => self.mpv.set_property_string("sid", value).await,
     }
     .map_err(|_| PlaybackError::MpvControlFailed)?;
+    let tracks = self.tracks().await?;
+    if let Some(file) = file {
+      self
+        .check_tool_file(file)
+        .await
+        .map_err(|_| PlaybackError::TrackUnavailable)?;
+    }
+    let confirmed = tracks
+      .iter()
+      .find(|track| track.subtitle_role == Some(SubtitleRole::Primary))
+      .map(|track| track.id);
+    if confirmed != primary_id {
+      return Err(PlaybackError::MpvControlFailed);
+    }
     self
       .active
       .as_mut()
       .ok_or(PlaybackError::NoActivePlayback)?
       .subtitle_stream_index = Some(provider_index);
     self.remember_subtitle_track(provider_index);
-    let tracks = self.tracks().await?;
     Ok(TrackSelectionOutcome {
       tracks,
       warnings: Vec::new(),
@@ -1039,6 +1105,7 @@ impl PlaybackController {
     };
 
     self.record_transport(&transport);
+    self.refresh_tools().await;
     let warnings = if passive_progress_report_due(
       self.last_progress_report_at,
       Instant::now(),
@@ -1085,6 +1152,7 @@ impl PlaybackController {
       None => Vec::new(),
     };
     self.active = None;
+    self.retire_tools();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1295,6 +1363,7 @@ impl PlaybackController {
       PlaybackWarning::PlaybackStopNotReported,
     );
     self.active = None;
+    self.retire_tools();
     Ok(PlaybackStopOutcome { warnings })
   }
 
@@ -1382,6 +1451,7 @@ impl PlaybackController {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvLoadFailed);
     }
+    self.initialize_tools().await;
     // The loadfile aid option is not honored on every backend/fork (embedded
     // replace-load can drop per-file options); re-assert through the same IPC
     // command manual switching uses.
@@ -1539,6 +1609,7 @@ impl PlaybackController {
       warnings.push(PlaybackWarning::PlaybackStartNotReported);
     }
     self.last_progress_report_at = Some(Instant::now());
+    self.refresh_tools().await;
 
     Ok(PlaybackOutcome {
       snapshot: self.snapshot_with_transport(transport),
@@ -1734,6 +1805,7 @@ impl PlaybackController {
       return false;
     };
     self.take_terminal_end_reason().await;
+    self.retire_tools();
     self.load_event_boundary = LoadEventBoundary::AwaitingStart;
     // From this point MPV may already have accepted the replacement even if
     // the awaiting Rust future is cancelled. Keep the previous server item for
@@ -1795,6 +1867,7 @@ impl PlaybackController {
       let _ = self.report_stop(previous).await;
     }
     self.active = None;
+    self.retire_tools();
   }
 
   /// Snapshot the outgoing process's fullscreen flag so the next process a
@@ -1927,6 +2000,7 @@ impl PlaybackController {
       None => Vec::new(),
     };
     self.active = None;
+    self.retire_tools();
     warnings
   }
 
@@ -1958,6 +2032,7 @@ impl PlaybackController {
       None => Vec::new(),
     };
     self.active = None;
+    self.retire_tools();
 
     PlaybackRefreshOutcome {
       snapshot: self.snapshot_with_transport(PlayerState::default()),
@@ -1968,6 +2043,11 @@ impl PlaybackController {
 
   fn snapshot_with_transport(&self, transport: PlayerState) -> PlaybackSnapshot {
     PlaybackSnapshot {
+      tools: if self.active_transport_matches_mpv {
+        self.tools.clone()
+      } else {
+        PlaybackToolsView::default()
+      },
       now_playing: self
         .active
         .as_ref()
@@ -2304,6 +2384,25 @@ fn parse_track_list(json: &str) -> Result<Vec<TrackInfo>, PlaybackError> {
         .get("selected")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false),
+      codec: value
+        .get("codec")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned),
+      subtitle_role: if track_type == "sub" {
+        match value
+          .get("main-selection")
+          .and_then(serde_json::Value::as_i64)
+        {
+          Some(0) => Some(SubtitleRole::Primary),
+          Some(1) => Some(SubtitleRole::Secondary),
+          _ if value.get("selected").and_then(serde_json::Value::as_bool) == Some(true) => {
+            Some(SubtitleRole::Primary)
+          }
+          _ => None,
+        }
+      } else {
+        None
+      },
       provider_index: None,
     });
   }
@@ -2720,6 +2819,9 @@ mod tests {
     fullscreen: bool,
     audio_track: i64,
     subtitle_track: Option<i64>,
+    secondary_subtitle_track: Option<i64>,
+    playlist_entry: i64,
+    tool_properties: std::collections::HashMap<String, serde_json::Value>,
     external_subtitle_tracks: Vec<(i64, String, Option<String>, Option<String>)>,
   }
 
@@ -2737,6 +2839,18 @@ mod tests {
         fullscreen: false,
         audio_track: 1,
         subtitle_track: None,
+        secondary_subtitle_track: None,
+        playlist_entry: 0,
+        tool_properties: [
+          ("ab-loop-a", serde_json::json!("no")),
+          ("ab-loop-b", serde_json::json!("no")),
+          ("ab-loop-count", serde_json::json!(0)),
+          ("seekable", serde_json::json!(true)),
+          ("partially-seekable", serde_json::json!(false)),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect(),
         external_subtitle_tracks: Vec::new(),
       }
     }
@@ -2787,6 +2901,7 @@ mod tests {
     fail_command: Arc<Mutex<Option<Vec<serde_json::Value>>>>,
     end_reason: Arc<Mutex<&'static str>>,
     withheld_volume: Arc<Mutex<Option<SubAddResponseGate>>>,
+    change_file_on_read: Arc<Mutex<Option<&'static str>>>,
   }
 
   impl InMemoryMpv {
@@ -2871,6 +2986,8 @@ mod tests {
       let task_end_reason = Arc::clone(&end_reason);
       let withheld_volume = Arc::new(Mutex::new(None::<SubAddResponseGate>));
       let task_withheld_volume = Arc::clone(&withheld_volume);
+      let change_file_on_read = Arc::new(Mutex::new(None::<&'static str>));
+      let task_change_file_on_read = Arc::clone(&change_file_on_read);
       let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
@@ -2905,6 +3022,17 @@ mod tests {
           } else {
             apply_mpv_command(&mut state, &command)
           };
+          if name == Some("get_property") {
+            let mut change = task_change_file_on_read
+              .lock()
+              .expect("file-change control");
+            if change.is_some()
+              && change.as_deref() == command.get(1).and_then(serde_json::Value::as_str)
+            {
+              state.playlist_entry += 1;
+              *change = None;
+            }
+          }
           if name == Some("set_property")
             && command.get(1).and_then(serde_json::Value::as_str) == Some("volume")
           {
@@ -3052,6 +3180,7 @@ mod tests {
         fail_command,
         end_reason,
         withheld_volume,
+        change_file_on_read,
       }
     }
 
@@ -3103,6 +3232,7 @@ mod tests {
     let name = command.first().and_then(serde_json::Value::as_str);
     match name {
       Some("loadfile") => {
+        state.playlist_entry += 1;
         state
           .loaded_generation
           .clone_from(&state.requested_generation);
@@ -3119,7 +3249,10 @@ mod tests {
         serde_json::Value::Null
       }
       Some("set_property") => {
-        let property = command.get(1).and_then(serde_json::Value::as_str);
+        let property = command
+          .get(1)
+          .and_then(serde_json::Value::as_str)
+          .map(|name| name.strip_prefix("file-local-options/").unwrap_or(name));
         let value = command.get(2).cloned().unwrap_or(serde_json::Value::Null);
         match property {
           Some("user-data/jellypilot-volume-generation") => {
@@ -3131,8 +3264,34 @@ mod tests {
           Some("mute") => state.muted = value.as_bool().unwrap_or(state.muted),
           Some("fullscreen") => state.fullscreen = value.as_bool().unwrap_or(state.fullscreen),
           Some("aid") => state.audio_track = value.as_i64().unwrap_or(state.audio_track),
-          Some("sid") => state.subtitle_track = value.as_i64(),
-          _ => {}
+          Some("sid") => {
+            let requested = value
+              .as_i64()
+              .or_else(|| value.as_str().and_then(|value| value.parse().ok()));
+            if (requested.is_none() || requested != state.secondary_subtitle_track)
+              && state.tool_properties.get("test/sid-noop") != Some(&serde_json::json!(true))
+            {
+              state.subtitle_track = requested;
+            }
+          }
+          Some("secondary-sid") => {
+            let requested = value
+              .as_i64()
+              .or_else(|| value.as_str().and_then(|value| value.parse().ok()));
+            if (requested.is_none() || requested != state.subtitle_track)
+              && state.tool_properties.get("test/secondary-noop") != Some(&serde_json::json!(true))
+            {
+              state.secondary_subtitle_track = requested;
+            }
+          }
+          Some(name) => {
+            let parsed = value
+              .as_str()
+              .and_then(|value| serde_json::from_str(value).ok())
+              .unwrap_or(value);
+            state.tool_properties.insert(name.to_owned(), parsed);
+          }
+          None => {}
         }
         serde_json::Value::Null
       }
@@ -3168,37 +3327,45 @@ mod tests {
         }
         serde_json::Value::Null
       }
-      Some("get_property") => {
-        match command.get(1).and_then(serde_json::Value::as_str) {
-          Some("pause") => serde_json::json!(state.paused),
-          Some("time-pos") => serde_json::json!(state.time_pos),
-          Some("duration") => serde_json::json!(state.duration),
-          Some("volume") => serde_json::json!(state.volume),
-          Some("speed") => serde_json::json!(state.speed),
-          Some("mute") => serde_json::json!(state.muted),
-          Some("fullscreen") => serde_json::json!(state.fullscreen),
-          Some("track-list") => {
-            let mut tracks = vec![
-              serde_json::json!({
-                "id": 1,
-                "type": "audio",
-                "title": "English",
-                "selected": state.audio_track == 1,
-              }),
-              serde_json::json!({
-                "id": 2,
-                "type": "audio",
-                "title": "Commentary",
-                "selected": state.audio_track == 2,
-              }),
-              serde_json::json!({
-                "id": 3,
-                "type": "sub",
-                "title": "English",
-                "selected": state.subtitle_track == Some(3),
-              }),
-            ];
-            tracks.extend(state.external_subtitle_tracks.iter().map(
+      Some("get_property") => match command.get(1).and_then(serde_json::Value::as_str) {
+        Some("playlist") => serde_json::json!([{"id": state.playlist_entry, "playing": true}]),
+        Some("sid") => state
+          .subtitle_track
+          .map_or(serde_json::json!(false), |id| serde_json::json!(id)),
+        Some("secondary-sid") => state
+          .secondary_subtitle_track
+          .map_or(serde_json::json!(false), |id| serde_json::json!(id)),
+        Some("pause") => serde_json::json!(state.paused),
+        Some("time-pos") => serde_json::json!(state.time_pos),
+        Some("duration") => serde_json::json!(state.duration),
+        Some("volume") => serde_json::json!(state.volume),
+        Some("speed") => serde_json::json!(state.speed),
+        Some("mute") => serde_json::json!(state.muted),
+        Some("fullscreen") => serde_json::json!(state.fullscreen),
+        Some("track-list") => {
+          let mut tracks = vec![
+            serde_json::json!({
+              "id": 1,
+              "type": "audio",
+              "title": "English",
+              "selected": state.audio_track == 1,
+            }),
+            serde_json::json!({
+              "id": 2,
+              "type": "audio",
+              "title": "Commentary",
+              "selected": state.audio_track == 2,
+            }),
+            serde_json::json!({
+              "id": 3,
+              "type": "sub",
+              "title": "English",
+              "selected": state.subtitle_track == Some(3) || state.secondary_subtitle_track == Some(3),
+              "main-selection": if state.subtitle_track == Some(3) { Some(0) } else if state.secondary_subtitle_track == Some(3) { Some(1) } else { None },
+              "codec": state.tool_properties.get("test/subtitle-codec").cloned().unwrap_or(serde_json::json!("subrip")),
+            }),
+          ];
+          tracks.extend(state.external_subtitle_tracks.iter().map(
               |(id, url, title, language)| {
                 serde_json::json!({
                   "id": id,
@@ -3206,15 +3373,21 @@ mod tests {
                   "title": title.as_deref().unwrap_or(url),
                   "lang": language,
                   "external": true,
-                  "selected": state.subtitle_track == Some(*id),
+                  "selected": state.subtitle_track == Some(*id) || state.secondary_subtitle_track == Some(*id),
+                  "main-selection": if state.subtitle_track == Some(*id) { Some(0) } else if state.secondary_subtitle_track == Some(*id) { Some(1) } else { None },
+                  "codec": state.tool_properties.get("test/external-codec").cloned().unwrap_or(serde_json::json!("subrip")),
                 })
               },
             ));
-            serde_json::json!(tracks)
-          }
-          _ => serde_json::Value::Null,
+          serde_json::json!(tracks)
         }
-      }
+        Some(name) => state
+          .tool_properties
+          .get(name)
+          .cloned()
+          .unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+      },
       _ => serde_json::Value::Null,
     }
   }
@@ -3225,6 +3398,497 @@ mod tests {
     let mpv = InMemoryMpv::new().await;
     let controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
     (controller, mpv)
+  }
+
+  mod playback_tools {
+    use super::*;
+    use crate::playback::tools::*;
+
+    async fn setup() -> (PlaybackController, InMemoryMpv) {
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![
+        audio_stream(1, "eng", Some("English")),
+        subtitle_stream(5, "eng", Some("English")),
+        subtitle_stream(6, "jpn", Some("Japanese")),
+      ];
+      let (mut controller, mpv) = controller_harness(Arc::new(server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .unwrap();
+      mpv
+        .client
+        .sub_add("fixture://subtitle", false, Some("Japanese"), Some("jpn"))
+        .await
+        .unwrap();
+      let _ = controller.select_subtitle_track(Some(3)).await.unwrap();
+      controller.refresh_tools().await;
+      (controller, mpv)
+    }
+
+    async fn action(
+      controller: &mut PlaybackController,
+      action: PlaybackToolAction,
+    ) -> PlaybackToolsView {
+      let file = controller.tools.file.unwrap();
+      controller.execute_tool(file, action).await.0
+    }
+
+    fn loop_view(view: &PlaybackToolsView) -> &AbLoopView {
+      let ToolState::Ready(view) = &view.ab_loop else {
+        panic!("loop readback must be ready: {view:?}");
+      };
+      view
+    }
+
+    fn tool_writes(mpv: &InMemoryMpv, from: usize) -> Vec<Vec<serde_json::Value>> {
+      mpv
+        .received_commands()
+        .into_iter()
+        .skip(from)
+        .filter(|command| {
+          command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+            && command
+              .get(1)
+              .and_then(serde_json::Value::as_str)
+              .is_some_and(|name| name.starts_with("file-local-options/"))
+        })
+        .collect()
+    }
+
+    #[test]
+    fn secondary_selection_and_promotion_preserve_primary_preference_until_confirmed() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        let files = AudioTrackFixture::new();
+        controller.set_audio_track_memory(files.store());
+        let key = AudioTrackKey::new("series-1").unwrap();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectSecondarySubtitle(Some(4)),
+        )
+        .await;
+        assert_eq!(view.error, None);
+        assert!(matches!(
+          view.secondary,
+          ToolState::Ready(SecondarySubtitleView {
+            selected: Some(4),
+            ..
+          })
+        ));
+        assert_eq!(
+          files.store().get_subtitle(&key),
+          None,
+          "secondary cannot save primary preference"
+        );
+        let from = mpv.received_commands().len();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectPrimarySubtitle(Some(4)),
+        )
+        .await;
+        assert_eq!(view.error, None);
+        assert!(matches!(
+          view.secondary,
+          ToolState::Ready(SecondarySubtitleView { selected: None, .. })
+        ));
+        assert_eq!(
+          view
+            .tracks
+            .iter()
+            .find(|track| track.subtitle_role == Some(SubtitleRole::Primary))
+            .unwrap()
+            .id,
+          4
+        );
+        let commands = mpv.received_commands();
+        let clear = commands
+          .iter()
+          .skip(from)
+          .position(|command| {
+            command
+              == &serde_json::json!(["set_property", "file-local-options/secondary-sid", "no"])
+                .as_array()
+                .unwrap()
+                .clone()
+          })
+          .unwrap();
+        let primary = commands
+          .iter()
+          .skip(from)
+          .position(|command| {
+            command
+              == &serde_json::json!(["set_property", "sid", 4])
+                .as_array()
+                .unwrap()
+                .clone()
+          })
+          .unwrap();
+        assert!(clear < primary);
+        let saved = files.store().get_subtitle(&key);
+        assert!(saved.is_some());
+        mpv
+          .client
+          .set_property_string("test/sid-noop", "true")
+          .await
+          .unwrap();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectPrimarySubtitle(Some(3)),
+        )
+        .await;
+        assert_eq!(view.error, Some(PlaybackToolError::CommandFailed));
+        assert_eq!(
+          files.store().get_subtitle(&key),
+          saved,
+          "success response without selection cannot rewrite preference"
+        );
+      });
+    }
+
+    #[test]
+    fn secondary_rejects_unknown_bitmap_same_track_and_successful_noop() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        for codec in ["dvd_subtitle", "unknown", "null"] {
+          mpv
+            .client
+            .set_property_string("test/external-codec", codec)
+            .await
+            .unwrap();
+          let view = action(
+            &mut controller,
+            PlaybackToolAction::SelectSecondarySubtitle(Some(4)),
+          )
+          .await;
+          assert_eq!(view.error, Some(PlaybackToolError::InvalidTrack));
+        }
+        mpv
+          .client
+          .set_property_string("test/external-codec", "subrip")
+          .await
+          .unwrap();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectSecondarySubtitle(Some(3)),
+        )
+        .await;
+        assert_eq!(view.error, Some(PlaybackToolError::InvalidTrack));
+        mpv
+          .client
+          .set_property_string("test/secondary-noop", "true")
+          .await
+          .unwrap();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectSecondarySubtitle(Some(4)),
+        )
+        .await;
+        assert_eq!(view.error, Some(PlaybackToolError::CommandFailed));
+        assert!(matches!(
+          view.secondary,
+          ToolState::Ready(SecondarySubtitleView { selected: None, .. })
+        ));
+        mpv
+          .client
+          .set_property_string("test/secondary-noop", "false")
+          .await
+          .unwrap();
+        assert_eq!(
+          action(
+            &mut controller,
+            PlaybackToolAction::SelectSecondarySubtitle(Some(4))
+          )
+          .await
+          .error,
+          None
+        );
+        assert_eq!(
+          action(
+            &mut controller,
+            PlaybackToolAction::SelectPrimarySubtitle(None)
+          )
+          .await
+          .error,
+          None
+        );
+        assert!(matches!(
+          controller.tools.secondary,
+          ToolState::Ready(SecondarySubtitleView {
+            selected: None,
+            eligible: false
+          })
+        ));
+      });
+    }
+
+    #[test]
+    fn loop_mark_toggle_and_restart_use_confirmed_order_without_resuming() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        mpv.client.set_pause(true).await.unwrap();
+        let from = mpv.received_commands().len();
+        let view = action(&mut controller, PlaybackToolAction::MarkA(10.0)).await;
+        assert_eq!(view.error, None);
+        assert_eq!(loop_view(&view).a_seconds, Some(10.0));
+        assert_eq!(loop_view(&view).b_seconds, None);
+        assert_eq!(
+          action(&mut controller, PlaybackToolAction::MarkB(20.0))
+            .await
+            .error,
+          None
+        );
+        let view = action(&mut controller, PlaybackToolAction::SetLoopEnabled(false)).await;
+        assert!(!loop_view(&view).enabled);
+        assert_eq!(loop_view(&view).b_seconds, Some(20.0));
+        let reenable_from = mpv.received_commands().len();
+        let view = action(&mut controller, PlaybackToolAction::SetLoopEnabled(true)).await;
+        assert!(loop_view(&view).enabled);
+        assert_eq!(
+          tool_writes(&mpv, reenable_from),
+          vec![
+            serde_json::json!(["set_property", "file-local-options/ab-loop-count", "0"])
+              .as_array()
+              .unwrap()
+              .clone(),
+            serde_json::json!(["set_property", "file-local-options/ab-loop-b", "no"])
+              .as_array()
+              .unwrap()
+              .clone(),
+            serde_json::json!(["set_property", "file-local-options/ab-loop-count", "inf"])
+              .as_array()
+              .unwrap()
+              .clone(),
+            serde_json::json!(["set_property", "file-local-options/ab-loop-a", "10"])
+              .as_array()
+              .unwrap()
+              .clone(),
+            serde_json::json!(["set_property", "file-local-options/ab-loop-b", "20"])
+              .as_array()
+              .unwrap()
+              .clone(),
+          ]
+        );
+        assert!(!mpv
+          .received_commands()
+          .iter()
+          .skip(from)
+          .any(
+            |command| command.first().and_then(serde_json::Value::as_str) == Some("seek")
+              || command.get(1).and_then(serde_json::Value::as_str) == Some("pause")
+          ));
+        let file = controller.tools.file.unwrap();
+        let (view, seeked) = controller
+          .execute_tool(file, PlaybackToolAction::RestartFromA)
+          .await;
+        assert_eq!(view.error, None);
+        let seeked = seeked.expect("confirmed existing seek outcome");
+        assert_eq!(seeked.snapshot.transport.time_pos, 10.0);
+        assert!(seeked.snapshot.transport.paused);
+        let view = action(&mut controller, PlaybackToolAction::ClearLoop).await;
+        assert_eq!(loop_view(&view).a_seconds, None);
+        assert_eq!(loop_view(&view).b_seconds, None);
+      });
+    }
+
+    #[test]
+    fn loop_rejects_invalid_points_and_unknown_or_partial_seekability_before_writing() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        for position in [f64::NAN, f64::INFINITY, -1.0, 1501.0] {
+          let from = mpv.received_commands().len();
+          assert_eq!(
+            action(&mut controller, PlaybackToolAction::MarkA(position))
+              .await
+              .error,
+            Some(PlaybackToolError::InvalidRange)
+          );
+          assert!(tool_writes(&mpv, from).is_empty());
+        }
+        let _ = action(&mut controller, PlaybackToolAction::MarkA(10.0)).await;
+        for b in [9.0, 10.0] {
+          assert_eq!(
+            action(&mut controller, PlaybackToolAction::MarkB(b))
+              .await
+              .error,
+            Some(PlaybackToolError::InvalidRange)
+          );
+        }
+        for (name, value) in [
+          ("seekable", "false"),
+          ("seekable", "null"),
+          ("partially-seekable", "true"),
+        ] {
+          mpv
+            .client
+            .set_property_string("seekable", "true")
+            .await
+            .unwrap();
+          mpv.client.set_property_string(name, value).await.unwrap();
+          let from = mpv.received_commands().len();
+          assert_eq!(
+            action(&mut controller, PlaybackToolAction::MarkA(5.0))
+              .await
+              .error,
+            Some(PlaybackToolError::Unavailable)
+          );
+          assert!(tool_writes(&mpv, from).is_empty());
+        }
+      });
+    }
+
+    #[test]
+    fn same_item_reload_retires_old_commands_and_resets_file_local_tools() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        let old = controller.tools.file.unwrap();
+        let _ = action(
+          &mut controller,
+          PlaybackToolAction::SelectSecondarySubtitle(Some(4)),
+        )
+        .await;
+        let _ = action(&mut controller, PlaybackToolAction::MarkA(10.0)).await;
+        let _ = action(&mut controller, PlaybackToolAction::MarkB(20.0)).await;
+        let _ = controller
+          .play(
+            library_item("Episode").into(),
+            PlaybackStartPosition::Beginning,
+          )
+          .await
+          .unwrap();
+        assert_ne!(controller.tools.file, Some(old));
+        assert_eq!(loop_view(&controller.tools).a_seconds, None);
+        assert_eq!(loop_view(&controller.tools).b_seconds, None);
+        assert!(matches!(
+          controller.tools.secondary,
+          ToolState::Ready(SecondarySubtitleView { selected: None, .. })
+        ));
+        let from = mpv.received_commands().len();
+        let (view, seeked) = controller
+          .execute_tool(old, PlaybackToolAction::MarkA(99.0))
+          .await;
+        assert_eq!(view.error, Some(PlaybackToolError::StaleFile));
+        assert!(seeked.is_none());
+        assert_eq!(mpv.received_commands().len(), from);
+      });
+    }
+
+    #[test]
+    fn partial_loop_write_failure_publishes_actual_points_and_keeps_playing() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        let _ = action(&mut controller, PlaybackToolAction::MarkA(10.0)).await;
+        *mpv.fail_command.lock().unwrap() = Some(
+          serde_json::json!(["set_property", "file-local-options/ab-loop-b", "20"])
+            .as_array()
+            .unwrap()
+            .clone(),
+        );
+        let view = action(&mut controller, PlaybackToolAction::MarkB(20.0)).await;
+        assert_eq!(view.error, Some(PlaybackToolError::CommandFailed));
+        assert_eq!(loop_view(&view).a_seconds, Some(10.0));
+        assert_eq!(loop_view(&view).b_seconds, None);
+        assert!(!loop_view(&view).enabled);
+        assert!(controller.active.is_some());
+        *mpv.fail_command.lock().unwrap() = None;
+        assert_eq!(
+          action(&mut controller, PlaybackToolAction::MarkB(20.0))
+            .await
+            .error,
+          None
+        );
+      });
+    }
+
+    #[test]
+    fn loss_of_seekability_keeps_disable_and_clear_available() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        let _ = action(&mut controller, PlaybackToolAction::MarkA(10.0)).await;
+        let _ = action(&mut controller, PlaybackToolAction::MarkB(20.0)).await;
+        mpv
+          .client
+          .set_property_string("seekable", "null")
+          .await
+          .unwrap();
+        let disabled = action(&mut controller, PlaybackToolAction::SetLoopEnabled(false)).await;
+        assert_eq!(disabled.error, None);
+        assert!(!loop_view(&disabled).editable);
+        assert!(!loop_view(&disabled).enabled);
+        assert_eq!(loop_view(&disabled).b_seconds, Some(20.0));
+        let cleared = action(&mut controller, PlaybackToolAction::ClearLoop).await;
+        assert_eq!(cleared.error, None);
+        assert_eq!(loop_view(&cleared).a_seconds, None);
+        assert_eq!(loop_view(&cleared).b_seconds, None);
+      });
+    }
+
+    #[test]
+    fn file_changed_during_property_read_rejects_the_mutation_before_writing() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        *mpv.change_file_on_read.lock().unwrap() = Some("track-list");
+        let from = mpv.received_commands().len();
+        let view = action(
+          &mut controller,
+          PlaybackToolAction::SelectSecondarySubtitle(Some(4)),
+        )
+        .await;
+        assert!(
+          view.file.is_none(),
+          "retired snapshot cannot name the replacement"
+        );
+        assert!(
+          tool_writes(&mpv, from).is_empty(),
+          "no old secondary id reaches the new file"
+        );
+      });
+    }
+
+    #[test]
+    fn unsupported_tools_do_not_fail_load_or_primary_subtitle_selection() {
+      run_async(async {
+        let (mut controller, mpv) = setup().await;
+        *mpv.fail_command.lock().unwrap() = Some(
+          serde_json::json!(["set_property", "file-local-options/secondary-sid", "no"])
+            .as_array()
+            .unwrap()
+            .clone(),
+        );
+        let _ = controller
+          .play(
+            library_item("Episode").into(),
+            PlaybackStartPosition::Beginning,
+          )
+          .await
+          .expect("tool reset failure is nonfatal");
+        assert_eq!(
+          controller.tools.error,
+          Some(PlaybackToolError::CommandFailed)
+        );
+        *mpv.fail_command.lock().unwrap() = Some(
+          serde_json::json!(["get_property", "secondary-sid"])
+            .as_array()
+            .unwrap()
+            .clone(),
+        );
+        controller.refresh_tools().await;
+        assert_eq!(controller.tools.secondary, ToolState::Unavailable);
+        assert!(matches!(controller.tools.ab_loop, ToolState::Ready(_)));
+        let _ = controller
+          .select_subtitle_track(Some(3))
+          .await
+          .expect("primary remains available");
+        let _ = controller
+          .set_paused(true)
+          .await
+          .expect("transport remains available");
+        assert!(controller.active.is_some());
+      });
+    }
   }
 
   #[test]
@@ -4602,6 +5266,8 @@ mod tests {
     let mut tracks = vec![
       TrackInfo {
         id: 2,
+        codec: None,
+        subtitle_role: None,
         track_type: "audio".to_owned(),
         title: None,
         language: None,
@@ -4610,6 +5276,8 @@ mod tests {
       },
       TrackInfo {
         id: 6,
+        codec: None,
+        subtitle_role: None,
         track_type: "sub".to_owned(),
         title: None,
         language: None,

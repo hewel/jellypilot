@@ -310,6 +310,7 @@ pub enum SettingsMessage {
 
 #[derive(Clone)]
 pub enum PlaybackMessage {
+  Tools(super::playback::tools::Message),
   ViewingQueue(super::playback::viewing_queue::Message),
   Intent(Box<PlaybackIntent>),
   Event(Box<PlaybackEvent>),
@@ -325,7 +326,6 @@ pub enum PlaybackMessage {
   AudioMenuDismissed,
   AudioTrackSelected(i64),
   SubtitleMenuToggled,
-  SubtitleMenuDismissed,
   SubtitleTrackSelected(Option<i64>),
   QueueMenuToggled,
   QueueMenuDismissed,

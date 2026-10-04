@@ -304,6 +304,8 @@ mod tests {
       tracks: vec![
         TrackInfo {
           id: 2,
+          codec: None,
+          subtitle_role: None,
           track_type: "audio".to_owned(),
           title: None,
           language: None,
@@ -312,6 +314,8 @@ mod tests {
         },
         TrackInfo {
           id: 6,
+          codec: None,
+          subtitle_role: None,
           track_type: "sub".to_owned(),
           title: None,
           language: None,

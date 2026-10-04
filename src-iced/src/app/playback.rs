@@ -56,6 +56,7 @@ use super::message::{Message, PlaybackMessage, RemoteMessage, SettingsMessage};
 use super::state::{intro_skip_mode, NoticeLevel, PlaybackControllerHandle};
 
 pub(crate) mod remote;
+pub(crate) mod tools;
 pub(crate) mod viewing_queue;
 
 pub(crate) const PLAYER_IMAGE_KEY: &str = "now-playing";
@@ -162,6 +163,7 @@ pub struct Surface {
   active_queue_load: Option<ActiveQueueLoad>,
   pub queue_menu_open: bool,
   pub viewing_queue: viewing_queue::QueueSurface,
+  pub tools: tools::ToolsSurface,
   /// Resource-owning remote target runtime; its view/token gate all remote
   /// readiness, event, and teardown decisions.
   pub remote: remote::Runtime,
@@ -206,6 +208,7 @@ impl Surface {
       active_queue_load: None,
       queue_menu_open: false,
       viewing_queue: Default::default(),
+      tools: Default::default(),
       // Embedded playback starts held: the first admitted window lifts it.
       // This covers start-minimized boots without a separate boot path.
       presentation_hold: Arc::new(AtomicBool::new(crate::embedded::enabled())),
@@ -968,6 +971,7 @@ pub(crate) fn initialize_playback(
 ) {
   surface.session = PlaybackSession::default();
   surface.viewing_queue = Default::default();
+  surface.tools = Default::default();
   surface
     .session
     .set_auto_next_episode(kernel.settings.snapshot().auto_next_episode());
@@ -1432,6 +1436,7 @@ fn update_playback(
   message: PlaybackMessage,
 ) -> PlaybackUpdate {
   match message {
+    PlaybackMessage::Tools(message) => tools::update(surface, kernel, quit_requested, message),
     PlaybackMessage::ViewingQueue(message) => {
       viewing_queue::update(surface, kernel, quit_requested, message)
     }
@@ -1539,6 +1544,7 @@ fn update_playback(
       AdjustmentInput::Adjust(Control::Volume, volume),
     ),
     PlaybackMessage::AudioMenuToggled => {
+      tools::close(surface);
       surface.audio_menu_open = !surface.audio_menu_open;
       surface.subtitle_menu_open = false;
       surface.queue_menu_open = false;
@@ -1559,12 +1565,12 @@ fn update_playback(
     }
     PlaybackMessage::SubtitleMenuToggled => {
       surface.subtitle_menu_open = !surface.subtitle_menu_open;
+      surface.tools.open = false;
+      surface.tools.options_open = false;
+      surface.viewing_queue.open = false;
+      tools::bind(surface);
       surface.audio_menu_open = false;
       surface.queue_menu_open = false;
-      PlaybackUpdate::without_transition(Task::none())
-    }
-    PlaybackMessage::SubtitleMenuDismissed => {
-      surface.subtitle_menu_open = false;
       PlaybackUpdate::without_transition(Task::none())
     }
     PlaybackMessage::SubtitleTrackSelected(id) => {
@@ -1577,6 +1583,7 @@ fn update_playback(
       )
     }
     PlaybackMessage::QueueMenuToggled => {
+      tools::close(surface);
       surface.queue_menu_open = !surface.queue_menu_open;
       surface.audio_menu_open = false;
       surface.subtitle_menu_open = false;
@@ -1957,12 +1964,12 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::AudioMenuDismissed => "audio-menu-dismissed",
     PlaybackMessage::AudioTrackSelected(_) => "audio-track-selected",
     PlaybackMessage::SubtitleMenuToggled => "subtitle-menu-toggled",
-    PlaybackMessage::SubtitleMenuDismissed => "subtitle-menu-dismissed",
     PlaybackMessage::SubtitleTrackSelected(_) => "subtitle-track-selected",
     PlaybackMessage::QueueMenuToggled => "queue-menu-toggled",
     PlaybackMessage::QueueMenuDismissed => "queue-menu-dismissed",
     PlaybackMessage::QueueItemSelected(_) => "queue-item-selected",
     PlaybackMessage::ViewingQueue(_) => "viewing-queue",
+    PlaybackMessage::Tools(_) => "playback-tools",
     PlaybackMessage::IntroModeChanged(_) => "intro-mode-changed",
     PlaybackMessage::QueueLoaded { .. } => "queue-loaded",
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
@@ -2420,7 +2427,9 @@ fn execute_controller_command(
   };
   let requires_admission = matches!(
     command,
-    ControllerCommand::Start { .. } | ControllerCommand::SetPaused(false)
+    ControllerCommand::Start { .. }
+      | ControllerCommand::SetPaused(false)
+      | ControllerCommand::PlaybackTool { .. }
   );
   let admission = requires_admission
     .then(|| kernel.sdk.playback_admission())
@@ -2437,9 +2446,16 @@ fn execute_controller_command(
   // surface's lease with a fresh held one.
   let lease = Arc::clone(&surface.presentation_hold);
   #[cfg(target_os = "linux")]
-  let seek_scope = matches!(command, ControllerCommand::Seek(_))
-    .then(|| super::system_media::Scope::from_playback(surface, kernel))
-    .flatten();
+  let seek_scope = matches!(
+    command,
+    ControllerCommand::Seek(_)
+      | ControllerCommand::PlaybackTool {
+        action: jellypilot_mpv::playback::tools::PlaybackToolAction::RestartFromA,
+        ..
+      }
+  )
+  .then(|| super::system_media::Scope::from_playback(surface, kernel))
+  .flatten();
   let Some(controller) = surface.controller.as_ref().map(Arc::clone) else {
     let settlement = command.missing_controller_settlement();
     return Task::done(Message::Playback(PlaybackMessage::ControllerSettled {
@@ -2992,6 +3008,7 @@ mod tests {
 
   fn playback_snapshot(position: f64) -> PlaybackSnapshot {
     PlaybackSnapshot {
+      tools: Default::default(),
       now_playing: Some(NowPlayingItem {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),
@@ -3023,6 +3040,224 @@ mod tests {
   fn active_playback_fixture() -> (Surface, Kernel) {
     let (surface, kernel, _) = active_playback_fixture_with_auxiliary();
     (surface, kernel)
+  }
+
+  fn tool_fixture() -> (
+    Surface,
+    Kernel,
+    jellypilot_mpv::playback::tools::PlaybackFileToken,
+  ) {
+    use jellypilot_mpv::playback::tools::{AbLoopView, PlaybackFileToken, ToolState};
+    let (mut surface, mut kernel) = active_playback_fixture();
+    surface.artwork_enabled = false;
+    kernel.sdk.adopt_test_session(tool_account("first"));
+    let profile = kernel.sdk.active_profile().unwrap();
+    accounts::sync_activated(&mut kernel, &profile);
+    sync_account_admission(&mut surface, &mut kernel);
+    let file = PlaybackFileToken::default();
+    let mut snapshot = playback_snapshot(10.0);
+    snapshot.tools.file = Some(file);
+    snapshot.tools.ab_loop = ToolState::Ready(AbLoopView {
+      a_seconds: Some(5.0),
+      b_seconds: Some(20.0),
+      enabled: true,
+      editable: true,
+    });
+    let (id, _) = controller_effect(
+      surface
+        .session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
+          Instant::now(),
+        )
+        .effects,
+    );
+    drop(surface.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot,
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      Instant::now(),
+    ));
+    surface.view = surface.session.view();
+    (surface, kernel, file)
+  }
+
+  fn tool_account(user: &str) -> jellypilot_media_server::SavedSession {
+    jellypilot_media_server::SavedSession {
+      provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.test".into(),
+      user_id: user.into(),
+      user_name: user.into(),
+      access_token: "fixture".into(),
+      server_name: None,
+      device_id: None,
+    }
+  }
+
+  #[test]
+  fn playback_tool_route_rejects_old_file_and_session_without_optimistic_state() {
+    use jellypilot_mpv::playback::tools::{PlaybackFileToken, PlaybackToolAction};
+    for stale_session in [false, true] {
+      let (mut surface, mut kernel, file) = tool_fixture();
+      let session = kernel.request_gate.current_session();
+      if stale_session {
+        kernel.request_gate.disconnect();
+      }
+      let observed = surface.view.tools.clone();
+      let rejected = tools::update(
+        &mut surface,
+        &mut kernel,
+        false,
+        tools::Message::Execute {
+          session,
+          file: if stale_session {
+            file
+          } else {
+            PlaybackFileToken::default()
+          },
+          action: PlaybackToolAction::ClearLoop,
+        },
+      );
+      assert!(iced_runtime::task::into_stream(rejected.task).is_none());
+      assert_eq!(surface.view.tools, observed);
+      assert!(!surface.view.tools.busy);
+    }
+    let (mut surface, mut kernel, file) = tool_fixture();
+    let session = kernel.request_gate.current_session();
+    let observed = surface.view.tools.ab_loop.clone();
+    let accepted = tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::Execute {
+        session,
+        file,
+        action: PlaybackToolAction::ClearLoop,
+      },
+    );
+    assert!(iced_runtime::task::into_stream(accepted.task).is_some());
+    assert!(surface.view.tools.busy);
+    assert_eq!(
+      surface.view.tools.ab_loop, observed,
+      "an accepted write is not observed readback"
+    );
+  }
+
+  #[tokio::test]
+  async fn tool_waiting_for_controller_lock_cannot_cross_account_admission() {
+    use iced::futures::{FutureExt, StreamExt};
+    use jellypilot_mpv::playback::tools::PlaybackToolAction;
+    let (mut surface, kernel, file) = tool_fixture();
+    let (id, command) = controller_effect(
+      surface
+        .session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::PlaybackTool {
+            file,
+            action: PlaybackToolAction::ClearLoop,
+          })),
+          Instant::now(),
+        )
+        .effects,
+    );
+    let controller = Arc::new(tokio::sync::Mutex::new(PlaybackController::from_mpv(
+      kernel.client.as_ref().unwrap().clone(),
+      jellypilot_mpv::MpvClient::new(Some("/must-not-launch-mpv".into())),
+      Vec::new(),
+    )));
+    surface.controller = Some(controller.clone());
+    let lock = controller.lock_owned().await;
+    let mut messages =
+      iced_runtime::task::into_stream(execute_controller_command(&surface, &kernel, id, command))
+        .unwrap();
+    assert!(messages.next().now_or_never().is_none());
+    let sdk = Arc::clone(&kernel.sdk);
+    let disconnect = sdk.disconnect();
+    tokio::pin!(disconnect);
+    let hook = tokio::select! {
+      _ = &mut disconnect => panic!("the real account transition must wait for playback teardown"),
+      hook = async { kernel.sdk_handoff.receiver.lock().await.recv().await } => hook.unwrap(),
+    };
+    assert!(sdk.content_mutations_blocked());
+    drop(hook);
+    assert!(disconnect.await.is_err());
+    assert!(
+      !sdk.content_mutations_blocked(),
+      "even a rolled-back handoff retires old admission"
+    );
+    drop(lock);
+    let Some(iced_runtime::Action::Output(Message::Playback(PlaybackMessage::ControllerSettled {
+      settlement,
+      ..
+    }))) = messages.next().await
+    else {
+      panic!("the waiting tool must settle without touching MPV");
+    };
+    assert!(matches!(
+      *settlement,
+      ControllerSettlement::AdmissionRejected
+    ));
+  }
+
+  #[test]
+  fn closing_and_reopening_tools_rejects_queued_panel_commands_for_the_same_file() {
+    use jellypilot_mpv::playback::tools::PlaybackToolAction;
+    let (mut surface, mut kernel, file) = tool_fixture();
+    drop(tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::OpenLoop,
+    ));
+    let session = kernel.request_gate.current_session();
+    let old = surface.tools.presentation;
+    drop(tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::Close,
+    ));
+    drop(tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::OpenLoop,
+    ));
+    let rejected = tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::PanelExecute {
+        session,
+        file,
+        presentation: old,
+        action: PlaybackToolAction::ClearLoop,
+      },
+    );
+    assert!(iced_runtime::task::into_stream(rejected.task).is_none());
+    assert!(!surface.view.tools.busy);
+    let presentation = surface.tools.presentation;
+    let accepted = tools::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      tools::Message::PanelExecute {
+        session,
+        file,
+        presentation,
+        action: PlaybackToolAction::ClearLoop,
+      },
+    );
+    assert!(iced_runtime::task::into_stream(accepted.task).is_some());
+    assert!(surface.view.tools.busy);
   }
 
   fn active_playback_fixture_with_auxiliary() -> (Surface, Kernel, Vec<PlaybackEffect>) {

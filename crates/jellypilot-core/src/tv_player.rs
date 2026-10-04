@@ -23,11 +23,14 @@ pub enum Control {
     Skip,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Panel {
     Queue,
     Audio,
     Subtitles,
+    PrimarySubtitles,
+    SecondarySubtitles,
+    Loop,
     Information,
     Settings,
 }
@@ -77,6 +80,7 @@ pub struct Player {
     full: bool,
     focus: Control,
     panel: Option<PanelState>,
+    parent_panel: Option<PanelState>,
     seek: Option<SeekPreview>,
     paused: bool,
     accessibility_focus: bool,
@@ -96,6 +100,7 @@ impl Player {
             full: true,
             focus: Control::PlayPause,
             panel: None,
+            parent_panel: None,
             seek: None,
             paused: false,
             accessibility_focus: false,
@@ -176,6 +181,7 @@ impl Player {
 
     pub fn open_panel(&mut self, kind: Panel, selected: usize, count: usize, now: Instant) {
         self.seek = None;
+        self.parent_panel = None;
         self.panel = Some(PanelState {
             kind,
             focused: selected.min(count.saturating_sub(1)),
@@ -186,7 +192,28 @@ impl Player {
         self.last_input = now;
     }
 
+    /// Opens one child page while retaining the invoking row and chrome origin.
+    pub fn open_subpanel(&mut self, kind: Panel, selected: usize, count: usize, now: Instant) {
+        let parent = self.panel;
+        self.open_panel(kind, selected, count, now);
+        if let (Some(parent), Some(child)) = (parent, self.panel.as_mut()) {
+            child.origin_full = parent.origin_full;
+            child.trigger = parent.trigger;
+        }
+        self.parent_panel = parent;
+    }
+
+    pub fn back_panel(&mut self, now: Instant) {
+        if let Some(parent) = self.parent_panel.take() {
+            self.panel = Some(parent);
+            self.last_input = now;
+        } else {
+            self.close_panel(now);
+        }
+    }
+
     pub fn close_panel(&mut self, now: Instant) {
+        self.parent_panel = None;
         if let Some(panel) = self.panel.take() {
             self.full = panel.origin_full;
             self.focus = panel.trigger;
@@ -273,15 +300,12 @@ impl Player {
         now: Instant,
     ) -> Option<Action> {
         self.last_input = now;
-        if input == Input::PlayPause {
-            return (!observation.busy).then_some(Action::TogglePaused);
-        }
         if let Some(panel) = &mut self.panel {
             match input {
-                Input::Back => self.close_panel(now),
+                Input::Back => self.back_panel(now),
                 Input::Up if panel.kind == Panel::Settings => {
-                    panel.focused = if panel.focused >= 6 {
-                        5
+                    panel.focused = if panel.focused > 5 {
+                        panel.focused - 1
                     } else if panel.focused == 5 {
                         1
                     } else {
@@ -292,7 +316,7 @@ impl Player {
                     panel.focused = if panel.focused < 5 {
                         5
                     } else {
-                        6.min(panel.count.saturating_sub(1))
+                        (panel.focused + 1).min(panel.count.saturating_sub(1))
                     };
                 }
                 Input::Left if panel.kind == Panel::Settings => {
@@ -315,6 +339,9 @@ impl Player {
                 _ => {}
             }
             return None;
+        }
+        if input == Input::PlayPause {
+            return (!observation.busy).then_some(Action::TogglePaused);
         }
         if !self.full {
             if input == Input::Back {
@@ -529,6 +556,58 @@ mod tests {
             player.input(Input::Confirm, observation(false), CONTROLS, now),
             Some(Action::ApplyChoice(2))
         );
+    }
+
+    #[test]
+    fn child_panels_restore_parent_row_and_close_restores_the_original_control() {
+        let now = Instant::now();
+        let mut player = Player::new(now);
+        player.observe(observation(false), now);
+        player.activate(Control::Subtitles, observation(false), now);
+        player.open_panel(Panel::Subtitles, 1, 3, now);
+        player.open_subpanel(Panel::SecondarySubtitles, 2, 5, now);
+        assert_eq!(
+            player.input(Input::PlayPause, observation(false), CONTROLS, now),
+            None
+        );
+        player.input(Input::Back, observation(false), CONTROLS, now);
+        assert_eq!(
+            player.panel().map(|panel| (panel.kind, panel.focused)),
+            Some((Panel::Subtitles, 1))
+        );
+        player.open_subpanel(Panel::PrimarySubtitles, 0, 4, now);
+        player.close_panel(now);
+        assert_eq!(player.focused(), Some(Control::Subtitles));
+
+        player.input(Input::Back, observation(false), CONTROLS, now);
+        player.open_panel(Panel::Settings, 6, 8, now);
+        player.reveal(now);
+        player.open_subpanel(Panel::Loop, 0, 7, now);
+        player.back_panel(now);
+        assert_eq!(
+            player.panel().map(|panel| (panel.kind, panel.focused)),
+            Some((Panel::Settings, 6))
+        );
+        player.close_panel(now);
+        assert!(!player.full());
+    }
+
+    #[test]
+    fn settings_navigation_reaches_rows_after_skip_and_busy_panels_consume_transport() {
+        let now = Instant::now();
+        let mut player = Player::new(now);
+        player.open_panel(Panel::Settings, 4, 8, now);
+        let mut busy = observation(false);
+        busy.busy = true;
+        for expected in [5, 6, 7, 7] {
+            assert_eq!(player.input(Input::Down, busy, CONTROLS, now), None);
+            assert_eq!(player.panel().unwrap().focused, expected);
+        }
+        assert_eq!(player.input(Input::PlayPause, busy, CONTROLS, now), None);
+        for expected in [6, 5, 1] {
+            player.input(Input::Up, busy, CONTROLS, now);
+            assert_eq!(player.panel().unwrap().focused, expected);
+        }
     }
 
     #[test]

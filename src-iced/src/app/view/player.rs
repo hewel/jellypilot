@@ -434,11 +434,18 @@ pub fn full(state: &State) -> Element<'_, Message> {
     return embedded(state);
   }
   let palette = state.palette();
+  let playing = state.playback.view.now_playing.is_some();
   let settings_button = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
     .id(SETTINGS_TRIGGER_ID)
     .padding([6, 10])
     .min_height(40.0)
-    .on_press(Message::Settings(SettingsMessage::Open));
+    .on_press(if playing {
+      Message::Playback(PlaybackMessage::Tools(
+        crate::app::playback::tools::Message::OptionsToggled,
+      ))
+    } else {
+      Message::Settings(SettingsMessage::Open)
+    });
   let header = row![
     space::horizontal(),
     tooltip(
@@ -453,7 +460,11 @@ pub fn full(state: &State) -> Element<'_, Message> {
     ),
     tooltip(
       settings_button,
-      state.t("common-settings"),
+      state.t(if playing {
+        "player-options"
+      } else {
+        "common-settings"
+      }),
       TooltipOptions::default()
     ),
   ]
@@ -795,9 +806,8 @@ fn embedded_volume_icon(muted: bool, volume: f64) -> Icon {
   }
 }
 
-pub(crate) fn embedded_options_available(state: &State, window_width: f32) -> bool {
-  !embedded_skip_fits_inline(window_width - 2.0 * embedded_inset(window_width))
-    && crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some()
+pub(crate) fn embedded_options_available(state: &State, _window_width: f32) -> bool {
+  state.playback.view.now_playing.is_some()
 }
 
 fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> {
@@ -806,6 +816,7 @@ fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> 
     let open = embedded_player::options_open(state);
     let trigger = focus_tooltip(
       control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
+        .id("playback-options-trigger")
         .style(cinema::top_control)
         .icon_size(IconSize::Custom(16.0))
         .padding(0)
@@ -820,12 +831,11 @@ fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> 
       state.t("player-options"),
       TooltipOptions::default(),
     );
-    let content = crate::app::playback::series_intro_mode(&state.playback, &state.kernel)
-      .filter(|_| open)
-      .map_or_else(
-        || column![].into(),
-        |mode| embedded_skip_toggle(state, mode),
-      );
+    let mut content = column![].spacing(TOKENS.spacing.s2);
+    if let Some(mode) = crate::app::playback::series_intro_mode(&state.playback, &state.kernel) {
+      content = content.push(embedded_skip_toggle(state, mode));
+    }
+    content = content.push(super::playback_tools::loop_entry(state));
     tools = tools.push(popover(
       trigger,
       content,
@@ -1765,11 +1775,6 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
 }
 
 fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, Message> {
-  let palette = playback_palette(state);
-  let has_subtitle_choices = match &state.playback.view.tracks {
-    TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "sub"),
-    TracksView::Loading | TracksView::Unavailable => false,
-  };
   let sub_btn_variant = if state.playback.subtitle_menu_open {
     ButtonVariant::TonalActive
   } else {
@@ -1790,7 +1795,7 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
   .padding([6, 10])
   .min_height(40.0)
   .on_press_maybe(
-    (has_subtitle_choices && (!embedded || !state.playback.view.busy))
+    (state.playback.view.now_playing.is_some() && (!embedded || !state.playback.view.busy))
       .then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
   );
   let trigger = if icon_only {
@@ -1801,87 +1806,10 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
   } else {
     trigger
   };
-  let trigger = menu_hint(trigger.into(), state.t("player-subtitles"), icon_only);
-  let menu = match &state.playback.view.tracks {
-    TracksView::Ready {
-      tracks, subtitle, ..
-    } => {
-      let choices = track_choices(state.kernel.locale, tracks, "sub", true);
-      let mut col = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
-      for choice in choices {
-        let active = choice.id == *subtitle;
-        let id = choice.id;
-        col = col.push(
-          control_button_content(
-            move |_| {
-              let active_marker: Element<'_, Message> = if active {
-                icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
-              } else {
-                space::horizontal().width(14).into()
-              };
-              row![
-                text(choice.label.clone()).width(Fill).size(13),
-                active_marker
-              ]
-              .align_y(Alignment::Center)
-              .into()
-            },
-            if embedded && active {
-              ButtonVariant::PillActive
-            } else {
-              ButtonVariant::Text
-            },
-          )
-          .padding(if embedded {
-            [TOKENS.spacing.s2, TOKENS.spacing.s2_5]
-          } else {
-            [6.0, 10.0]
-          })
-          .min_height(40.0)
-          .width(Fill)
-          .on_press_maybe(
-            (!embedded || !state.playback.view.busy).then_some(Message::Playback(
-              PlaybackMessage::SubtitleTrackSelected(id),
-            )),
-          ),
-        );
-      }
-      col
-    }
-    TracksView::Loading => column![text(state.t("player-loading-subtitles"))
-      .size(12)
-      .color(palette.text.metadata)]
-    .spacing(TOKENS.spacing.s1)
-    .width(Fill),
-    TracksView::Unavailable => column![text(state.t("player-unavailable-subtitles"))
-      .size(12)
-      .color(palette.text.metadata)]
-    .spacing(TOKENS.spacing.s1)
-    .width(Fill),
-  };
-  let menu: Element<'_, Message> = if embedded {
-    container(scrollable(menu).style(jellypilot_ui::theme::scrollable))
-      .height(Length::Fit.max(QUEUE_MENU_MAX_HEIGHT))
-      .into()
-  } else {
-    menu.into()
-  };
-
-  popover(
-    trigger,
-    menu,
-    state.playback.subtitle_menu_open,
-    PopoverOptions {
-      placement: Placement::Above,
-      width: Some(240.0),
-      appearance: if embedded {
-        PopoverAppearance::EmbeddedPlayer
-      } else {
-        PopoverAppearance::Default
-      },
-      ..PopoverOptions::default()
-    },
-    Message::Playback(PlaybackMessage::SubtitleMenuDismissed),
+  menu_hint(
+    trigger.id("playback-subtitles-trigger").into(),
+    state.t("player-subtitles"),
+    icon_only,
   )
 }
 
@@ -3288,6 +3216,8 @@ mod tests {
     let mut state = State::boot(false);
     state.playback.view.tracks = TracksView::Ready {
       tracks: vec![TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 1,
         track_type: "audio".to_owned(),
         title: Some("Audio".to_owned()),
@@ -3862,6 +3792,7 @@ mod tests {
         settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
           playback: PlaybackOutcome {
             snapshot: PlaybackSnapshot {
+              tools: Default::default(),
               now_playing: Some(NowPlayingItem {
                 item_id: "episode-1".to_owned(),
                 title: "Pilot Episode".to_owned(),
@@ -3910,6 +3841,7 @@ mod tests {
           settlement: ControllerSettlement::Refreshed {
             outcome: PlaybackRefreshOutcome {
               snapshot: PlaybackSnapshot {
+                tools: Default::default(),
                 now_playing: Some(NowPlayingItem {
                   item_id: "episode-1".to_owned(),
                   title: "Pilot Episode".to_owned(),
@@ -3956,6 +3888,8 @@ mod tests {
   fn track_choices_includes_off_for_subtitles_and_excludes_for_audio() {
     let tracks = vec![
       TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 1,
         track_type: "audio".to_owned(),
         title: Some("English Stereo".to_owned()),
@@ -3964,6 +3898,8 @@ mod tests {
         provider_index: None,
       },
       TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 2,
         track_type: "audio".to_owned(),
         title: Some("Spanish".to_owned()),
@@ -3972,6 +3908,8 @@ mod tests {
         provider_index: None,
       },
       TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 3,
         track_type: "sub".to_owned(),
         title: Some("English SDH".to_owned()),
@@ -4016,6 +3954,8 @@ mod tests {
     use jellypilot_core::locale::UiLanguage;
     let tracks = vec![
       TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 7,
         track_type: "sub".to_owned(),
         title: Some("字幕 · English SDH".to_owned()),
@@ -4024,6 +3964,8 @@ mod tests {
         provider_index: Some(4),
       },
       TrackInfo {
+        codec: None,
+        subtitle_role: None,
         id: 8,
         track_type: "sub".to_owned(),
         title: None,

@@ -13,6 +13,9 @@ mod viewing_queue;
 use viewing_queue::QueuedPlayback;
 pub use viewing_queue::{UpcomingQueueEntry, UpcomingQueueView};
 
+use crate::playback::tools::{
+  PlaybackFileToken, PlaybackToolAction, PlaybackToolsView, SubtitleRole,
+};
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackCleanupError, PlaybackEndReason, PlaybackError,
   PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection,
@@ -54,6 +57,10 @@ pub enum PlaybackIntent {
   SetMuted(bool),
   SelectAudioTrack(i64),
   SelectSubtitleTrack(Option<i64>),
+  PlaybackTool {
+    file: PlaybackFileToken,
+    action: PlaybackToolAction,
+  },
   Stop,
   PlayAdjacent(AdjacentDirection),
   /// Starts the exact upcoming entry shown in a queue revision.
@@ -115,6 +122,10 @@ pub enum ControllerSettlement {
     client_messages: Vec<String>,
   },
   TrackSelected(Result<TrackSelectionOutcome, PlaybackError>),
+  ToolApplied {
+    tools: PlaybackToolsView,
+    seeked: Option<Box<PlaybackOutcome>>,
+  },
   OsdShown(Result<(), PlaybackError>),
   Shutdown(PlaybackShutdownOutcome),
 }
@@ -144,6 +155,10 @@ pub enum ControllerCommand {
   SetMuted(bool),
   SelectAudioTrack(i64),
   SelectSubtitleTrack(Option<i64>),
+  PlaybackTool {
+    file: PlaybackFileToken,
+    action: PlaybackToolAction,
+  },
   ShowText {
     text: String,
     duration_ms: i64,
@@ -172,6 +187,10 @@ impl ControllerCommand {
       Self::SelectAudioTrack(_) | Self::SelectSubtitleTrack(_) => {
         ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
       }
+      Self::PlaybackTool { .. } => ControllerSettlement::ToolApplied {
+        tools: PlaybackToolsView::default(),
+        seeked: None,
+      },
       Self::ShowText { .. } | Self::IntroPrompt { .. } | Self::ToggleStats => {
         ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback))
       }
@@ -182,6 +201,7 @@ impl ControllerCommand {
       Self::Refresh => ControllerSettlement::Refreshed {
         outcome: PlaybackRefreshOutcome {
           snapshot: PlaybackSnapshot {
+            tools: PlaybackToolsView::default(),
             now_playing: None,
             transport: Default::default(),
           },
@@ -374,6 +394,7 @@ pub struct PlaybackLifecycleView {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionView {
+  pub tools: PlaybackToolsView,
   pub now_playing: Option<NowPlayingView>,
   pub tracks: TracksView,
   pub adjacent: AdjacentView,
@@ -532,7 +553,9 @@ impl PlaybackSession {
       self.pending.retain(|pending| {
         !matches!(
           pending.command,
-          ControllerCommand::Start { .. } | ControllerCommand::SetPaused(false)
+          ControllerCommand::Start { .. }
+            | ControllerCommand::SetPaused(false)
+            | ControllerCommand::PlaybackTool { .. }
         )
       });
       self.desired_paused = None;
@@ -541,6 +564,27 @@ impl PlaybackSession {
   }
 
   pub fn view(&self) -> SessionView {
+    let mut tools = self
+      .snapshot
+      .as_ref()
+      .map(|snapshot| snapshot.tools.clone())
+      .unwrap_or_default();
+    if self.replacing || self.cleanup_pending || self.quitting {
+      tools = PlaybackToolsView::default();
+    }
+    tools.busy = self
+      .in_flight
+      .as_ref()
+      .is_some_and(|flight| matches!(flight.operation, ControllerOperation::PlaybackTool { .. }))
+      || self
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.operation, ControllerOperation::PlaybackTool { .. }));
+    let tracks = if tools.tracks.is_empty() {
+      self.tracks.clone()
+    } else {
+      ready_tracks(tools.tracks.clone())
+    };
     let now_playing = self.snapshot.as_ref().and_then(|snapshot| {
       snapshot.now_playing.as_ref().map(|item| {
         let duration_seconds = (snapshot.transport.duration.is_finite()
@@ -558,8 +602,9 @@ impl PlaybackSession {
       })
     });
     SessionView {
+      tools,
       now_playing,
-      tracks: self.tracks.clone(),
+      tracks,
       adjacent: self.effective_adjacent(),
       upcoming: self.upcoming_view.clone(),
       intro_prompt: self
@@ -704,6 +749,25 @@ impl PlaybackSession {
       }
       PlaybackIntent::SelectAudioTrack(id) => self.select_track(true, Some(id)),
       PlaybackIntent::SelectSubtitleTrack(id) => self.select_track(false, id),
+      PlaybackIntent::PlaybackTool { file, action } => {
+        if self.replacing
+          || self.suspended
+          || !self.playback_admitted
+          || self.view().tools.busy
+          || self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.tools.file)
+            != Some(file)
+        {
+          return PlaybackStep::ignored();
+        }
+        self.enqueue(ControllerRequest {
+          kind: RequestKind::PlaybackTool,
+          command: ControllerCommand::PlaybackTool { file, action },
+          operation: ControllerOperation::PlaybackTool { file },
+        })
+      }
       PlaybackIntent::Stop => {
         self.upcoming.release_pending();
         self.enqueue(ControllerRequest::stop())
@@ -888,10 +952,22 @@ impl PlaybackSession {
   }
 
   fn dispatch_next(&mut self) -> Vec<PlaybackEffect> {
-    self
-      .pending
-      .pop_front()
-      .map_or_else(Vec::new, |request| self.dispatch(request))
+    while let Some(request) = self.pending.pop_front() {
+      if let ControllerCommand::PlaybackTool { file, .. } = &request.command {
+        if self.suspended
+          || !self.playback_admitted
+          || self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.tools.file)
+            != Some(*file)
+        {
+          continue;
+        }
+      }
+      return self.dispatch(request);
+    }
+    Vec::new()
   }
 
   fn settle_controller(
@@ -939,7 +1015,9 @@ impl PlaybackSession {
     }
     match (operation, settlement) {
       (
-        ControllerOperation::Start { .. } | ControllerOperation::Controlled,
+        ControllerOperation::Start { .. }
+        | ControllerOperation::Controlled
+        | ControllerOperation::PlaybackTool { .. },
         ControllerSettlement::AdmissionRejected,
       ) => {
         self.desired_paused = None;
@@ -970,6 +1048,37 @@ impl PlaybackSession {
       ) => PlaybackStep::applied(self.finish_refresh(outcome, &client_messages, now)),
       (ControllerOperation::TrackSelection, ControllerSettlement::TrackSelected(result)) => {
         self.finish_track_selection(result);
+        PlaybackStep::applied(Vec::new())
+      }
+      (
+        ControllerOperation::PlaybackTool { file },
+        ControllerSettlement::ToolApplied { tools, seeked },
+      ) => {
+        if self.replacing || (seeked.is_some() && tools.file != Some(file)) {
+          return PlaybackStep::ignored();
+        }
+        if !self.replacing {
+          if self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.tools.file)
+            != Some(file)
+          {
+            return PlaybackStep::ignored();
+          }
+          if let Some(outcome) = seeked {
+            self.finish_control(Ok(*outcome));
+          }
+          if let Some(snapshot) = self
+            .snapshot
+            .as_mut()
+            .filter(|snapshot| snapshot.tools.file == Some(file))
+          {
+            if tools.file == Some(file) || tools.file.is_none() {
+              snapshot.tools = tools;
+            }
+          }
+        }
         PlaybackStep::applied(Vec::new())
       }
       (ControllerOperation::Prompt { token }, ControllerSettlement::OsdShown(result)) => {
@@ -1131,6 +1240,9 @@ impl PlaybackSession {
   fn finish_track_selection(&mut self, result: Result<TrackSelectionOutcome, PlaybackError>) {
     match result {
       Ok(outcome) => {
+        if let Some(snapshot) = self.snapshot.as_mut() {
+          snapshot.tools.tracks = outcome.tracks.clone();
+        }
         self.tracks = ready_tracks(outcome.tracks);
         self.set_warning_notice(outcome.warnings);
       }
@@ -1184,6 +1296,9 @@ impl PlaybackSession {
   }
 
   fn select_track(&mut self, audio: bool, id: Option<i64>) -> PlaybackStep {
+    if self.replacing || self.suspended || !self.playback_admitted {
+      return PlaybackStep::ignored();
+    }
     let TracksView::Ready { tracks, .. } = &self.tracks else {
       return PlaybackStep::ignored();
     };
@@ -1324,8 +1439,10 @@ impl PlaybackSession {
     self.suspended = true;
     self.upcoming.release_pending();
     self.pending.retain(|pending| {
-      !matches!(pending.kind, RequestKind::Start { .. })
-        && !matches!(pending.command, ControllerCommand::SetPaused(false))
+      !matches!(
+        pending.kind,
+        RequestKind::Start { .. } | RequestKind::PlaybackTool
+      ) && !matches!(pending.command, ControllerCommand::SetPaused(false))
     });
     self.pending_adjacent = [None, None];
     // Lookups cancelled above must not project Loading forever.
@@ -1527,6 +1644,9 @@ enum ControllerOperation {
   Stop,
   Refresh,
   TrackSelection,
+  PlaybackTool {
+    file: PlaybackFileToken,
+  },
   Prompt {
     token: IntroPromptToken,
   },
@@ -1552,6 +1672,7 @@ impl ControllerOperation {
       | Self::Controlled
       | Self::Stop
       | Self::TrackSelection
+      | Self::PlaybackTool { .. }
       | Self::Shutdown => ControllerOccupancy::Command,
     }
   }
@@ -1568,6 +1689,7 @@ enum RequestKind {
   Muted,
   AudioTrack,
   SubtitleTrack,
+  PlaybackTool,
   ShowText,
   IntroPrompt,
   Stats,
@@ -1768,7 +1890,7 @@ fn ready_tracks(tracks: Vec<TrackInfo>) -> TracksView {
     .map(|track| track.id);
   let subtitle = tracks
     .iter()
-    .find(|track| track.track_type == "sub" && track.selected)
+    .find(|track| track.subtitle_role == Some(SubtitleRole::Primary))
     .map(|track| track.id);
   TracksView::Ready {
     tracks,
@@ -2485,6 +2607,7 @@ mod tests {
 
   fn snapshot(item_id: &str, item_type: &str, position: f64) -> PlaybackSnapshot {
     PlaybackSnapshot {
+      tools: PlaybackToolsView::default(),
       now_playing: Some(NowPlayingItem {
         item_id: item_id.to_owned(),
         title: "Pilot".to_owned(),
@@ -3687,6 +3810,8 @@ mod tests {
           },
           tracks: Ok(vec![TrackInfo {
             id: audio_id,
+            codec: None,
+            subtitle_role: None,
             track_type: "audio".to_owned(),
             title: None,
             language: Some("eng".to_owned()),
@@ -4169,6 +4294,8 @@ mod tests {
     let tracks = vec![
       TrackInfo {
         id: 3,
+        codec: None,
+        subtitle_role: None,
         track_type: "audio".to_owned(),
         title: Some("English".to_owned()),
         language: Some("eng".to_owned()),
@@ -4177,6 +4304,8 @@ mod tests {
       },
       TrackInfo {
         id: 8,
+        codec: Some("subrip".into()),
+        subtitle_role: Some(SubtitleRole::Primary),
         track_type: "sub".to_owned(),
         title: Some("Spanish".to_owned()),
         language: Some("spa".to_owned()),
@@ -4195,6 +4324,120 @@ mod tests {
         ..
       }
     ));
+  }
+
+  #[test]
+  fn playback_tool_requests_are_retired_by_replacement_and_profile_admission() {
+    for retired_by in ["replacement", "admission", "suspend"] {
+      let (mut session, now, _) = start_session(IntroSkipMode::Off);
+      let file = PlaybackFileToken::default();
+      session.snapshot.as_mut().unwrap().tools.file = Some(file);
+      let (poll, _) = controller_effect(
+        session
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+          .effects,
+      );
+      let tool = PlaybackIntent::PlaybackTool {
+        file,
+        action: PlaybackToolAction::MarkA(10.0),
+      };
+      assert!(session
+        .handle(PlaybackInput::Intent(Box::new(tool.clone())), now)
+        .effects
+        .is_empty());
+      match retired_by {
+        "replacement" => {
+          session.handle(
+            PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+              item: Playable::Media(media_item("episode-2", "Replacement")),
+              position: PlaybackStartPosition::Beginning,
+              intro: intro_availability(IntroSkipMode::Off),
+              selection: Box::default(),
+            })),
+            now,
+          );
+        }
+        "admission" => session.set_playback_admitted(false),
+        _ => {
+          session.handle(
+            PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+            now,
+          );
+        }
+      }
+      let step = session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id: poll,
+          settlement: ControllerSettlement::Refreshed {
+            outcome: PlaybackRefreshOutcome {
+              snapshot: snapshot("episode-1", "Episode", 0.0),
+              state: PlaybackRefreshState::Active,
+              warnings: Vec::new(),
+            },
+            client_messages: Vec::new(),
+          },
+        })),
+        now,
+      );
+      assert!(!step.effects.iter().any(|effect| matches!(
+        effect,
+        PlaybackEffect::Controller(_, ControllerCommand::PlaybackTool { .. })
+      )));
+      assert!(session
+        .handle(PlaybackInput::Intent(Box::new(tool)), now)
+        .effects
+        .is_empty());
+    }
+  }
+
+  #[test]
+  fn late_tool_seek_cannot_update_or_publish_success_for_a_replacement() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let file = PlaybackFileToken::default();
+    session.snapshot.as_mut().unwrap().tools.file = Some(file);
+    let (tool, _) = controller_effect(
+      session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::PlaybackTool {
+            file,
+            action: PlaybackToolAction::RestartFromA,
+          })),
+          now,
+        )
+        .effects,
+    );
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2", "Replacement")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      })),
+      now,
+    );
+    let tools = PlaybackToolsView {
+      file: Some(file),
+      ..Default::default()
+    };
+    let mut observed = snapshot("episode-1", "Episode", 10.0);
+    observed.tools = tools.clone();
+    let settled = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: tool,
+        settlement: ControllerSettlement::ToolApplied {
+          tools,
+          seeked: Some(Box::new(PlaybackOutcome {
+            snapshot: observed,
+            warnings: Vec::new(),
+          })),
+        },
+      })),
+      now,
+    );
+    assert_eq!(settled.transition.controller, ControllerAcceptance::Ignored);
+    assert!(
+      matches!(controller_effect(settled.effects).1, ControllerCommand::Start { item, .. } if item.item_id() == "episode-2")
+    );
   }
 
   #[test]

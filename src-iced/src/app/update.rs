@@ -246,6 +246,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     super::item_actions::sync_scope(&mut state.kernel);
     state.kernel.undo.clear();
     state.playback.viewing_queue = Default::default();
+    super::playback::tools::close(&mut state.playback);
     state.tv = Default::default();
   }
   if was_fullscreen && !state.shell.player_fullscreen {
@@ -256,6 +257,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   super::undo::reconcile(state);
   let list_playback_task = super::list_playback::sync(state);
   let fullscreen_task = shell::reconcile_player_fullscreen(state);
+  super::playback::tools::reconcile(state);
   super::embedded_player::reconcile(state);
   let tv_return = shell::reconcile_tv_playback(state);
   let tv_task = super::tv::reconcile(state);
@@ -806,7 +808,7 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       #[cfg(target_os = "linux")]
       let seek_succeeded = matches!(&message, super::message::PlaybackMessage::ControllerSettled {
         settlement, ..
-      } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Controlled(Ok(_))));
+      } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Controlled(Ok(_)) | jellypilot_mpv::playback_session::ControllerSettlement::ToolApplied { seeked: Some(_), .. }));
       let queue_focus = super::view::viewing_queue::focus_after_edit(state, &message);
       let queue_revision = state.playback.view.upcoming.revision;
       let had_playback = state.playback.view.now_playing.is_some();
@@ -2658,6 +2660,7 @@ pub(crate) mod tests {
 
   fn playback_snapshot(position: f64) -> PlaybackSnapshot {
     PlaybackSnapshot {
+      tools: Default::default(),
       now_playing: Some(jellypilot_mpv::playback::NowPlayingItem {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),

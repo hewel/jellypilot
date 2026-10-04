@@ -1,5 +1,6 @@
 //! TV presentation for the existing playback session. Engine ownership stays in playback.
 
+mod tools;
 pub(crate) mod upcoming;
 
 use std::hash::{Hash, Hasher};
@@ -7,8 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-  button, column, container, mouse_area, opaque, responsive, row, scrollable, space, stack, text,
-  Column,
+  button, column, container, mouse_area, opaque, responsive, row, space, stack, text, Column,
 };
 use iced::{Alignment, Element, Fill, Length, Size, Subscription, Task};
 use jellypilot_core::intro_skipper::IntroSkipMode;
@@ -38,6 +38,7 @@ use crate::app::state::{Destination, State};
 #[derive(Clone, Debug)]
 pub enum Message {
   Upcoming(upcoming::Message),
+  Tools(tools::Message),
   Activate(Control),
   Choice(usize),
   ClosePanel,
@@ -71,6 +72,8 @@ pub struct Surface {
   sampling: Option<Instant>,
   choices: Vec<Choice>,
   choices_revision: u64,
+  choices_panel: Option<Panel>,
+  panel_presentation: Option<Instant>,
   pointer: Option<iced::Point>,
   notice: Option<crate::i18n::UiText>,
 }
@@ -78,7 +81,7 @@ pub struct Surface {
 #[derive(Clone)]
 enum ChoiceAction {
   Audio(i64),
-  Subtitle(Option<i64>),
+  Tool(tools::Action),
   Queue(Box<VideoLibraryItem>),
   Speed(f64),
   SessionSkip,
@@ -223,9 +226,15 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
       .remote
       .panel()
       .and_then(|panel| state.tv.player.choices.get(panel.focused))
-      .is_some_and(|choice| matches!(choice.action, ChoiceAction::Close))
+      .is_some_and(|choice| {
+        matches!(
+          choice.action,
+          ChoiceAction::Close | ChoiceAction::Tool(tools::Action::Open(_) | tools::Action::Back)
+        )
+      })
   {
-    return update(state, Message::ClosePanel);
+    let focused = state.tv.player.remote.panel().unwrap().focused;
+    return apply_choice(state, focused);
   }
   let observation = observation(state);
   let controls = available_controls(state);
@@ -239,6 +248,7 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
   Task::batch([
     task,
     synchronize_panel(state, before.map(|panel| panel.kind)),
+    tools::reveal(state),
   ])
 }
 
@@ -259,6 +269,7 @@ pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
   let now = Instant::now();
   match event {
     Message::Upcoming(_) => Task::none(),
+    Message::Tools(event) => tools::update(state, event),
     Message::Activate(control) => {
       if control != Control::Back && !available_controls(state).contains(&control) {
         return Task::none();
@@ -398,7 +409,13 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
       .remote
       .set_accessibility_focus(upcoming_open, Instant::now());
   }
+  let previous_panel = state.tv.player.remote.panel();
   refresh_panel_choices(state);
+  let reveal = if previous_panel != state.tv.player.remote.panel() {
+    tools::reveal(state)
+  } else {
+    Task::none()
+  };
   if state.playback.notice != state.tv.player.notice {
     state.tv.player.notice = state.playback.notice.clone();
     if state.tv.player.notice.is_some() {
@@ -406,9 +423,9 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
     }
   }
   if replaced {
-    Task::batch([queue, sample_controls(state)])
+    Task::batch([queue, reveal, sample_controls(state)])
   } else {
-    queue
+    Task::batch([queue, reveal])
   }
 }
 
@@ -464,6 +481,8 @@ fn open_panel(state: &mut State, panel: Panel) -> Task<AppMessage> {
     .remote
     .open_panel(panel, selected, choices.len(), Instant::now());
   state.tv.player.choices_revision = choices_revision(state, panel);
+  state.tv.player.choices_panel = Some(panel);
+  state.tv.player.panel_presentation = Some(Instant::now());
   state.tv.player.choices = choices;
   if panel == Panel::Information {
     command(
@@ -478,8 +497,12 @@ fn open_panel(state: &mut State, panel: Panel) -> Task<AppMessage> {
 fn choices_revision(state: &State, panel: Panel) -> u64 {
   let mut hash = std::collections::hash_map::DefaultHasher::new();
   state.kernel.locale.hash(&mut hash);
+  panel.hash(&mut hash);
+  if tools::is_panel(panel) {
+    tools::hash_choices(state, &mut hash);
+  }
   match panel {
-    Panel::Audio | Panel::Subtitles => {
+    Panel::Audio => {
       std::mem::discriminant(&state.playback.view.tracks).hash(&mut hash);
       if let TracksView::Ready { tracks, .. } = &state.playback.view.tracks {
         for track in tracks {
@@ -503,7 +526,7 @@ fn choices_revision(state: &State, panel: Panel) -> u64 {
 fn same_choice(left: &ChoiceAction, right: &ChoiceAction) -> bool {
   match (left, right) {
     (ChoiceAction::Audio(a), ChoiceAction::Audio(b)) => a == b,
-    (ChoiceAction::Subtitle(a), ChoiceAction::Subtitle(b)) => a == b,
+    (ChoiceAction::Tool(a), ChoiceAction::Tool(b)) => a == b,
     (ChoiceAction::Queue(a), ChoiceAction::Queue(b)) => a.id == b.id,
     (ChoiceAction::Speed(a), ChoiceAction::Speed(b)) => a == b,
     (ChoiceAction::SessionSkip, ChoiceAction::SessionSkip)
@@ -521,52 +544,49 @@ fn refresh_panel_choices(state: &mut State) {
     return;
   }
   let choices = panel_choices(state, panel.kind);
-  let focused = state
-    .tv
-    .player
-    .choices
-    .get(panel.focused)
-    .and_then(|previous| {
-      choices
-        .iter()
-        .position(|choice| same_choice(&previous.action, &choice.action))
-    })
-    .unwrap_or(panel.focused.min(choices.len().saturating_sub(1)));
+  let focused = if state.tv.player.choices_panel != Some(panel.kind) {
+    panel.focused.min(choices.len().saturating_sub(1))
+  } else {
+    state
+      .tv
+      .player
+      .choices
+      .get(panel.focused)
+      .and_then(|previous| {
+        choices
+          .iter()
+          .position(|choice| same_choice(&previous.action, &choice.action))
+      })
+      .unwrap_or_else(|| {
+        if tools::is_panel(panel.kind) {
+          choices.len().saturating_sub(1)
+        } else {
+          panel.focused.min(choices.len().saturating_sub(1))
+        }
+      })
+  };
   state
     .tv
     .player
     .remote
     .replace_choices(focused, choices.len());
   state.tv.player.choices_revision = revision;
+  state.tv.player.choices_panel = Some(panel.kind);
   state.tv.player.choices = choices;
 }
 
 fn panel_choices(state: &State, panel: Panel) -> Vec<Choice> {
   let mut choices = Vec::new();
   match panel {
-    Panel::Audio | Panel::Subtitles => {
-      if panel == Panel::Subtitles {
-        choices.push(Choice {
-          label: state.t("tv-player-subtitles-off"),
-          action: ChoiceAction::Subtitle(None),
-        });
-      }
+    Panel::Subtitles | Panel::PrimarySubtitles | Panel::SecondarySubtitles | Panel::Loop => {
+      choices = tools::choices(state, panel);
+    }
+    Panel::Audio => {
       if let TracksView::Ready { tracks, .. } = &state.playback.view.tracks {
-        for track in tracks.iter().filter(|track| {
-          track.track_type
-            == if panel == Panel::Audio {
-              "audio"
-            } else {
-              "sub"
-            }
-        }) {
+        for track in tracks.iter().filter(|track| track.track_type == "audio") {
           choices.push(Choice {
             label: track_label(state, track),
-            action: if panel == Panel::Audio {
-              ChoiceAction::Audio(track.id)
-            } else {
-              ChoiceAction::Subtitle(Some(track.id))
-            },
+            action: ChoiceAction::Audio(track.id),
           });
         }
       }
@@ -588,6 +608,10 @@ fn panel_choices(state: &State, panel: Panel) -> Vec<Choice> {
         label: state.t("player-auto-skip-intro-credits"),
         action: ChoiceAction::SessionSkip,
       });
+      choices.push(Choice {
+        label: state.t("ab-loop-title"),
+        action: ChoiceAction::Tool(tools::Action::Open(Panel::Loop)),
+      });
     }
     Panel::Information => {}
   }
@@ -599,12 +623,18 @@ fn panel_choices(state: &State, panel: Panel) -> Vec<Choice> {
 }
 
 fn synchronize_panel(state: &mut State, previous: Option<Panel>) -> Task<AppMessage> {
+  let current = state.tv.player.remote.panel().map(|panel| panel.kind);
+  if current != previous {
+    state.tv.player.panel_presentation = current.map(|_| Instant::now());
+  }
   if state.tv.player.remote.panel().is_none() {
     state.tv.player.choices.clear();
+    state.tv.player.choices_panel = None;
     if previous == Some(Panel::Information) {
       return embedded_player::update(state, embedded_player::Message::InformationDismissed);
     }
   }
+  refresh_panel_choices(state);
   Task::none()
 }
 
@@ -618,6 +648,10 @@ fn apply_choice(state: &mut State, index: usize) -> Task<AppMessage> {
   else {
     return Task::none();
   };
+  if let ChoiceAction::Tool(action) = action {
+    let event = tools::event(state, action);
+    return tools::update(state, event);
+  }
   if (!matches!(action, ChoiceAction::Close) && observation(state).busy)
     || !choice_enabled(state, &action)
   {
@@ -628,10 +662,7 @@ fn apply_choice(state: &mut State, index: usize) -> Task<AppMessage> {
       state,
       AppMessage::Playback(PlaybackMessage::AudioTrackSelected(id)),
     ),
-    ChoiceAction::Subtitle(id) => command(
-      state,
-      AppMessage::Playback(PlaybackMessage::SubtitleTrackSelected(id)),
-    ),
+    ChoiceAction::Tool(_) => unreachable!("tool choices are handled above"),
     ChoiceAction::Queue(item) => command(
       state,
       AppMessage::Playback(PlaybackMessage::QueueItemSelected(item)),
@@ -667,10 +698,10 @@ fn choice_enabled(state: &State, action: &ChoiceAction) -> bool {
       !state.playback.view.intro_ranges.is_empty()
         && playback::series_intro_mode(&state.playback, &state.kernel).is_some()
     }
-    ChoiceAction::Audio(id) | ChoiceAction::Subtitle(Some(id)) => {
+    ChoiceAction::Audio(id) => {
       matches!(&state.playback.view.tracks, TracksView::Ready { tracks, .. } if tracks.iter().any(|track| track.id == *id))
     }
-    ChoiceAction::Subtitle(None) => matches!(state.playback.view.tracks, TracksView::Ready { .. }),
+    ChoiceAction::Tool(action) => tools::enabled(state, *action),
     ChoiceAction::Queue(item) => {
       matches!(&state.playback.queue, QueueState::Ready(items) if items.iter().any(|candidate| candidate.id == item.id))
     }
@@ -683,9 +714,7 @@ fn choice_selected(state: &State, action: &ChoiceAction) -> bool {
     ChoiceAction::Audio(id) => {
       matches!(&state.playback.view.tracks, TracksView::Ready { audio, .. } if *audio == Some(*id))
     }
-    ChoiceAction::Subtitle(id) => {
-      matches!(&state.playback.view.tracks, TracksView::Ready { subtitle, .. } if subtitle == id)
-    }
+    ChoiceAction::Tool(action) => tools::selected(state, *action),
     ChoiceAction::Queue(item) => state
       .playback
       .view
@@ -991,7 +1020,7 @@ fn panel_hint(state: &State) -> String {
   }
   let action = match choice.action {
     ChoiceAction::Audio(_) => state.t("tv-player-apply-audio"),
-    ChoiceAction::Subtitle(_) => state.t("tv-player-apply-subtitles"),
+    ChoiceAction::Tool(_) => choice.label.clone(),
     ChoiceAction::Queue(_) => state.t("tv-player-play-item"),
     ChoiceAction::Speed(_) => state.format(
       "tv-player-use-speed",
@@ -1005,10 +1034,7 @@ fn panel_hint(state: &State) -> String {
     ChoiceAction::Close => return state.t("tv-player-panel-close-hint"),
   };
   state.format(
-    if matches!(
-      choice.action,
-      ChoiceAction::Audio(_) | ChoiceAction::Subtitle(_)
-    ) {
+    if matches!(choice.action, ChoiceAction::Audio(_)) {
       "tv-player-panel-apply-hint"
     } else {
       "tv-player-panel-change-hint"
@@ -1208,10 +1234,19 @@ fn panel_view(
   bounds: iced::Size,
   scale: f32,
 ) -> Element<'_, AppMessage> {
+  if tools::is_panel(panel) {
+    return tools::view(state, panel, bounds, scale);
+  }
+  if panel == Panel::Settings {
+    return tools::settings_view(state, bounds, scale);
+  }
   let title = match panel {
     Panel::Queue => "player-queue",
     Panel::Audio => "player-audio",
     Panel::Subtitles => "player-subtitles",
+    Panel::PrimarySubtitles => "subtitle-primary",
+    Panel::SecondarySubtitles => "subtitle-secondary",
+    Panel::Loop => "ab-loop-title",
     Panel::Information => "player-information",
     Panel::Settings => "tv-player-settings",
   };
@@ -1232,60 +1267,11 @@ fn panel_view(
     .iter()
     .enumerate()
     .find(|(_, choice)| matches!(choice.action, ChoiceAction::Close));
-  let heading: Element<'_, AppMessage> = if panel == Panel::Settings {
-    let mut heading = row![title, space().width(Fill)].align_y(Alignment::Center);
-    if let Some((index, _)) = close {
-      heading = heading.push(panel_close_button(index, focused, scale));
-    }
-    heading.into()
-  } else {
-    title.into()
-  };
-  let mut content = column![heading].spacing(24.0 * scale);
+  let mut content = column![title].spacing(24.0 * scale);
   if panel == Panel::Information {
     content = content.push(information(state, scale));
   }
-  if panel == Panel::Settings {
-    content = content.push(
-      text(state.t("tv-player-speed"))
-        .size(style::BODY * scale)
-        .line_height(iced::Pixels(32.0 * scale)),
-    );
-    let speed = state
-      .tv
-      .player
-      .choices
-      .iter()
-      .take(5)
-      .enumerate()
-      .fold(row![], |row, (index, choice)| {
-        row.push(choice_button(state, index, choice, focused, scale))
-      });
-    content = content.push(speed.spacing(12.0 * scale));
-    for (index, choice) in state
-      .tv
-      .player
-      .choices
-      .iter()
-      .enumerate()
-      .skip(5)
-      .filter(|(_, choice)| !matches!(choice.action, ChoiceAction::Close))
-    {
-      content = content.push(choice_button(state, index, choice, focused, scale));
-    }
-    content = content.push(
-      text(
-        state.t(if choice_enabled(state, &ChoiceAction::SessionSkip) {
-          "tv-player-session-skip-hint"
-        } else {
-          "tv-player-session-skip-unavailable"
-        }),
-      )
-      .size(style::META * scale)
-      .line_height(iced::Pixels(28.0 * scale))
-      .color(style::PALETTE.text.body),
-    );
-  } else {
+  {
     let room = ((bounds.height - (2.0 * style::SAFE_Y + 360.0) * scale) / (104.0 * scale))
       .floor()
       .max(1.0) as usize;
@@ -1332,11 +1318,9 @@ fn panel_view(
       content = content.push(text(state.t(status)).size(style::META * scale));
     }
   }
-  if panel != Panel::Settings {
-    content = content.push(space().height(Fill));
-    if let Some((index, choice)) = close {
-      content = content.push(choice_button(state, index, choice, focused, scale));
-    }
+  content = content.push(space().height(Fill));
+  if let Some((index, choice)) = close {
+    content = content.push(choice_button(state, index, choice, focused, scale));
   }
   content = content.push(
     ellipsis_text(panel_hint(state))
@@ -1345,23 +1329,11 @@ fn panel_view(
       .color(style::PALETTE.text.body),
   );
   let max_height = (bounds.height - 2.0 * style::SAFE_Y * scale).max(1.0);
-  let height = if panel == Panel::Settings {
-    Length::Fit.max(max_height)
-  } else {
-    Length::Fixed(max_height)
-  };
-  let content: Element<'_, AppMessage> = if panel == Panel::Settings {
-    scrollable(content)
-      .height(Length::Fit.max((max_height - 80.0 * scale).max(1.0)))
-      .into()
-  } else {
-    content.into()
-  };
   let panel = container(content)
     .id("tv-player-panel")
     .padding(40.0 * scale)
     .width(744.0 * scale)
-    .height(height)
+    .height(max_height)
     .style(chrome::panel);
   container(panel)
     .width(Fill)
@@ -1386,7 +1358,7 @@ fn panel_close_button(index: usize, focused: usize, scale: f32) -> Element<'stat
     .width(style::CONTROL * scale)
     .height(style::CONTROL * scale)
     .style(chrome::choice(progress, false, false))
-    .on_press(message(Message::Choice(index)))
+    .on_press(message(Message::ClosePanel))
     .into()
   }))
   .id("tv-player-panel-close")
@@ -1587,7 +1559,7 @@ mod tests {
   use jellypilot_mpv::playback::NowPlayingItem;
   use jellypilot_mpv::playback_session::NowPlayingView;
 
-  async fn dispatched(task: Task<AppMessage>) -> Message {
+  pub(super) async fn dispatched(task: Task<AppMessage>) -> Message {
     let mut stream = iced_runtime::task::into_stream(task).expect("deferred TV command");
     let Some(iced_runtime::Action::Output(AppMessage::Tv(super::super::Message::Player(message)))) =
       stream.next().await
@@ -1597,7 +1569,7 @@ mod tests {
     message
   }
 
-  fn playing_state() -> State {
+  pub(super) fn playing_state() -> State {
     let mut state = crate::app::update::tests::test_state();
     state.shell.ui_mode = UiMode::Tv;
     state.shell.window_id = Some(iced::window::Id::unique());
@@ -1974,6 +1946,8 @@ mod tests {
       language: None,
       selected: id == 1,
       provider_index: None,
+      codec: None,
+      subtitle_role: None,
     };
     state.playback.view.tracks = TracksView::Ready {
       tracks: vec![track(1), track(2)],

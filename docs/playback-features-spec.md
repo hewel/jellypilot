@@ -13,7 +13,7 @@ playback, account, or platform contracts.
 | 1, addition | Progressive blur for embedded player controls | Implemented; published iced pin, remote cold preparation, app checks and independent review passed; human acceptance pending |
 | 2 | Android controls an authorized living-room PC/TV Playback Target through the media server | Implemented; focused checks and independent review passed; human integration pending; [contract](remote-controller-spec.md) |
 | 3 | Editable, temporary viewing queue containing movies and episodes within one Profile Scope | Implemented; automated tests and independent review passed; human acceptance pending; [accepted contract](viewing-queue-spec.md) |
-| 4 | Secondary text subtitles and A/B loop for the active Playback Session | Contract prepared; implementation follows batch 3; [accepted contract](playback-tools-spec.md) |
+| 4 | Secondary text subtitles and A/B loop for the active Playback Session | Implemented; automated checks and independent review passed; human acceptance pending; [contract](playback-tools-spec.md) |
 | 5 | Named, device-local saved browse filters within one Profile Scope | Contract prepared; implementation follows batch 4; [accepted contract](saved-browse-filters-spec.md) |
 
 Later batches must use the established server and playback adapters. They do not
@@ -21,6 +21,22 @@ authorize a new pairing service, background Android playback, Android TV, or a
 cross-server queue. Saved filters remain independent of Favorites and Watchlist.
 Implementation-specific contracts and evidence will be recorded as each batch
 is completed.
+
+## Active playback tools evidence
+
+Desktop and native TV share current-file secondary text subtitles and A/B
+configuration through the existing serialized MPV controller. Focused checks
+passed 256 MPV tests, 310 core tests and 656 iced tests. The final cross-crate
+pass completed `bun run check`, 1602 independent workspace Rust tests and native
+startup smoke, with zero failures and one existing ignored test. The private
+D-Bus test also executes once in a child.
+
+Independent backend and UI review have no remaining findings. UI review closed
+same-file panel close/reopen stale gestures and secondary-Off capability-loss
+regressions, with actual widget/input tests. Real subtitle readability, primary
+ASS overlap, repeated media loops, remote focus and narrow-window appearance
+remain human acceptance. The engine's headless IPC contract and Paper states
+are supporting evidence, not native visual or decoder acceptance.
 
 ## Viewing queue evidence
 

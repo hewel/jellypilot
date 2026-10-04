@@ -53,6 +53,8 @@ mod tests {
     let tracks = vec![
       TrackInfo {
         id: 3,
+        codec: None,
+        subtitle_role: None,
         track_type: "audio".to_owned(),
         title: Some("English".to_owned()),
         language: Some("eng".to_owned()),
@@ -61,6 +63,8 @@ mod tests {
       },
       TrackInfo {
         id: 8,
+        codec: None,
+        subtitle_role: None,
         track_type: "sub".to_owned(),
         title: Some("Spanish".to_owned()),
         language: Some("spa".to_owned()),

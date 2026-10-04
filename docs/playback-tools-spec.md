@@ -6,6 +6,11 @@ the existing Playback Session and MPV controller. Android's player and remote
 controller are not extended in this batch. Detail-page track information stays
 read-only.
 
+Implementation and independent backend/UI review are complete. Focused tests,
+the cross-crate suite and nonvisual startup smoke passed; see
+[delivery evidence](playback-features-spec.md#active-playback-tools-evidence).
+Human media and visual acceptance remains pending.
+
 ## Secondary text subtitles
 
 The existing subtitle menu distinguishes Primary subtitle and Secondary text
@@ -29,6 +34,10 @@ automatic subtitle collision solver; overlapping primary ASS positioning,
 long lines, aspect ratios and subtitles inside the player blur region require
 human acceptance. Missing eligible tracks show an explanation, not dummy
 choices. Busy, unavailable and failed reads remain distinct from Off.
+If an external MPV action removes the known text primary while a secondary
+selection remains configured, Off stays available. Only selecting a new
+secondary track requires an eligible primary; capability loss must not prevent
+clearing an existing selection.
 
 Use file-local ownership for secondary settings. Stop, media replacement and
 profile retirement clear the app's selection and stale requests. Do not allow
@@ -54,6 +63,12 @@ points as an em dash and explain unavailable controls. Disabling repeat retains
 the points; Clear removes both. Turning repeat back on reinstalls B according
 to MPV's confirmed property ordering, without implicitly jumping to A.
 
+If seekability or duration later becomes unavailable, disable new point marks,
+Enable and Restart. Existing repeat can still be disabled and existing points
+cleared while their properties and current-file identity remain available.
+Refresh and Close remain reachable; losing seek capability must not trap the
+user in an already configured interval.
+
 The panel shows observed configuration, not a claim that a decoder has already
 completed a loop. Seeking past B does not promise an immediate jump back;
 Restart from A provides the explicit action. Failed writes/readback expose
@@ -75,13 +90,30 @@ ordered, and no second polling loop, playback state machine or host ABI is
 introduced. Missing properties disable only the affected feature.
 
 Desktop uses existing independent Floating Popovers, reachable Close controls,
-40px minimum targets, bounded scrolling and narrow-window wrapping. TV uses
-the established 64px-at-1080p controls and remote focus rules. Keep the existing
+40px minimum targets, bounded scrolling and narrow-window wrapping. Subtitle
+menus retain their 240px width and existing track-list scrolling. A/B uses
+min(320px, viewport width minus 32px), with no forced minimum; the complete
+panel including padding is height-constrained, with Close outside the scrolling
+body. These Desktop tools render above an inert background: Subtitles is
+anchored at the surface's lower-right 16px safe margin and opens upward; A/B is
+anchored at its upper-right 16px margin and opens downward. They do not track
+the triggering button's exact horizontal position. TV panels retain 744px times
+the existing scale, 96px/60px horizontal/vertical safe margins, and 40px padding /
+24px gaps at 1080p. Close remains fixed
+and the body scrolls. In windows shorter than 480px times the scale, TV reduces
+padding to 16px and the header gap to 12px while retaining its 64px reference
+controls and a reachable scrolling body. TV uses the established 64px-at-1080p
+controls and remote focus rules. Keep the existing
 main control bar: subtitle tools are reached through Subtitles, and A/B through
-Playback settings. TV's subtitle role page opens a primary or secondary track
-subpage; Back returns to that role. A/B Back returns to its Settings entry.
-Close exits the panel chain and restores the invoking main control. A pending operation retains focus; successful
-selection retains the action or a safe Close target. Playback shortcuts do not
+Playback settings. Desktop embedded playback keeps its existing playback-options
+gear available at wide as well as narrow widths. The external/control-only
+player's existing settings gear opens a small menu containing playback tools
+and application settings; the existing global settings shortcuts and Sidebar
+entry retain their behavior. TV's subtitle role page opens a primary or secondary
+track subpage; Back returns to that role. A/B Back returns to its Settings entry.
+Close exits the panel chain and restores the invoking main control. A pending
+operation retains focus; successful selection retains the action or a safe Close
+target. Playback shortcuts do not
 leak through an open panel, and opening a panel does not change pause state.
 
 Tests must exercise actual adapter commands/readback, primary-secondary role

@@ -900,6 +900,7 @@ mod tests {
     let settlement = ControllerSettlement::Controlled(if success {
       Ok(PlaybackOutcome {
         snapshot: PlaybackSnapshot {
+          tools: Default::default(),
           now_playing: Some(playing.item.clone()),
           transport: jellypilot_mpv::PlayerState {
             connected: true,
@@ -945,6 +946,110 @@ mod tests {
       state.system_media.seek_serial, 1,
       "the reducer ignored a replayed receipt"
     );
+  }
+
+  #[test]
+  fn only_applied_restart_receipts_emit_seeked_and_other_tools_never_do() {
+    use jellypilot_mpv::playback::tools::{PlaybackFileToken, PlaybackToolAction};
+    use jellypilot_mpv::playback::{
+      PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
+    };
+    use jellypilot_mpv::playback_session::{
+      ControllerSettlement, PlaybackEffect, PlaybackEvent, PlaybackInput,
+    };
+    let mut state = playing();
+    let playing = state.playback.view.now_playing.as_ref().unwrap();
+    let mut snapshot = PlaybackSnapshot {
+      tools: Default::default(),
+      now_playing: Some(playing.item.clone()),
+      transport: jellypilot_mpv::PlayerState {
+        connected: true,
+        paused: true,
+        muted: false,
+        time_pos: 10.0,
+        duration: 1800.0,
+        volume: 75.0,
+      },
+    };
+    let file = PlaybackFileToken::default();
+    snapshot.tools.file = Some(file);
+    let effects = state
+      .playback
+      .session
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
+        Instant::now(),
+      )
+      .effects;
+    let [PlaybackEffect::Controller(id, _)] = effects.as_slice() else {
+      panic!("refresh");
+    };
+    drop(state.playback.session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: *id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot.clone(),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      })),
+      Instant::now(),
+    ));
+    state.playback.view = state.playback.session.view();
+    for action in [
+      PlaybackToolAction::MarkA(10.0),
+      PlaybackToolAction::Refresh,
+      PlaybackToolAction::RestartFromA,
+    ] {
+      state.playback.session.set_playback_admitted(true);
+      let scope = Scope::capture(&state).unwrap();
+      let effects = state
+        .playback
+        .session
+        .handle(
+          PlaybackInput::Intent(Box::new(PlaybackIntent::PlaybackTool { file, action })),
+          Instant::now(),
+        )
+        .effects;
+      let [PlaybackEffect::Controller(id, _)] = effects.as_slice() else {
+        panic!("tool must dispatch");
+      };
+      snapshot.transport.time_pos = 10.1;
+      let message = Message::SeekSettled {
+        scope,
+        message: Box::new(PlaybackMessage::ControllerSettled {
+          id: *id,
+          settlement: Box::new(ControllerSettlement::ToolApplied {
+            tools: snapshot.tools.clone(),
+            seeked: (action == PlaybackToolAction::RestartFromA).then(|| {
+              Box::new(PlaybackOutcome {
+                snapshot: snapshot.clone(),
+                warnings: Vec::new(),
+              })
+            }),
+          }),
+          started: None,
+        }),
+      };
+      drop(update(&mut state, message.clone()));
+      drop(sync(&mut state, false));
+      let expected = u64::from(action == PlaybackToolAction::RestartFromA);
+      assert_eq!(state.system_media.seek_serial, expected);
+      drop(update(&mut state, message));
+      drop(sync(&mut state, false));
+      assert_eq!(
+        state.system_media.seek_serial, expected,
+        "duplicate success cannot emit another Seeked"
+      );
+    }
+    assert_eq!(
+      state.system_media.channel.snapshot.borrow().position,
+      10_100_000
+    );
+    assert!(state.playback.view.now_playing.as_ref().unwrap().paused);
   }
 
   #[tokio::test]

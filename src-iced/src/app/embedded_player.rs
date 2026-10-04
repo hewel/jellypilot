@@ -281,6 +281,7 @@ fn menu_open(state: &State) -> bool {
     || state.playback.subtitle_menu_open
     || state.playback.queue_menu_open
     || state.playback.viewing_queue.open
+    || state.playback.tools.open
 }
 
 pub(super) fn input_blocked(state: &State) -> bool {
@@ -820,6 +821,7 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       state.playback.subtitle_menu_open = false;
       state.playback.queue_menu_open = false;
       state.playback.viewing_queue.open = false;
+      super::playback::tools::close(&mut state.playback);
     }
     Message::InformationDismissed => {
       let surface = &mut state.shell.embedded_player;

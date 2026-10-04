@@ -50,6 +50,7 @@ pub(super) fn update(
     Message::Close => surface.viewing_queue.open = false,
     Message::Open => {
       if kernel.client.is_some() && !quit {
+        super::tools::close(surface);
         surface.viewing_queue.open = true;
         surface.audio_menu_open = false;
         surface.subtitle_menu_open = false;

@@ -917,6 +917,7 @@ mod gpu_probe {
           .number("volume")
           .ok_or("mpv volume property unavailable")?;
         Ok(PlaybackSnapshot {
+          tools: Default::default(),
           now_playing: Some(NowPlayingItem {
             item_id: self.item_id.clone(),
             title: self.title.clone(),
