@@ -17,7 +17,7 @@ use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::inert::inert;
 use jellypilot_ui::widgets::{motion, tv_focus};
 
-use super::navigation;
+use super::{detail as detail_state, navigation};
 use super::{AppMessage, Focus, Message, State};
 use crate::app::artwork::{ArtworkSurface, ImageCollection, ImageSpec};
 use crate::app::home::ArtworkPlacement;
@@ -130,6 +130,13 @@ pub(super) fn context_hint(state: &State) -> String {
   if !super::browse_focus_visible(state) {
     return String::new();
   }
+  if matches!(
+    state.tv.focus,
+    Focus::DetailWatchlist | Focus::DetailFavorite
+  ) && !navigation::action_enabled(state, state.tv.focus)
+  {
+    return state.t("tv-action-pending");
+  }
   let key = match state.tv.focus {
     Focus::Header(_) if !matches!(state.shell.destination, Destination::Library { .. }) => {
       return String::new()
@@ -155,6 +162,16 @@ pub(super) fn context_hint(state: &State) -> String {
     Focus::DetailBack => "tv-hint-back",
     Focus::HeroWatchlist | Focus::DetailWatchlist | Focus::DetailFavorite => "tv-hint-toggle",
     Focus::DetailMenu => "tv-hint-menu",
+    Focus::DetailOverview if detail_state::overview_expanded(state) => "tv-hint-overview-read",
+    Focus::DetailOverview => "tv-hint-overview",
+    Focus::DetailEpisodesMore if !navigation::action_enabled(state, state.tv.focus) => "tv-loading",
+    Focus::DetailEpisodesMore
+      if matches!(detail_state::append(state), Some(LoadState::Failed(_))) =>
+    {
+      "tv-hint-retry"
+    }
+    Focus::DetailEpisodesMore => "tv-hint-load-more",
+    Focus::DetailEpisodesRetry => "tv-hint-retry",
     Focus::Header(2) => "tv-hint-filter",
     Focus::Header(3) => "tv-hint-sort",
     Focus::Header(_) | Focus::Season(_) => "tv-hint-select",
@@ -277,36 +294,15 @@ pub(super) fn action<'a>(
   scale: f32,
 ) -> iced::widget::Container<'a, AppMessage> {
   let focused = state.tv.focus == focus && super::browse_focus_visible(state);
-  let enabled = match focus {
-    Focus::Header(_) => matches!(state.shell.destination, Destination::Library { .. }),
-    Focus::HeroWatchlist => {
-      crate::app::collections::controls(state, crate::app::collections::Source::Hero)
-        .watchlist_action
-        .is_some()
-    }
-    Focus::HeroPlay | Focus::DetailPlay => state.playback.view.engine_available,
-    Focus::DetailWatchlist | Focus::DetailFavorite => match &state.shell.destination {
-      Destination::Detail(id) => {
-        !crate::app::item_actions::busy(&state.kernel, id)
-          && (focus != Focus::DetailWatchlist
-            || state
-              .full
-              .as_ref()
-              .is_some_and(|full| full.personal_lists.membership_loaded))
-      }
-      _ => false,
-    },
-    _ => true,
-  };
+  let enabled = navigation::action_enabled(state, focus);
   let width = match focus {
     Focus::Rail(_) => iced::Length::Fixed(184.0 * scale),
     Focus::Season(_) => iced::Length::Fixed(196.0 * scale),
     _ => iced::Length::Fit,
   };
   container(
-    mouse_area(tv_focus::focus(focused && enabled, move |progress| {
-      let progress = if enabled { progress } else { 0.0 };
-      let color = if enabled {
+    mouse_area(tv_focus::focus(focused, move |progress| {
+      let color = if enabled || focused {
         style::foreground(style::PALETTE, progress, selected)
       } else {
         style::PALETTE.text.muted
@@ -883,7 +879,7 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
 
 fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let Some(full) = state.full.as_ref() else {
-    return status(state, state.t("tv-loading"), scale);
+    return detail_notice(state.t("tv-loading"), scale);
   };
   let data = &full.detail.data;
   let back = action(
@@ -903,7 +899,11 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
       ]
       .into()
     }
-    _ => return column![back, status(state, state.t("tv-loading"), scale)].into(),
+    _ => {
+      return column![back, detail_notice(state.t("tv-loading"), scale)]
+        .spacing(24.0 * scale)
+        .into()
+    }
   };
   let (title, metadata, overview) = match content {
     DetailContent::Item(item) => (
@@ -938,20 +938,49 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .size(style::META * scale)
       .line_height(iced::Pixels(28.0 * scale))
       .color(style::PALETTE.text.body),
-    text(overview.unwrap_or_default())
+  ]
+  .spacing(24.0 * scale);
+  if let Some(overview) = overview.filter(|copy| !copy.trim().is_empty()) {
+    let expanded = data.overview_expanded;
+    let copy = text(overview)
       .size(style::BODY * scale)
       .line_height(iced::Pixels(32.0 * scale))
       .color(style::PALETTE.text.body)
-      .width(850.0 * scale)
-      .height(128.0 * scale)
-  ]
-  .spacing(24.0 * scale);
+      .width((850.0 * scale).min(width));
+    hero = hero
+      .push(action(
+        state,
+        Focus::DetailOverview,
+        state.t(if expanded {
+          "tv-overview-collapse"
+        } else {
+          "tv-overview-expand"
+        }),
+        Some(if expanded {
+          Icon::ChevronUp
+        } else {
+          Icon::ChevronDown
+        }),
+        false,
+        scale,
+      ))
+      .push(
+        container(copy)
+          .height(if expanded {
+            iced::Length::Fit
+          } else {
+            iced::Length::Fixed(128.0 * scale)
+          })
+          .clip(true)
+          .id(iced::widget::Id::new("tv-detail-overview")),
+      );
+  }
   let mut actions = Row::new().spacing(20.0 * scale);
   if navigation::detail_playable(state).is_some() {
     actions = actions.push(action(
       state,
       Focus::DetailPlay,
-      state.t("home-play"),
+      detail_state::play_label(state),
       Some(Icon::Play),
       false,
       scale,
@@ -1004,9 +1033,11 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
       scale,
     ));
   hero = hero.push(actions);
-  let mut page = column![stack![backdrop, hero].height(570.0 * scale)]
-    .width(Fill)
-    .spacing(24.0 * scale);
+  let mut page = column![
+    stack![container(hero).height(iced::Length::Fit.min(570.0 * scale))].push_under(backdrop)
+  ]
+  .width(Fill)
+  .spacing(24.0 * scale);
   if let DetailContent::Show(show) = content {
     let seasons = Row::with_children(show.seasons.iter().enumerate().map(|(index, season)| {
       action(
@@ -1033,53 +1064,121 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         })
         .height(80.0 * scale),
     );
-    match &data.season_episodes {
-      LoadState::Ready(episodes) => {
-        let cards = move || {
-          Row::with_children(episodes.episodes.iter().enumerate().map(|(index, item)| {
-            media_card(
-              state,
-              item,
-              Focus::Episode(index),
-              (&full.detail.artwork, ArtworkSurface::Detail),
-              crate::app::detail::episode_image_spec(
-                data,
-                jellypilot_core::detail::detail_episode_key(&item.id),
-                item,
-              ),
-              (320.0 * scale, true),
+    if show.seasons.is_empty() {
+      page = page.push(detail_notice(state.t("detail-no-seasons"), scale));
+    }
+  }
+  if let Some(episodes) = detail_state::episodes(state) {
+    if !matches!(episodes, LoadState::Idle) {
+      if matches!(content, DetailContent::Item(_)) {
+        page = page.push(heading(state.t("detail-season-neighbors"), scale));
+      }
+      match episodes {
+        LoadState::Ready(episodes) => {
+          if episodes.episodes.is_empty() && !episodes.has_more {
+            page = page.push(detail_notice(
+              state.t(if matches!(content, DetailContent::Show(_)) {
+                "detail-no-episodes"
+              } else {
+                "detail-no-neighbors"
+              }),
               scale,
-            )
-          }))
-          .spacing(24.0 * scale)
-          .into()
-        };
-        page = page.push(horizontal_shelf(
-          state,
-          iced::widget::Id::new("tv-episodes"),
-          340.0 * scale,
-          cards,
-          |offset| {
-            AppMessage::Tv(Message::HorizontalScrolled(
+            ));
+          } else {
+            let cards = move || {
+              let mut cards =
+                Row::with_children(episodes.episodes.iter().enumerate().map(|(index, item)| {
+                  media_card(
+                    state,
+                    item,
+                    Focus::Episode(index),
+                    (&full.detail.artwork, ArtworkSurface::Detail),
+                    crate::app::detail::episode_image_spec(
+                      data,
+                      jellypilot_core::detail::detail_episode_key(&item.id),
+                      item,
+                    ),
+                    (320.0 * scale, true),
+                    scale,
+                  )
+                }))
+                .spacing(24.0 * scale);
+              if episodes.has_more {
+                let append = detail_state::append(state);
+                let label = state.t(match append {
+                  Some(LoadState::Loading) => "tv-loading",
+                  Some(LoadState::Failed(_)) => "detail-retry",
+                  _ => "tv-load-more-episodes",
+                });
+                let mut more = column![action(
+                  state,
+                  Focus::DetailEpisodesMore,
+                  label,
+                  None,
+                  false,
+                  scale
+                )]
+                .spacing(24.0 * scale)
+                .width(320.0 * scale);
+                if let Some(LoadState::Failed(error)) = append {
+                  more = more.push(detail_notice(state.kernel.locale.message(error), scale));
+                }
+                cards = cards.push(
+                  container(more)
+                    .width(320.0 * scale)
+                    .height(320.0 * scale)
+                    .align_y(Alignment::Center),
+                );
+              }
+              cards.into()
+            };
+            page = page.push(horizontal_shelf(
+              state,
               iced::widget::Id::new("tv-episodes"),
-              offset,
-            ))
-          },
-        ));
-      }
-      LoadState::Failed(error) => {
-        page = page.push(status(state, state.kernel.locale.message(error), scale));
-      }
-      _ => {
-        page = page.push(
-          text(state.t("tv-loading"))
-            .size(style::BODY * scale)
-            .line_height(iced::Pixels(32.0 * scale)),
-        );
+              340.0 * scale,
+              cards,
+              |offset| {
+                AppMessage::Tv(Message::HorizontalScrolled(
+                  iced::widget::Id::new("tv-episodes"),
+                  offset,
+                ))
+              },
+            ));
+            if !episodes.has_more {
+              page = page.push(detail_notice(state.t("tv-episodes-complete"), scale));
+            }
+          }
+        }
+        LoadState::Failed(error) => {
+          page = page.push(
+            column![
+              detail_notice(state.kernel.locale.message(error), scale),
+              action(
+                state,
+                Focus::DetailEpisodesRetry,
+                state.t("detail-retry"),
+                None,
+                false,
+                scale
+              )
+            ]
+            .spacing(24.0 * scale),
+          );
+        }
+        LoadState::Loading => page = page.push(detail_notice(state.t("tv-loading"), scale)),
+        LoadState::Idle => {}
       }
     }
   }
   page.into()
+}
+
+fn detail_notice<'a>(message: String, scale: f32) -> Element<'a, AppMessage> {
+  text(message)
+    .size(style::BODY * scale)
+    .line_height(iced::Pixels(32.0 * scale))
+    .color(style::PALETTE.text.body)
+    .into()
 }
 
 #[cfg(test)]

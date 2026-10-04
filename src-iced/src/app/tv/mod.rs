@@ -1,6 +1,7 @@
 //! TV presentation: one focus owner, shared browse/detail/playback services.
 
 pub(crate) mod account;
+mod detail;
 pub(crate) mod filters;
 mod input;
 pub(crate) mod lists;
@@ -39,6 +40,9 @@ pub enum Focus {
   DetailWatchlist,
   DetailFavorite,
   DetailMenu,
+  DetailOverview,
+  DetailEpisodesMore,
+  DetailEpisodesRetry,
   Lists(lists::Focus),
   Season(usize),
   Episode(usize),
@@ -71,6 +75,12 @@ pub enum Message {
     horizontal: Option<(iced::widget::Id, f32)>,
   },
   HorizontalScrolled(iced::widget::Id, f32),
+  OverviewMoved {
+    destination: Destination,
+    session: jellypilot_core::request_gate::SessionToken,
+    direction: Input,
+    offset: Option<f32>,
+  },
 }
 
 #[derive(Default)]
@@ -91,6 +101,8 @@ pub struct Surface {
   focused_item: Option<String>,
   press: Option<ConfirmPress>,
   next_press: u64,
+  detail_page: Option<(String, Option<String>, usize)>,
+  detail_overview_expanded: bool,
 }
 
 struct ConfirmPress {
@@ -325,6 +337,31 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       remember_horizontal(state, id, offset);
       Task::none()
     }
+    Message::OverviewMoved {
+      destination,
+      session,
+      direction,
+      offset,
+    } => {
+      if destination != state.shell.destination
+        || session != state.kernel.request_gate.current_session()
+        || state.tv.focus != Focus::DetailOverview
+        || !detail::overview_expanded(state)
+      {
+        return Task::none();
+      }
+      if let Some(offset) = offset {
+        state.tv.offset = offset;
+        navigation::restore_scroll(state)
+      } else {
+        state.tv.focus = if direction == Input::Down {
+          detail::first_action(state)
+        } else {
+          Focus::DetailBack
+        };
+        navigation::reveal_measured(state)
+      }
+    }
   }
 }
 
@@ -392,7 +429,10 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
   let playing = player::active(state);
   restore |= state.tv.was_playing && !playing;
   state.tv.was_playing = playing;
+  let previous_focus = state.tv.focus;
+  restore |= detail::reconcile_page(state);
   navigation::reconcile_focus(state);
+  restore |= previous_focus != state.tv.focus;
   let lists = lists::reconcile(state);
   let player = player::reconcile(state);
   let browse = navigation::sync_browse(state);

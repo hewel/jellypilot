@@ -13,7 +13,7 @@ use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::tv as style;
 use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
-use super::{AppMessage, Focus, State};
+use super::{detail, AppMessage, Focus, State};
 use crate::app::message::{BrowseMessage, DetailMessage, HomeMessage, PlaybackMessage};
 use crate::app::state::Destination;
 
@@ -119,24 +119,8 @@ pub(super) fn reconcile_focus(state: &mut State) {
     {
       first_shelf(state).unwrap_or(Focus::Retry)
     }
-    Focus::DetailPlay if detail_playable(state).is_none() => {
-      if !seasons(state).is_empty() {
-        Focus::Season(0)
-      } else if state
-        .full
-        .as_ref()
-        .is_some_and(|full| matches!(full.detail.data.content, LoadState::Failed(_)))
-      {
-        Focus::Retry
-      } else {
-        Focus::DetailBack
-      }
-    }
-    Focus::Season(index) if !seasons(state).is_empty() => {
-      Focus::Season(index.min(seasons(state).len() - 1))
-    }
-    Focus::Episode(index) if !episodes(state).is_empty() => {
-      Focus::Episode(index.min(episodes(state).len() - 1))
+    focus if matches!(state.shell.destination, Destination::Detail(_)) => {
+      detail::normalize(state, focus)
     }
     other => other,
   };
@@ -201,14 +185,10 @@ fn first_shelf(state: &State) -> Option<Focus> {
 }
 
 pub(super) fn episodes(state: &State) -> &[VideoLibraryItem] {
-  state
-    .full
-    .as_ref()
-    .and_then(|full| match &full.detail.data.season_episodes {
-      LoadState::Ready(page) => Some(page.episodes.as_slice()),
-      _ => None,
-    })
-    .unwrap_or_default()
+  match detail::episodes(state) {
+    Some(LoadState::Ready(page)) => &page.episodes,
+    _ => &[],
+  }
 }
 
 pub(super) fn seasons(state: &State) -> &[jellypilot_media_server::VideoSeason] {
@@ -223,9 +203,18 @@ pub(super) fn seasons(state: &State) -> &[jellypilot_media_server::VideoSeason] 
 }
 
 pub(super) fn play(state: &State, item: Playable) -> AppMessage {
+  let resume = match &item {
+    Playable::Library(item) => jellypilot_core::home_hero::has_resume_position(item),
+    Playable::Detail(item) => item.can_resume,
+    Playable::Media(_) => false,
+  };
   AppMessage::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Start {
     item,
-    position: PlaybackStartPosition::Resume,
+    position: if resume {
+      PlaybackStartPosition::Resume
+    } else {
+      PlaybackStartPosition::Beginning
+    },
     intro: state.kernel.intro_availability(),
     selection: Box::default(),
   })))
@@ -244,7 +233,41 @@ pub(super) fn detail_playable(state: &State) -> Option<Playable> {
   }
 }
 
+pub(super) fn action_enabled(state: &State, focus: Focus) -> bool {
+  match focus {
+    Focus::Header(_) => matches!(state.shell.destination, Destination::Library { .. }),
+    Focus::HeroWatchlist => {
+      crate::app::collections::controls(state, crate::app::collections::Source::Hero)
+        .watchlist_action
+        .is_some()
+    }
+    Focus::HeroPlay | Focus::DetailPlay => state.playback.view.engine_available,
+    Focus::DetailWatchlist | Focus::DetailFavorite => match &state.shell.destination {
+      Destination::Detail(id) => {
+        !crate::app::item_actions::busy(&state.kernel, id)
+          && (focus != Focus::DetailWatchlist
+            || state
+              .full
+              .as_ref()
+              .is_some_and(|full| full.personal_lists.membership_loaded))
+      }
+      _ => false,
+    },
+    Focus::DetailEpisodesMore => {
+      detail::has_more(state) && !matches!(detail::append(state), Some(LoadState::Loading))
+    }
+    Focus::DetailEpisodesRetry => detail::retry_episodes(state),
+    _ => true,
+  }
+}
+
 pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
+  if !action_enabled(state, focus) {
+    return Task::none();
+  }
+  if focus == Focus::DetailOverview {
+    return Task::done(AppMessage::Detail(DetailMessage::OverviewToggled));
+  }
   if let Focus::Lists(focus) = focus {
     return super::lists::activate(state, focus);
   }
@@ -345,7 +368,9 @@ pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
     Focus::DetailFavorite => Some(AppMessage::ItemActions(
       crate::app::item_actions::Message::Detail(crate::app::state::UserDataActionKind::Favorite),
     )),
-    Focus::DetailMenu | Focus::Lists(_) => None,
+    Focus::DetailMenu | Focus::Lists(_) | Focus::DetailOverview => None,
+    Focus::DetailEpisodesMore => Some(AppMessage::Detail(detail::episode_message(state, true))),
+    Focus::DetailEpisodesRetry => Some(AppMessage::Detail(detail::episode_message(state, false))),
     Focus::Season(index) => seasons(state)
       .get(index)
       .map(|season| AppMessage::Detail(DetailMessage::SeasonSelected(season.id.clone()))),
@@ -353,17 +378,7 @@ pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
       .get(index)
       .map(|item| play(state, Playable::from(item.clone()))),
     Focus::Retry => Some(match state.shell.destination {
-      Destination::Detail(_) => AppMessage::Detail(
-        if state
-          .full
-          .as_ref()
-          .is_some_and(|full| matches!(full.detail.data.content, LoadState::Ready(_)))
-        {
-          DetailMessage::RetrySeason
-        } else {
-          DetailMessage::Retry
-        },
-      ),
+      Destination::Detail(_) => AppMessage::Detail(DetailMessage::Retry),
       Destination::Library { .. } | Destination::Search(_) => {
         AppMessage::Browse(BrowseMessage::Retry)
       }
@@ -418,6 +433,17 @@ pub(super) fn input(state: &mut State, input: Input) -> Task<AppMessage> {
       .map_or_else(Task::none, Task::done);
   }
   let old = state.tv.focus;
+  if matches!(state.shell.destination, Destination::Detail(_)) && !matches!(old, Focus::Rail(_)) {
+    if old == Focus::DetailOverview
+      && detail::overview_expanded(state)
+      && matches!(input, Input::Up | Input::Down)
+    {
+      return detail::read_overview(state, input);
+    }
+    state.tv.focus = detail::navigate(state, input);
+    state.tv.focused_item = None;
+    return reveal(state);
+  }
   let next = match (old, input) {
     (Focus::Rail(index), Input::Up) => Focus::Rail(index.saturating_sub(1)),
     (Focus::Rail(index), Input::Down) => {
@@ -463,42 +489,6 @@ pub(super) fn input(state: &mut State, input: Input) -> Task<AppMessage> {
     (Focus::Header(index), Input::Right) => Focus::Header((index + 1).min(3)),
     (Focus::Header(_), Input::Down) if total(state) > 0 => Focus::Grid(0),
     (Focus::Header(_), Input::Down) if browse_retry_available(state) => Focus::Retry,
-    (Focus::DetailBack, Input::Down | Input::Right) => Focus::DetailPlay,
-    (Focus::DetailPlay, Input::Up | Input::Left) => Focus::DetailBack,
-    (Focus::DetailPlay, Input::Right) => Focus::DetailWatchlist,
-    (Focus::DetailWatchlist, Input::Left) => Focus::DetailPlay,
-    (Focus::DetailWatchlist, Input::Right) => Focus::DetailFavorite,
-    (Focus::DetailFavorite, Input::Left) => Focus::DetailWatchlist,
-    (Focus::DetailFavorite, Input::Right) => Focus::DetailMenu,
-    (Focus::DetailMenu, Input::Left) => Focus::DetailFavorite,
-    (Focus::DetailWatchlist | Focus::DetailFavorite | Focus::DetailMenu, Input::Up) => {
-      Focus::DetailBack
-    }
-    (Focus::DetailWatchlist | Focus::DetailFavorite | Focus::DetailMenu, Input::Down)
-      if !seasons(state).is_empty() =>
-    {
-      Focus::Season(0)
-    }
-    (Focus::DetailPlay, Input::Down) if !seasons(state).is_empty() => Focus::Season(0),
-    (Focus::Season(index), Input::Left) => Focus::Season(index.saturating_sub(1)),
-    (Focus::Season(index), Input::Right) => {
-      Focus::Season((index + 1).min(seasons(state).len().saturating_sub(1)))
-    }
-    (Focus::Season(_), Input::Up) => Focus::DetailPlay,
-    (Focus::Season(_), Input::Down) if !episodes(state).is_empty() => Focus::Episode(0),
-    (Focus::Season(_), Input::Down)
-      if state
-        .full
-        .as_ref()
-        .is_some_and(|full| matches!(full.detail.data.season_episodes, LoadState::Failed(_))) =>
-    {
-      Focus::Retry
-    }
-    (Focus::Episode(index), Input::Left) => Focus::Episode(index.saturating_sub(1)),
-    (Focus::Episode(index), Input::Right) => {
-      Focus::Episode((index + 1).min(episodes(state).len().saturating_sub(1)))
-    }
-    (Focus::Episode(_), Input::Up) => Focus::Season(0),
     (Focus::Retry, Input::Up) => match state.shell.destination {
       Destination::Detail(_) if !seasons(state).is_empty() => Focus::Season(0),
       Destination::Detail(_) => Focus::DetailBack,
@@ -704,7 +694,7 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
   let horizontal = match state.tv.focus {
     Focus::Shelf { row, .. } => Some(shelf_id(row)),
     Focus::Season(_) => Some(iced::widget::Id::new("tv-seasons")),
-    Focus::Episode(_) => Some(iced::widget::Id::new("tv-episodes")),
+    Focus::Episode(_) | Focus::DetailEpisodesMore => Some(iced::widget::Id::new("tv-episodes")),
     _ => None,
   };
   widget::operate(Reveal {

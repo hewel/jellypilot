@@ -104,10 +104,58 @@ controls natural EOF advancement; explicit Next still works. Progress sync chang
 passive report interval; transport changes and stopping continue to report immediately.
 External audio passthrough applies on the next MPV process. Image enhancement, display
 refresh-rate switching and embedded passthrough show their unsupported capability.
+The global Default skip mode row retains Automatic and Manual, with Automatic as the
+default. It uses the shared saved preference and
+[ADR 0045's series-override normalization](adr/0045-desktop-series-intro-skipper-preferences.md):
+saved series choices take precedence, and matching choices follow the default. The TV
+player's separate skip toggle changes only the current Playback Session.
 
 Account confirmations default to Cancel and use the existing account reducer directly;
 they cannot turn a delayed confirmation for one profile into authorization for another.
 Canceling sign-out preserves saved credentials and local data.
+
+## Detail completeness and remote navigation
+
+The 2026-10-04 revision keeps the existing TV composition, palette, focus treatment and
+shared detail services. It completes the detail path for long seasons, unavailable
+playback targets and long descriptions; it does not introduce an Android TV client.
+The reference's trailer and extras placeholders do not add native playback capabilities.
+Account, Search and on-screen keyboard remain implemented native flows without dedicated
+current Paper boards; this revision does not redesign those flows.
+
+- Hero actions describe the actual playback target, including resume and episode
+  identity when available. An episode detail's collection actions apply to that
+  episode; a series detail's collection actions apply to the series. Favorites remain
+  server-owned and Watchlist remains local to the Profile Scope.
+- Directional navigation follows the actions that are actually present. A missing Play
+  target must not prevent reaching Watchlist, Favorite or More. Returning from the
+  episode shelf to the season row uses the selected season rather than resetting to
+  the first season. Delayed data and collection updates must leave a visible focus
+  target; temporarily busy actions do not dispatch duplicate work.
+- Series detail shows the selected season; episode detail shows other episodes from
+  the same season, excluding the current episode. Both use the shared 30-item paging
+  path and server cursor. A reachable Load more control appends the next page without
+  discarding loaded cards. Loading prevents repeat submission; a failed append keeps
+  the loaded cards and provides Retry. Focus stays on the append control while loading
+  or retrying, then moves to the first new card after a successful append. A page that
+  contributes no visible cards keeps the append target if more pages remain; at the
+  final page, focus returns to the last valid card or an available action in an empty
+  detail. Empty and final-page states never imply that a missing or failed response
+  was a complete season.
+- Initial loading has no Retry action. An actual initial failure has a reachable Retry
+  action, and the return path remains available throughout. Canceling an old request,
+  switching seasons or leaving detail keeps the shared request-identity safeguards.
+- Long descriptions have a focusable read-more/read-less action. Expanded text must
+  remain readable without covering the collection actions or episode content; collapse
+  keeps the reading action reachable. Directional input must allow reading text taller
+  than the viewport, not jump straight from the opening lines to the bottom action.
+  Up from the action row enters the reading control; Confirm expands or collapses it.
+  While expanded, Up/Down read through the actual text bounds and Right returns to the
+  action row. Back retains the normal detail return behavior.
+  Long localized titles and descriptions must not change which media object an action
+  targets.
+
+## Player controls
 
 The player owns these rules separately from desktop shortcuts:
 
@@ -123,6 +171,12 @@ The player owns these rules separately from desktop shortcuts:
   write global or per-series preferences. Missing capabilities remain unavailable.
 
 ## Acceptance
+
+The 2026-10-04 detail refinement passed 615 focused iced/UI/host tests, including nine
+new TV behavior and headless-layout regressions, focused Clippy, Rust formatting and
+both Desktop/TV startup smoke gates. Independent review closed the invalid-resume
+boundary by reusing the core resume predicate. Television visual and remote-device
+acceptance remains pending.
 
 Automated checks cover focus boundaries, page/scroll restoration, preview commit/cancel,
 panel return, input exclusivity, invocation/config persistence, single-instance delivery,
@@ -153,3 +207,11 @@ Human acceptance on the actual television must check:
    Detail round-trip retention and no hidden filter after returning to Desktop.
 10. Compare compact playback/decoder/filter panels in normal and short windows;
     inspect contextual hints, failed-save retry and long localized text.
+11. Open a season longer than 30 episodes and an episode within that season. Traverse
+    the loaded cards, append more, exercise failed-append Retry, and reach the final
+    page. Confirm the current episode is absent from its neighbor shelf and returning
+    upward restores the selected season. Check an empty season separately.
+12. Open a detail with no playable target and use only directional keys and Confirm to
+    reach the available collection actions. Expand and collapse a long description in
+    both languages; verify visible focus, complete reading and reachable actions at
+    1920×1080 and 1280×720. Test loading and initial failure without a mouse.
