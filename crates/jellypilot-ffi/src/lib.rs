@@ -14,6 +14,7 @@ mod history;
 mod playback;
 mod preferences;
 mod remote;
+mod remote_control;
 mod watchlist;
 
 use std::path::PathBuf;
@@ -30,6 +31,7 @@ pub use history::HistoryRemoval;
 pub use playback::*;
 pub use preferences::{BusinessPreferences, IntroSkipMode, LoginPrefill};
 pub use remote::{RemoteCommand, RemoteTarget, RemoteTargetEvent, RemoteTargetState};
+pub use remote_control::*;
 pub use watchlist::WatchlistRemoval;
 
 uniffi::setup_scaffolding!();

@@ -71,6 +71,13 @@ pub struct JellyfinClient {
 #[path = "client/library_filters.rs"]
 mod library_filters;
 
+#[path = "client/remote_control.rs"]
+mod remote_control;
+pub use remote_control::{
+  JellyfinRemoteControl, RemoteControlCapabilities, RemoteControlNowPlaying, RemoteControlRequest,
+  RemoteControlTarget, RemoteControlTargetKey, RemoteSession,
+};
+
 #[path = "client/server_probe.rs"]
 mod server_probe;
 #[cfg(feature = "raster")]
@@ -357,6 +364,11 @@ impl JellyfinClient {
     JellyfinPlayback { client: self }
   }
 
+  /// Discovery and outbound commands for other media-server sessions.
+  pub fn remote_control(&self) -> JellyfinRemoteControl<'_> {
+    JellyfinRemoteControl::new(self)
+  }
+
   /// Library Browser operations used by the authenticated shell.
   pub fn library(&self) -> JellyfinLibrary<'_> {
     JellyfinLibrary { client: self }
@@ -550,12 +562,26 @@ impl JellyfinClient {
     device_id: Option<&str>,
     redirect_policy: reqwest::redirect::Policy,
   ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
-    let mut headers = header::HeaderMap::new();
     let authorization = device_id.map_or_else(
       || self.auth_header(token),
       |device_id| self.auth_header_for_device(token, device_id),
     );
-    let auth_header = header::HeaderValue::from_str(&authorization).map_err(|err| {
+    Self::openapi_configuration_with_authorization(
+      server_url,
+      &authorization,
+      redirect_policy,
+      std::time::Duration::from_secs(30),
+    )
+  }
+
+  fn openapi_configuration_with_authorization(
+    server_url: &str,
+    authorization: &str,
+    redirect_policy: reqwest::redirect::Policy,
+    timeout: std::time::Duration,
+  ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
+    let mut headers = header::HeaderMap::new();
+    let auth_header = header::HeaderValue::from_str(authorization).map_err(|err| {
       JellyfinError::HttpError(format!("Invalid Jellyfin authorization header: {err}"))
     })?;
     headers.insert(header::AUTHORIZATION, auth_header);
@@ -564,7 +590,7 @@ impl JellyfinClient {
     configuration.base_path = server_url.to_string();
     configuration.user_agent = Some(Self::app_user_agent());
     configuration.client = Client::builder()
-      .timeout(std::time::Duration::from_secs(30))
+      .timeout(timeout)
       .redirect(redirect_policy)
       .default_headers(headers)
       .build()?;
@@ -599,12 +625,26 @@ impl JellyfinClient {
     device_id: Option<&str>,
     redirect_policy: reqwest::redirect::Policy,
   ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
-    let mut headers = header::HeaderMap::new();
     let authorization = device_id.map_or_else(
       || self.auth_header(token),
       |device_id| self.auth_header_for_device(token, device_id),
     );
-    let auth_header = header::HeaderValue::from_str(&authorization).map_err(|err| {
+    Self::emby_openapi_configuration_with_authorization(
+      server_url,
+      &authorization,
+      redirect_policy,
+      std::time::Duration::from_secs(30),
+    )
+  }
+
+  fn emby_openapi_configuration_with_authorization(
+    server_url: &str,
+    authorization: &str,
+    redirect_policy: reqwest::redirect::Policy,
+    timeout: std::time::Duration,
+  ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
+    let mut headers = header::HeaderMap::new();
+    let auth_header = header::HeaderValue::from_str(authorization).map_err(|err| {
       JellyfinError::HttpError(format!("Invalid Emby authorization header: {err}"))
     })?;
     headers.insert("X-Emby-Authorization", auth_header);
@@ -613,7 +653,7 @@ impl JellyfinClient {
     configuration.base_path = server_url.to_string();
     configuration.user_agent = Some(Self::emby_chrome_user_agent());
     configuration.client = Client::builder()
-      .timeout(std::time::Duration::from_secs(30))
+      .timeout(timeout)
       .redirect(redirect_policy)
       .default_headers(headers)
       .build()?;

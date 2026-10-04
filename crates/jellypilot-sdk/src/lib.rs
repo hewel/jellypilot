@@ -31,6 +31,7 @@ mod preferences;
 mod query;
 mod quick_connect;
 pub mod remote;
+pub mod remote_control;
 #[cfg(test)]
 mod tests;
 mod watchlist;

@@ -6,6 +6,8 @@ mod browse;
 mod history;
 mod playback;
 mod product;
+#[path = "remote_control_tests.rs"]
+mod remote_control;
 mod server_probe;
 
 use std::future::Future;

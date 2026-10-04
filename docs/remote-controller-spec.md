@@ -1,6 +1,7 @@
 # Android Remote Controller
 
-Accepted addition, 2026-10-05. Implementation has not started. This is batch 2 of
+Accepted addition, 2026-10-05. Implemented; automated verification and independent
+review are complete, with real-device integration acceptance pending. This is batch 2 of
 the [playback feature delivery plan](playback-features-spec.md), and is distinct
 from Android's existing foreground Playback Target receiver.
 
@@ -12,6 +13,17 @@ Pause, resume, stop, seek and volume are available only when supported by that
 target. Details offer an explicit Play on another device action for a playable
 movie or episode. Ordinary Play continues to use the local player; choosing a
 remote target does not silently replace the application's default playback path.
+
+Both entries open the same independent, back-navigable page. The detail entry
+retains the real item and start position while the user chooses a target, then
+requires an explicit Play on this device action; selection never sends PlayNow.
+The page identifies the current server and target, uses at least 48dp button and
+slider targets, and remains a scrollable single column centered on tablets.
+
+The first snapshot exposes text and playback state, without a media-image
+reference. Unknown pause state does not become an invented Play/Pause action;
+unknown position or volume displays an em dash. Each known capability remains
+independent, so Stop may still be available when pause state is unknown.
 
 The phone sends one movie or episode with PlayNow, using the selected detail's
 real playback identity and applicable start position. It does not prepare local
@@ -45,6 +57,10 @@ release sends one command. Commands are serialized and acknowledged feedback is
 distinct from the refreshed target state: HTTP acceptance alone does not prove
 that the target started or reached the requested position.
 
+Accepted feedback means Command sent / Updating. Actual playing state continues
+to come from refreshed snapshots. A lost target or failed refresh disables the
+previous controls until retry and fresh authorization succeed.
+
 ## Scope and lifecycle
 
 The SDK binds a controller to the authenticated scope epoch, its own generation,
@@ -53,6 +69,11 @@ sending a command; an account handoff or pending credential cleanup must block
 new writes. Closing the controller, replacing its target or scope, backgrounding,
 and device locking cancel waiting work. A command already accepted by the server
 cannot be recalled, and the interface must not claim that it was.
+
+Generations are unique across controller instances in the process, and changing
+the selected target's Now Playing identity also retires the previous generation.
+Buttons capture their rendered generation and target; sliders retain the identity
+from the start of the drag. Neither silently retargets an old action at release.
 
 Refresh only while the controller page is visible and the phone is unlocked,
 with a bounded interval and at most one refresh in flight. Refresh after accepted
@@ -77,3 +98,18 @@ lifetime and unchanged local playback. Follow the cross-crate suite tier and
 
 Real phone-to-PC/TV control, server permission policy and network timing require
 human integration acceptance. No agent screenshots or native input injection.
+
+The focused provider suite passes 236 tests and SDK passes 98, including 12 new
+remote-controller scenarios. The FFI compiles and the three Rust crates pass
+Clippy. `bun run task android check` passes 117 host tests (108 app, 9 player),
+including 17 new controller, entry and screen tests, and Android lint. These are
+host checks, not actual phone-to-target playback evidence.
+
+Independent Rust review found no remaining Standards or Spec issues. Android
+review caught the server heading using a username for an unsaved login; the page
+now uses the actual Active Profile's server name, falling back to its provider.
+The fix was independently rechecked and included in the final Android check.
+
+The final shared pass with the progressive-blur addition also passes
+`bun run check`, workspace Rust tests (1537 distinct tests, one existing ignored;
+the D-Bus case runs once more in a private child), and native startup smoke.

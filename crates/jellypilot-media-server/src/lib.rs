@@ -15,8 +15,9 @@ pub use artwork_cache::{
 };
 
 pub use client::{
-  JellyfinClient, JellyfinLibrary, JellyfinLogin, JellyfinPlayback, LibraryImageHeaders,
-  LibraryImageRequest,
+  JellyfinClient, JellyfinLibrary, JellyfinLogin, JellyfinPlayback, JellyfinRemoteControl,
+  LibraryImageHeaders, LibraryImageRequest, RemoteControlCapabilities, RemoteControlNowPlaying,
+  RemoteControlRequest, RemoteControlTarget, RemoteControlTargetKey, RemoteSession,
 };
 #[cfg(feature = "raster")]
 pub use client::{TrickplayAtlas, TrickplayGeometry, TrickplayManifest};
