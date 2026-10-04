@@ -277,6 +277,80 @@ visual acceptance.
 
 ## Delivery boundary
 
+### 2026-10-04 reference reconciliation
+
+The user delegated remaining presentation choices and implementation. Keep all
+retained native contracts above: Continue Watching and Next Up may overlap;
+episode details act on that episode; detail source-track popovers remain read-only;
+and examples never supply production playback targets or media facts.
+The coordinated Paper pass records these choices in the
+[native contract reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/NZN-0),
+including 30-item append, loading, failure/retry and final-page states. This is a
+design reference, not native visual-acceptance evidence.
+
+- Series season lists and an episode's other same-season episodes expose Load more
+  for real pages beyond the first 30 items. Append without replacing loaded content
+  or resetting its scroll position. Failed appends remain retryable; changing the
+  season, detail or Profile Scope retires the old request.
+- Embedded Tab/Shift+Tab reveals controls before navigation. Actual control focus
+  holds chrome until focus leaves; Information retains its independent lifetime.
+  Pointer-region visibility, drag/menu holds and playback-key feedback remain native.
+- Subtitle ordering, footer transport/mute/volume and Sidebar tools use independent
+  40px hit regions. Correct first/last ordering boundaries and the already-40px
+  account-copy/timeline controls remain unchanged.
+- The expanded Sidebar groups its 56px account trigger and tools under one divider,
+  with text Settings and separate Refresh/Control mode actions. Control mode remains
+  the existing App Mode, without a new picture-in-picture capability.
+- Account Popover targets 340px rather than 320px, retaining the existing viewport
+  clamp, address truncation/full-value hint and 40px copy target. This is not a new
+  minimum window or popover width.
+- Move Start minimized from Storage to Interface near App Mode without changing
+  persistence, tray availability or Background Residency.
+- The final size reconciliation also applies 40px minimum input regions to embedded
+  and responsive sliders, detail hero/season/episode/track controls, and Settings
+  navigation, selectors, menu rows, shortcuts and direct actions. Retain larger main
+  playback buttons, content text links, glyph sizes and responsive layout.
+- Settings names the global Automatic/Manual selector Default skip mode; its help
+  explains per-series adjustment and same-value normalization. No default selector
+  or series override behavior is removed.
+
+Human acceptance covers a season longer than 30 episodes, append failure/retry and
+rapid season changes; keyboard access after chrome hides and pointer interaction
+after keyboard focus; Information remaining independent; both languages/themes of
+the footer; and nonempty subtitle priorities in the narrow Settings Modal.
+
+Verification for this pass:
+
+- `bun run check` passed, including 27 script tests and workspace Clippy. An initial
+  Clippy diagnostic in the new headless focus test was corrected before the final pass.
+- `bun run task rust test` passed: 1,488 reported passes, zero failures and one ignored
+  lifecycle helper exercised by its parent tests. This includes 433 application,
+  162 UI widget and 10 embedded-host tests. New regressions cover pagination retry,
+  stale season/account results, navigation restoration, refresh during season change,
+  and control focus after automatic hiding.
+- `xvfb-run -a bun run task iced run --smoke` passed. It verifies startup and first-frame
+  completion only; no agent visual inspection or desktop input injection was performed.
+- Independent review found a refresh token that could block pagination after switching
+  seasons. The fix and regression were reviewed, and the final tests include them.
+  Documentation links and `git diff --check` passed. Human visual acceptance remains pending.
+- The subsequent 320→340 Account Popover constant adjustment passed
+  `bun run task rust check iced`, `bun run task rust fmt --check` and `git diff --check`.
+  Existing viewport clamping and full-address hints were inspected and retained;
+  the unchanged behavior did not require another full suite or smoke run.
+- The final target-size and bilingual-copy reconciliation passed
+  `bun run task rust test iced`: 433 application, 163 UI and 10 embedded-host tests,
+  zero failures. `bun run task rust clippy iced`, `bun run task rust fmt --check`
+  and `git diff --check` also passed. These focused checks cover all changed views
+  and the shared ControlButton helper; the earlier workspace and startup results
+  remain separate evidence for the unchanged boundaries.
+- Enlarging the track chip exposed a pre-existing ControlButton bug: its named
+  minimum height was implemented as a fixed height. Both size negotiation and layout
+  now use a true minimum, retaining intrinsic content growth and the parent's maximum.
+  A widget regression checks ordinary/custom wrapped content, last-line clicks and
+  outside-bound rejection; the original detail long-label regression passes unchanged.
+
+### Previous delivery
+
 Product terms are recorded in [CONTEXT.md](../CONTEXT.md); the consequential History
 ownership and persistence choice is in [ADR 0046](adr/0046-local-desktop-history-visibility.md).
 The desktop implementation includes shared filled-action styles, Library and

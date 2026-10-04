@@ -8,14 +8,16 @@ use std::sync::Arc;
 use crate::i18n::UiText;
 use iced::Task;
 use jellypilot_core::detail::{
-  apply_user_data_update, detail_episode_key, detail_similar_key, detail_user_data, initial_season,
-  load_detail_content, load_season_neighbors, load_similar_items, season_for_number,
-  selected_season_request, DetailContent,
+  append_season_page, apply_user_data_update, detail_episode_key, detail_similar_key,
+  detail_user_data, initial_season, load_detail_content, load_season_neighbors, load_similar_items,
+  next_season_page_request, season_for_number, selected_season_request, DetailContent,
+  SEASON_EPISODE_PAGE_SIZE,
 };
 use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RequestGate};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
-  VideoLibraryItem, VideoSeasonEpisodesPage, VideoUserDataAction, VideoUserDataUpdate,
+  VideoLibraryItem, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoUserDataAction,
+  VideoUserDataUpdate,
 };
 
 use super::artwork::{ImageCollection, ImageSpec};
@@ -81,6 +83,8 @@ pub fn update(
     DetailMessage::Retry => start_load(surface, kernel, detail_item_id),
     DetailMessage::RetryNeighbors => start_followup(surface, kernel, false),
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
+    DetailMessage::LoadMoreNeighbors => start_more_neighbors(surface, kernel),
+    DetailMessage::LoadMoreSeason => start_more_season(surface, kernel),
     DetailMessage::OverviewToggled => {
       surface.data.overview_expanded = !surface.data.overview_expanded;
       Task::none()
@@ -147,13 +151,11 @@ pub fn update(
       if !kernel.request_gate.finish_detail_aux(token) {
         return Task::none();
       }
-      surface.data.season_neighbors = match result {
-        Ok(items) => jellypilot_core::LoadState::Ready(items),
-        Err(error) => {
-          tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
-          jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
-        }
-      };
+      settle_episode_page(
+        &mut surface.data.season_neighbors,
+        &mut surface.data.neighbors_append,
+        result,
+      );
       prepare_artwork(surface)
     }
     DetailMessage::SimilarLoaded { token, result } => {
@@ -187,6 +189,7 @@ pub fn start_load(
 ) -> Task<Message> {
   surface.season_menu_open = false;
   surface.track_menu_open = None;
+  surface.refresh_token = None;
   surface.view_generation = next_view_generation();
   surface.view_item_id = item_id.map(str::to_owned);
   let Some(item_id) = item_id else {
@@ -237,6 +240,16 @@ pub(crate) fn restore(
   data: DetailState,
 ) -> Task<Message> {
   surface.data = data;
+  // Leaving the history entry retired these requests. Retain the loaded rows
+  // and let the user continue from the same cursor when returning.
+  for append in [
+    &mut surface.data.season_append,
+    &mut surface.data.neighbors_append,
+  ] {
+    if matches!(append, jellypilot_core::LoadState::Loading) {
+      *append = jellypilot_core::LoadState::Idle;
+    }
+  }
   surface.view_generation = next_view_generation();
   surface.view_item_id = Some(item_id.to_owned());
   surface.refresh_token = None;
@@ -295,6 +308,14 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str)
   if kernel.item_actions.pending(item_id).is_some()
     || matches!(
       surface.data.season_episodes,
+      jellypilot_core::LoadState::Loading
+    )
+    || matches!(
+      surface.data.season_append,
+      jellypilot_core::LoadState::Loading
+    )
+    || matches!(
+      surface.data.neighbors_append,
       jellypilot_core::LoadState::Loading
     )
   {
@@ -481,16 +502,62 @@ fn start_neighbors_load(
     return Task::none();
   };
   surface.data.season_neighbors = jellypilot_core::LoadState::Loading;
+  surface.data.neighbors_append = jellypilot_core::LoadState::Idle;
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.data.season_neighbors = jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE));
     return Task::none();
   };
   Task::perform(
     async move {
-      load_season_neighbors(client, item_id, series_id, season_number)
-        .await
-        .map_err(|error| error.to_string())
+      load_season_neighbors(
+        client,
+        item_id,
+        VideoSeasonEpisodesPageRequest {
+          series_id,
+          season_id: None,
+          season_number: Some(season_number),
+          start_index: 0,
+          limit: SEASON_EPISODE_PAGE_SIZE,
+        },
+      )
+      .await
+      .map_err(|error| error.to_string())
     },
+    move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
+  )
+}
+
+fn start_more_neighbors(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  if surface.refresh_token.is_some()
+    || matches!(
+      surface.data.neighbors_append,
+      jellypilot_core::LoadState::Loading
+    )
+  {
+    return Task::none();
+  }
+  let jellypilot_core::LoadState::Ready(page) = &surface.data.season_neighbors else {
+    return Task::none();
+  };
+  let Some(request) = next_season_page_request(page) else {
+    return Task::none();
+  };
+  let jellypilot_core::LoadState::Ready(DetailContent::Item(item)) = &surface.data.content else {
+    return Task::none();
+  };
+  let item_id = item.id.clone();
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  let Some(token) = kernel
+    .request_gate
+    .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
+  else {
+    return Task::none();
+  };
+  surface.data.neighbors_append = jellypilot_core::LoadState::Loading;
+  Task::perform(
+    load_season_neighbors(client, item_id, request),
     move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
   )
 }
@@ -535,6 +602,7 @@ fn select_season(detail: &mut DetailState, season_id: &str) -> bool {
 }
 
 fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  surface.data.season_append = jellypilot_core::LoadState::Idle;
   let Some(request) = selected_season_request(
     &surface.data.content,
     surface.data.selected_season_id.as_deref(),
@@ -542,6 +610,7 @@ fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Tas
     surface.data.season_episodes = jellypilot_core::LoadState::Idle;
     return Task::none();
   };
+  cancel_refresh(surface, kernel);
   let token = kernel.request_gate.begin_detail();
   surface.data.season_episodes = jellypilot_core::LoadState::Loading;
   drop(prepare_artwork(surface));
@@ -561,6 +630,64 @@ fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Tas
   )
 }
 
+fn start_more_season(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  if surface.refresh_token.is_some()
+    || matches!(
+      surface.data.season_append,
+      jellypilot_core::LoadState::Loading
+    )
+  {
+    return Task::none();
+  }
+  let jellypilot_core::LoadState::Ready(page) = &surface.data.season_episodes else {
+    return Task::none();
+  };
+  let Some(request) = next_season_page_request(page) else {
+    return Task::none();
+  };
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  let token = kernel.request_gate.begin_detail();
+  surface.data.season_append = jellypilot_core::LoadState::Loading;
+  Task::perform(
+    async move {
+      client
+        .library()
+        .season_episodes_page(request)
+        .await
+        .map_err(|error| error.to_string())
+    },
+    move |result| Message::Detail(DetailMessage::SeasonLoaded { token, result }),
+  )
+}
+
+fn settle_episode_page(
+  episodes: &mut jellypilot_core::LoadState<VideoSeasonEpisodesPage, UiText>,
+  append: &mut jellypilot_core::LoadState<(), UiText>,
+  result: Result<VideoSeasonEpisodesPage, String>,
+) {
+  if let Err(error) = &result {
+    tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
+  }
+  if matches!(append, jellypilot_core::LoadState::Loading) {
+    let appended = match (episodes, result) {
+      (jellypilot_core::LoadState::Ready(loaded), Ok(page)) => append_season_page(loaded, page),
+      _ => false,
+    };
+    *append = if appended {
+      jellypilot_core::LoadState::Idle
+    } else {
+      jellypilot_core::LoadState::Failed(UiText::new("detail-more-episodes-error"))
+    };
+  } else {
+    *episodes = match result {
+      Ok(page) => jellypilot_core::LoadState::Ready(page),
+      Err(_) => jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE)),
+    };
+  }
+}
+
 fn settle_season_load(
   detail: &mut DetailState,
   gate: &mut RequestGate,
@@ -570,27 +697,25 @@ fn settle_season_load(
   if !gate.finish_detail(token) {
     return false;
   }
-  detail.season_episodes = match result {
-    Ok(page) => {
-      // Preserve richer season metadata for Next Up across season switches.
-      if let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &mut detail.content {
-        if let Some(next) = &mut show.next_episode {
-          if next.artwork_image_id.is_none() {
-            next.artwork_image_id = page
-              .episodes
-              .iter()
-              .find(|episode| episode.id == next.id)
-              .and_then(|episode| episode.artwork_image_id.clone());
-          }
+  if let Ok(page) = &result {
+    // Preserve richer season metadata for Next Up across season switches.
+    if let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &mut detail.content {
+      if let Some(next) = &mut show.next_episode {
+        if next.artwork_image_id.is_none() {
+          next.artwork_image_id = page
+            .episodes
+            .iter()
+            .find(|episode| episode.id == next.id)
+            .and_then(|episode| episode.artwork_image_id.clone());
         }
       }
-      jellypilot_core::LoadState::Ready(page)
     }
-    Err(error) => {
-      tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
-      jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
-    }
-  };
+  }
+  settle_episode_page(
+    &mut detail.season_episodes,
+    &mut detail.season_append,
+    result,
+  );
   true
 }
 
@@ -691,16 +816,16 @@ pub(crate) fn apply_snapshot_update(data: &mut DetailState, update: &VideoUserDa
       overlay_item(next, update);
     }
   }
-  if let jellypilot_core::LoadState::Ready(page) = &mut data.season_episodes {
-    for item in &mut page.episodes {
-      overlay_item(item, update);
-    }
-  }
-  for state in [&mut data.season_neighbors, &mut data.similar_items] {
-    if let jellypilot_core::LoadState::Ready(items) = state {
-      for item in items {
+  for state in [&mut data.season_episodes, &mut data.season_neighbors] {
+    if let jellypilot_core::LoadState::Ready(page) = state {
+      for item in &mut page.episodes {
         overlay_item(item, update);
       }
+    }
+  }
+  if let jellypilot_core::LoadState::Ready(items) = &mut data.similar_items {
+    for item in items {
+      overlay_item(item, update);
     }
   }
 }
@@ -722,9 +847,10 @@ fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
     );
     match content {
       DetailContent::Item(_) => {
-        if let jellypilot_core::LoadState::Ready(items) = &surface.data.season_neighbors {
+        if let jellypilot_core::LoadState::Ready(page) = &surface.data.season_neighbors {
           specs.extend(
-            items
+            page
+              .episodes
               .iter()
               .filter_map(|item| card_image_spec(detail_episode_key(&item.id), item)),
           );
@@ -835,6 +961,7 @@ pub(crate) fn episode_image_spec(
 pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
   surface.season_menu_open = false;
   surface.track_menu_open = None;
+  surface.refresh_token = None;
   surface.view_generation = next_view_generation();
   surface.view_item_id = None;
   kernel.request_gate.navigate();
@@ -846,6 +973,7 @@ pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
 mod tests {
   use std::sync::Arc;
 
+  use iced::futures::StreamExt;
   use jellypilot_auth::login::ConnectionPhase;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
@@ -958,6 +1086,25 @@ mod tests {
     }
   }
 
+  fn episode_page(
+    episodes: Vec<VideoLibraryItem>,
+    start_index: i32,
+    has_more: bool,
+  ) -> VideoSeasonEpisodesPage {
+    let next_start_index = start_index + i32::try_from(episodes.len()).expect("bounded test page");
+    VideoSeasonEpisodesPage {
+      series_id: "show-1".to_owned(),
+      season_id: Some("season-1".to_owned()),
+      season_number: Some(1),
+      start_index,
+      limit: SEASON_EPISODE_PAGE_SIZE,
+      total_record_count: 35,
+      next_start_index,
+      has_more,
+      episodes,
+    }
+  }
+
   fn show_detail() -> jellypilot_media_server::VideoShowDetail {
     jellypilot_media_server::VideoShowDetail {
       id: "show-1".to_owned(),
@@ -978,6 +1125,193 @@ mod tests {
     }
   }
 
+  async fn detail_completion(task: Task<Message>) -> DetailMessage {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      let mut stream = iced_runtime::task::into_stream(task).expect("detail emitted work");
+      while let Some(action) = stream.next().await {
+        if let iced_runtime::Action::Output(Message::Detail(message)) = action {
+          return message;
+        }
+      }
+      panic!("detail task ended without a completion");
+    })
+    .await
+    .expect("detail request settled")
+  }
+
+  #[tokio::test]
+  async fn neighbors_page_past_thirty_retry_failed_append_and_keep_the_current_episode_excluded() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+      for (start, end, fail) in [(0, 30, false), (30, 35, true), (30, 35, false)] {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = BufReader::new(socket);
+        let mut request = String::new();
+        socket.read_line(&mut request).await.unwrap();
+        assert!(
+          request.contains(&format!("startIndex={start}")),
+          "{request}"
+        );
+        assert!(request.contains("limit=30"), "{request}");
+        loop {
+          let mut line = String::new();
+          assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+          if line == "\r\n" {
+            break;
+          }
+        }
+        let items: Vec<_> = (start..end)
+          .map(|index| {
+            serde_json::json!({
+              "Id": format!("{index:032x}"), "Name": format!("Episode {index}"), "Type": "Episode"
+            })
+          })
+          .collect();
+        let body = serde_json::json!({ "Items": items, "TotalRecordCount": 35 }).to_string();
+        let status = if fail {
+          "503 Service Unavailable"
+        } else {
+          "200 OK"
+        };
+        socket.get_mut().write_all(format!(
+          "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+        ).as_bytes()).await.unwrap();
+      }
+    });
+    let (mut surface, mut kernel) = test_fixture();
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+        server_url: format!("http://{address}"),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    kernel.client = Some(client);
+    let item_id = format!("{:032x}", 15);
+    let mut item = video_item(&item_id);
+    item.item_type = "Episode".to_owned();
+    item.series_id = Some("show-1".to_owned());
+    item.season_number = Some(1);
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
+    kernel.request_gate.set_detail_item(Some(item_id.clone()));
+    let task = start_neighbors_load(
+      &mut surface,
+      &mut kernel,
+      item_id.clone(),
+      "show-1".to_owned(),
+      1,
+    );
+    let message = detail_completion(task).await;
+    drop(update(&mut surface, &mut kernel, Some(&item_id), message));
+    assert!(
+      matches!(&surface.data.season_neighbors, jellypilot_core::LoadState::Ready(page)
+      if page.episodes.len() == 29 && page.next_start_index == 30)
+    );
+
+    let task = start_more_neighbors(&mut surface, &mut kernel);
+    assert_eq!(start_more_neighbors(&mut surface, &mut kernel).units(), 0);
+    let message = detail_completion(task).await;
+    drop(update(&mut surface, &mut kernel, Some(&item_id), message));
+    assert!(matches!(
+      surface.data.neighbors_append,
+      jellypilot_core::LoadState::Failed(_)
+    ));
+    assert!(
+      matches!(&surface.data.season_neighbors, jellypilot_core::LoadState::Ready(page)
+      if page.episodes.len() == 29 && page.next_start_index == 30)
+    );
+
+    let message = detail_completion(start_more_neighbors(&mut surface, &mut kernel)).await;
+    drop(update(&mut surface, &mut kernel, Some(&item_id), message));
+    assert!(
+      matches!(&surface.data.season_neighbors, jellypilot_core::LoadState::Ready(page)
+      if page.episodes.len() == 34 && !page.has_more && !page.episodes.iter().any(|item| item.id == item_id))
+    );
+    assert_eq!(start_more_neighbors(&mut surface, &mut kernel).units(), 0);
+    peer.await.unwrap();
+  }
+
+  #[test]
+  fn switching_seasons_retires_an_in_flight_append_without_accepting_its_rows() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    surface.data.selected_season_id = Some("season-1".to_owned());
+    surface.data.season_episodes =
+      jellypilot_core::LoadState::Ready(episode_page(vec![episode("loaded", 1)], 0, true));
+    surface.data.season_append = jellypilot_core::LoadState::Loading;
+    let stale = kernel.request_gate.begin_detail();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonSelected("season-2".to_owned()),
+    ));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonLoaded {
+        token: stale,
+        result: Ok(episode_page(vec![episode("stale", 1)], 1, false)),
+      },
+    ));
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
+    assert!(matches!(
+      surface.data.season_episodes,
+      jellypilot_core::LoadState::Loading
+    ));
+    assert!(matches!(
+      surface.data.season_append,
+      jellypilot_core::LoadState::Idle
+    ));
+  }
+
+  #[test]
+  fn neighbor_append_results_after_navigation_or_account_change_cannot_replace_loaded_content() {
+    for account_change in [false, true] {
+      let (mut surface, mut kernel) = test_fixture();
+      kernel
+        .request_gate
+        .set_detail_item(Some("episode-1".to_owned()));
+      surface.data.season_neighbors =
+        jellypilot_core::LoadState::Ready(episode_page(vec![episode("loaded", 1)], 0, true));
+      surface.data.neighbors_append = jellypilot_core::LoadState::Loading;
+      let token = kernel
+        .request_gate
+        .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
+        .unwrap();
+      if account_change {
+        kernel.request_gate.disconnect();
+      } else {
+        kernel.request_gate.navigate();
+      }
+      drop(update(
+        &mut surface,
+        &mut kernel,
+        Some("episode-1"),
+        DetailMessage::NeighborsLoaded {
+          token,
+          result: Ok(episode_page(vec![episode("stale", 1)], 1, false)),
+        },
+      ));
+      assert!(
+        matches!(&surface.data.season_neighbors, jellypilot_core::LoadState::Ready(page)
+        if page.episodes.len() == 1 && page.episodes[0].id == "loaded")
+      );
+    }
+  }
+
   #[test]
   fn restoring_detail_preserves_expansion_and_ready_related_content() {
     let (mut surface, mut kernel) = test_fixture();
@@ -989,8 +1323,10 @@ mod tests {
       .data
       .expanded_episode_ids
       .insert("related".to_owned());
+    surface.refresh_token = Some(kernel.request_gate.begin_detail());
     let saved = std::mem::take(&mut surface.data);
     leave_view(&mut surface, &mut kernel);
+    assert!(surface.refresh_token.is_none());
     drop(start_load(&mut surface, &mut kernel, Some("other")));
     drop(restore(&mut surface, &mut kernel, "original", saved));
     assert!(
@@ -1001,6 +1337,91 @@ mod tests {
     assert!(
       matches!(&surface.data.similar_items, jellypilot_core::LoadState::Ready(items) if items[0].id == "related")
     );
+  }
+
+  #[test]
+  fn returning_to_an_interrupted_append_preserves_loaded_rows_and_allows_continuation() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    surface.data.selected_season_id = Some("season-1".to_owned());
+    surface.data.season_episodes = jellypilot_core::LoadState::Ready(episode_page(
+      (0..30)
+        .map(|index| episode(&format!("episode-{index}"), 1))
+        .collect(),
+      0,
+      true,
+    ));
+    surface.data.similar_items = jellypilot_core::LoadState::Ready(Vec::new());
+    assert_eq!(start_more_season(&mut surface, &mut kernel).units(), 1);
+    let saved = std::mem::take(&mut surface.data);
+    leave_view(&mut surface, &mut kernel);
+    drop(restore(&mut surface, &mut kernel, "show-1", saved));
+    assert!(
+      matches!(&surface.data.season_episodes, jellypilot_core::LoadState::Ready(page)
+      if page.episodes.len() == 30 && page.next_start_index == 30)
+    );
+    assert_eq!(start_more_season(&mut surface, &mut kernel).units(), 1);
+    assert_eq!(start_more_season(&mut surface, &mut kernel).units(), 0);
+  }
+
+  #[tokio::test]
+  async fn switching_seasons_cancels_refresh_so_its_missing_response_cannot_block_more_episodes() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface
+      .items
+      .insert("show-1".to_owned(), episode("show-1", 1));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    surface.data.selected_season_id = Some("season-1".to_owned());
+    surface.data.season_episodes =
+      jellypilot_core::LoadState::Ready(episode_page(vec![episode("loaded", 1)], 0, true));
+    drop(refresh(&mut surface, &mut kernel, "show-1"));
+    let stale = surface.refresh_token.expect("refresh is pending");
+    let task = update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonSelected("season-2".to_owned()),
+    );
+    let DetailMessage::SeasonLoaded { token, .. } = detail_completion(task).await else {
+      panic!("season selection must load its first page");
+    };
+    let mut page = episode_page(
+      (0..30)
+        .map(|index| episode(&format!("season-2-{index}"), 2))
+        .collect(),
+      0,
+      true,
+    );
+    page.season_id = Some("season-2".to_owned());
+    page.season_number = Some(2);
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::SeasonLoaded {
+        token,
+        result: Ok(page),
+      },
+    ));
+    assert_eq!(start_more_season(&mut surface, &mut kernel).units(), 1);
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      Some("show-1"),
+      DetailMessage::Loaded {
+        token: stale,
+        result: Box::new(Ok(DetailContent::Show(Box::new(show_detail())))),
+      },
+    ));
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
+    assert!(matches!(
+      surface.data.season_append,
+      jellypilot_core::LoadState::Loading
+    ));
   }
 
   #[test]
@@ -1077,7 +1498,8 @@ mod tests {
     surface
       .items
       .insert("item-1".to_owned(), episode("item-1", 1));
-    surface.data.season_neighbors = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
+    surface.data.season_neighbors =
+      jellypilot_core::LoadState::Ready(episode_page(vec![episode("item-1", 1)], 0, false));
     surface.data.similar_items = jellypilot_core::LoadState::Ready(vec![episode("item-1", 1)]);
 
     prepare_mutation(&mut surface, &mut kernel, "item-1");
@@ -1096,7 +1518,7 @@ mod tests {
     assert!(surface.items["item-1"].favorite);
     assert!(matches!(
       &surface.data.season_neighbors,
-      jellypilot_core::LoadState::Ready(items) if items[0].favorite
+      jellypilot_core::LoadState::Ready(page) if page.episodes[0].favorite
     ));
     assert!(matches!(
       &surface.data.similar_items,
@@ -1534,7 +1956,7 @@ mod tests {
     item.season_number = Some(1);
     surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
     surface.data.season_neighbors =
-      jellypilot_core::LoadState::Ready(vec![episode("episode-2", 1)]);
+      jellypilot_core::LoadState::Ready(episode_page(vec![episode("episode-2", 1)], 0, false));
     kernel
       .request_gate
       .set_detail_item(Some("episode-1".to_owned()));
@@ -1547,7 +1969,7 @@ mod tests {
     ));
     assert!(matches!(
       &surface.data.season_neighbors,
-      jellypilot_core::LoadState::Ready(items) if items.iter().any(|item| item.id == "episode-2")
+      jellypilot_core::LoadState::Ready(page) if page.episodes.iter().any(|item| item.id == "episode-2")
     ));
   }
 

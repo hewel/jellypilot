@@ -73,9 +73,9 @@ These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, a
 | Personal navigation | Minimum row height 38, radius 12; pale indigo selected fill and clear accent icon/text, without a heavy outline |
 | Library heading | Libraries label on the left, actual count in a separate right-aligned neutral badge; do not use the inline `Libraries · N` treatment |
 | Library rows | Minimum height 38, radius 8; aligned typed icons and names, with independent scrolling |
-| Bottom identity card | Minimum height 54, radius 12; 36-pixel rounded-square avatar, username first and provider/server identity second |
-| Bottom toolbar | Three equal 38-pixel-high flat tool targets, without the preceding segmented container |
-| Account Popover | Width 320, outer radius 16 and padding 10; white opaque light-mode surface, semantic dark-mode surface, restrained outline and soft shadow |
+| Bottom identity card | Minimum height 56, radius 12; 36-pixel rounded-square avatar, username first and provider/server identity second |
+| Bottom toolbar | Shared top divider above the account and tools; text Settings entry followed by independent 40×40 Refresh and Control mode buttons, with 16px icons. The compact Sidebar retains icon-only tools with 40px hit height |
+| Account Popover | Target width 340, constrained by available window width rather than a forced minimum; outer radius 16 and padding 10; white opaque light-mode surface, semantic dark-mode surface, restrained outline and soft shadow |
 | Saved profile row | Show other accounts only, with a fixed-size rounded-square monogram and aligned username/provider/server identity; the current account appears once in the header |
 | Address and copy | Unframed, single-line address with an icon-only 40×40 copy target; full-value and copy-state hints remain available by keyboard and pointer |
 | Quick actions | Quiet full-width Add account, Manage accounts, and connected-only Disconnect rows; minimum height 40, label size 14, transparent resting backgrounds |
@@ -166,12 +166,11 @@ A network failure does not mean an item was deleted and must not cause bulk mark
 
 ### Presentation and Entry Points
 
-The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. In the expanded Sidebar, a separate rounded toolbar places Settings, Refresh, and Control mode in three equal columns with dividers.
+The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. The expanded Sidebar groups the account and tools below one top divider. Settings retains its text label, followed by separate Refresh and Control mode actions. Control mode uses the Sliders icon and opens the existing fixed-size Control-Only composition; it does not introduce picture-in-picture. Refresh retains the native current-context scope, pending guard and error feedback.
 The Playback Target's device identity must not masquerade as a server node code. The quick menu shows one connection-state badge without repeating it as avatar dots; Settings separately describes existing remote-control connection status.
 "Signed in" does not mean continuously reachable; do not display unmeasured Mbps or latency.
 
-The Account Popover is anchored above the identity card by default, start-aligned, with a target width of 368.
-It may extend into the main content area; the visual revision explicitly retains 368 rather than adopting the external reference's 288 or the proposed 336 alternative. Its position and maximum height are constrained by the entire window; flip placement when space is insufficient. Size short lists to content and constrain/scroll long lists independently. Only use broader content scrolling when window height requires it to keep all actions reachable.
+The Account Popover is anchored above the identity card by default, start-aligned, with a target width of 340 as reconciled with Paper on 2026-10-04. It may extend into the main content area, but the available window width still constrains it; 340 is not a minimum. Preserve long-address truncation and the full-value hint alongside the independent 40px copy target. Its position and maximum height are constrained by the entire window; flip placement when space is insufficient. Size short lists to content and constrain/scroll long lists independently. Only use broader content scrolling when window height requires it to keep all actions reachable.
 Outside click or Esc closes it. Closing a busy menu does not itself cancel background operations.
 
 Order the quick menu as current identity/address, other saved accounts when present, then Add account, Manage accounts, and connected-only Disconnect. Errors and cleanup-retry actions remain visible when relevant. Do not reserve empty space for absent feedback or account rows.

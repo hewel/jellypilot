@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use jellypilot_media_server::{
     JellyfinClient, JellyfinError, VideoItemDetail, VideoLibraryItem, VideoSeason,
-    VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataUpdate,
+    VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataUpdate,
 };
 
 use crate::LoadState;
@@ -39,26 +40,61 @@ pub async fn load_detail_content(
 pub async fn load_season_neighbors(
     client: Arc<JellyfinClient>,
     item_id: String,
-    series_id: String,
-    season_number: i32,
-) -> Result<Vec<VideoLibraryItem>, String> {
+    request: VideoSeasonEpisodesPageRequest,
+) -> Result<VideoSeasonEpisodesPage, String> {
     client
         .library()
-        .season_episodes_page(VideoSeasonEpisodesPageRequest {
-            series_id,
-            season_id: None,
-            season_number: Some(season_number),
-            start_index: 0,
-            limit: SEASON_EPISODE_PAGE_SIZE,
-        })
+        .season_episodes_page(request)
         .await
-        .map(|page| {
-            page.episodes
-                .into_iter()
-                .filter(|episode| episode.id != item_id)
-                .collect()
+        .map(|mut page| {
+            // The server cursor includes the current episode even though its
+            // neighbor shelf does not, so keep all paging metadata unchanged.
+            page.episodes.retain(|episode| episode.id != item_id);
+            page
         })
         .map_err(|error| error.to_string())
+}
+
+/// Continues from the server cursor, including records omitted by card mapping
+/// or by the current episode's neighbor shelf.
+#[must_use]
+pub fn next_season_page_request(
+    page: &VideoSeasonEpisodesPage,
+) -> Option<VideoSeasonEpisodesPageRequest> {
+    (page.has_more && page.next_start_index > page.start_index).then(|| {
+        VideoSeasonEpisodesPageRequest {
+            series_id: page.series_id.clone(),
+            season_id: page.season_id.clone(),
+            season_number: page.season_number,
+            start_index: page.next_start_index,
+            limit: SEASON_EPISODE_PAGE_SIZE,
+        }
+    })
+}
+
+/// Appends only the next page of the same season, retaining loaded episode
+/// order and ignoring overlapping records if the server's library changed.
+/// Returns `false` without changing content for a mismatched page.
+#[must_use]
+pub fn append_season_page(
+    loaded: &mut VideoSeasonEpisodesPage,
+    mut next: VideoSeasonEpisodesPage,
+) -> bool {
+    if !loaded.has_more
+        || next.series_id != loaded.series_id
+        || next.season_id != loaded.season_id
+        || next.season_number != loaded.season_number
+        || next.start_index != loaded.next_start_index
+    {
+        return false;
+    }
+    let mut ids: HashSet<_> = loaded.episodes.iter().map(|item| item.id.clone()).collect();
+    next.episodes.retain(|item| ids.insert(item.id.clone()));
+    loaded.episodes.extend(next.episodes);
+    loaded.total_record_count = next.total_record_count;
+    loaded.has_more = next.has_more && next.next_start_index > next.start_index;
+    loaded.next_start_index = next.next_start_index;
+    true
 }
 
 /// Loads provider-neutral similar video cards for a detail shelf.
@@ -176,6 +212,66 @@ pub fn apply_user_data_update<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn episode_page(start: i32, end: i32, total: i32) -> VideoSeasonEpisodesPage {
+        VideoSeasonEpisodesPage {
+            series_id: "show-1".to_owned(),
+            season_id: Some("season-1".to_owned()),
+            season_number: Some(1),
+            start_index: start,
+            limit: SEASON_EPISODE_PAGE_SIZE,
+            total_record_count: total,
+            next_start_index: end,
+            has_more: end < total,
+            episodes: (start..end)
+                .map(|index| episode(&format!("episode-{index}"), 1))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn paging_reaches_episodes_beyond_thirty_without_counting_filtered_cards() {
+        let mut loaded = episode_page(0, 30, 35);
+        loaded.episodes.retain(|episode| episode.id != "episode-15");
+        let request = next_season_page_request(&loaded).expect("next page available");
+        assert_eq!(request.start_index, 30);
+        assert_eq!(request.season_id.as_deref(), Some("season-1"));
+
+        assert!(append_season_page(&mut loaded, episode_page(30, 35, 35)));
+        assert_eq!(loaded.episodes.len(), 34);
+        assert_eq!(
+            loaded.episodes.last().expect("last episode").id,
+            "episode-34"
+        );
+        assert!(!loaded.episodes.iter().any(|item| item.id == "episode-15"));
+        assert!(next_season_page_request(&loaded).is_none());
+    }
+
+    #[test]
+    fn appending_rejects_another_season_or_cursor_without_losing_loaded_content() {
+        let mut loaded = episode_page(0, 30, 40);
+        let mut wrong_season = episode_page(30, 40, 40);
+        wrong_season.season_id = Some("season-2".to_owned());
+        assert!(!append_season_page(&mut loaded, wrong_season));
+        assert!(!append_season_page(&mut loaded, episode_page(0, 30, 40)));
+        assert_eq!(loaded.episodes.len(), 30);
+        assert_eq!(
+            next_season_page_request(&loaded)
+                .expect("retry cursor")
+                .start_index,
+            30
+        );
+    }
+
+    #[test]
+    fn overlapping_server_pages_do_not_duplicate_loaded_episodes() {
+        let mut loaded = episode_page(0, 30, 35);
+        let mut next = episode_page(30, 35, 35);
+        next.episodes.insert(0, episode("episode-29", 1));
+        assert!(append_season_page(&mut loaded, next));
+        assert_eq!(loaded.episodes.len(), 35);
+        assert!(next_season_page_request(&loaded).is_none());
+    }
 
     #[test]
     fn season_page_request_uses_exact_identity_and_a_bounded_window() {

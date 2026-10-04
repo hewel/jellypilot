@@ -812,11 +812,7 @@ where
     fn size(&self) -> Size<Length> {
         Size {
             width: self.width,
-            height: if self.min_height > 0.0 {
-                Length::Fixed(self.min_height)
-            } else {
-                Length::Fit
-            },
+            height: Length::Fit.min(self.min_height),
         }
     }
 
@@ -826,15 +822,10 @@ where
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let height = if self.min_height > 0.0 {
-            Length::Fixed(self.min_height)
-        } else {
-            Length::Fit
-        };
         layout::positioned(
             limits,
             self.width,
-            height,
+            Length::Fit.min(self.min_height),
             self.padding,
             |limits| {
                 // Measure intrinsic content before centering it in the taller hit area.
@@ -1261,6 +1252,97 @@ mod tests {
             let glyph = glyph_bounds(Layout::new(&node)).expect("visible icon");
             assert_eq!(glyph.size(), Size::new(18.0, 18.0));
             assert_eq!(glyph.center(), Point::new(width / 2.0, 20.0));
+        }
+    }
+
+    #[test]
+    fn minimum_height_keeps_wrapped_labels_inside_the_clickable_bounds() {
+        use iced::advanced::renderer::{Headless, Settings as RendererSettings};
+        use iced::widget::text;
+        use iced::Element;
+
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            RendererSettings::default(),
+            Some("tiny-skia"),
+        ))
+        .expect("software layout renderer");
+        let label = "The full server-provided audio track name must stay readable and clickable when it wraps.";
+        let limits = layout::Limits::new(Size::ZERO, Size::new(120.0, 500.0));
+        let mut expected: Element<'_, TestMessage> =
+            text(label).size(14).width(Length::Fill).into();
+        let mut expected_tree = Tree::new(&expected);
+        let text_height = expected
+            .as_widget_mut()
+            .layout(
+                &mut expected_tree,
+                &renderer,
+                &limits.shrink(Size::new(20.0, 8.0)),
+            )
+            .size()
+            .height;
+        assert!(
+            text_height > 40.0,
+            "the fixture must require multiple lines"
+        );
+
+        for mut button in [
+            super::control_button(None, Some(label.to_owned()), ButtonVariant::Tonal)
+                .label_size(14.0)
+                .label_fill(true),
+            super::control_button_content(
+                move |_| text(label).size(14).width(Length::Fill).into(),
+                ButtonVariant::Tonal,
+            ),
+        ] {
+            button = button
+                .width(Length::Fixed(120.0))
+                .min_height(40.0)
+                .padding([4.0, 10.0])
+                .on_press(TestMessage::Clicked);
+            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, iced::Renderer>);
+            button.diff(&mut tree);
+            let node = button.layout(&mut tree, &renderer, &limits);
+            assert!(node.size().height >= text_height + 8.0);
+            assert!(node.size().width <= limits.max().width);
+            let layout = Layout::new(&node);
+            let content = layout.children().next().expect("button content").bounds();
+            assert!(content.y + content.height <= node.size().height - 4.0);
+
+            for (position, activates) in [
+                (Point::new(60.0, 4.0 + text_height - 1.0), true),
+                (Point::new(60.0, node.size().height + 1.0), false),
+            ] {
+                let mut messages = iced::advanced::shell::Bus::new();
+                let mut shell = Shell::new(
+                    &iced::window::Headless,
+                    iced::advanced::shell::Waker::noop(),
+                    &mut messages,
+                );
+                for event in [
+                    mouse::Event::ButtonPressed(mouse::Button::Left),
+                    mouse::Event::ButtonReleased(mouse::Button::Left),
+                ] {
+                    button.update(
+                        &mut tree,
+                        &Event::Mouse(event),
+                        layout,
+                        mouse::Cursor::Available(position),
+                        &renderer,
+                        &mut shell,
+                        &Rectangle::with_size(limits.max()),
+                    );
+                }
+                assert_eq!(messages.drain().count(), usize::from(activates));
+            }
+            let constrained = button.layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(120.0, 30.0)),
+            );
+            assert!(
+                constrained.size().height <= 30.0,
+                "the parent's maximum still applies"
+            );
         }
     }
 

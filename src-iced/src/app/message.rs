@@ -211,6 +211,8 @@ pub enum DetailMessage {
   Retry,
   RetryNeighbors,
   RetrySeason,
+  LoadMoreNeighbors,
+  LoadMoreSeason,
   OverviewToggled,
   EpisodeOverviewToggled(String),
   SeasonMenuToggled,
@@ -231,7 +233,7 @@ pub enum DetailMessage {
   },
   NeighborsLoaded {
     token: DetailAuxToken,
-    result: Result<Vec<VideoLibraryItem>, String>,
+    result: Result<VideoSeasonEpisodesPage, String>,
   },
   SimilarLoaded {
     token: DetailAuxToken,

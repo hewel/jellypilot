@@ -17,8 +17,16 @@ use super::state::{Destination, State};
 const IDLE: Duration = Duration::from_secs(3);
 const FEEDBACK: Duration = Duration::from_millis(1200);
 
+#[derive(Clone, Copy, Debug)]
+pub enum FocusRegion {
+  Back,
+  Tools,
+  Transport,
+}
+
 #[derive(Clone)]
 pub enum Message {
+  FocusChanged(FocusRegion, bool),
   PointerMoved {
     position: iced::Point,
     bounds: iced::Size,
@@ -58,6 +66,7 @@ pub enum Message {
 impl std::fmt::Debug for Message {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     formatter.write_str(match self {
+      Self::FocusChanged(..) => "FocusChanged",
       Self::PointerMoved { .. } => "PointerMoved",
       Self::PointerLeft => "PointerLeft",
       Self::Back => "Back",
@@ -85,6 +94,7 @@ pub struct Surface {
   minimal_deadline: Option<Instant>,
   paused: bool,
   pointer_regions: Option<(bool, bool)>,
+  focused_regions: [bool; 3],
   back_visible: bool,
   back_deadline: Option<Instant>,
   cursor_visible: bool,
@@ -118,6 +128,21 @@ pub struct Surface {
 }
 
 impl Surface {
+  fn reveal_for_focus(&mut self, now: Instant) {
+    self.visible = true;
+    self.back_visible = true;
+    self.minimal_deadline = None;
+    self.pointer_regions = None;
+    self.idle_deadline = Some(now + IDLE);
+    self.back_deadline = Some(now + IDLE);
+  }
+
+  fn focus_held(&self) -> bool {
+    self.focused_regions[FocusRegion::Back as usize]
+      || self.focused_regions[FocusRegion::Transport as usize]
+      || (self.focused_regions[FocusRegion::Tools as usize] && !self.information_open)
+  }
+
   fn minimal_visible(&self) -> bool {
     !self.visible && (self.paused || self.minimal_deadline.is_some())
   }
@@ -312,14 +337,24 @@ pub(super) fn is_volume_dragging(state: &State) -> bool {
 
 fn held(state: &State) -> bool {
   // Only interactions that genuinely need the controls keep them open: an
-  // in-flight drag, an open track/queue menu, or blocked input. Pausing, a
+  // in-flight drag, keyboard focus, an open track/queue menu, or blocked input. Pausing, a
   // live skip prompt, and the Information panel stay visible on their own
   // without forcing the complete presentation.
   let adjustments = state.playback.adjustments.view();
   adjustments.seek_dragging
     || adjustments.volume_dragging
+    || state.shell.embedded_player.focus_held()
     || input_blocked(state)
     || state.shell.embedded_player.returning
+}
+
+/// Reveal before focus traversal so logically hidden controls can receive Tab.
+/// Playback keys retain their existing independent feedback and visibility.
+pub(super) fn reveal_for_focus(state: &mut State) {
+  if !active(state) || input_blocked(state) || information_open(state) {
+    return;
+  }
+  state.shell.embedded_player.reveal_for_focus(Instant::now());
 }
 
 pub(super) fn reconcile(state: &mut State) {
@@ -712,6 +747,9 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
   }
   let now = Instant::now();
   match message {
+    Message::FocusChanged(region, focused) => {
+      state.shell.embedded_player.focused_regions[region as usize] = focused;
+    }
     Message::QueueScrolled {
       epoch,
       item_count,
@@ -1338,6 +1376,38 @@ mod tests {
     reconcile_surface(&mut surface, false, false, false, deadline);
     assert!(!surface.cursor_visible);
     assert!(surface.cursor_deadline.is_none());
+  }
+
+  #[test]
+  fn keyboard_focus_reveals_and_holds_chrome_until_focus_leaves() {
+    let now = Instant::now();
+    let mut surface = Surface::default();
+    reconcile_surface(&mut surface, true, false, false, now);
+    pointer_left(&mut surface, now);
+    assert!(!surface.visible);
+
+    surface.reveal_for_focus(now);
+    reconcile_surface(&mut surface, true, false, false, now);
+    assert!(surface.visible && surface.back_visible);
+    let old_deadline = surface.idle_deadline.unwrap();
+    surface.focused_regions[FocusRegion::Transport as usize] = true;
+    let held = surface.focus_held();
+    reconcile_surface(&mut surface, true, held, false, now);
+    expire(&mut surface, old_deadline, now + IDLE, held);
+    pointer_left(&mut surface, now + IDLE);
+    reconcile_surface(&mut surface, true, held, false, now + IDLE);
+    assert!(surface.visible && surface.back_visible);
+
+    surface.focused_regions[FocusRegion::Transport as usize] = false;
+    let held = surface.focus_held();
+    reconcile_surface(&mut surface, true, held, false, now + IDLE);
+    assert!(!surface.visible && !surface.back_visible);
+    assert!(surface.minimal_visible());
+
+    // Keyboard navigation inside Information does not pin transport chrome.
+    surface.focused_regions[FocusRegion::Tools as usize] = true;
+    surface.information_open = true;
+    assert!(!surface.focus_held());
   }
 
   #[test]

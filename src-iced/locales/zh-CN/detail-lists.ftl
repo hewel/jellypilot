@@ -1,5 +1,7 @@
 detail-load-error = 无法加载此项目，请重试。
 detail-season-error = 无法加载本季内容，请重试。
+detail-load-more-episodes = 加载更多剧集
+detail-more-episodes-error = 无法加载更多剧集，请重试。
 detail-similar-error = 无法加载相似推荐。
 detail-user-data-error = 无法更新用户数据，请重试。
 detail-refresh-error = 无法刷新此项目，已保留现有详情。

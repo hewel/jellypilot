@@ -867,8 +867,14 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
   use iced::widget::operation;
   match message {
     ShellMessage::ExitPlayerFullscreen => exit_player_fullscreen(state),
-    ShellMessage::FocusNext => operation::focus_next(),
-    ShellMessage::FocusPrevious => operation::focus_previous(),
+    ShellMessage::FocusNext => {
+      super::embedded_player::reveal_for_focus(state);
+      operation::focus_next()
+    }
+    ShellMessage::FocusPrevious => {
+      super::embedded_player::reveal_for_focus(state);
+      operation::focus_previous()
+    }
     ShellMessage::FocusSearch | ShellMessage::ToggleCompactSearch => {
       if state.full.is_none() || state.shell.settings_open {
         return Task::none();

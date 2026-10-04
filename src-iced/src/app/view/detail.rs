@@ -566,7 +566,7 @@ fn detail_actions<'a>(
   .icon_size(IconSize::Custom(15.0))
   .spacing(8.0)
   .padding([8, 16])
-  .min_height(36.0)
+  .min_height(40.0)
   .label_size(14.0)
   .on_press_maybe(
     playback_target
@@ -608,7 +608,7 @@ fn detail_actions<'a>(
       ButtonVariant::TonalActive,
     )
     .padding([9, 16])
-    .min_height(36.0)
+    .min_height(40.0)
     .on_press_maybe(
       (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
         UserDataActionKind::Favorite,
@@ -623,7 +623,7 @@ fn detail_actions<'a>(
     )
     .icon_size(IconSize::Custom(15.0))
     .label_size(14.0)
-    .min_height(36.0)
+    .min_height(40.0)
     .spacing(8.0)
     .padding([8, 16])
     .on_press_maybe(
@@ -654,7 +654,7 @@ fn detail_actions<'a>(
   )
   .icon_size(IconSize::Custom(15.0))
   .label_size(14.0)
-  .min_height(36.0)
+  .min_height(40.0)
   .spacing(8.0)
   .padding([8, 16])
   .on_press_maybe((!busy).then_some(Message::ItemActions(ItemActionsMessage::DetailWatchlist)));
@@ -674,7 +674,7 @@ fn detail_actions<'a>(
   let played_button = control_button(Some(played_icon), Some(played_label), played_variant)
     .icon_size(IconSize::Custom(15.0))
     .label_size(14.0)
-    .min_height(36.0)
+    .min_height(40.0)
     .spacing(8.0)
     .padding([8, 16])
     .on_press_maybe(
@@ -979,6 +979,7 @@ fn track_chip<'a>(
     ButtonVariant::Pill,
   )
   .padding([3, 8])
+  .min_height(40.0)
   .radius(TOKENS.radii.md)
   .on_press(Message::Detail(DetailMessage::TrackMenuToggled(menu)));
   let open = state
@@ -1278,7 +1279,7 @@ fn seasons_section<'a>(
   .trailing_icon(true)
   .spacing(7.0)
   .padding([8, 12])
-  .min_height(32.0)
+  .min_height(40.0)
   .label_size(12.0)
   .on_press_maybe((!loading).then_some(Message::Detail(DetailMessage::SeasonMenuToggled)));
   let options = Column::with_children(
@@ -1317,10 +1318,21 @@ fn seasons_section<'a>(
       error,
       Message::Detail(DetailMessage::RetrySeason),
     ),
-    LoadState::Ready(page) if page.episodes.is_empty() => {
-      status_surface(state.palette(), state.t("detail-no-episodes"))
-    }
-    LoadState::Ready(page) => episode_list(state, &page.episodes, skeleton_phase, reduced_motion),
+    LoadState::Ready(page) => column![
+      if page.episodes.is_empty() && !page.has_more {
+        status_surface(state.palette(), state.t("detail-no-episodes"))
+      } else {
+        episode_list(state, &page.episodes, skeleton_phase, reduced_motion)
+      },
+      episode_paging(
+        state,
+        page.has_more,
+        &full.detail.data.season_append,
+        DetailMessage::LoadMoreSeason,
+      )
+    ]
+    .spacing(TOKENS.spacing.s3)
+    .into(),
   };
   column![title, selector, episodes].spacing(14).into()
 }
@@ -1346,7 +1358,7 @@ fn season_button<'a>(
   };
   control_button(None, Some(season_label(season).to_owned()), variant)
     .padding([8, 12])
-    .min_height(32.0)
+    .min_height(40.0)
     .label_size(12.0)
     .width(Fill)
     .on_press_maybe(
@@ -1363,6 +1375,7 @@ fn neighbor_section(
   reduced_motion: bool,
 ) -> Element<'_, Message> {
   let title = section_title(state.palette(), state.t("detail-season-neighbors"));
+  let full = state.full.as_ref().expect("FullUi required");
   let body = match &state
     .full
     .as_ref()
@@ -1379,12 +1392,55 @@ fn neighbor_section(
       error,
       Message::Detail(DetailMessage::RetryNeighbors),
     ),
-    LoadState::Ready(items) if items.is_empty() => {
-      status_surface(state.palette(), state.t("detail-no-neighbors"))
-    }
-    LoadState::Ready(items) => episode_list(state, items, skeleton_phase, reduced_motion),
+    LoadState::Ready(page) => column![
+      if page.episodes.is_empty() && !page.has_more {
+        status_surface(state.palette(), state.t("detail-no-neighbors"))
+      } else {
+        episode_list(state, &page.episodes, skeleton_phase, reduced_motion)
+      },
+      episode_paging(
+        state,
+        page.has_more,
+        &full.detail.data.neighbors_append,
+        DetailMessage::LoadMoreNeighbors,
+      )
+    ]
+    .spacing(TOKENS.spacing.s3)
+    .into(),
   };
   column![title, body].spacing(TOKENS.spacing.s3).into()
+}
+
+fn episode_paging<'a>(
+  state: &'a State,
+  has_more: bool,
+  append: &'a LoadState<(), UiText>,
+  message: DetailMessage,
+) -> Element<'a, Message> {
+  if let LoadState::Failed(error) = append {
+    return retryable_surface(
+      state.palette(),
+      state.kernel.locale,
+      error,
+      Message::Detail(message),
+    );
+  }
+  if !has_more {
+    return space::vertical().height(0).into();
+  }
+  let loading = matches!(append, LoadState::Loading);
+  control_button(
+    None,
+    Some(state.t(if loading {
+      "common-loading"
+    } else {
+      "detail-load-more-episodes"
+    })),
+    ButtonVariant::Tonal,
+  )
+  .min_height(40.0)
+  .on_press_maybe((!loading).then_some(Message::Detail(message)))
+  .into()
 }
 
 fn similar_section(
@@ -1671,7 +1727,7 @@ fn episode_card<'a>(
     .icon_size(IconSize::Custom(14.0))
     .spacing(8.0)
     .padding([7, 12])
-    .min_height(32.0)
+    .min_height(40.0)
     .label_size(12.0)
     .radius(TOKENS.radii.lg)
     .on_press_maybe(state.playback.view.engine_available.then(|| {
@@ -2099,6 +2155,7 @@ fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> 
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)));
   let retry = control_button(
     Some(Icon::Refresh),
@@ -2108,6 +2165,7 @@ fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> 
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
+  .min_height(40.0)
   .on_press(Message::Detail(DetailMessage::Retry));
   container(
     column![
@@ -2139,6 +2197,7 @@ fn retryable_surface<'a>(
     row![
       text(locale.message(error))
         .size(13)
+        .width(Fill)
         .color(palette.colors.error),
       control_button(
         Some(Icon::Refresh),
@@ -2148,6 +2207,7 @@ fn retryable_surface<'a>(
       .icon_size(IconSize::Xs)
       .spacing(TOKENS.spacing.s1)
       .padding([6, 10])
+      .min_height(40.0)
       .on_press(retry),
     ]
     .spacing(TOKENS.spacing.s3)
@@ -2944,7 +3004,7 @@ mod tests {
           }
           let bounds = action.bounds();
           assert!(bounds.width > 0.0 && bounds.x + bounds.width <= width);
-          assert_eq!(bounds.height, 32.0);
+          assert!(bounds.height >= 40.0);
           let cursor = mouse::Cursor::Available(bounds.center());
           let mut bus = iced::advanced::shell::Bus::new();
           for event in [

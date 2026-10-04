@@ -1,5 +1,7 @@
 detail-load-error = Could not load this item. Try again.
 detail-season-error = Could not load this season. Try again.
+detail-load-more-episodes = Load more episodes
+detail-more-episodes-error = Could not load more episodes. Try again.
 detail-similar-error = Could not load similar items.
 detail-user-data-error = Could not update user data. Try again.
 detail-refresh-error = Could not refresh this item. Existing details were kept.

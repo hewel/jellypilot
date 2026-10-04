@@ -31,7 +31,7 @@ use crate::app::shell::{
 use crate::app::state::{LoginMethod, QuickConnectState, State};
 use crate::i18n::{Localizer, UiText};
 
-const POPOVER_WIDTH: f32 = 320.0;
+const POPOVER_WIDTH: f32 = 340.0;
 const PROFILE_LIST_HEIGHT: f32 = 192.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -312,7 +312,7 @@ fn identity_card<'a>(
     .id(ACCOUNT_TRIGGER_ID)
     .padding([8, 10])
     .width(Fill)
-    .min_height(54.0)
+    .min_height(56.0)
     .on_press(Message::Shell(ShellMessage::ToggleAccountPopover)),
     full_identity,
     TooltipOptions::default(),

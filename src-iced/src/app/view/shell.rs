@@ -293,6 +293,10 @@ fn sidebar_full(
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable);
   let bottom = column![
+    container(space::horizontal())
+      .width(Fill)
+      .height(HAIRLINE_WIDTH)
+      .style(sidebar::divider),
     account::sidebar_popover(state, false),
     footer_toolbar(state),
   ]
@@ -465,7 +469,8 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)
       .style(sidebar::action)
-      .min_height(36.0)
+      .icon_size(IconSize::Sm)
+      .min_height(40.0)
       .padding([7, 0])
       .width(Fill)
       .content_centered(true)
@@ -483,10 +488,11 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     compact_settings_button(state.kernel.locale),
     refresh,
     tooltip(
-      control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
+      control_button(Some(Icon::Sliders), None, ButtonVariant::Tonal)
         .style(sidebar::action)
-        .min_height(36.0)
-        .padding([7, 12])
+        .icon_size(IconSize::Sm)
+        .min_height(40.0)
+        .padding([TOKENS.spacing.s2, 0.0])
         .width(Fill)
         .content_centered(true)
         .on_press(Message::Settings(SettingsMessage::AppModeSelected(
@@ -550,25 +556,13 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   }
 }
 
-fn settings_button<'a>() -> Element<'a, Message> {
-  control_button(Some(Icon::Settings), None, ButtonVariant::Text)
-    .style(sidebar::action)
-    .id(SETTINGS_TRIGGER_ID)
-    .icon_size(IconSize::Md)
-    .padding([8, 0])
-    .min_height(34.0)
-    .width(Fill)
-    .content_centered(true)
-    .on_press(Message::Settings(SettingsMessage::Open))
-    .into()
-}
-
 fn compact_settings_button<'a>(locale: Localizer) -> Element<'a, Message> {
   // Action, not navigation — neutral Tonal, never the ghost vocabulary.
   let btn = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
     .style(sidebar::action)
     .id(SETTINGS_TRIGGER_ID)
-    .min_height(36.0)
+    .icon_size(IconSize::Sm)
+    .min_height(40.0)
     .padding([7, 0])
     .width(Fill)
     .content_centered(true)
@@ -581,15 +575,22 @@ fn compact_settings_button<'a>(locale: Localizer) -> Element<'a, Message> {
   )
 }
 
-/// The full sidebar groups its three global actions into one compact control
-/// strip so the account trigger remains the clear visual anchor at the bottom.
 fn footer_toolbar(state: &State) -> Element<'_, Message> {
-  let divider = container(space::horizontal())
-    .width(Fill)
-    .height(HAIRLINE_WIDTH)
-    .style(sidebar::divider);
   let settings = tooltip(
-    settings_button(),
+    control_button(
+      Some(Icon::Settings),
+      Some(state.t("common-settings")),
+      ButtonVariant::Text,
+    )
+    .style(sidebar::action)
+    .id(SETTINGS_TRIGGER_ID)
+    .icon_size(IconSize::Sm)
+    .label_size(TOKENS.font_sizes.s12)
+    .spacing(TOKENS.spacing.s2)
+    .padding(TOKENS.spacing.s2)
+    .min_height(40.0)
+    .width(Fill)
+    .on_press(Message::Settings(SettingsMessage::Open)),
     state.t("common-settings"),
     TooltipOptions::default(),
   );
@@ -597,10 +598,10 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
       .style(sidebar::action)
-      .icon_size(IconSize::Md)
-      .padding([8, 0])
-      .min_height(34.0)
-      .width(Fill)
+      .icon_size(IconSize::Sm)
+      .padding(TOKENS.spacing.s2)
+      .min_height(40.0)
+      .width(Length::Fixed(40.0))
       .content_centered(true)
       .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
     if refreshing {
@@ -611,12 +612,12 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     TooltipOptions::default(),
   );
   let control = tooltip(
-    control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Text)
+    control_button(Some(Icon::Sliders), None, ButtonVariant::Text)
       .style(sidebar::action)
-      .icon_size(IconSize::Md)
-      .padding([8, 0])
-      .min_height(34.0)
-      .width(Fill)
+      .icon_size(IconSize::Sm)
+      .padding(TOKENS.spacing.s2)
+      .min_height(40.0)
+      .width(Length::Fixed(40.0))
       .content_centered(true)
       .on_press(Message::Settings(SettingsMessage::AppModeSelected(
         AppMode::ControlOnly,
@@ -625,17 +626,11 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     TooltipOptions::default(),
   );
 
-  column![
-    divider,
-    row![
-      container(settings).width(Length::FillPortion(1)),
-      container(refresh).width(Length::FillPortion(1)),
-      container(control).width(Length::FillPortion(1)),
-    ]
-    .align_y(Alignment::Center),
-  ]
-  .width(Fill)
-  .into()
+  row![container(settings).width(Fill), refresh, control]
+    .spacing(TOKENS.spacing.s1)
+    .align_y(Alignment::Center)
+    .width(Fill)
+    .into()
 }
 
 fn destination_button<'a>(

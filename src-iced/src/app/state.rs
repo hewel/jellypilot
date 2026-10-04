@@ -426,9 +426,12 @@ pub enum TrackMenu {
 #[derive(Default)]
 pub struct DetailState {
   pub content: LoadState<DetailContent, UiText>,
-  pub season_neighbors: LoadState<Vec<VideoLibraryItem>, UiText>,
+  pub season_neighbors: LoadState<VideoSeasonEpisodesPage, UiText>,
   pub similar_items: LoadState<Vec<VideoLibraryItem>, UiText>,
   pub season_episodes: LoadState<VideoSeasonEpisodesPage, UiText>,
+  /// Append feedback is separate so loaded rows stay usable while paging.
+  pub season_append: LoadState<(), UiText>,
+  pub neighbors_append: LoadState<(), UiText>,
   pub selected_season_id: Option<String>,
   /// Season number requested by the navigation that opened this detail (the
   /// originating season when arriving from an episode's parent-series link).

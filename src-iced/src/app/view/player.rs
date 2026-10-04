@@ -35,6 +35,7 @@ use jellypilot_ui::widgets::control_button::{control_button, control_button_cont
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::embedded_player as cinema;
 use jellypilot_ui::widgets::inert::inert;
+use jellypilot_ui::widgets::notice_interaction::notice_interaction;
 use jellypilot_ui::widgets::tracked_slider::{tracked_slider, Event as SliderEvent};
 use jellypilot_ui::{full_radius, rounded_image};
 
@@ -293,6 +294,7 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
   let play_pause_button = control_button(Some(play_pause_icon), None, ButtonVariant::Primary)
     .icon_size(IconSize::Lg)
     .padding([7, 11])
+    .min_height(40.0)
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::TogglePaused,
     ))));
@@ -304,6 +306,9 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
 
   let stop_button = control_button(Some(Icon::Stop), None, ButtonVariant::Tonal)
     .padding([6, 10])
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .content_centered(true)
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::Stop,
     ))));
@@ -355,6 +360,7 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
   )
   .on_release(Message::Playback(PlaybackMessage::VolumeReleased))
   .step(1.0)
+  .height(40)
   .width(100);
 
   let mute_icon = if now_playing.muted {
@@ -369,6 +375,9 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
   });
   let mute_button = control_button(Some(mute_icon), None, ButtonVariant::Tonal)
     .padding([6, 10])
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .content_centered(true)
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::SetMuted(!now_playing.muted),
     ))));
@@ -388,11 +397,10 @@ fn seek_row(position: f64, duration: f64, docked: bool) -> Element<'static, Mess
   })
   .on_release(Message::Playback(PlaybackMessage::SeekReleased))
   .step(1.0)
+  .height(40)
   .width(Fill);
   let seek = if docked {
-    seek
-      .height(40)
-      .style(jellypilot_ui::widgets::player_bar::timeline)
+    seek.style(jellypilot_ui::widgets::player_bar::timeline)
   } else {
     seek
   };
@@ -419,12 +427,14 @@ pub fn full(state: &State) -> Element<'_, Message> {
   let settings_button = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
     .id(SETTINGS_TRIGGER_ID)
     .padding([6, 10])
+    .min_height(40.0)
     .on_press(Message::Settings(SettingsMessage::Open));
   let header = row![
     space::horizontal(),
     tooltip(
       control_button(Some(Icon::ArrowsMaximize), None, ButtonVariant::Tonal,)
         .padding([6, 10])
+        .min_height(40.0)
         .on_press(Message::Settings(SettingsMessage::AppModeSelected(
           AppMode::Full
         ))),
@@ -568,9 +578,12 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       back_visible.then_some(Message::EmbeddedPlayer(embedded_player::Message::Back)),
     );
     layers = layers.push(reveal_player_chrome(
-      container(back)
-        .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
-        .width(Fill),
+      container(observe_chrome_focus(
+        back,
+        embedded_player::FocusRegion::Back,
+      ))
+      .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
+      .width(Fill),
       back_visible,
     ));
     // The Information popover outlives the top chrome: while its panel is
@@ -578,15 +591,18 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     // the top bar has auto-hidden.
     let info_visible = back_visible || embedded_player::information_open(state);
     layers = layers.push(reveal_player_chrome(
-      container(embedded_top_tools(state, bounds.width))
-        .padding(iced::Padding {
-          top: TOKENS.spacing.s6,
-          right: embedded_inset(bounds.width),
-          bottom: 0.0,
-          left: 0.0,
-        })
-        .width(Fill)
-        .align_x(Alignment::End),
+      container(observe_chrome_focus(
+        embedded_top_tools(state, bounds.width),
+        embedded_player::FocusRegion::Tools,
+      ))
+      .padding(iced::Padding {
+        top: TOKENS.spacing.s6,
+        right: embedded_inset(bounds.width),
+        bottom: 0.0,
+        left: 0.0,
+      })
+      .width(Fill)
+      .align_x(Alignment::End),
       info_visible,
     ));
     layers = layers.push(reveal_player_chrome(
@@ -603,10 +619,13 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     ));
     if let Some(now_playing) = state.playback.view.now_playing.as_ref() {
       layers = layers.push(reveal_player_chrome(
-        container(embedded_bar(
-          state,
-          now_playing,
-          bounds.width - 2.0 * embedded_inset(bounds.width),
+        container(observe_chrome_focus(
+          embedded_bar(
+            state,
+            now_playing,
+            bounds.width - 2.0 * embedded_inset(bounds.width),
+          ),
+          embedded_player::FocusRegion::Transport,
         ))
         .padding(iced::Padding {
           top: 0.0,
@@ -738,6 +757,18 @@ fn reveal_player_chrome<'a>(
   visible: bool,
 ) -> Element<'a, Message> {
   jellypilot_ui::widgets::motion::reveal(content, visible, false, TOKENS.durations.none)
+}
+
+fn observe_chrome_focus<'a>(
+  content: impl Into<Element<'a, Message>>,
+  region: embedded_player::FocusRegion,
+) -> Element<'a, Message> {
+  notice_interaction(content, move |interaction| {
+    Message::EmbeddedPlayer(embedded_player::Message::FocusChanged(
+      region,
+      interaction.focused,
+    ))
+  })
 }
 
 fn embedded_volume_icon(muted: bool, volume: f64) -> Icon {
@@ -911,7 +942,7 @@ fn embedded_bar<'a>(
     )
     .step(1.0)
     .on_release(SliderEvent::DragEnded)
-    .height(36)
+    .height(40)
     .width(84.0)
     .style(if ready {
       cinema::volume
@@ -1025,15 +1056,11 @@ fn embedded_inset(width: f32) -> f32 {
 
 fn embedded_controls_height(width: f32, tools_width: f32) -> f32 {
   if width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * tools_width {
-    if width > 900.0 - 2.0 * TOKENS.spacing.s9 {
-      48.0
-    } else {
-      44.0
-    }
+    56.0
   } else if width >= EMBEDDED_TRANSPORT_WIDTH + tools_width + TOKENS.spacing.s4 {
-    48.0 + TOKENS.spacing.s3 + 44.0
+    56.0 + TOKENS.spacing.s3 + 44.0
   } else {
-    48.0 + TOKENS.spacing.s3 + 44.0 + TOKENS.spacing.s3 + 40.0
+    56.0 + TOKENS.spacing.s3 + 44.0 + TOKENS.spacing.s3 + 40.0
   }
 }
 
@@ -1041,13 +1068,13 @@ fn controls_reveal_height(width: f32, has_skip_toggle: bool) -> f32 {
   let inset = embedded_inset(width);
   let tools_width = embedded_tools_width(width - 2.0 * inset, has_skip_toggle);
   // Timeline, inner padding, controls, bottom inset, and the prompt allowance.
-  24.0
+  40.0
     + 2.0 * TOKENS.spacing.s3
     + TOKENS.spacing.s4
     + embedded_controls_height(width - 2.0 * inset, tools_width)
     + TOKENS.spacing.s4
     + inset
-    + 36.0
+    + 48.0
 }
 
 fn embedded_controls<'a>(
@@ -1130,7 +1157,7 @@ fn embedded_identity<'a>(
   .style(cinema::control)
   .padding([TOKENS.spacing.s1, TOKENS.spacing.s1_5])
   .width(Length::Shrink)
-  .min_height(28.0)
+  .min_height(40.0)
   .on_press_maybe(
     (!state.playback.view.busy && has_queue)
       .then_some(Message::Playback(PlaybackMessage::QueueMenuToggled)),
@@ -1244,7 +1271,7 @@ fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   .style(cinema::control)
   .label_size(13.0)
   .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s2])
-  .min_height(28.0)
+  .min_height(40.0)
   .on_press_maybe(
     ready.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::SkipIntro,
@@ -1255,8 +1282,8 @@ fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       .style(cinema::control)
       .icon_size(IconSize::Custom(14.0))
       .padding(0)
-      .width(Length::Fixed(24.0))
-      .min_height(24.0)
+      .width(Length::Fixed(40.0))
+      .min_height(40.0)
       .content_centered(true)
       .on_press_maybe(
         ready.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
@@ -1368,7 +1395,7 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
           SliderEvent::Changed,
         )
         .step(1.0)
-        .height(24)
+        .height(40)
         .width(Fill)
         .on_release(SliderEvent::DragEnded)
         .style(cinema::timeline_input),
@@ -1433,7 +1460,7 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
       rail
     }
   })
-  .height(24);
+  .height(40);
   let remaining = (duration - position).max(0.0);
   row![
     text(format_duration(position))
@@ -1488,6 +1515,7 @@ fn intro_prompt_element<'a>(
     .icon_size(IconSize::Sm)
     .spacing(TOKENS.spacing.s1_5)
     .padding([6, 12])
+    .min_height(40.0)
     .on_press_maybe(
       interactive.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
         PlaybackIntent::SkipIntro
@@ -1500,6 +1528,7 @@ fn intro_prompt_element<'a>(
     )
     .icon_size(IconSize::Xs)
     .spacing(TOKENS.spacing.s1_5)
+    .min_height(40.0)
     .on_press_maybe(
       interactive.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
         PlaybackIntent::DismissIntro
@@ -1542,6 +1571,9 @@ fn adjacent_button<'a>(
   let available = matches!(availability, AdjacentAvailability::Available { .. });
   let btn = control_button(Some(icon_variant), None, ButtonVariant::Tonal)
     .padding([6, 10])
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .content_centered(true)
     .on_press_maybe(
       available.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
         PlaybackIntent::PlayAdjacent(direction),
@@ -1578,6 +1610,7 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(
     (has_audio_choices && (!embedded || !state.playback.view.busy))
       .then_some(Message::Playback(PlaybackMessage::AudioMenuToggled)),
@@ -1585,7 +1618,6 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
   let trigger = if icon_only {
     trigger
       .width(Length::Fixed(40.0))
-      .min_height(40.0)
       .padding(if embedded { [0, 0] } else { [6, 10] })
       .content_centered(embedded)
   } else {
@@ -1648,6 +1680,7 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
             } else {
               [6.0, 10.0]
             })
+            .min_height(40.0)
             .width(Fill)
             .on_press_maybe(
               (!embedded || !state.playback.view.busy)
@@ -1719,6 +1752,7 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(
     (has_subtitle_choices && (!embedded || !state.playback.view.busy))
       .then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
@@ -1726,7 +1760,6 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
   let trigger = if icon_only {
     trigger
       .width(Length::Fixed(40.0))
-      .min_height(40.0)
       .padding(if embedded { [0, 0] } else { [6, 10] })
       .content_centered(embedded)
   } else {
@@ -1768,6 +1801,7 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
           } else {
             [6.0, 10.0]
           })
+          .min_height(40.0)
           .width(Fill)
           .on_press_maybe(
             (!embedded || !state.playback.view.busy).then_some(Message::Playback(
@@ -1895,9 +1929,10 @@ fn queue_popover(state: &State, icon_only: bool) -> Element<'_, Message> {
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(available.then_some(Message::Playback(PlaybackMessage::QueueMenuToggled)));
   let trigger = if icon_only {
-    trigger.width(Length::Fixed(40.0)).min_height(40.0)
+    trigger.width(Length::Fixed(40.0))
   } else {
     trigger
   };
@@ -1979,6 +2014,7 @@ fn queue_content(state: &State) -> Element<'_, Message> {
               row_variant,
             )
             .padding([6, 10])
+            .min_height(40.0)
             .width(Fill)
             .on_press_maybe((!is_current).then_some(Message::Playback(
               PlaybackMessage::QueueItemSelected(Box::new(item.clone())),
@@ -2408,6 +2444,97 @@ mod tests {
   };
   use jellypilot_mpv::PlayerState;
   use std::time::Instant;
+
+  #[tokio::test]
+  async fn revealed_chrome_reports_keyboard_focus_and_releases_on_picture_press() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{keyboard, window, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use jellypilot_ui::widgets::control_button::FocusVisibility;
+    use jellypilot_ui::widgets::focus_scope::focus_scope;
+
+    let visibility = FocusVisibility::default();
+    let view = |visible| {
+      focus_scope(
+        reveal_player_chrome(
+          observe_chrome_focus(
+            control_button(Some(Icon::ChevronLeft), None, ButtonVariant::Tonal)
+              .id("player-focus-back")
+              .width(Length::Fixed(40.0))
+              .min_height(40.0)
+              .on_press(Message::EmbeddedPlayer(embedded_player::Message::Back)),
+            embedded_player::FocusRegion::Back,
+          ),
+          visible,
+        ),
+        visibility.clone(),
+      )
+    };
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let size = Size::new(600.0, 300.0);
+    let picture = Point::new(400.0, 200.0);
+    let redraw = Event::Window(window::Event::RedrawRequested(Instant::now()));
+    let mut ui = UserInterface::build(view(false), size, Cache::new(), &mut renderer);
+    dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(keyboard::key::Named::Tab),
+        modified_key: keyboard::Key::Named(keyboard::key::Named::Tab),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Tab),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })],
+      picture,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::focusable::focus::<()>(widget::Id::new("player-focus-back")),
+    );
+    assert!(dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      std::slice::from_ref(&redraw),
+      picture
+    )
+    .is_empty());
+
+    let mut ui = UserInterface::build(view(true), size, ui.into_cache(), &mut renderer);
+    ui.operate(
+      &renderer,
+      &mut widget::operation::focusable::focus::<()>(widget::Id::new("player-focus-back")),
+    );
+    let messages = dispatch_embedded(&mut ui, &mut renderer, &[redraw], picture);
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::EmbeddedPlayer(embedded_player::Message::FocusChanged(
+        embedded_player::FocusRegion::Back,
+        true
+      ))
+    )));
+    let messages = dispatch_embedded(
+      &mut ui,
+      &mut renderer,
+      &[Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Left,
+      ))],
+      picture,
+    );
+    assert!(messages.iter().any(|message| matches!(
+      message,
+      Message::EmbeddedPlayer(embedded_player::Message::FocusChanged(
+        embedded_player::FocusRegion::Back,
+        false
+      ))
+    )));
+  }
 
   #[cfg(target_os = "linux")]
   #[test]
@@ -3243,7 +3370,7 @@ mod tests {
     .expect("software renderer");
     let mut ui = UserInterface::build(
       embedded_identity(&state, &playing, false),
-      iced::Size::new(500.0, 44.0),
+      iced::Size::new(500.0, 56.0),
       Cache::new(),
       &mut renderer,
     );
@@ -3251,7 +3378,8 @@ mod tests {
       (Point::new(2.0, 2.0), true),
       (Point::new(6.0, 10.0), true),
       (Point::new(400.0, 10.0), false),
-      (Point::new(6.0, 36.0), false),
+      (Point::new(6.0, 36.0), true),
+      (Point::new(6.0, 48.0), false),
     ] {
       let mut bus = iced::advanced::shell::Bus::new();
       let _ = ui.update(
@@ -3320,7 +3448,7 @@ mod tests {
       playing.muted = muted;
       let mut ui = UserInterface::build(
         embedded_bar(&state, &playing, 900.0),
-        iced::Size::new(900.0, 118.0),
+        iced::Size::new(900.0, 136.0),
         Cache::new(),
         &mut renderer,
       );
@@ -3417,23 +3545,23 @@ mod tests {
       state.kernel.locale = Localizer::new(language);
       state.kernel.client = has_skip_toggle.then(|| client.clone());
       for (window_width, expected_height) in [
-        (1920.0, 112.0),
-        (1600.0, 112.0),
-        (1440.0, 112.0),
-        (1280.0, 112.0),
-        (1172.0, 112.0),
-        (1171.0, 112.0),
-        (1099.0, 112.0),
-        (1024.0, 112.0),
-        (901.0, 112.0),
-        (900.0, 108.0),
-        (768.0, 108.0),
-        (750.0, 108.0),
-        (700.0, 164.0),
-        (600.0, 164.0),
-        (599.0, 164.0),
-        (480.0, 164.0),
-        (400.0, 216.0),
+        (1920.0, 136.0),
+        (1600.0, 136.0),
+        (1440.0, 136.0),
+        (1280.0, 136.0),
+        (1172.0, 136.0),
+        (1171.0, 136.0),
+        (1099.0, 136.0),
+        (1024.0, 136.0),
+        (901.0, 136.0),
+        (900.0, 136.0),
+        (768.0, 136.0),
+        (750.0, 136.0),
+        (700.0, 192.0),
+        (600.0, 192.0),
+        (599.0, 192.0),
+        (480.0, 192.0),
+        (400.0, 244.0),
       ] {
         let card_width = window_width - 2.0 * embedded_inset(window_width);
         let mut content = embedded_bar(&state, &now_playing, card_width);
@@ -3523,12 +3651,12 @@ mod tests {
       let _ = crate::app::playback::adjust(&mut state.playback, AdjustmentInput::Replace);
       let mut ui = UserInterface::build(
         embedded_timeline(&state, &now_playing),
-        iced::Size::new(600.0, 24.0),
+        iced::Size::new(600.0, 40.0),
         Cache::new(),
         &mut renderer,
       );
       let mut bus = iced::advanced::shell::Bus::new();
-      let hover = Point::new(300.0, 12.0);
+      let hover = Point::new(300.0, 32.0);
       let _ = ui.update(
         &iced::window::Headless,
         &iced::advanced::shell::Waker::noop(),
@@ -3556,9 +3684,9 @@ mod tests {
         (mouse::Event::ButtonPressed(mouse::Button::Left), hover),
         (
           mouse::Event::CursorMoved {
-            position: Point::new(450.0, 12.0),
+            position: Point::new(450.0, 32.0),
           },
-          Point::new(450.0, 12.0),
+          Point::new(450.0, 32.0),
         ),
       ] {
         let _ = ui.update(
@@ -3604,7 +3732,7 @@ mod tests {
       state.playback.view.busy = true;
       let mut ui = UserInterface::build(
         embedded_timeline(&state, &now_playing),
-        iced::Size::new(600.0, 24.0),
+        iced::Size::new(600.0, 40.0),
         cache,
         &mut renderer,
       );
@@ -3615,7 +3743,7 @@ mod tests {
         &[Event::Mouse(mouse::Event::ButtonReleased(
           mouse::Button::Left,
         ))],
-        mouse::Cursor::Available(Point::new(450.0, 12.0)),
+        mouse::Cursor::Available(Point::new(450.0, 32.0)),
         &mut renderer,
         &mut bus,
       );

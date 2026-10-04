@@ -132,6 +132,7 @@ fn navigation_items(locale: Localizer, active: SettingsSection) -> Column<'stati
     .label_size(TOKENS.font_sizes.s12)
     .spacing(TOKENS.spacing.s2_5)
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s2_5])
+    .min_height(40.0)
     .width(Fill)
     .label_fill(true)
     .on_press(Message::Settings(SettingsMessage::SectionSelected(section)));
@@ -437,6 +438,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
         ButtonVariant::Text,
       )
       .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s2_5])
+      .min_height(40.0)
       .width(Fill)
       .label_fill(true)
       .label_size(TOKENS.font_sizes.s12)
@@ -455,6 +457,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     .label_size(TOKENS.font_sizes.s12)
     .spacing(TOKENS.spacing.s1_5)
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s3_5])
+    .min_height(40.0)
     .radius(TOKENS.radii.lg)
     .on_press(Message::Settings(SettingsMessage::SubtitleMenuToggled)),
     menu,
@@ -490,27 +493,31 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
         .size(TOKENS.font_sizes.s12)
         .color(palette.text.secondary)
         .width(Fill),
-        compact_icon_button(
-          Icon::ArrowUp,
-          state.t("settings-move-up"),
-          index > 0,
-          SettingsMessage::SubtitleLanguageMoved { index, offset: -1 },
-        ),
-        compact_icon_button(
-          Icon::ArrowDown,
-          state.t("settings-move-down"),
-          index + 1 < languages.len(),
-          SettingsMessage::SubtitleLanguageMoved { index, offset: 1 },
-        ),
-        compact_icon_button(
-          Icon::Trash,
-          state.t("settings-remove"),
-          true,
-          SettingsMessage::SubtitleLanguageRemoved(index),
-        ),
+        row![
+          compact_icon_button(
+            Icon::ArrowUp,
+            state.t("settings-move-up"),
+            index > 0,
+            SettingsMessage::SubtitleLanguageMoved { index, offset: -1 },
+          ),
+          compact_icon_button(
+            Icon::ArrowDown,
+            state.t("settings-move-down"),
+            index + 1 < languages.len(),
+            SettingsMessage::SubtitleLanguageMoved { index, offset: 1 },
+          ),
+          compact_icon_button(
+            Icon::Trash,
+            state.t("settings-remove"),
+            true,
+            SettingsMessage::SubtitleLanguageRemoved(index),
+          ),
+        ]
+        .spacing(TOKENS.spacing.s2),
       ]
       .spacing(TOKENS.spacing.s2)
-      .align_y(Alignment::Center),
+      .align_y(Alignment::Center)
+      .wrap(),
     );
   }
   column![
@@ -587,6 +594,8 @@ fn shortcut_row<'a>(state: &'a State, label: String, kind: ShortcutKind) -> Elem
   )
   .style(settings_style::navigation_button)
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s3_5])
+  .min_height(40.0)
+  .width(Length::Fit.min(40.0))
   .radius(TOKENS.radii.lg)
   .on_press(Message::Settings(SettingsMessage::BeginShortcutCapture(
     kind,
@@ -617,6 +626,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let theme_mode = state.kernel.settings.snapshot().theme_mode();
   let app_mode = state.kernel.settings.snapshot().app_mode();
+  let start_minimized = state.kernel.settings.snapshot().start_minimized();
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   column![
     language_row(state),
@@ -630,6 +640,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
         ButtonVariant::Tonal
       )
       .id("settings-enter-tv")
+      .min_height(40.0)
       .on_press(Message::UiModeSelected(jellypilot_core::config::UiMode::Tv))
       .into(),
     ),
@@ -671,6 +682,14 @@ fn interface_section(state: &State) -> Element<'_, Message> {
           SettingsMessage::AppModeSelected(AppMode::ControlOnly),
         ),
       ]),
+    ),
+    toggle_row(
+      palette,
+      state.t("settings-start-minimized"),
+      Some(state.t("settings-start-minimized-help")),
+      start_minimized,
+      "settings-start-minimized",
+      SettingsMessage::StartMinimizedToggled,
     ),
     toggle_row(
       palette,
@@ -739,25 +758,14 @@ fn language_row(state: &State) -> Element<'_, Message> {
 fn storage_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let cache_enabled = state.kernel.settings.snapshot().image_cache_enabled();
-  let start_minimized = state.kernel.settings.snapshot().start_minimized();
-  column![
-    toggle_row(
-      palette,
-      state.t("settings-image-cache"),
-      Some(state.t("settings-image-cache-help")),
-      cache_enabled,
-      "settings-image-cache",
-      SettingsMessage::ImageCacheToggled,
-    ),
-    toggle_row(
-      palette,
-      state.t("settings-start-minimized"),
-      Some(state.t("settings-start-minimized-help")),
-      start_minimized,
-      "settings-start-minimized",
-      SettingsMessage::StartMinimizedToggled,
-    ),
-  ]
+  column![toggle_row(
+    palette,
+    state.t("settings-image-cache"),
+    Some(state.t("settings-image-cache-help")),
+    cache_enabled,
+    "settings-image-cache",
+    SettingsMessage::ImageCacheToggled,
+  ),]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
   .into()
@@ -888,6 +896,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   .label_size(TOKENS.font_sizes.s12)
   .spacing(TOKENS.spacing.s1_5)
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s3_5])
+  .min_height(40.0)
   .radius(TOKENS.radii.lg)
   .on_press(Message::Settings(SettingsMessage::ExportLogs));
 
@@ -1003,6 +1012,7 @@ fn about_block(state: &State) -> Element<'_, Message> {
     )
     .label_size(TOKENS.font_sizes.s12)
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s3_5])
+    .min_height(40.0)
     .radius(TOKENS.radii.lg)
     .on_press(Message::Settings(SettingsMessage::FontLicensesToggled)),]
     .padding(iced::Padding {
@@ -1061,7 +1071,7 @@ fn labeled_field<'a>(
       .label_size(TOKENS.font_sizes.s12)
       .spacing(TOKENS.spacing.s1_5)
       .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
-      .min_height(32.0)
+      .min_height(40.0)
       .radius(TOKENS.radii.lg)
       .on_press(Message::Settings(save)),
     ]
@@ -1143,6 +1153,7 @@ fn segmented_option(
   .style(settings_style::segmented_button)
   .label_size(TOKENS.font_sizes.s12)
   .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s3])
+  .min_height(40.0)
   .on_press(Message::Settings(message))
   .into()
 }
@@ -1177,6 +1188,7 @@ fn select_trigger<'a>(
     ButtonVariant::Tonal,
   )
   .padding(padding)
+  .min_height(40.0)
   .radius(TOKENS.radii.lg)
   .width(width)
 }
@@ -1210,6 +1222,7 @@ fn filter_trigger<'a>(
     ButtonVariant::Tonal,
   )
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s3_5])
+  .min_height(40.0)
   .radius(TOKENS.radii.lg)
 }
 
@@ -1230,6 +1243,7 @@ fn menu_option(
   .style(settings_style::navigation_button)
   .label_size(TOKENS.font_sizes.s12)
   .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s2_5])
+  .min_height(40.0)
   .width(Fill)
   .label_fill(true)
   .on_press(Message::Settings(message))
@@ -1245,6 +1259,8 @@ fn compact_icon_button<'a>(
   let trigger = control_button(Some(icon), None, ButtonVariant::Tonal)
     .icon_size(IconSize::Xs)
     .padding(TOKENS.spacing.s1_5)
+    .min_height(40.0)
+    .width(Length::Fixed(40.0))
     .content_centered(true)
     .on_press_maybe(enabled.then_some(Message::Settings(message)));
   tooltip(trigger, label, TooltipOptions::default())
@@ -1455,6 +1471,11 @@ mod tests {
 
     let mut state = State::boot(true);
     state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state
+      .kernel
+      .settings
+      .set_subtitle_languages(vec!["zho".to_owned(), "eng".to_owned(), "por".to_owned()])
+      .expect("subtitle preferences");
     state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
     state.kernel.connected_identity = Some(crate::app::state::ConnectedIdentity {
       user_name: "Current user".to_owned(),
