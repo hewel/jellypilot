@@ -56,6 +56,7 @@ use super::message::{Message, PlaybackMessage, RemoteMessage, SettingsMessage};
 use super::state::{intro_skip_mode, NoticeLevel, PlaybackControllerHandle};
 
 pub(crate) mod remote;
+pub(crate) mod viewing_queue;
 
 pub(crate) const PLAYER_IMAGE_KEY: &str = "now-playing";
 pub(crate) const PLAYER_THUMBNAIL_KEY: &str = "now-playing-thumbnail";
@@ -160,6 +161,7 @@ pub struct Surface {
   queue_generation: u64,
   active_queue_load: Option<ActiveQueueLoad>,
   pub queue_menu_open: bool,
+  pub viewing_queue: viewing_queue::QueueSurface,
   /// Resource-owning remote target runtime; its view/token gate all remote
   /// readiness, event, and teardown decisions.
   pub remote: remote::Runtime,
@@ -203,6 +205,7 @@ impl Surface {
       queue_generation: 0,
       active_queue_load: None,
       queue_menu_open: false,
+      viewing_queue: Default::default(),
       // Embedded playback starts held: the first admitted window lifts it.
       // This covers start-minimized boots without a separate boot path.
       presentation_hold: Arc::new(AtomicBool::new(crate::embedded::enabled())),
@@ -964,6 +967,7 @@ pub(crate) fn initialize_playback(
   quit_requested: bool,
 ) {
   surface.session = PlaybackSession::default();
+  surface.viewing_queue = Default::default();
   surface
     .session
     .set_auto_next_episode(kernel.settings.snapshot().auto_next_episode());
@@ -1095,7 +1099,10 @@ fn apply_local_playback_intent(
 ) -> PlaybackUpdate {
   if matches!(
     &intent,
-    PlaybackIntent::Start { .. } | PlaybackIntent::Stop | PlaybackIntent::PlayAdjacent(_)
+    PlaybackIntent::Start { .. }
+      | PlaybackIntent::PlayQueued { .. }
+      | PlaybackIntent::Stop
+      | PlaybackIntent::PlayAdjacent(_)
   ) {
     kernel.request_gate.begin_remote_play();
   }
@@ -1204,8 +1211,15 @@ fn start_intro_availability(
   kernel: &Kernel,
   item: &Playable,
 ) -> jellypilot_mpv::playback_session::IntroAvailability {
+  intro_availability_for_series(kernel, playable_series_id(item))
+}
+
+fn intro_availability_for_series(
+  kernel: &Kernel,
+  series_id: Option<&str>,
+) -> jellypilot_mpv::playback_session::IntroAvailability {
   jellypilot_mpv::playback_session::IntroAvailability {
-    mode: intro_skip_mode(effective_intro_mode(kernel, playable_series_id(item))),
+    mode: intro_skip_mode(effective_intro_mode(kernel, series_id)),
     skipper_available: kernel
       .client
       .as_ref()
@@ -1418,6 +1432,9 @@ fn update_playback(
   message: PlaybackMessage,
 ) -> PlaybackUpdate {
   match message {
+    PlaybackMessage::ViewingQueue(message) => {
+      viewing_queue::update(surface, kernel, quit_requested, message)
+    }
     PlaybackMessage::Intent(intent) => {
       apply_local_playback_intent(surface, kernel, quit_requested, *intent)
     }
@@ -1633,6 +1650,19 @@ fn update_playback(
         ControllerSettlement::Started(Err(error)) => Some(error.to_string()),
         _ => None,
       };
+      if let ControllerSettlement::Started(Ok(outcome)) = settlement.as_ref() {
+        if let Some(item) = outcome.playback.snapshot.now_playing.as_ref() {
+          // Resolve the actual target before its auxiliary requests start. Next/EOF
+          // may cross series whose intro preference differs from the previous item.
+          let series_id = (item.item_type == "Episode")
+            .then_some(item.series_id.as_deref())
+            .flatten();
+          let availability = intro_availability_for_series(kernel, series_id);
+          surface
+            .session
+            .set_start_intro_availability(id, &item.item_id, availability);
+        }
+      }
       let PlaybackStep {
         effects,
         transition,
@@ -1820,8 +1850,14 @@ pub(crate) fn apply_playback_input(
   // Mutate in place: other intents pass through without re-boxing.
   let mut input = input;
   if let PlaybackInput::Intent(intent) = &mut input {
-    if let PlaybackIntent::Start { item, intro, .. } = intent.as_mut() {
-      *intro = start_intro_availability(kernel, item);
+    match intent.as_mut() {
+      PlaybackIntent::Start { item, intro, .. } => *intro = start_intro_availability(kernel, item),
+      PlaybackIntent::PlayQueued { id, intro, .. } => {
+        if let Some(item) = surface.session.queued_playable(*id) {
+          *intro = start_intro_availability(kernel, item);
+        }
+      }
+      _ => {}
     }
   }
   let PlaybackStep {
@@ -1926,6 +1962,7 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::QueueMenuToggled => "queue-menu-toggled",
     PlaybackMessage::QueueMenuDismissed => "queue-menu-dismissed",
     PlaybackMessage::QueueItemSelected(_) => "queue-item-selected",
+    PlaybackMessage::ViewingQueue(_) => "viewing-queue",
     PlaybackMessage::IntroModeChanged(_) => "intro-mode-changed",
     PlaybackMessage::QueueLoaded { .. } => "queue-loaded",
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
@@ -2006,6 +2043,11 @@ enum PendingPlay {
   Remote(RemoteToken, RemoteCommandAction),
   Resume,
   Adjacent(AdjacentDirection),
+  Queued {
+    session: SessionToken,
+    revision: u64,
+    id: jellypilot_core::viewing_queue::QueueEntryId,
+  },
   #[cfg(target_os = "linux")]
   SystemMedia(super::system_media::Scope, Box<PlaybackIntent>),
 }
@@ -2156,6 +2198,28 @@ pub(crate) fn window_opened(
         return None;
       }
       Some(apply_local_playback_intent(surface, kernel, quit_requested, *intent).task)
+    }
+    PendingPlay::Queued {
+      session,
+      revision,
+      id,
+    } => {
+      if !kernel.request_gate.is_current_session(session) || quit_requested {
+        return None;
+      }
+      Some(
+        viewing_queue::update(
+          surface,
+          kernel,
+          quit_requested,
+          viewing_queue::Message::Edit {
+            session,
+            revision,
+            action: viewing_queue::Action::PlayNow(id),
+          },
+        )
+        .task,
+      )
     }
     PendingPlay::Remote(remote, action) => {
       // A remote session that restarted while the command was deferred can no
@@ -2734,6 +2798,117 @@ mod tests {
     (surface, kernel)
   }
 
+  #[tokio::test]
+  async fn viewing_queue_rejects_retired_profile_and_revision_messages() {
+    use jellypilot_core::viewing_queue::QueuePlacement;
+    use viewing_queue::{Action, Message as QueueMessage};
+    let (mut surface, mut kernel) = test_fixture();
+    let fixture = crate::app::test_support::BrowseFixture::new();
+    kernel.client = Some(fixture.client());
+    let session = kernel.request_gate.current_session();
+    let revision = surface.view.upcoming.revision;
+    let insert = QueueMessage::Edit {
+      session,
+      revision,
+      action: Action::Insert {
+        item: Box::new(Playable::Media(media_item("episode-a"))),
+        position: PlaybackStartPosition::Resume,
+        placement: QueuePlacement::Last,
+      },
+    };
+    drop(viewing_queue::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      insert.clone(),
+    ));
+    assert!(surface.viewing_queue.open);
+    assert_eq!(surface.view.upcoming.entries.len(), 1);
+    assert_eq!(surface.view.upcoming.entries[0].item_id, "episode-a");
+    assert_eq!(
+      surface.view.upcoming.entries[0].position,
+      PlaybackStartPosition::Resume
+    );
+    let inserted = surface.view.upcoming.clone();
+    drop(viewing_queue::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      insert,
+    ));
+    assert_eq!(surface.view.upcoming, inserted);
+    assert!(surface.viewing_queue.error.is_some());
+    kernel.request_gate.disconnect();
+    drop(viewing_queue::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      QueueMessage::Edit {
+        session,
+        revision: inserted.revision,
+        action: Action::Clear,
+      },
+    ));
+    assert_eq!(
+      surface.view.upcoming, inserted,
+      "a retired page cannot clear the retained current session"
+    );
+  }
+
+  #[tokio::test]
+  async fn queue_close_and_stop_preserve_items_and_stale_play_does_not_restore_window() {
+    use jellypilot_core::viewing_queue::QueuePlacement;
+    use viewing_queue::{Action, Message as QueueMessage};
+    let (mut surface, mut kernel) = test_fixture();
+    let fixture = crate::app::test_support::BrowseFixture::new();
+    kernel.client = Some(fixture.client());
+    let old_revision = surface.view.upcoming.revision;
+    let id = surface
+      .session
+      .queue_insert(
+        old_revision,
+        Playable::Media(media_item("queued")),
+        PlaybackStartPosition::Beginning,
+        QueuePlacement::Last,
+      )
+      .unwrap();
+    sync_playback_projection(&mut surface, &kernel, false);
+    let inserted = surface.view.upcoming.clone();
+    surface.viewing_queue.open = true;
+    drop(viewing_queue::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      QueueMessage::Close,
+    ));
+    assert!(!surface.viewing_queue.open);
+    drop(apply_local_playback_intent(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackIntent::Stop,
+    ));
+    assert_eq!(surface.view.upcoming.entries, inserted.entries);
+    surface.presentation_hold.store(true, Ordering::Release);
+    let session = kernel.request_gate.current_session();
+    drop(viewing_queue::update(
+      &mut surface,
+      &mut kernel,
+      false,
+      QueueMessage::Edit {
+        session,
+        revision: old_revision,
+        action: Action::PlayNow(id),
+      },
+    ));
+    assert!(
+      surface.pending_play.is_none(),
+      "stale queue click must not create a deferred window restore"
+    );
+    assert!(surface.view.now_playing.is_none());
+    assert_eq!(surface.view.upcoming.entries, inserted.entries);
+  }
+
   #[test]
   fn different_warnings_with_the_same_ui_summary_remain_in_diagnostics() {
     let (mut surface, mut kernel) = test_fixture();
@@ -3304,6 +3479,82 @@ mod tests {
       ("series-1", Some(1))
     );
     assert!(request.season_id.is_none());
+  }
+
+  #[tokio::test]
+  async fn queued_cross_series_start_fetches_target_intro_ranges_after_previous_off_mode() {
+    use crate::app::test_support::{BrowseFixture, FixtureReply};
+    use jellypilot_core::viewing_queue::QueuePlacement;
+    for mode in [IntroMode::Automatic, IntroMode::Manual] {
+      let (directory, settings) = isolated_settings_dir();
+      let (mut surface, mut kernel) = test_fixture();
+      let mut fixture = BrowseFixture::new();
+      kernel.client = Some(fixture.client());
+      kernel.settings = settings;
+      let scope = playback_scope(&kernel).unwrap();
+      kernel
+        .settings
+        .set_series_intro_mode("series-1", &scope, mode)
+        .unwrap();
+      let now = Instant::now();
+      surface.session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
+        now,
+      );
+      let revision = surface.session.view().upcoming.revision;
+      let entry = surface
+        .session
+        .queue_insert(
+          revision,
+          Playable::Media(media_item("episode-1")),
+          PlaybackStartPosition::Beginning,
+          QueuePlacement::Last,
+        )
+        .unwrap();
+      let start = surface.session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::PlayQueued {
+          revision: surface.session.view().upcoming.revision,
+          id: entry,
+          intro: IntroAvailability {
+            mode: IntroSkipMode::Off,
+            skipper_available: true,
+          },
+        })),
+        now,
+      );
+      let (id, _) = controller_effect(start.effects);
+      let result = update_playback(
+        &mut surface,
+        &mut kernel,
+        false,
+        PlaybackMessage::ControllerSettled {
+          id,
+          settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: playback_snapshot(0.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
+          }))),
+          started: None,
+        },
+      );
+      let mut requested_ranges = false;
+      fixture
+        .run_task(result.task, |request| {
+          requested_ranges |= request.target().starts_with("/MediaSegments/episode-1?");
+          FixtureReply::Failure
+        })
+        .await;
+      assert!(
+        requested_ranges,
+        "target series {mode:?} must fetch ranges even when the previous series was Off"
+      );
+      assert_eq!(surface.session.intro_mode(), intro_skip_mode(mode));
+      if directory.exists() {
+        std::fs::remove_dir_all(directory).unwrap();
+      }
+    }
   }
 
   #[test]

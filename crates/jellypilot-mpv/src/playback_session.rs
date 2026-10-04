@@ -6,7 +6,12 @@ use jellypilot_core::intro_skipper::{
   IntroPromptToken, IntroSkipAction, IntroSkipInput, IntroSkipMode, IntroSkipper,
   ManualPromptPolicy,
 };
+use jellypilot_core::viewing_queue::{QueueClaim, QueueEntryId, ViewingQueue};
 use jellypilot_media_server::{IntroSkipKind, IntroSkipRange, MediaItem};
+
+mod viewing_queue;
+use viewing_queue::QueuedPlayback;
+pub use viewing_queue::{UpcomingQueueEntry, UpcomingQueueView};
 
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackCleanupError, PlaybackEndReason, PlaybackError,
@@ -51,6 +56,12 @@ pub enum PlaybackIntent {
   SelectSubtitleTrack(Option<i64>),
   Stop,
   PlayAdjacent(AdjacentDirection),
+  /// Starts the exact upcoming entry shown in a queue revision.
+  PlayQueued {
+    revision: u64,
+    id: QueueEntryId,
+    intro: IntroAvailability,
+  },
   /// Display-free suspension (ADR 0043): the main window closed while the
   /// session stays resident. Queued start/resume work is cancelled, pending
   /// adjacent authorization is revoked, and the active item is held paused;
@@ -366,6 +377,7 @@ pub struct SessionView {
   pub now_playing: Option<NowPlayingView>,
   pub tracks: TracksView,
   pub adjacent: AdjacentView,
+  pub upcoming: UpcomingQueueView,
   pub intro_prompt: Option<IntroPromptView>,
   /// Real fetched intro/credit ranges for the active item; empty while no
   /// playback is active, the fetch has not settled, or ranges were retired.
@@ -381,6 +393,8 @@ pub struct PlaybackSession {
   snapshot: Option<crate::playback::PlaybackSnapshot>,
   tracks: TracksView,
   adjacent: AdjacentState,
+  upcoming: ViewingQueue<QueuedPlayback>,
+  upcoming_view: UpcomingQueueView,
   intro: IntroSkipper,
   skipper_available: bool,
   notice: Option<PlaybackNotice>,
@@ -411,10 +425,17 @@ pub struct PlaybackSession {
 
 impl Default for PlaybackSession {
   fn default() -> Self {
+    let upcoming = ViewingQueue::default();
+    let upcoming_view = UpcomingQueueView {
+      revision: upcoming.revision(),
+      ..Default::default()
+    };
     Self {
       snapshot: None,
       tracks: TracksView::Unavailable,
       adjacent: AdjacentState::default(),
+      upcoming,
+      upcoming_view,
       intro: IntroSkipper::default(),
       skipper_available: false,
       notice: None,
@@ -450,6 +471,35 @@ impl PlaybackSession {
   pub fn intro_mode(&self) -> IntroSkipMode {
     self.intro.mode()
   }
+
+  /// Resolves the actual target's current intro policy immediately before its
+  /// Start settlement. Only that in-flight Start is updated; retired effects
+  /// cannot change the active policy or revive an earlier range fetch.
+  pub fn set_start_intro_availability(
+    &mut self,
+    id: EffectId,
+    target_item_id: &str,
+    availability: IntroAvailability,
+  ) -> bool {
+    if id.epoch != self.epoch {
+      return false;
+    }
+    let Some(in_flight) = self.in_flight.as_mut().filter(|pending| pending.id == id) else {
+      return false;
+    };
+    let ControllerOperation::Start {
+      target_id, intro, ..
+    } = &mut in_flight.operation
+    else {
+      return false;
+    };
+    if target_id != target_item_id {
+      return false;
+    }
+    *intro = availability;
+    true
+  }
+
   pub fn handle(&mut self, input: PlaybackInput, now: Instant) -> PlaybackStep {
     let generation = self.replacement_generation;
     let mut step = match input {
@@ -468,6 +518,7 @@ impl PlaybackSession {
     if !self.controller_busy() {
       self.replacing = false;
     }
+    self.sync_upcoming_view();
     step
   }
 
@@ -477,6 +528,7 @@ impl PlaybackSession {
   pub fn set_playback_admitted(&mut self, admitted: bool) {
     self.playback_admitted = admitted;
     if !admitted {
+      self.upcoming.release_pending();
       self.pending.retain(|pending| {
         !matches!(
           pending.command,
@@ -484,6 +536,7 @@ impl PlaybackSession {
         )
       });
       self.desired_paused = None;
+      self.sync_upcoming_view();
     }
   }
 
@@ -507,7 +560,8 @@ impl PlaybackSession {
     SessionView {
       now_playing,
       tracks: self.tracks.clone(),
-      adjacent: self.adjacent.view(),
+      adjacent: self.effective_adjacent(),
+      upcoming: self.upcoming_view.clone(),
       intro_prompt: self
         .intro
         .prompt_kind()
@@ -536,12 +590,21 @@ impl PlaybackSession {
   }
 
   fn handle_intent(&mut self, intent: PlaybackIntent, now: Instant) -> PlaybackStep {
+    if let PlaybackIntent::PlayQueued { revision, id, .. } = &intent {
+      if *revision != self.upcoming.revision()
+        || self.upcoming.pending().is_some()
+        || self.queued_playable(*id).is_none()
+      {
+        return PlaybackStep::ignored();
+      }
+    }
     // An explicit play intent is the only way out of display-free
     // suspension; it is lifted before the intent is evaluated so the command
     // authorizes fresh controller work on its own lease.
     if matches!(
       intent,
       PlaybackIntent::Start { .. }
+        | PlaybackIntent::PlayQueued { .. }
         | PlaybackIntent::PlayAdjacent(_)
         | PlaybackIntent::TogglePaused
         | PlaybackIntent::SetPaused(false)
@@ -641,9 +704,17 @@ impl PlaybackSession {
       }
       PlaybackIntent::SelectAudioTrack(id) => self.select_track(true, Some(id)),
       PlaybackIntent::SelectSubtitleTrack(id) => self.select_track(false, id),
-      PlaybackIntent::Stop => self.enqueue(ControllerRequest::stop()),
+      PlaybackIntent::Stop => {
+        self.upcoming.release_pending();
+        self.enqueue(ControllerRequest::stop())
+      }
       PlaybackIntent::Suspend => self.suspend(),
       PlaybackIntent::PlayAdjacent(direction) => self.play_adjacent(direction),
+      PlaybackIntent::PlayQueued {
+        revision,
+        id,
+        intro,
+      } => self.play_queued(revision, id, intro, false),
       PlaybackIntent::SkipIntro => self.apply_intro_action(now, true),
       PlaybackIntent::DismissIntro => {
         self.intro.dismiss_prompt();
@@ -710,6 +781,14 @@ impl PlaybackSession {
       }
       if self.is_duplicate_in_flight(&request) {
         if let RequestKind::Start { target_id } = &request.kind {
+          for pending in &self.pending {
+            if matches!(&pending.kind, RequestKind::Start { target_id: queued_target } if queued_target != target_id)
+            {
+              if let Some(claim) = pending.operation.queue_claim() {
+                self.upcoming.settle(claim, false);
+              }
+            }
+          }
           self.pending.retain(|pending| {
             !matches!(
               &pending.kind,
@@ -764,6 +843,11 @@ impl PlaybackSession {
 
   fn queue_request(&mut self, request: ControllerRequest) {
     if matches!(request.kind, RequestKind::Start { .. } | RequestKind::Stop) {
+      for pending in &self.pending {
+        if let Some(claim) = pending.operation.queue_claim() {
+          self.upcoming.settle(claim, false);
+        }
+      }
       self.pending.clear();
     } else {
       self.pending.retain(|pending| pending.kind != request.kind);
@@ -847,6 +931,12 @@ impl PlaybackSession {
     settlement: ControllerSettlement,
     now: Instant,
   ) -> PlaybackStep {
+    if let Some(claim) = operation.queue_claim() {
+      let started = matches!(&settlement, ControllerSettlement::Started(Ok(outcome))
+        if self.upcoming.claimed(claim).is_some_and(|entry| outcome.playback.snapshot.now_playing.as_ref()
+          .is_some_and(|playing| playing.item_id == entry.playable.item_id())));
+      self.upcoming.settle(claim, started);
+    }
     match (operation, settlement) {
       (
         ControllerOperation::Start { .. } | ControllerOperation::Controlled,
@@ -983,6 +1073,13 @@ impl PlaybackSession {
       state,
       warnings,
     } = outcome;
+    // A refresh may finish after the user queued Play or Stop. The upcoming
+    // list survives replacement, so unlike adjacent caches it must explicitly
+    // yield to that already accepted command.
+    let replacement_pending = self
+      .pending
+      .iter()
+      .any(|request| matches!(request.kind, RequestKind::Start { .. } | RequestKind::Stop));
     match state {
       PlaybackRefreshState::Active => {
         self.snapshot = Some(snapshot);
@@ -990,7 +1087,7 @@ impl PlaybackSession {
         self.set_warning_notice(warnings);
         // Automatic follow-on work stays parked while the session is
         // suspended; only explicit play intents resume it.
-        if self.suspended || !self.playback_admitted {
+        if self.suspended || !self.playback_admitted || replacement_pending {
           return Vec::new();
         }
         if let Some(direction) = adjacent_direction_from_client_messages(client_messages) {
@@ -1013,8 +1110,10 @@ impl PlaybackSession {
         // the next one waits for an explicit play intent.
         if self.playback_admitted
           && !self.suspended
+          && !replacement_pending
           && self.auto_next_episode
-          && self.adjacent.item(AdjacentDirection::Next).is_some()
+          && (!self.upcoming.entries().is_empty()
+            || self.adjacent.item(AdjacentDirection::Next).is_some())
         {
           return self.play_adjacent(AdjacentDirection::Next).effects;
         }
@@ -1118,6 +1217,19 @@ impl PlaybackSession {
   }
 
   fn play_adjacent(&mut self, direction: AdjacentDirection) -> PlaybackStep {
+    if direction == AdjacentDirection::Next {
+      if let Some(entry) = self.upcoming.entries().first() {
+        return self.play_queued(
+          self.upcoming.revision(),
+          entry.id,
+          IntroAvailability {
+            mode: self.intro.mode(),
+            skipper_available: self.skipper_available,
+          },
+          true,
+        );
+      }
+    }
     let Some(item) = self.adjacent.item(direction).cloned() else {
       return PlaybackStep::ignored();
     };
@@ -1210,6 +1322,7 @@ impl PlaybackSession {
   /// never masquerades as paused.
   fn suspend(&mut self) -> PlaybackStep {
     self.suspended = true;
+    self.upcoming.release_pending();
     self.pending.retain(|pending| {
       !matches!(pending.kind, RequestKind::Start { .. })
         && !matches!(pending.command, ControllerCommand::SetPaused(false))
@@ -1225,6 +1338,7 @@ impl PlaybackSession {
   }
 
   fn begin_teardown(&mut self, quitting: bool) -> PlaybackStep {
+    self.upcoming.reset();
     if quitting {
       self.quitting = true;
     }
@@ -1407,6 +1521,7 @@ enum ControllerOperation {
   Start {
     target_id: String,
     intro: IntroAvailability,
+    queue_claim: Option<QueueClaim>,
   },
   Controlled,
   Stop,
@@ -1423,6 +1538,12 @@ enum ControllerOperation {
 }
 
 impl ControllerOperation {
+  fn queue_claim(&self) -> Option<QueueClaim> {
+    match self {
+      Self::Start { queue_claim, .. } => *queue_claim,
+      _ => None,
+    }
+  }
   fn occupancy(&self) -> ControllerOccupancy {
     match self {
       Self::Refresh => ControllerOccupancy::Refresh,
@@ -1479,7 +1600,11 @@ impl ControllerRequest {
         selection,
         continue_playback,
       },
-      operation: ControllerOperation::Start { target_id, intro },
+      operation: ControllerOperation::Start {
+        target_id,
+        intro,
+        queue_claim: None,
+      },
     }
   }
 
@@ -1658,6 +1783,685 @@ mod tests {
 
   use super::*;
   use crate::playback::PlaybackSnapshot;
+
+  mod viewing_queue {
+    use super::*;
+    use jellypilot_core::viewing_queue::{QueueEditError, QueueMove, QueuePlacement};
+
+    fn add(
+      session: &mut PlaybackSession,
+      item_id: &str,
+      placement: QueuePlacement,
+    ) -> QueueEntryId {
+      let mut item = media_item(item_id, item_id);
+      item.item_type = "Movie".into();
+      session
+        .queue_insert(
+          session.view().upcoming.revision,
+          Playable::Media(item),
+          PlaybackStartPosition::Beginning,
+          placement,
+        )
+        .unwrap()
+    }
+
+    fn play(session: &mut PlaybackSession, id: QueueEntryId, now: Instant) -> PlaybackStep {
+      session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::PlayQueued {
+          revision: session.view().upcoming.revision,
+          id,
+          intro: intro_availability(IntroSkipMode::Off),
+        })),
+        now,
+      )
+    }
+
+    fn settled(
+      session: &mut PlaybackSession,
+      id: EffectId,
+      item_id: &str,
+      now: Instant,
+    ) -> PlaybackStep {
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+            playback: PlaybackOutcome {
+              snapshot: snapshot(item_id, "Movie", 0.0),
+              warnings: Vec::new(),
+            },
+            tracks: Err(PlaybackError::TrackUnavailable),
+          })),
+        })),
+        now,
+      )
+    }
+
+    fn refresh(
+      session: &mut PlaybackSession,
+      state: PlaybackRefreshState,
+      messages: Vec<String>,
+      now: Instant,
+    ) -> PlaybackStep {
+      let (id, _) = controller_effect(
+        session
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+          .effects,
+      );
+      refreshed(session, id, state, messages, now)
+    }
+
+    fn refreshed(
+      session: &mut PlaybackSession,
+      id: EffectId,
+      state: PlaybackRefreshState,
+      messages: Vec<String>,
+      now: Instant,
+    ) -> PlaybackStep {
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Refreshed {
+            outcome: PlaybackRefreshOutcome {
+              snapshot: snapshot("episode-1", "Episode", 100.0),
+              state,
+              warnings: Vec::new(),
+            },
+            client_messages: messages,
+          },
+        })),
+        now,
+      )
+    }
+
+    #[test]
+    fn manual_next_client_next_and_natural_eof_all_start_the_same_queued_movie() {
+      for source in ["manual", "client", "eof"] {
+        let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+        let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
+        session.handle(
+          PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+            id: next_id,
+            direction: AdjacentDirection::Next,
+            result: Ok(Some(media_item("episode-2", "Second episode"))),
+          })),
+          now,
+        );
+        let entry = add(&mut session, "queued-movie", QueuePlacement::Last);
+        assert_eq!(
+          session.view().adjacent.next,
+          AdjacentAvailability::Available {
+            title: "queued-movie".into()
+          }
+        );
+        let step = match source {
+          "manual" => session.handle(
+            PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+              AdjacentDirection::Next,
+            ))),
+            now,
+          ),
+          "client" => refresh(
+            &mut session,
+            PlaybackRefreshState::Active,
+            vec!["jellypilot-next".into()],
+            now,
+          ),
+          _ => refresh(
+            &mut session,
+            PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            Vec::new(),
+            now,
+          ),
+        };
+        let (start_id, command) = controller_effect(step.effects);
+        assert!(
+          matches!(command, ControllerCommand::Start { item, continue_playback: true, .. } if item.item_id() == "queued-movie")
+        );
+        assert_eq!(session.view().upcoming.pending, Some(entry));
+        assert_eq!(
+          session.view().upcoming.entries.len(),
+          1,
+          "dispatch does not consume"
+        );
+        settled(&mut session, start_id, "queued-movie", now);
+        assert!(session.view().upcoming.entries.is_empty());
+      }
+    }
+
+    #[test]
+    fn queued_cross_series_start_resolves_intro_before_the_first_range_fetch() {
+      for source in ["manual", "client", "eof"] {
+        for (current_mode, target_mode) in [
+          (IntroSkipMode::Off, IntroSkipMode::Automatic),
+          (IntroSkipMode::Off, IntroSkipMode::Manual),
+          (IntroSkipMode::Automatic, IntroSkipMode::Off),
+        ] {
+          let (mut session, now, old_auxiliary) = start_session(current_mode);
+          let mut target = media_item("other-series-episode", "Other series");
+          target.series_id = Some("series-2".into());
+          session
+            .queue_insert(
+              session.view().upcoming.revision,
+              Playable::Media(target),
+              PlaybackStartPosition::Beginning,
+              QueuePlacement::Last,
+            )
+            .unwrap();
+          let step = match source {
+            "manual" => session.handle(
+              PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+                AdjacentDirection::Next,
+              ))),
+              now,
+            ),
+            "client" => refresh(
+              &mut session,
+              PlaybackRefreshState::Active,
+              vec!["jellypilot-next".into()],
+              now,
+            ),
+            _ => refresh(
+              &mut session,
+              PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+              Vec::new(),
+              now,
+            ),
+          };
+          let (start, _) = controller_effect(step.effects);
+          assert!(session.set_start_intro_availability(
+            start,
+            "other-series-episode",
+            intro_availability(target_mode)
+          ));
+          let mut target_snapshot = snapshot("other-series-episode", "Episode", 0.0);
+          target_snapshot.now_playing.as_mut().unwrap().series_id = Some("series-2".into());
+          let settled = session.handle(
+            PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+              id: start,
+              settlement: ControllerSettlement::Started(Ok(PlaybackStartOutcome {
+                playback: PlaybackOutcome {
+                  snapshot: target_snapshot,
+                  warnings: Vec::new(),
+                },
+                tracks: Err(PlaybackError::TrackUnavailable),
+              })),
+            })),
+            now,
+          );
+          assert_eq!(session.intro_mode(), target_mode);
+          let range_fetches = settled
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+              PlaybackEffect::FetchIntroRanges(id, item) => Some((*id, item.as_str())),
+              _ => None,
+            })
+            .collect::<Vec<_>>();
+          if target_mode == IntroSkipMode::Off {
+            assert!(range_fetches.is_empty());
+            settle_intro_ranges(&mut session, intro_fetch_id(&old_auxiliary), now);
+            assert!(
+              session.view().intro_ranges.is_empty(),
+              "previous series fetch stays retired"
+            );
+          } else {
+            assert_eq!(range_fetches.len(), 1);
+            assert_eq!(range_fetches[0].1, "other-series-episode");
+            settle_intro_ranges(&mut session, range_fetches[0].0, now);
+            let (_, command) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+            match target_mode {
+              IntroSkipMode::Automatic => assert!(matches!(command, ControllerCommand::Seek(30.0))),
+              IntroSkipMode::Manual => assert!(
+                matches!(command, ControllerCommand::IntroPrompt { text, .. } if !text.is_empty())
+              ),
+              IntroSkipMode::Off => unreachable!(),
+            }
+          }
+        }
+      }
+    }
+
+    #[test]
+    fn stale_or_wrong_target_start_policy_cannot_change_a_reloaded_item() {
+      let now = instant();
+      let mut session = PlaybackSession::default();
+      let old = start_command(&mut session, now, IntroSkipMode::Off);
+      settle_start(&mut session, old, now, "Episode");
+      let current = start_command(&mut session, now, IntroSkipMode::Off);
+      assert!(!session.set_start_intro_availability(
+        old,
+        "episode-1",
+        intro_availability(IntroSkipMode::Automatic)
+      ));
+      assert!(!session.set_start_intro_availability(
+        current,
+        "other-target",
+        intro_availability(IntroSkipMode::Automatic)
+      ));
+      assert!(settle_start(&mut session, old, now, "Episode").is_empty());
+      let auxiliary = settle_start(&mut session, current, now, "Episode");
+      assert_eq!(session.intro_mode(), IntroSkipMode::Off);
+      assert!(!auxiliary
+        .iter()
+        .any(|effect| matches!(effect, PlaybackEffect::FetchIntroRanges(_, _))));
+      assert!(!session.set_start_intro_availability(
+        current,
+        "episode-1",
+        intro_availability(IntroSkipMode::Automatic)
+      ));
+      assert!(settle_start(&mut session, current, now, "Episode").is_empty());
+      assert_eq!(session.intro_mode(), IntroSkipMode::Off);
+    }
+
+    #[test]
+    fn retired_profile_start_cannot_accept_a_new_intro_policy() {
+      let now = instant();
+      let mut session = PlaybackSession::default();
+      let start = start_command(&mut session, now, IntroSkipMode::Off);
+      session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+        now,
+      );
+      assert!(!session.set_start_intro_availability(
+        start,
+        "episode-1",
+        intro_availability(IntroSkipMode::Automatic)
+      ));
+      let effects = settle_start(&mut session, start, now, "Episode");
+      assert!(!effects
+        .iter()
+        .any(|effect| matches!(effect, PlaybackEffect::FetchIntroRanges(_, _))));
+      assert!(session.view().now_playing.is_none());
+    }
+
+    #[test]
+    fn play_now_failure_is_retryable_and_success_consumes_only_the_selected_entry() {
+      let (mut session, now, _) = start_session(IntroSkipMode::Off);
+      let head = add(&mut session, "head", QueuePlacement::Last);
+      let chosen = add(&mut session, "chosen", QueuePlacement::Last);
+      let (id, _) = controller_effect(play(&mut session, chosen, now).effects);
+      assert_eq!(
+        session.queue_remove(session.view().upcoming.revision, head),
+        Err(QueueEditError::Busy)
+      );
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: ControllerSettlement::Started(Err(PlaybackError::PlaybackInfoUnavailable)),
+        })),
+        now,
+      );
+      assert!(session.view().upcoming.pending.is_none());
+      assert_eq!(session.view().upcoming.entries.len(), 2);
+      assert!(matches!(
+        session.view().notice,
+        Some(PlaybackNotice::Failed(
+          PlaybackError::PlaybackInfoUnavailable
+        ))
+      ));
+      let (retry, _) = controller_effect(play(&mut session, chosen, now).effects);
+      assert!(settled(&mut session, id, "chosen", now).effects.is_empty());
+      assert_eq!(
+        session.view().upcoming.pending,
+        Some(chosen),
+        "old settlement cannot consume retry"
+      );
+      settled(&mut session, retry, "chosen", now);
+      assert_eq!(
+        session
+          .view()
+          .upcoming
+          .entries
+          .iter()
+          .map(|entry| entry.id)
+          .collect::<Vec<_>>(),
+        [head]
+      );
+    }
+
+    #[test]
+    fn a_new_ordinary_play_replaces_a_waiting_queue_start_without_removing_its_entry() {
+      let (mut session, now, _) = start_session(IntroSkipMode::Off);
+      let queued = add(&mut session, "queued", QueuePlacement::Last);
+      let (poll, _) = controller_effect(
+        session
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+          .effects,
+      );
+      assert!(play(&mut session, queued, now).effects.is_empty());
+      assert_eq!(session.view().upcoming.pending, Some(queued));
+      session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
+          item: Playable::Media(media_item("ordinary", "Ordinary")),
+          position: PlaybackStartPosition::Beginning,
+          intro: intro_availability(IntroSkipMode::Off),
+          selection: Box::default(),
+        })),
+        now,
+      );
+      assert!(session.view().upcoming.pending.is_none());
+      let (start, command) = controller_effect(
+        refreshed(
+          &mut session,
+          poll,
+          PlaybackRefreshState::Active,
+          Vec::new(),
+          now,
+        )
+        .effects,
+      );
+      assert!(
+        matches!(command, ControllerCommand::Start { item, .. } if item.item_id() == "ordinary")
+      );
+      assert_eq!(
+        session.queue_clear(session.view().upcoming.revision),
+        Err(QueueEditError::Busy),
+        "ordinary starts also fence edits"
+      );
+      settled(&mut session, start, "ordinary", now);
+      assert_eq!(session.view().upcoming.entries[0].id, queued);
+    }
+
+    #[test]
+    fn late_eof_and_client_next_cannot_jump_ahead_of_an_already_accepted_play_or_stop() {
+      for stop in [false, true] {
+        for ended in [false, true] {
+          let (mut session, now, _) = start_session(IntroSkipMode::Off);
+          let queued = add(&mut session, "queued", QueuePlacement::Last);
+          let (poll, _) = controller_effect(
+            session
+              .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+              .effects,
+          );
+          let explicit = if stop {
+            PlaybackIntent::Stop
+          } else {
+            PlaybackIntent::Start {
+              item: Playable::Media(media_item("explicit", "Explicit")),
+              position: PlaybackStartPosition::Beginning,
+              intro: intro_availability(IntroSkipMode::Off),
+              selection: Box::default(),
+            }
+          };
+          session.handle(PlaybackInput::Intent(Box::new(explicit)), now);
+          let state = if ended {
+            PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile)
+          } else {
+            PlaybackRefreshState::Active
+          };
+          let (_, command) = controller_effect(
+            refreshed(
+              &mut session,
+              poll,
+              state,
+              vec!["jellypilot-next".into()],
+              now,
+            )
+            .effects,
+          );
+          if stop {
+            assert!(matches!(command, ControllerCommand::Stop));
+          } else {
+            assert!(
+              matches!(command, ControllerCommand::Start { item, .. } if item.item_id() == "explicit")
+            );
+          }
+          assert_eq!(session.view().upcoming.entries[0].id, queued);
+          assert!(session.view().upcoming.pending.is_none());
+          assert!(
+            session.pending.is_empty(),
+            "automatic queue did not introduce a second Start"
+          );
+        }
+      }
+    }
+
+    #[test]
+    fn stop_cancels_waiting_queue_start_and_preserves_entries_on_both_stop_outcomes() {
+      for succeeds in [false, true] {
+        let (mut session, now, _) = start_session(IntroSkipMode::Off);
+        let queued = add(&mut session, "queued", QueuePlacement::Last);
+        let (poll, _) = controller_effect(
+          session
+            .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+            .effects,
+        );
+        play(&mut session, queued, now);
+        session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
+        let (stop, command) = controller_effect(
+          refreshed(
+            &mut session,
+            poll,
+            PlaybackRefreshState::Active,
+            Vec::new(),
+            now,
+          )
+          .effects,
+        );
+        assert!(matches!(command, ControllerCommand::Stop));
+        session.handle(
+          PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+            id: stop,
+            settlement: ControllerSettlement::Stopped(if succeeds {
+              Ok(PlaybackStopOutcome {
+                warnings: Vec::new(),
+              })
+            } else {
+              Err(PlaybackError::MpvControlFailed)
+            }),
+          })),
+          now,
+        );
+        assert_eq!(session.view().upcoming.entries[0].id, queued);
+        assert!(session.view().upcoming.pending.is_none());
+      }
+    }
+
+    #[test]
+    fn suspension_cancels_waiting_start_and_stale_play_now_cannot_lift_it() {
+      let (mut session, now, _) = start_session(IntroSkipMode::Off);
+      let queued = add(&mut session, "queued", QueuePlacement::Last);
+      let old_revision = session.view().upcoming.revision;
+      let (poll, _) = controller_effect(
+        session
+          .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now)
+          .effects,
+      );
+      play(&mut session, queued, now);
+      session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+        now,
+      );
+      let stale = session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::PlayQueued {
+          revision: old_revision,
+          id: queued,
+          intro: intro_availability(IntroSkipMode::Off),
+        })),
+        now,
+      );
+      assert!(stale.effects.is_empty());
+      assert!(session.suspended);
+      assert!(refreshed(
+        &mut session,
+        poll,
+        PlaybackRefreshState::Active,
+        vec!["jellypilot-next".into()],
+        now
+      )
+      .effects
+      .is_empty());
+      assert!(session.view().upcoming.pending.is_none());
+      let (_, command) = controller_effect(play(&mut session, queued, now).effects);
+      assert!(!session.suspended);
+      assert!(
+        matches!(command, ControllerCommand::Start { item, .. } if item.item_id() == "queued")
+      );
+    }
+
+    #[test]
+    fn revoked_admission_and_inflight_close_never_consume_a_late_start() {
+      for interruption in ["admission", "suspend", "stop"] {
+        let (mut session, now, _) = start_session(IntroSkipMode::Off);
+        let queued = add(&mut session, "queued", QueuePlacement::Last);
+        let (start, _) = controller_effect(play(&mut session, queued, now).effects);
+        match interruption {
+          "admission" => session.set_playback_admitted(false),
+          "suspend" => {
+            session.handle(
+              PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+              now,
+            );
+          }
+          _ => {
+            session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
+          }
+        }
+        assert!(session.view().upcoming.pending.is_none());
+        settled(&mut session, start, "queued", now);
+        assert_eq!(
+          session.view().upcoming.entries[0].id,
+          queued,
+          "revoked claim remains queued: {interruption}"
+        );
+      }
+      let (mut session, now, _) = start_session(IntroSkipMode::Off);
+      let queued = add(&mut session, "queued", QueuePlacement::Last);
+      let (start, _) = controller_effect(play(&mut session, queued, now).effects);
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+          id: start,
+          settlement: ControllerSettlement::AdmissionRejected,
+        })),
+        now,
+      );
+      assert_eq!(session.view().upcoming.entries[0].id, queued);
+      assert!(session.view().upcoming.pending.is_none());
+    }
+
+    #[test]
+    fn natural_eof_still_obeys_auto_next_admission_and_suspension() {
+      for blocker in ["setting", "admission", "suspension"] {
+        let (mut session, now, _) = start_session(IntroSkipMode::Off);
+        let queued = add(&mut session, "queued", QueuePlacement::Last);
+        match blocker {
+          "setting" => session.set_auto_next_episode(false),
+          "admission" => session.set_playback_admitted(false),
+          _ => {
+            session.handle(
+              PlaybackInput::Intent(Box::new(PlaybackIntent::Suspend)),
+              now,
+            );
+          }
+        }
+        assert!(refresh(
+          &mut session,
+          PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+          Vec::new(),
+          now
+        )
+        .effects
+        .is_empty());
+        assert_eq!(session.view().upcoming.entries[0].id, queued);
+        assert!(session.view().upcoming.pending.is_none());
+      }
+    }
+
+    #[test]
+    fn profile_retirement_clears_queue_and_old_completion_cannot_consume_new_profile() {
+      for quitting in [false, true] {
+        let (mut session, now, _) = start_session(IntroSkipMode::Off);
+        let queued = add(&mut session, "same-media", QueuePlacement::Last);
+        let (old_start, _) = controller_effect(play(&mut session, queued, now).effects);
+        session.handle(
+          PlaybackInput::Intent(Box::new(if quitting {
+            PlaybackIntent::Quit
+          } else {
+            PlaybackIntent::Disconnect
+          })),
+          now,
+        );
+        assert!(session.view().upcoming.entries.is_empty());
+        let replacement = add(&mut session, "same-media", QueuePlacement::Last);
+        assert_ne!(queued, replacement);
+        settled(&mut session, old_start, "same-media", now);
+        assert_eq!(session.view().upcoming.entries[0].id, replacement);
+      }
+    }
+
+    #[test]
+    fn queue_display_is_shared_between_transport_ticks_and_previous_keeps_episode_semantics() {
+      let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+      add(&mut session, "queued-movie", QueuePlacement::Last);
+      let first = session.view().upcoming.entries;
+      refresh(&mut session, PlaybackRefreshState::Active, Vec::new(), now);
+      assert!(Arc::ptr_eq(&first, &session.view().upcoming.entries));
+      session.handle(
+        PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
+          id: adjacent_id(&auxiliary, AdjacentDirection::Previous),
+          direction: AdjacentDirection::Previous,
+          result: Ok(Some(media_item("previous", "Previous episode"))),
+        })),
+        now,
+      );
+      let (_, command) = controller_effect(
+        session
+          .handle(
+            PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+              AdjacentDirection::Previous,
+            ))),
+            now,
+          )
+          .effects,
+      );
+      assert!(
+        matches!(command, ControllerCommand::Start { item, .. } if item.item_id() == "previous")
+      );
+      assert!(session.view().upcoming.pending.is_none());
+      assert_eq!(session.view().upcoming.entries.len(), 1);
+    }
+
+    #[test]
+    fn queue_intake_validates_real_item_and_explicit_position_before_any_playback() {
+      let mut session = PlaybackSession::default();
+      let mut series = media_item("series", "Series");
+      series.item_type = "Series".into();
+      assert_eq!(
+        session.queue_insert(
+          session.view().upcoming.revision,
+          Playable::Media(series),
+          PlaybackStartPosition::Beginning,
+          QueuePlacement::Next
+        ),
+        Err(QueueEditError::InvalidItem)
+      );
+      assert_eq!(
+        session.queue_insert(
+          session.view().upcoming.revision,
+          Playable::Media(media_item("episode", "Episode")),
+          PlaybackStartPosition::At(f64::NAN),
+          QueuePlacement::Next
+        ),
+        Err(QueueEditError::InvalidItem)
+      );
+      let entry = add(&mut session, "movie", QueuePlacement::Last);
+      let old = session.view().upcoming.revision;
+      session
+        .queue_insert(
+          old,
+          Playable::Media(media_item("episode", "Episode")),
+          PlaybackStartPosition::Resume,
+          QueuePlacement::Last,
+        )
+        .unwrap();
+      assert_eq!(
+        session.queue_move(old, entry, QueueMove::Down),
+        Err(QueueEditError::Stale)
+      );
+      assert!(session.view().now_playing.is_none());
+    }
+  }
 
   fn instant() -> Instant {
     Instant::now()

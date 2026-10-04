@@ -32,6 +32,10 @@ _Avoid_: Pairing service, remote login, local player
 One active presentation of a media item through a desktop Playback Backend or Android MPV Playback.
 _Avoid_: Player process, transcode job
 
+**Viewing Queue**:
+A temporary, device-local ordered list of movies and episodes still waiting to start within one Profile Scope. It is separate from the current-season episode list, Watchlist and server playlists.
+_Avoid_: Episode list, Watchlist, playback history
+
 **External MPV Playback**:
 Playback presented by a standalone MPV process so the user's MPV configuration, scripts, and shaders remain available.
 _Avoid_: Embedded MPV, libmpv

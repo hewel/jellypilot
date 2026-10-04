@@ -10,6 +10,7 @@ const IDLE: Duration = Duration::from_secs(5);
 pub enum Control {
     Back,
     Queue,
+    Upcoming,
     Information,
     Previous,
     Backward,
@@ -54,6 +55,7 @@ pub enum Action {
     Previous,
     Next,
     OpenPanel(Panel),
+    OpenUpcoming,
     ApplyChoice(usize),
     Skip,
 }
@@ -239,6 +241,7 @@ impl Player {
             Control::Next => Some(Action::Next),
             Control::Skip => Some(Action::Skip),
             Control::Queue => Some(Action::OpenPanel(Panel::Queue)),
+            Control::Upcoming => Some(Action::OpenUpcoming),
             Control::Information => Some(Action::OpenPanel(Panel::Information)),
             Control::Audio => Some(Action::OpenPanel(Panel::Audio)),
             Control::Subtitles => Some(Action::OpenPanel(Panel::Subtitles)),
@@ -352,6 +355,14 @@ impl Player {
         }
         match input {
             Input::Back => self.full = false,
+            Input::Right
+                if self.focus == Control::Back && controls.contains(&Control::Upcoming) =>
+            {
+                self.focus = Control::Upcoming;
+            }
+            Input::Left if self.focus == Control::Upcoming => self.focus = Control::Back,
+            Input::Down if self.focus == Control::Upcoming => self.focus = Control::PlayPause,
+            Input::Up | Input::Right if self.focus == Control::Upcoming => {}
             Input::Up if self.focus != Control::Back && !observation.busy => {
                 self.begin_seek(observation, now);
                 if self.seek.is_none() {
@@ -362,11 +373,18 @@ impl Player {
             Input::Left | Input::Right => {
                 if let Some(index) = controls.iter().position(|control| *control == self.focus) {
                     let next = if input == Input::Left {
-                        index.saturating_sub(1)
+                        controls[..index]
+                            .iter()
+                            .rev()
+                            .find(|control| **control != Control::Upcoming)
                     } else {
-                        (index + 1).min(controls.len().saturating_sub(1))
+                        controls[index + 1..]
+                            .iter()
+                            .find(|control| **control != Control::Upcoming)
                     };
-                    self.focus = controls[next];
+                    if let Some(next) = next {
+                        self.focus = *next;
+                    }
                 }
             }
             Input::Confirm => return self.activate(self.focus, observation, now),
@@ -395,6 +413,37 @@ mod tests {
             seek_range: Some((20.0, 60.0)),
             busy: false,
         }
+    }
+
+    #[test]
+    fn upcoming_queue_uses_top_row_without_replacing_season_navigation() {
+        let now = Instant::now();
+        let mut player = Player::new(now);
+        let observation = observation(true);
+        let controls = [
+            Control::Queue,
+            Control::Upcoming,
+            Control::Information,
+            Control::PlayPause,
+        ];
+        player.observe(observation, now);
+        player.input(Input::Up, observation, &controls, now);
+        player.input(Input::Up, observation, &controls, now);
+        assert_eq!(player.focused(), Some(Control::Back));
+        player.input(Input::Right, observation, &controls, now);
+        assert_eq!(player.focused(), Some(Control::Upcoming));
+        assert_eq!(
+            player.input(Input::Confirm, observation, &controls, now),
+            Some(Action::OpenUpcoming)
+        );
+        player.input(Input::Down, observation, &controls, now);
+        player.input(Input::Left, observation, &controls, now);
+        player.input(Input::Left, observation, &controls, now);
+        assert_eq!(player.focused(), Some(Control::Queue));
+        assert_eq!(
+            player.input(Input::Confirm, observation, &controls, now),
+            Some(Action::OpenPanel(Panel::Queue))
+        );
     }
 
     #[test]

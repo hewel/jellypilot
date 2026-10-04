@@ -15,6 +15,8 @@ pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;
 mod undo_notice;
+pub(crate) mod viewing_queue;
+mod viewing_queue_rows;
 
 use crate::i18n::Localizer;
 use iced::widget::{button, container, row, stack, text};
@@ -73,6 +75,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
     };
     stack![base, account]
   }
+  .width(Fill)
+  .height(Fill);
+  let layers: Element<'_, Message> = layers.into();
+  let layers = stack![
+    if state.playback.viewing_queue.open && !state.tv_mode() {
+      inert(layers)
+    } else {
+      layers
+    },
+    viewing_queue::layer(state),
+  ]
   .width(Fill)
   .height(Fill);
   let toast = state

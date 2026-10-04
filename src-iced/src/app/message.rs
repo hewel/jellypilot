@@ -310,6 +310,7 @@ pub enum SettingsMessage {
 
 #[derive(Clone)]
 pub enum PlaybackMessage {
+  ViewingQueue(super::playback::viewing_queue::Message),
   Intent(Box<PlaybackIntent>),
   Event(Box<PlaybackEvent>),
   SeekDragStarted,

@@ -24,6 +24,7 @@ pub struct DesignTokens {
     pub easings: Easings,
     pub breakpoints: Breakpoints,
     pub modal: Modal,
+    pub player_chrome: PlayerChrome,
 }
 
 /// Semantic color roles.
@@ -374,10 +375,25 @@ pub struct Modal {
     pub backdrop_blur_sigma: f32,
 }
 
+/// Full embedded-player background, independent of the browser theme.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerChrome {
+    pub backdrop_height: f32,
+    /// Maximum approximate Gaussian sigma in logical pixels at the bottom edge.
+    pub backdrop_blur_sigma: f32,
+    /// Fraction of the region kept sharp before the progressive falloff starts.
+    pub backdrop_blur_start: f32,
+}
+
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
     modal: Modal {
         backdrop_blur_sigma: 40.0,
+    },
+    player_chrome: PlayerChrome {
+        backdrop_height: 340.0,
+        backdrop_blur_sigma: 16.0,
+        backdrop_blur_start: 0.15,
     },
     fonts: Fonts {
         display: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",

@@ -557,6 +557,7 @@ fn detail_actions<'a>(
   played: bool,
   favorite: bool,
 ) -> Element<'a, Message> {
+  let queue_target = playback_target.clone();
   let playback_enabled = playback_target.is_some() && state.playback.view.engine_available;
   let playback = control_button(
     Some(Icon::Play),
@@ -689,6 +690,36 @@ fn detail_actions<'a>(
     .push(favorite_button)
     .push(watchlist_button)
     .push(played_button);
+  if let Some((item, position)) = queue_target {
+    for (placement, label) in [
+      (
+        jellypilot_core::viewing_queue::QueuePlacement::Next,
+        "viewing-queue-next",
+      ),
+      (
+        jellypilot_core::viewing_queue::QueuePlacement::Last,
+        "viewing-queue-add",
+      ),
+    ] {
+      actions = actions.push(super::viewing_queue::queue_guard(
+        state,
+        control_button(
+          Some(Icon::Playlist),
+          Some(state.t(label)),
+          ButtonVariant::Tonal,
+        )
+        .id(label)
+        .min_height(40.0)
+        .padding([8, 16])
+        .label_size(14.0)
+        .on_press_maybe(
+          (state.playback.view.upcoming.pending.is_none()
+            && !state.playback.view.lifecycle.replacing)
+            .then(|| super::viewing_queue::add(state, item.clone(), position, placement)),
+        ),
+      ));
+    }
+  }
   if let Some(action) = state.kernel.item_actions.pending(item_id) {
     actions = actions.push(
       text(match action {
@@ -2973,6 +3004,100 @@ mod tests {
       episode.resume_position_seconds = position;
       assert_eq!(resume_progress_label(locale, &episode), None);
     }
+  }
+
+  #[test]
+  fn detail_queue_actions_use_real_movie_or_resolved_episode_and_start_position() {
+    use super::super::viewing_queue::tests::{click, Bounds};
+    use crate::app::playback::viewing_queue::{Action, Message as QueueMessage};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = headless_renderer();
+    let mut state = hero_state();
+    state.playback.view.upcoming.revision = 17;
+    let mut show = VideoShowDetail {
+      id: "series".into(),
+      name: "Series".into(),
+      overview: None,
+      production_year: None,
+      genres: Vec::new(),
+      played: false,
+      original_language: None,
+      favorite: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      logo_image_id: None,
+      next_episode: None,
+      seasons: Vec::new(),
+      metadata: Default::default(),
+    };
+    for resume in [false, true] {
+      let episode = episode_with_progress(resume.then_some(120.0), None, false);
+      let expected_id = episode.id.clone();
+      show.next_episode = Some(episode);
+      let mut ui = UserInterface::build(
+        show_hero(&state, &show, 0.0, true),
+        iced::Size::new(400.0, 1400.0),
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut bounds = Bounds::default();
+      ui.operate(&renderer, &mut bounds);
+      for (label, expected) in [
+        (
+          "viewing-queue-next",
+          jellypilot_core::viewing_queue::QueuePlacement::Next,
+        ),
+        (
+          "viewing-queue-add",
+          jellypilot_core::viewing_queue::QueuePlacement::Last,
+        ),
+      ] {
+        let messages = click(&mut ui, &mut renderer, bounds.get(label));
+        assert!(
+          matches!(messages.as_slice(), [Message::Playback(PlaybackMessage::ViewingQueue(QueueMessage::Edit { session, revision: 17, action: Action::Insert { item, position, placement } }))]
+          if *session == state.kernel.request_gate.current_session() && item.item_id() == expected_id && *placement == expected && *position == if resume { PlaybackStartPosition::Resume } else { PlaybackStartPosition::Beginning })
+        );
+      }
+    }
+    show.next_episode = None;
+    let mut ui = UserInterface::build(
+      show_hero(&state, &show, 0.0, true),
+      iced::Size::new(400.0, 1400.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut bounds = Bounds::default();
+    ui.operate(&renderer, &mut bounds);
+    assert!(
+      !bounds
+        .0
+        .iter()
+        .any(|(id, _)| *id == iced::widget::Id::new("viewing-queue-add")),
+      "unresolved series is never enqueued"
+    );
+    drop(ui);
+    let mut movie = episode_with_progress(None, None, false);
+    movie.id = "real-movie".into();
+    movie.item_type = "Movie".into();
+    let mut ui = UserInterface::build(
+      detail_actions(
+        &state,
+        state.t("detail-play"),
+        Some((Playable::Library(movie), PlaybackStartPosition::Beginning)),
+        "real-movie",
+        false,
+        false,
+      ),
+      iced::Size::new(400.0, 600.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut bounds = Bounds::default();
+    ui.operate(&renderer, &mut bounds);
+    assert!(
+      matches!(click(&mut ui, &mut renderer, bounds.get("viewing-queue-add")).as_slice(), [Message::Playback(PlaybackMessage::ViewingQueue(QueueMessage::Edit { action: Action::Insert { item, position: PlaybackStartPosition::Beginning, .. }, .. }))] if item.item_id() == "real-movie")
+    );
   }
 
   #[test]

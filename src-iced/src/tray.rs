@@ -369,6 +369,7 @@ mod tests {
         muted,
       }),
       tracks: TracksView::Unavailable,
+      upcoming: Default::default(),
       adjacent: AdjacentView {
         previous: AdjacentAvailability::Unavailable,
         next: AdjacentAvailability::Available {

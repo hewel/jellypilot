@@ -113,7 +113,8 @@ struct ConfirmPress {
 }
 
 pub(super) fn browse_focus_visible(state: &State) -> bool {
-  !filters::is_open(state)
+  !player::upcoming::is_open(state)
+    && !filters::is_open(state)
     && !state.tv.settings.open
     && !state.tv.search.open
     && !account::modal_open(state)
@@ -139,6 +140,9 @@ fn open_menu(state: &mut State) -> Task<AppMessage> {
 }
 
 fn route_input(state: &mut State, input: Input) -> Task<AppMessage> {
+  if player::upcoming::is_open(state) {
+    return player::upcoming::input(state, input);
+  }
   if filters::is_open(state) {
     return filters::input(state, input);
   }

@@ -60,7 +60,15 @@ impl fmt::Display for TrackChoice {
 }
 
 pub fn bar(state: &State) -> Option<Element<'_, Message>> {
-  let now_playing = state.playback.view.now_playing.as_ref()?;
+  let Some(now_playing) = state.playback.view.now_playing.as_ref() else {
+    return (!state.playback.view.upcoming.entries.is_empty()).then(|| {
+      container(super::viewing_queue::trigger(state, false))
+        .padding([10, 16])
+        .width(Fill)
+        .align_x(Alignment::End)
+        .into()
+    });
+  };
   Some(
     responsive(move |bounds| {
       bar_content(
@@ -189,6 +197,7 @@ fn bar_content<'a>(state: &'a State, view: BarView<'a>, width: f32) -> Element<'
     TooltipOptions::default(),
   );
   let tools = row![
+    super::viewing_queue::trigger(state, true),
     queue_popover(state, true),
     audio_popover(state, true, false),
     subtitle_popover(state, true, false),
@@ -337,6 +346,7 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
 /// compact player.
 fn track_selection(state: &State) -> Element<'_, Message> {
   row![
+    super::viewing_queue::trigger(state, false),
     queue_popover(state, false),
     audio_popover(state, false, false),
     subtitle_popover(state, false, false)
@@ -451,6 +461,12 @@ pub fn full(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center);
 
+  let header = if state.playback.view.now_playing.is_none() {
+    header.push(super::viewing_queue::trigger(state, false))
+  } else {
+    header
+  };
+
   let body: Element<'_, Message> = match state.playback.view.now_playing.as_ref() {
     Some(now_playing) => {
       let duration = now_playing
@@ -562,6 +578,14 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     ]
     .width(Fill)
     .height(Fill);
+    // Sample video before any chrome: their regions can overlap in short fullscreen windows.
+    layers = layers.push(reveal_player_chrome(
+      container(cinema::full_backdrop(visible))
+        .width(Fill)
+        .height(Fill)
+        .align_y(Alignment::End),
+      visible,
+    ));
     // Keep widget state mounted, but switch drawing and hit targets together
     // so no outgoing control remains visible after it becomes inert.
     layers = layers.push(reveal_player_chrome(
@@ -604,18 +628,6 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       .width(Fill)
       .align_x(Alignment::End),
       info_visible,
-    ));
-    layers = layers.push(reveal_player_chrome(
-      container(
-        container(space::horizontal())
-          .width(Fill)
-          .height(340)
-          .style(|_| cinema::scrim(false)),
-      )
-      .width(Fill)
-      .height(Fill)
-      .align_y(Alignment::End),
-      visible,
     ));
     if let Some(now_playing) = state.playback.view.now_playing.as_ref() {
       layers = layers.push(reveal_player_chrome(
@@ -917,6 +929,7 @@ fn embedded_bar<'a>(
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center);
   let tracks = row![
+    super::viewing_queue::trigger(state, true),
     audio_popover(state, true, true),
     subtitle_popover(state, true, true)
   ]
@@ -1029,10 +1042,10 @@ fn embedded_bar<'a>(
 
 const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
 /// Upper bound for the tools cluster without the skip-mode pill.
-const EMBEDDED_TOOLS_WIDTH: f32 = 269.0;
+const EMBEDDED_TOOLS_WIDTH: f32 = 317.0;
 /// Includes the localized skip-mode pill. Below this side-slot budget the
 /// pill moves to Playback options, preserving the reference's transport row.
-const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 480.0;
+const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 528.0;
 
 fn embedded_skip_fits_inline(width: f32) -> bool {
   width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
@@ -3578,12 +3591,12 @@ mod tests {
         (1024.0, 136.0),
         (901.0, 136.0),
         (900.0, 136.0),
-        (768.0, 136.0),
-        (750.0, 136.0),
+        (768.0, 192.0),
+        (750.0, 192.0),
         (700.0, 192.0),
         (600.0, 192.0),
         (599.0, 192.0),
-        (480.0, 192.0),
+        (480.0, 244.0),
         (400.0, 244.0),
       ] {
         let card_width = window_width - 2.0 * embedded_inset(window_width);
@@ -3612,7 +3625,7 @@ mod tests {
           .iter()
           .find(|bounds| bounds.size() == Size::new(44.0, 44.0))
           .expect("primary play control remains full size");
-        if window_width >= 750.0 || window_width == 400.0 {
+        if expected_height == 136.0 || expected_height == 244.0 {
           assert!(
             (primary.center().x - Point::new(card_width / 2.0, 0.0).x).abs() < 0.5,
             "play must stay centered despite long metadata at {window_width}: {primary:?}"

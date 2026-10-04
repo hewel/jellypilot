@@ -245,6 +245,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   {
     super::item_actions::sync_scope(&mut state.kernel);
     state.kernel.undo.clear();
+    state.playback.viewing_queue = Default::default();
     state.tv = Default::default();
   }
   if was_fullscreen && !state.shell.player_fullscreen {
@@ -806,6 +807,8 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       let seek_succeeded = matches!(&message, super::message::PlaybackMessage::ControllerSettled {
         settlement, ..
       } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Controlled(Ok(_))));
+      let queue_focus = super::view::viewing_queue::focus_after_edit(state, &message);
+      let queue_revision = state.playback.view.upcoming.revision;
       let had_playback = state.playback.view.now_playing.is_some();
       let playback_update = playback::update(
         &mut state.playback,
@@ -834,7 +837,14 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       }
       let return_to_source =
         super::embedded_player::after_playback(state, playback_update.transition.controller);
-      let task = playback_update.task;
+      let task = if state.playback.view.upcoming.revision != queue_revision {
+        Task::batch([
+          playback_update.task,
+          queue_focus.map_or_else(Task::none, iced::widget::operation::focus),
+        ])
+      } else {
+        playback_update.task
+      };
       let task = if (crate::embedded::enabled() || state.tv_mode())
         && !had_playback
         && state.playback.view.now_playing.is_some()

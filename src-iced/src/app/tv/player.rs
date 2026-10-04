@@ -1,5 +1,7 @@
 //! TV presentation for the existing playback session. Engine ownership stays in playback.
 
+pub(crate) mod upcoming;
+
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,6 +37,7 @@ use crate::app::state::{Destination, State};
 
 #[derive(Clone, Debug)]
 pub enum Message {
+  Upcoming(upcoming::Message),
   Activate(Control),
   Choice(usize),
   ClosePanel,
@@ -60,6 +63,7 @@ pub enum Message {
 
 #[derive(Default)]
 pub struct Surface {
+  upcoming: upcoming::Surface,
   pub remote: Player,
   generation: Option<u64>,
   presentation: Option<Instant>,
@@ -116,6 +120,7 @@ pub fn active(state: &State) -> bool {
 
 fn input_admitted(state: &State) -> bool {
   active(state)
+    && !upcoming::is_open(state)
     && !state.shell.quit_requested
     && state.shell.pending_close.is_none()
     && state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
@@ -180,7 +185,7 @@ fn seek_range(state: &State) -> Option<(f64, f64)> {
 }
 
 fn available_controls(state: &State) -> Vec<Control> {
-  let mut controls = vec![Control::Queue, Control::Information];
+  let mut controls = vec![Control::Queue, Control::Upcoming, Control::Information];
   if matches!(
     state.playback.view.adjacent.previous,
     AdjacentAvailability::Available { .. }
@@ -238,6 +243,9 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
 }
 
 pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
+  if let Message::Upcoming(event) = event {
+    return upcoming::update(state, event);
+  }
   if !active(state) {
     return Task::none();
   }
@@ -250,6 +258,7 @@ pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
   }
   let now = Instant::now();
   match event {
+    Message::Upcoming(_) => Task::none(),
     Message::Activate(control) => {
       if control != Control::Back && !available_controls(state).contains(&control) {
         return Task::none();
@@ -359,15 +368,21 @@ fn sample_controls(state: &mut State) -> Task<AppMessage> {
 }
 
 pub fn reconcile(state: &mut State) -> Task<AppMessage> {
+  let upcoming_was_open = state.tv.player.upcoming.open;
+  let queue = upcoming::reconcile(state);
   if !active(state) {
     if state.tv.player.generation.is_some() {
-      state.tv.player = Surface::default();
+      state.tv.player = Surface {
+        upcoming: std::mem::take(&mut state.tv.player.upcoming),
+        ..Surface::default()
+      };
     }
-    return Task::none();
+    return queue;
   }
   let generation = state.playback.view.lifecycle.replacement_generation;
   if state.tv.player.generation != Some(generation) {
     state.tv.player = Surface {
+      upcoming: std::mem::take(&mut state.tv.player.upcoming),
       generation: Some(generation),
       presentation: Some(Instant::now()),
       ..Surface::default()
@@ -375,6 +390,14 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
   }
   let observation = observation(state);
   let replaced = state.tv.player.remote.observe(observation, Instant::now());
+  let upcoming_open = upcoming::is_open(state);
+  if upcoming_open || upcoming_was_open {
+    state
+      .tv
+      .player
+      .remote
+      .set_accessibility_focus(upcoming_open, Instant::now());
+  }
   refresh_panel_choices(state);
   if state.playback.notice != state.tv.player.notice {
     state.tv.player.notice = state.playback.notice.clone();
@@ -383,9 +406,9 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
     }
   }
   if replaced {
-    sample_controls(state)
+    Task::batch([queue, sample_controls(state)])
   } else {
-    Task::none()
+    queue
   }
 }
 
@@ -420,6 +443,7 @@ fn apply_action(state: &mut State, action: Option<Action>) -> Task<AppMessage> {
     Some(Action::Next) => dispatch(state, PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
     Some(Action::Skip) => dispatch(state, PlaybackIntent::SkipIntro),
     Some(Action::OpenPanel(panel)) => open_panel(state, panel),
+    Some(Action::OpenUpcoming) => upcoming::open(state),
     Some(Action::ApplyChoice(index)) => apply_choice(state, index),
   }
 }
@@ -790,7 +814,15 @@ fn full_chrome(state: &State, scale: f32) -> Element<'_, AppMessage> {
     ellipsis_text(title)
       .font(HEADING_FONT)
       .size(style::SECTION * scale)
-      .color(style::PALETTE.text.heading)
+      .color(style::PALETTE.text.heading),
+    space().width(Fill),
+    action_button(
+      state,
+      Control::Upcoming,
+      Icon::Playlist,
+      Some(state.t("viewing-queue-title")),
+      scale
+    )
   ]
   .spacing(style::GAP * scale)
   .align_y(Alignment::Center);
@@ -925,6 +957,7 @@ fn controls_hint(state: &State) -> Option<String> {
     Control::Backward => "tv-player-backward",
     Control::Forward => "tv-player-forward",
     Control::Queue => "player-queue",
+    Control::Upcoming => "viewing-queue-title",
     Control::Information => "player-information",
     Control::Audio => "player-audio",
     Control::Subtitles => "player-subtitles",
@@ -991,7 +1024,7 @@ fn action_button(
   label: Option<String>,
   scale: f32,
 ) -> Element<'_, AppMessage> {
-  let focused = state.tv.player.remote.focused() == Some(control);
+  let focused = !upcoming::is_open(state) && state.tv.player.remote.focused() == Some(control);
   let enabled = !observation(state).busy
     && (control == Control::Back || available_controls(state).contains(&control));
   let primary = control == Control::PlayPause;

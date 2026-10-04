@@ -44,6 +44,7 @@ pub mod skeleton;
 pub mod tv_navigation;
 pub mod tv_player;
 pub mod undo_notices;
+pub mod viewing_queue;
 #[cfg(feature = "portable")]
 pub mod volume_memory;
 #[cfg(feature = "portable")]

@@ -22,6 +22,7 @@ pub(super) enum RailAction {
   Search,
   Home,
   Lists,
+  Upcoming,
   Library(usize),
   Settings,
   Account,
@@ -29,11 +30,16 @@ pub(super) enum RailAction {
 }
 
 pub(super) fn rail_actions(state: &State) -> Vec<RailAction> {
-  [RailAction::Search, RailAction::Home, RailAction::Lists]
-    .into_iter()
-    .chain((0..shortcuts(state).len()).map(RailAction::Library))
-    .chain([RailAction::Settings, RailAction::Account, RailAction::Exit])
-    .collect()
+  [
+    RailAction::Search,
+    RailAction::Home,
+    RailAction::Lists,
+    RailAction::Upcoming,
+  ]
+  .into_iter()
+  .chain((0..shortcuts(state).len()).map(RailAction::Library))
+  .chain([RailAction::Settings, RailAction::Account, RailAction::Exit])
+  .collect()
 }
 
 pub(super) fn focused_item(state: &State) -> Option<&VideoLibraryItem> {
@@ -277,6 +283,7 @@ pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
     };
     match action {
       RailAction::Search => return super::search::open(state),
+      RailAction::Upcoming => return super::player::upcoming::open(state),
       RailAction::Settings => return super::settings::open(state),
       RailAction::Account => {
         return super::settings::open_category(state, super::settings::Category::Account)

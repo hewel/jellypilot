@@ -341,6 +341,22 @@ pub fn scrim(top: bool) -> container::Style {
     }
 }
 
+/// Samples live video before the Full scrim and later controls are drawn.
+/// The scrim also keeps unsupported renderers readable without a blur effect.
+pub fn full_backdrop<'a, Message: 'a>(visible: bool) -> Element<'a, Message> {
+    let tokens = TOKENS.player_chrome;
+    iced::widget::backdrop(
+        iced::Blur::vertical_gradient(0.0, tokens.backdrop_blur_sigma)
+            .range(tokens.backdrop_blur_start, 1.0),
+        container(space::horizontal())
+            .width(Length::Fill)
+            .height(tokens.backdrop_height)
+            .style(|_| scrim(false)),
+    )
+    .enabled(visible)
+    .into()
+}
+
 /// The minimal presentation's shallow bottom gradient: 80px, black/30% to
 /// transparent, much weaker than the complete scrim.
 pub fn minimal_scrim(_theme: &Theme) -> container::Style {

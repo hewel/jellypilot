@@ -61,6 +61,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       subscriptions.push(event::listen_with(|event, status, _| {
         super::tv::keyboard(event, status)
       }));
+    } else if state.playback.viewing_queue.open {
+      subscriptions.push(event::listen_with(viewing_queue_keyboard));
     } else if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
     } else {
@@ -155,6 +157,33 @@ fn visible_application_shortcut(
     }
     Some(Message::Settings(super::message::SettingsMessage::Open)) if fullscreen => None,
     message => message,
+  }
+}
+
+fn viewing_queue_keyboard(event: Event, status: event::Status, _: window::Id) -> Option<Message> {
+  if status == event::Status::Captured {
+    return None;
+  }
+  let Event::Keyboard(keyboard::Event::KeyPressed {
+    modified_key,
+    modifiers,
+    repeat: false,
+    ..
+  }) = event
+  else {
+    return None;
+  };
+  match (modified_key.as_ref(), modifiers) {
+    (keyboard::Key::Named(keyboard::key::Named::Escape), _) => Some(Message::Playback(
+      PlaybackMessage::ViewingQueue(super::playback::viewing_queue::Message::Close),
+    )),
+    (keyboard::Key::Named(keyboard::key::Named::Tab), keyboard::Modifiers::NONE) => {
+      Some(Message::Shell(ShellMessage::FocusNext))
+    }
+    (keyboard::Key::Named(keyboard::key::Named::Tab), keyboard::Modifiers::SHIFT) => {
+      Some(Message::Shell(ShellMessage::FocusPrevious))
+    }
+    _ => None,
   }
 }
 
@@ -688,6 +717,85 @@ mod tests {
       .await
       .iter()
       .any(|message| matches!(message, Message::Window(WindowMessage::FrameTick(_))))
+  }
+
+  #[tokio::test]
+  async fn viewing_queue_subscription_keeps_focus_navigation_and_blocks_background_shortcuts() {
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    state.playback.viewing_queue.open = true;
+    let id = window::Id::unique();
+    state.shell.window_id = Some(id);
+    for (key, modifiers, expected) in [
+      (
+        keyboard::Key::Named(keyboard::key::Named::Tab),
+        keyboard::Modifiers::NONE,
+        1,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Tab),
+        keyboard::Modifiers::SHIFT,
+        2,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::NONE,
+        3,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Space),
+        keyboard::Modifiers::NONE,
+        0,
+      ),
+      (
+        keyboard::Key::Character("k".into()),
+        keyboard::Modifiers::CTRL,
+        0,
+      ),
+      (
+        keyboard::Key::Character(">".into()),
+        keyboard::Modifiers::SHIFT,
+        0,
+      ),
+    ] {
+      for status in [event::Status::Ignored, event::Status::Captured] {
+        let messages = emitted_messages(
+          &state,
+          iced::advanced::subscription::Event::Interaction {
+            window: id,
+            event: key_pressed(key.clone(), modifiers),
+            status,
+          },
+        )
+        .await;
+        let actions: Vec<_> = messages
+          .iter()
+          .filter(|message| matches!(message, Message::Shell(_) | Message::Playback(_)))
+          .collect();
+        match if status == event::Status::Captured {
+          0
+        } else {
+          expected
+        } {
+          1 => assert!(matches!(
+            actions.as_slice(),
+            [Message::Shell(ShellMessage::FocusNext)]
+          )),
+          2 => assert!(matches!(
+            actions.as_slice(),
+            [Message::Shell(ShellMessage::FocusPrevious)]
+          )),
+          3 => assert!(matches!(
+            actions.as_slice(),
+            [Message::Playback(PlaybackMessage::ViewingQueue(
+              super::super::playback::viewing_queue::Message::Close
+            ))]
+          )),
+          _ => assert!(actions.is_empty()),
+        }
+      }
+    }
   }
 
   #[tokio::test]

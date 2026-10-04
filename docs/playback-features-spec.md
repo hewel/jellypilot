@@ -10,17 +10,35 @@ playback, account, or platform contracts.
 | Batch | Accepted scope | Delivery status |
 | --- | --- | --- |
 | 1 | Desktop seek thumbnails and Linux MPRIS | Implemented; automated checks and independent review passed; human acceptance pending |
-| 1, addition | Progressive blur for embedded player controls | Compatible iced candidate in verification; app integration pending |
-| 2 | Android controls an authorized living-room PC/TV Playback Target through the media server | Not started |
-| 3 | Editable, temporary viewing queue containing movies and episodes within one Profile Scope | Not started |
-| 4 | Secondary text subtitles and A/B loop for the active Playback Session | Not started |
-| 5 | Named, device-local saved browse filters within one Profile Scope | Not started |
+| 1, addition | Progressive blur for embedded player controls | Implemented; published iced pin, remote cold preparation, app checks and independent review passed; human acceptance pending |
+| 2 | Android controls an authorized living-room PC/TV Playback Target through the media server | Implemented; focused checks and independent review passed; human integration pending; [contract](remote-controller-spec.md) |
+| 3 | Editable, temporary viewing queue containing movies and episodes within one Profile Scope | Implemented; automated tests and independent review passed; human acceptance pending; [accepted contract](viewing-queue-spec.md) |
+| 4 | Secondary text subtitles and A/B loop for the active Playback Session | Contract prepared; implementation follows batch 3; [accepted contract](playback-tools-spec.md) |
+| 5 | Named, device-local saved browse filters within one Profile Scope | Contract prepared; implementation follows batch 4; [accepted contract](saved-browse-filters-spec.md) |
 
 Later batches must use the established server and playback adapters. They do not
 authorize a new pairing service, background Android playback, Android TV, or a
 cross-server queue. Saved filters remain independent of Favorites and Watchlist.
 Implementation-specific contracts and evidence will be recorded as each batch
 is completed.
+
+## Viewing queue evidence
+
+The Desktop/native TV queue passed 640 focused iced tests, 245 MPV tests and
+308 core tests, with focused Clippy. The final cross-crate pass completed
+`bun run check` and 1573 independent workspace Rust tests, zero failures and one
+existing ignored test; the private D-Bus test also executes once in a child.
+The final nonvisual native startup smoke also passed.
+Independent backend and UI reviews have no remaining findings. They closed
+late-EOF priority, cross-series Intro initialization, keyboard traversal,
+editing-focus and pointer-state transfer regressions through observable tests.
+
+The Paper handoff `/tmp/media-streamer-viewing-queue-handoff.md` records 24 new
+states (12 Desktop, 12 TV), finish OK, and final inventories of Desktop 51,
+TV 49 and unchanged Mobile 86. Desktop sorting focuses Close at a disabled
+boundary; TV retains the same disabled editing action. Both keep sorting from
+turning into Play or Remove. Native input, real media continuity and visual
+acceptance remain separate from these static design references.
 
 ## Seek Preview
 
@@ -66,8 +84,8 @@ MPRIS is Linux-only. A missing session bus must not prevent application startup
 or playback. It introduces no second transport state machine or busy polling.
 The initial service does not promise MPRIS TrackList, Playlists or OpenUri.
 
-Next/Previous are advertised only while playing and a real adjacent episode is
-available; paused calls cannot accidentally resume playback. Observed rate remains
+Next/Previous are advertised only while playing and a real next item or previous
+episode is available; paused calls cannot accidentally resume playback. Observed rate remains
 accurate even when an external MPV configuration exceeds the app's 0.25–4 range.
 The declared range includes that observed rate; new settings use MPRIS best-fit
 semantics within the app's supported range. Successful seek settlement emits
@@ -94,10 +112,32 @@ embedded composition remain intact. Hidden control surfaces must not leave a
 blur effect running. The docked browser footer and external Control-Only screen
 are outside this visual change.
 
-The iced dependency must supply a compatible, reproducible implementation before
-the app enables the effect. Final radius, falloff, tint and crop are implementation
-parameters to validate at that boundary; a Paper image cannot prove live-frame,
-HDR, performance, or lifecycle correctness.
+The local integration uses an isolated compatible backport on the previous iced
+pin, preserving the existing scalar blur, Widget and embedded-engine interfaces.
+Revision `3cf722cd8c33ca2afe1ae88cfc8ce20f31fd1a2c` is recorded in the application
+manifest and, after explicit user approval, published on the iced fork's
+`player-progressive-backdrop` branch. Remote ref readback matches exactly.
+Fresh application sources with no vendor checkout successfully ran
+`bun install --frozen-lockfile` and `bun run task iced prepare` without `--source`;
+the fetched checkout is clean at that revision. All 18 declared iced path
+dependencies point within that same vendor checkout.
+
+Native Full retains its existing 340px bottom scrim height. The blur progresses
+from zero to 16px sigma, starting after the first 15% of that region. These values
+live in `jellypilot-ui` tokens, not in the application view. The existing scrim is
+drawn after the sampled video and remains available on the software/no-effect
+path. Full visibility gates the effect independently from Minimal and popovers;
+no animation timer or redraw subscription is added. The Paper 320px height is a
+static reference, not a required replacement of the native region.
+
+A Paper image cannot prove live-frame, HDR, performance, or lifecycle correctness.
+
+Independent consumer review caught the backdrop sampling top buttons in short
+fullscreen windows. It now draws immediately after video and before every
+control. The final order passed precise re-review, 624 focused iced tests,
+focused Clippy, the joint 1537-test workspace suite and native startup smoke.
+The one existing ignored test remains ignored; the D-Bus test also executes
+once in a private child process.
 
 ## Verification and acceptance
 
@@ -109,7 +149,8 @@ resume. Native appearance, actual media/control integration, display color and
 device performance remain human acceptance; neither Paper nor smoke proves them.
 
 Preserve unrelated Android and other local changes. Commit completed slices
-with explicit paths; no push is authorized by this delivery plan.
+with explicit paths; no JellyPilot push is authorized. The later explicit
+approval covers only the iced `player-progressive-backdrop` candidate branch.
 
 ### First-batch evidence
 
@@ -129,4 +170,4 @@ The first-batch Paper handoff is `/tmp/media-streamer-player-features-handoff.md
 nine new Desktop boards, 39 total, finish returned OK with token hash `28f17849`.
 Its [contract board](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/QMK-0)
 records the adaptive preview and provisional blur material. Paper completion is
-separate from the still-pending progressive-blur app integration and human checks.
+separate from the completed progressive-blur app integration and pending human checks.

@@ -40,8 +40,10 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     && !super::account::modal_open(state))
   .then(|| super::lists::overlay(state))
   .flatten();
-  let obscured =
-    state.tv.search.open || super::lists::menu_open(state) || super::filters::is_open(state);
+  let obscured = state.tv.search.open
+    || super::lists::menu_open(state)
+    || super::filters::is_open(state)
+    || super::player::upcoming::is_open(state);
   let mut layers = vec![if obscured { inert(base) } else { base }];
   if let Some(overlay) = list_overlay {
     layers.push(overlay);
@@ -51,6 +53,9 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   }
   if super::filters::is_open(state) {
     layers.push(super::filters::view(state));
+  }
+  if super::player::upcoming::is_open(state) {
+    layers.push(super::player::upcoming::view(state));
   }
   iced::widget::Stack::with_children(layers)
     .width(Fill)
@@ -240,6 +245,7 @@ fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         Icon::Bookmark,
         !state.tv.settings.open && matches!(state.shell.destination, Destination::PersonalLists(_)),
       ),
+      RailAction::Upcoming => (state.t("viewing-queue-title"), Icon::Playlist, false),
       RailAction::Library(index) => {
         let Some(shortcut) = navigation::shortcuts(state).get(index) else {
           continue;

@@ -6,8 +6,9 @@ use jellypilot_core::item_actions::{Action, Receipt};
 use jellypilot_core::request_gate::SessionToken;
 use jellypilot_core::tv_navigation::Input;
 use jellypilot_core::undo_notices::UndoPause;
+use jellypilot_core::viewing_queue::QueuePlacement;
 use jellypilot_media_server::{VideoLibraryItem, VideoUserDataAction};
-use jellypilot_mpv::playback::Playable;
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tv as style;
@@ -17,10 +18,11 @@ use jellypilot_ui::widgets::tv_focus;
 use super::{AppMessage, Focus as TvFocus, State};
 use crate::app::artwork::ArtworkSurface;
 use crate::app::item_actions::{self, Origin};
-use crate::app::message::HomeMessage;
+use crate::app::message::{HomeMessage, PlaybackMessage};
 use crate::app::personal_lists::{
   self, Kind, ListEntry, ListPage, PersonalListsMessage, Route, PAGE_SIZE,
 };
+use crate::app::playback::viewing_queue;
 use crate::app::state::Destination;
 use crate::app::{list_playback, undo};
 
@@ -74,6 +76,8 @@ struct Menu {
   row: usize,
   error: bool,
   pending: Option<Action>,
+  queue_target: Option<Playable>,
+  queue_revision: u64,
 }
 
 struct Added {
@@ -198,6 +202,7 @@ fn open(
     return Task::none();
   }
   state.tv.lists.serial = state.tv.lists.serial.wrapping_add(1);
+  let queue_target = queue_target(state, item.as_ref());
   state.tv.lists.menu = Some(Menu {
     session: state.kernel.request_gate.current_session(),
     serial: state.tv.lists.serial,
@@ -216,8 +221,39 @@ fn open(
     },
     error: false,
     pending: None,
+    queue_target,
+    queue_revision: state.playback.view.upcoming.revision,
   });
   Task::none()
+}
+
+fn queue_target(state: &State, item: Option<&VideoLibraryItem>) -> Option<Playable> {
+  let item = item?;
+  if matches!(&state.shell.destination, Destination::Detail(id) if id == &item.id) {
+    return super::navigation::detail_playable(state);
+  }
+  matches!(item.item_type.as_str(), "Movie" | "Episode").then(|| Playable::from(item.clone()))
+}
+
+fn menu_rows(menu: &Menu) -> usize {
+  if menu.queue_target.is_some() {
+    4
+  } else {
+    2
+  }
+}
+
+fn reveal_menu(state: &State) -> Task<AppMessage> {
+  let Some(menu) = &state.tv.lists.menu else {
+    return Task::none();
+  };
+  iced::widget::operation::scroll_to(
+    "tv-list-action-menu",
+    iced::widget::operation::AbsoluteOffset {
+      x: 0.0,
+      y: menu.row.saturating_sub(1) as f32 * 96.0 * style::scale(state.shell.window_size.width),
+    },
+  )
 }
 
 fn close_menu(state: &mut State) {
@@ -438,12 +474,12 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
       Input::Back => close_menu(state),
       Input::Up => {
         if let Some(menu) = &mut state.tv.lists.menu {
-          menu.row = 0;
+          menu.row = menu.row.saturating_sub(1);
         }
       }
       Input::Down => {
         if let Some(menu) = &mut state.tv.lists.menu {
-          menu.row = 1;
+          menu.row = (menu.row + 1).min(menu_rows(menu) - 1);
         }
       }
       Input::Confirm => {
@@ -460,7 +496,7 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
       }
       _ => {}
     }
-    return Task::none();
+    return reveal_menu(state);
   }
   let kind = kind(state);
   let focus = match state.tv.focus {
@@ -582,7 +618,7 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
     }
     Message::MenuFocus(row) => {
       if let Some(menu) = &mut state.tv.lists.menu {
-        menu.row = row.min(1);
+        menu.row = row.min(menu_rows(menu) - 1);
       }
       Task::none()
     }
@@ -604,6 +640,47 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
         || item_actions::busy(&state.kernel, &menu.id)
       {
         return Task::none();
+      }
+      if row >= 2 {
+        if row >= menu_rows(menu)
+          || state.playback.view.upcoming.pending.is_some()
+          || state.playback.view.busy
+          || state.playback.view.lifecycle.replacing
+        {
+          return Task::none();
+        }
+        let Some(item) = menu.queue_target.clone() else {
+          return Task::none();
+        };
+        let resume = match &item {
+          Playable::Library(item) => jellypilot_core::home_hero::has_resume_position(item),
+          Playable::Detail(item) => item.can_resume,
+          Playable::Media(_) => false,
+        };
+        let revision = menu.queue_revision;
+        close_menu(state);
+        return crate::app::update::route_message(
+          state,
+          AppMessage::Playback(PlaybackMessage::ViewingQueue(
+            viewing_queue::Message::Edit {
+              session,
+              revision,
+              action: viewing_queue::Action::Insert {
+                item: Box::new(item),
+                position: if resume {
+                  PlaybackStartPosition::Resume
+                } else {
+                  PlaybackStartPosition::Beginning
+                },
+                placement: if row == 2 {
+                  QueuePlacement::Next
+                } else {
+                  QueuePlacement::Last
+                },
+              },
+            },
+          )),
+        );
       }
       if row == 0
         && state
@@ -1182,7 +1259,7 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
       .size(style::SECTION * scale)
       .font(HEADING_FONT)]
     .spacing(24.0 * scale);
-    for (row, label) in [
+    let mut labels = vec![
       (
         0,
         state.t(if watchlisted {
@@ -1199,24 +1276,41 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
           "tv-lists-add-favorites"
         }),
       ),
-    ] {
+    ];
+    if menu.queue_target.is_some() {
+      let target = match menu.queue_target.as_ref() {
+        Some(Playable::Library(item)) => item.name.as_str(),
+        Some(Playable::Detail(item)) => item.name.as_str(),
+        Some(Playable::Media(item)) => item.name.as_str(),
+        None => "",
+      };
+      labels.extend([
+        (2, format!("{} · {target}", state.t("viewing-queue-next"))),
+        (3, format!("{} · {target}", state.t("viewing-queue-add"))),
+      ]);
+    }
+    for (row, label) in labels {
       let enabled = menu.pending.is_none()
         && (menu.item.is_some() || (row == 0 && watchlisted))
         && (row != 0
           || state
             .full
             .as_ref()
-            .is_some_and(|full| full.personal_lists.membership_loaded));
+            .is_some_and(|full| full.personal_lists.membership_loaded))
+        && (row < 2
+          || (state.playback.view.upcoming.pending.is_none()
+            && !state.playback.view.busy
+            && !state.playback.view.lifecycle.replacing));
       let message = dispatch(Message::MenuChoose {
         session,
         serial: menu.serial,
         row,
       });
       let action: Element<'_, AppMessage> = tv_focus::focus(menu.row == row, move |progress| {
-        let icon = if row == 0 {
-          Icon::Bookmark
-        } else {
-          Icon::Heart
+        let icon = match row {
+          0 => Icon::Bookmark,
+          1 => Icon::Heart,
+          _ => Icon::Playlist,
         };
         let content = row![
           icon_with_color(
@@ -1234,7 +1328,7 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
           container(content)
             .padding([12.0 * scale, 20.0 * scale])
             .width(Fill)
-            .height(72.0 * scale)
+            .height(iced::Length::Fit.min(72.0 * scale))
             .align_y(Alignment::Center),
         )
         .padding(0)
@@ -1266,10 +1360,16 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
       dispatch(Message::CloseMenu),
       scale,
     ));
-    let panel = container(actions)
-      .width(520.0 * scale)
-      .padding(32.0 * scale)
-      .style(style::panel);
+    let panel = container(
+      iced::widget::scrollable(actions)
+        .id("tv-list-action-menu")
+        .height(iced::Length::Fit.max(
+          (state.shell.window_size.height - 2.0 * style::SAFE_Y * scale - 64.0 * scale).max(1.0),
+        )),
+    )
+    .width(520.0 * scale)
+    .padding(32.0 * scale)
+    .style(style::panel);
     let shade = mouse_area(
       container(space())
         .width(Fill)
@@ -1282,7 +1382,7 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
       .height(Fill)
       .align_x(Alignment::End)
       .padding(iced::Padding {
-        top: 288.0 * scale,
+        top: style::SAFE_Y * scale,
         right: 96.0 * scale,
         bottom: 60.0 * scale,
         left: 0.0,
@@ -1496,6 +1596,79 @@ mod tests {
         }
       }
     }
+  }
+
+  #[tokio::test]
+  async fn series_menu_queues_resolved_episode_without_starting_and_rejects_stale_menu_revision() {
+    use jellypilot_core::detail::DetailContent;
+    use jellypilot_core::LoadState;
+    use jellypilot_media_server::VideoShowDetail;
+
+    let fixture = BrowseFixture::new();
+    let mut state = state(&fixture);
+    let mut series = item("show");
+    series.item_type = "Series".into();
+    state.shell.destination = Destination::Detail(series.id.clone());
+    state.tv.focus = TvFocus::DetailMenu;
+    assert!(queue_target(&state, Some(&series)).is_none());
+    let mut episode = item("episode");
+    episode.item_type = "Episode".into();
+    episode.runtime_seconds = Some(600.0);
+    episode.resume_position_seconds = Some(120.0);
+    state.full.as_mut().expect("full").detail.data.content =
+      LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
+        id: series.id.clone(),
+        name: series.name.clone(),
+        overview: None,
+        production_year: None,
+        genres: vec![],
+        played: false,
+        original_language: None,
+        favorite: false,
+        can_play: true,
+        artwork_image_id: None,
+        backdrop_image_id: None,
+        logo_image_id: None,
+        next_episode: Some(episode),
+        seasons: vec![],
+        metadata: Default::default(),
+      })));
+    drop(open_menu(&mut state, series.clone()));
+    let menu = state.tv.lists.menu.as_ref().expect("menu");
+    let event = Message::MenuChoose {
+      session: menu.session,
+      serial: menu.serial,
+      row: 2,
+    };
+    drop(update(&mut state, event));
+    assert!(state.playback.viewing_queue.open);
+    assert!(!state.playback.view.lifecycle.playback_active);
+    let entry = state
+      .playback
+      .view
+      .upcoming
+      .entries
+      .first()
+      .expect("queued episode");
+    assert_eq!(entry.item_id, "episode");
+    assert_eq!(entry.position, PlaybackStartPosition::Resume);
+
+    drop(open_menu(&mut state, series));
+    let menu = state.tv.lists.menu.as_ref().expect("menu");
+    let event = Message::MenuChoose {
+      session: menu.session,
+      serial: menu.serial,
+      row: 3,
+    };
+    let revision = state.playback.view.upcoming.revision;
+    state
+      .playback
+      .session
+      .queue_clear(revision)
+      .expect("concurrent queue change");
+    drop(update(&mut state, event));
+    assert!(state.playback.view.upcoming.entries.is_empty());
+    assert!(state.playback.viewing_queue.error.is_some());
   }
 
   #[tokio::test]
