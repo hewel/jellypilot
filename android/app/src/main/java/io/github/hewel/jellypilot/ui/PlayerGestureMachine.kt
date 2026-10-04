@@ -30,7 +30,10 @@ internal data class GesturePlayback(
 internal data class GestureSeekCapture(val token: Long, val position: Double)
 internal sealed interface GestureFeedback {
   data class Step(val delta: Double, val anchor: GesturePoint, val backwards: Boolean = false) : GestureFeedback
-  data class Seek(val origin: Double, val target: Double, val cancelled: Boolean) : GestureFeedback
+  data class Seek(
+    val origin: Double, val target: Double, val cancelled: Boolean,
+    val anchor: GesturePoint, val duration: Double,
+  ) : GestureFeedback
   data class Level(val brightness: Boolean, val value: Int) : GestureFeedback
   data object Speed : GestureFeedback
 }
@@ -63,7 +66,7 @@ internal class PlayerGestureMachine(
     val start: GesturePoint, val region: Region, val time: Long,
     val playback: GesturePlayback, var mode: Mode = Mode.Pending,
     var hold: Boolean = true, var moved: Boolean = false,
-    var seek: GestureSeekCapture? = null, var lockY: Float = 0f,
+    var seek: GestureSeekCapture? = null, var lockY: Float = 0f, var anchorX: Float = 0f,
     var target: Double = 0.0, var duration: Double = 0.0, var cancelled: Boolean = false,
     var speed: Long? = null, var value: Int = 0,
   )
@@ -124,9 +127,11 @@ internal class PlayerGestureMachine(
     when (active.mode) {
       Mode.Seek -> {
         val capture = requireNotNull(active.seek)
+        if (!active.cancelled) active.anchorX = point.x
         active.cancelled = active.cancelled || point.y - active.lockY >= 64
         active.target = (capture.position + dx / bounds.width * 120).coerceIn(0.0, active.duration)
-        show(GestureFeedback.Seek(capture.position, active.target, active.cancelled))
+        show(GestureFeedback.Seek(capture.position, active.target, active.cancelled,
+          GesturePoint(active.anchorX, active.lockY), active.duration))
       }
       Mode.Brightness, Mode.Volume -> {
         val brightness = active.mode == Mode.Brightness

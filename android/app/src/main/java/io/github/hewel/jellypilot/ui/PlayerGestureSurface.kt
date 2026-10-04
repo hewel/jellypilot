@@ -19,6 +19,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.hewel.jellypilot.R
@@ -166,27 +167,49 @@ internal fun PlayerGestureFeedback(
   val value = last ?: return
   val density = LocalDensity.current
   val scale = density.fontScale.coerceAtLeast(1f)
+  val seekStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp)
+  val cancelStyle = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, lineHeight = 24.sp)
+  val secondaryStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp, lineHeight = 16.sp)
+  val cancelLabel = stringResource(R.string.gesture_release_cancel)
   val brightnessLabel = stringResource(R.string.gesture_brightness)
-  val labelWidth = rememberTextMeasurer().measure(brightnessLabel,
+  val measurer = rememberTextMeasurer()
+  val labelWidth = measurer.measure(brightnessLabel,
     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp)).size.width / density.density
+  val seekSize = if (value is GestureFeedback.Seek) remember(value.duration, value.origin, bounds, density,
+    seekStyle, cancelStyle, secondaryStyle, cancelLabel, measurer) {
+    val constraints = Constraints(maxWidth = ((bounds.width - 24).coerceAtLeast(1f) * density.density).roundToInt())
+    // Reserve the whole timecode range and cancellation wording up front so neither hours nor
+    // entering cancellation changes the chosen side or moves the bubble away from its anchor.
+    val clock = playbackClock(maxOf(value.duration, value.origin))
+    val clocks = ('0'..'9').map { digit -> clock.map { if (it.isDigit()) digit else it }.joinToString("") }
+    val primary = clocks.map { measurer.measure(it, seekStyle, constraints = constraints).size } +
+      measurer.measure(cancelLabel, cancelStyle, constraints = constraints).size
+    val secondary = (clocks.flatMap { listOf("+$it", "−$it") } + playbackClock(value.origin))
+      .map { measurer.measure(it, secondaryStyle, constraints = constraints).size }
+    val width = (primary + secondary).maxOf { it.width } / density.density + 24
+    val height = (primary.maxOf { it.height } + secondary.maxOf { it.height }) / density.density + 16
+    maxOf(112f, width) to maxOf(56f, height)
+  } else null
   val width = when (value) {
     is GestureFeedback.Step -> 72f * scale
     is GestureFeedback.Level -> if (value.brightness) maxOf(40f * scale, labelWidth + 12) else 40f * scale
-    is GestureFeedback.Seek -> 160f * scale
+    is GestureFeedback.Seek -> requireNotNull(seekSize).first
     GestureFeedback.Speed -> 52f * scale
   }.coerceAtMost(bounds.width)
   val height = when (value) {
     is GestureFeedback.Step -> 72f * scale
     is GestureFeedback.Level -> 108f + 28f * scale
-    is GestureFeedback.Seek -> 16f + 40f * scale
+    is GestureFeedback.Seek -> requireNotNull(seekSize).second
     GestureFeedback.Speed -> 12f + 20f * scale
-  }.coerceAtMost(bounds.height)
+  }.coerceAtMost(if (value is GestureFeedback.Seek) (bounds.height - 64).coerceAtLeast(1f) else bounds.height)
   // Native subtitles are composited into the video. Reserve their lower picture lane as well
   // as keeping this passive sibling underneath every actionable overlay.
   val feedbackBottom = (bounds.bottom - 64).coerceAtLeast(bounds.top + height)
+  val seekPosition = if (value is GestureFeedback.Seek) seekFeedbackPosition(value.anchor, bounds, width, height) else null
   val x = when (value) {
     is GestureFeedback.Step -> value.anchor.x - width / 2
     is GestureFeedback.Level -> if (value.brightness) bounds.left + 56 - width / 2 else bounds.right - 56 - width / 2
+    is GestureFeedback.Seek -> requireNotNull(seekPosition).x
     else -> (bounds.left + bounds.right - width) / 2
   }.coerceIn(bounds.left, (bounds.right - width).coerceAtLeast(bounds.left))
   val y = when (value) {
@@ -195,6 +218,7 @@ internal fun PlayerGestureFeedback(
       if (above >= bounds.top && above + height <= feedbackBottom) above else value.anchor.y + 48 - height / 2
     }
     is GestureFeedback.Level -> (bounds.top + bounds.bottom - height) / 2
+    is GestureFeedback.Seek -> requireNotNull(seekPosition).y
     else -> bounds.top + 24
   }.coerceIn(bounds.top, (feedbackBottom - height).coerceAtLeast(bounds.top))
   Box(modifier.fillMaxSize().clearAndSetSemantics { }) {
@@ -214,10 +238,12 @@ internal fun PlayerGestureFeedback(
             style = MaterialTheme.typography.labelMedium.copy(fontSize = 14.sp, lineHeight = 20.sp), color = PilotPlayerTokens.foreground)
         }
         is GestureFeedback.Seek -> {
-          Text(if (value.cancelled) stringResource(R.string.gesture_release_cancel) else playbackClock(value.target),
-            style = MaterialTheme.typography.titleMedium, color = PilotPlayerTokens.foreground)
+          Text(if (value.cancelled) cancelLabel else playbackClock(value.target),
+            modifier = Modifier.padding(horizontal = 12.dp),
+            style = if (value.cancelled) cancelStyle else seekStyle, color = PilotPlayerTokens.foreground)
           Text(if (value.cancelled) playbackClock(value.origin) else signedTime(value.target - value.origin),
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp, lineHeight = 16.sp), color = PilotPlayerTokens.secondary)
+            modifier = Modifier.padding(horizontal = 12.dp),
+            style = secondaryStyle, color = PilotPlayerTokens.secondary)
         }
         is GestureFeedback.Level -> {
           Text(if (!value.brightness && value.value == 0) stringResource(R.string.gesture_muted) else "${value.value}%",

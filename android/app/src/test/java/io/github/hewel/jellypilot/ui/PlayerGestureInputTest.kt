@@ -34,6 +34,8 @@ class PlayerGestureInputTest {
       Box(Modifier.size(800.dp, 360.dp).testTag("picture").observePlayerMultitouch(arbitration)) {
         PlayerGestureSurface(1, enabled.value, true, "Picture gestures", GestureBounds(24f, 24f, 776f, 336f), actions, arbitration,
           Modifier.matchParentSize())
+        PlayerGestureFeedback(GestureFeedback.Seek(399.0, 429.0, false, GesturePoint(400f, 200f), 1292.0),
+          GestureBounds(24f, 24f, 776f, 336f), reducedMotion = true)
         Button(onClick = { clicks++ }, modifier = Modifier.align(Alignment.Center).size(100.dp, 56.dp)) { Text("Control") }
         Box(Modifier.align(Alignment.BottomEnd).size(200.dp, 60.dp).reservePlayerOverlayTouchArea()) { Text("Undo notice") }
       }
@@ -50,6 +52,21 @@ class PlayerGestureInputTest {
       down(Offset(width * 0.2f, height * 0.5f)); moveTo(center); up()
     }
     compose.runOnIdle { assertEquals(1, actions.previews); assertEquals(1, actions.finishes.size); assertEquals(1, clicks) }
+  }
+
+  @Test fun passiveSeekFeedbackAllowsPictureGestureThroughItsText() {
+    mount()
+    compose.onNodeWithTag("picture").performTouchInput {
+      down(Offset(width * 0.5f, height * 0.35f))
+      moveTo(Offset(width * 0.7f, height * 0.35f)); up()
+    }
+    compose.runOnIdle {
+      assertEquals(1, actions.previews)
+      assertEquals(1, actions.finishes.size)
+      assertNotNull(actions.finishes.single().second)
+      assertEquals(0, clicks)
+      assertEquals(0, actions.toggles)
+    }
   }
 
   @Test fun secondPointerCancelsPreviewAndNeverTurnsRemainingPointerIntoTap() {
