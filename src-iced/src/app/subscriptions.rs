@@ -61,6 +61,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       subscriptions.push(event::listen_with(|event, status, _| {
         super::tv::keyboard(event, status)
       }));
+    } else if state.saved_browse.editor.is_some() {
+      subscriptions.push(
+        event::listen_with(|event, status, window| Some((event, status, window)))
+          .with(super::saved_browse::target(state))
+          .filter_map(saved_editor_keyboard),
+      );
     } else if super::playback::tools::is_open(state) {
       subscriptions.push(event::listen_with(playback_tools_keyboard));
     } else if state.playback.viewing_queue.open {
@@ -160,6 +166,23 @@ fn visible_application_shortcut(
     Some(Message::Settings(super::message::SettingsMessage::Open)) if fullscreen => None,
     message => message,
   }
+}
+
+fn saved_editor_keyboard(
+  (target, (event, status, window)): (
+    super::saved_browse::Target,
+    (Event, event::Status, window::Id),
+  ),
+) -> Option<Message> {
+  viewing_queue_keyboard(event, status, window).map(|message| match message {
+    Message::Playback(PlaybackMessage::ViewingQueue(_)) => {
+      Message::SavedBrowse(super::saved_browse::Message::Action {
+        target,
+        action: super::saved_browse::Action::CloseEditor,
+      })
+    }
+    other => other,
+  })
 }
 
 fn playback_tools_keyboard(
@@ -817,6 +840,91 @@ mod tests {
             )),
             _ => assert!(actions.is_empty()),
           }
+        }
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn saved_name_editor_routes_only_focus_and_scoped_escape() {
+    let mut state = super::super::update::tests::test_state();
+    state.shell.window_id = Some(window::Id::unique());
+    state.saved_browse.editor = Some(super::super::saved_browse::Editor {
+      name: "Draft".into(),
+      error: None,
+      kind: super::super::saved_browse::EditorKind::Save(Box::new(
+        jellypilot_sdk::saved_browse::SavedBrowseDraft {
+          name: String::new(),
+          library_id: "movies".into(),
+          library_name: "Movies".into(),
+          collection_type: jellypilot_media_server::VideoLibraryKind::Movies,
+          preferences: Default::default(),
+        },
+      )),
+    });
+    for (key, modifiers, expected) in [
+      (
+        keyboard::Key::Named(keyboard::key::Named::Tab),
+        keyboard::Modifiers::NONE,
+        1,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Tab),
+        keyboard::Modifiers::SHIFT,
+        2,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::NONE,
+        3,
+      ),
+      (
+        keyboard::Key::Named(keyboard::key::Named::Space),
+        keyboard::Modifiers::NONE,
+        0,
+      ),
+      (
+        keyboard::Key::Character("k".into()),
+        keyboard::Modifiers::CTRL,
+        0,
+      ),
+    ] {
+      for status in [event::Status::Ignored, event::Status::Captured] {
+        let messages = emitted_messages(
+          &state,
+          iced::advanced::subscription::Event::Interaction {
+            window: state.shell.window_id.unwrap(),
+            event: key_pressed(key.clone(), modifiers),
+            status,
+          },
+        )
+        .await;
+        let actions: Vec<_> = messages
+          .iter()
+          .filter(|message| {
+            matches!(
+              message,
+              Message::Shell(_) | Message::Playback(_) | Message::SavedBrowse(_)
+            )
+          })
+          .collect();
+        match if status == event::Status::Captured {
+          0
+        } else {
+          expected
+        } {
+          1 => assert!(matches!(
+            actions.as_slice(),
+            [Message::Shell(ShellMessage::FocusNext)]
+          )),
+          2 => assert!(matches!(
+            actions.as_slice(),
+            [Message::Shell(ShellMessage::FocusPrevious)]
+          )),
+          3 => assert!(
+            matches!(actions.as_slice(), [Message::SavedBrowse(super::super::saved_browse::Message::Action { target, action: super::super::saved_browse::Action::CloseEditor })] if *target == super::super::saved_browse::target(&state))
+          ),
+          _ => assert!(actions.is_empty()),
         }
       }
     }

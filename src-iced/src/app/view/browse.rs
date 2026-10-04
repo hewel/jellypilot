@@ -119,6 +119,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     },
     Destination::Search(query) => query,
     Destination::Home
+    | Destination::SavedBrowse
     | Destination::PersonalLists(_)
     | Destination::Detail(_)
     | Destination::NowPlaying => library_label.as_str(),
@@ -126,6 +127,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let heading = match &state.shell.destination {
     Destination::Search(_) => state.format("browse-search-results", &[("query", title.into())]),
     Destination::Home
+    | Destination::SavedBrowse
     | Destination::PersonalLists(_)
     | Destination::Library { .. }
     | Destination::Detail(_)
@@ -140,6 +142,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
   );
   if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(toolbar(state));
+    if state
+      .full
+      .as_ref()
+      .is_some_and(|full| full.browse.saved.is_some())
+    {
+      header = header.push(super::saved_browse::active_summary(state));
+    }
   }
   header = header.push(presentation_bar(state));
 
@@ -203,6 +212,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
       filters.played_filter()
     ),
     favorites,
+    super::saved_browse::save_button(state),
   ]
   .spacing(TOKENS.spacing.s2_5)
   .align_y(Alignment::Center)
@@ -377,6 +387,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
         ),
         Destination::Home
         | Destination::PersonalLists(_)
+        | Destination::SavedBrowse
         | Destination::Library { .. }
         | Destination::Detail(_)
         | Destination::NowPlaying => {

@@ -49,6 +49,7 @@ pub struct Surface {
   pub filters: Option<BrowseFilterSettings>,
   pub advanced_filters: VideoLibraryFilters,
   pub mode: ViewMode,
+  pub saved: Option<super::saved_browse::AppliedFilter>,
   /// The active presentation supplies its measured geometry; absent for desktop.
   pub presentation_grid: Option<ArtworkGridMetrics>,
   alternate_scroll: Option<ScrollSnapshot>,
@@ -68,6 +69,7 @@ impl Default for Surface {
       filters: None,
       advanced_filters: VideoLibraryFilters::default(),
       mode: ViewMode::Grid,
+      saved: None,
       presentation_grid: None,
       alternate_scroll: None,
     }
@@ -94,7 +96,12 @@ pub(crate) struct Snapshot {
   advanced_filters: VideoLibraryFilters,
   search_input: String,
   mode: ViewMode,
+  saved: Option<super::saved_browse::AppliedFilter>,
   alternate_scroll: Option<ScrollSnapshot>,
+}
+
+pub(crate) fn snapshot_uses_saved(snapshot: &Snapshot) -> bool {
+  snapshot.saved.is_some()
 }
 
 pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> Snapshot {
@@ -112,6 +119,7 @@ pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> 
     advanced_filters: surface.advanced_filters.clone(),
     search_input: submitted_query.unwrap_or(&surface.search_input).to_owned(),
     mode: surface.mode,
+    saved: surface.saved.take(),
     alternate_scroll: surface.alternate_scroll.take(),
   }
 }
@@ -134,6 +142,7 @@ pub(crate) fn restore(
   surface.advanced_filters = snapshot.advanced_filters;
   surface.search_input = snapshot.search_input;
   surface.mode = snapshot.mode;
+  surface.saved = snapshot.saved;
   surface.alternate_scroll = snapshot.alternate_scroll;
   surface.sort_menu_open = false;
   if allow_advanced_filters && normalize_tv_filters(surface, kernel) {
@@ -141,7 +150,10 @@ pub(crate) fn restore(
     surface.browser.reset();
     return start(surface, kernel, source);
   }
-  if !allow_advanced_filters && surface.advanced_filters != VideoLibraryFilters::default() {
+  if !allow_advanced_filters
+    && surface.saved.is_none()
+    && surface.advanced_filters != VideoLibraryFilters::default()
+  {
     surface.advanced_filters = VideoLibraryFilters::default();
     surface.browser.reset();
     return start(surface, kernel, source);
@@ -179,6 +191,9 @@ pub(crate) fn restore(
 
 /// Keep the TV toolbar truthful without writing over desktop saved preferences.
 pub(crate) fn normalize_tv_filters(surface: &mut Surface, kernel: &Kernel) -> bool {
+  if surface.saved.is_some() {
+    return false;
+  }
   use jellypilot_media_server::VideoLibraryPlayedFilter;
   let original = surface
     .filters
@@ -192,6 +207,53 @@ pub(crate) fn normalize_tv_filters(surface: &mut Surface, kernel: &Kernel) -> bo
     .with_played_filter(played);
   surface.filters = Some(filters);
   filters != original
+}
+
+pub(crate) fn preferences(surface: &Surface, kernel: &Kernel) -> BrowsePreferences {
+  BrowsePreferences {
+    filters: surface.advanced_filters.clone(),
+    ..BrowsePreferences::from(
+      surface
+        .filters
+        .unwrap_or_else(|| kernel.settings.snapshot().browse_filters()),
+    )
+  }
+}
+
+/// Installs one complete query without mutating ordinary browsing defaults.
+pub(crate) fn install_preferences(surface: &mut Surface, preferences: BrowsePreferences) {
+  surface.filters = Some(filter_settings(&preferences));
+  surface.advanced_filters = preferences.filters;
+}
+
+fn filter_settings(preferences: &BrowsePreferences) -> BrowseFilterSettings {
+  BrowseFilterSettings::default()
+    .with_sort(preferences.sort)
+    .with_sort_direction(preferences.sort_direction)
+    .with_played_filter(preferences.played_filter)
+    .with_favorites_only(preferences.favorites_only)
+}
+
+pub(crate) fn commit_preferences(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  source: Option<BrowseSource>,
+  preferences: BrowsePreferences,
+) -> Task<Message> {
+  if surface.saved.is_none() {
+    if let Err(error) = kernel
+      .settings
+      .set_browse_filters(filter_settings(&preferences))
+    {
+      return kernel.show_toast(
+        super::state::NoticeLevel::Error,
+        UiText::new("browse-save-filters-failed")
+          .arg("details", sanitize_message(&error.to_string())),
+      );
+    }
+  }
+  install_preferences(surface, preferences);
+  start(surface, kernel, source)
 }
 
 /// `source` is the router-resolved browse source for the current destination
@@ -400,7 +462,11 @@ fn persist_filters(
       .filters
       .unwrap_or_else(|| kernel.settings.snapshot().browse_filters()),
   );
-  if let Err(error) = kernel.settings.set_browse_filters(filters) {
+  if let Err(error) = if surface.saved.is_none() {
+    kernel.settings.set_browse_filters(filters)
+  } else {
+    Ok(false)
+  } {
     kernel.diagnostics.record(
       DiagnosticLevel::Error,
       DiagnosticCategory::Connection,
@@ -431,13 +497,10 @@ pub fn start(
     kernel.notice = Some(UiText::new("browse-library-unavailable"));
     return Task::none();
   };
-  let filters = *surface
+  let _ = *surface
     .filters
     .get_or_insert_with(|| kernel.settings.snapshot().browse_filters());
-  let preferences = BrowsePreferences {
-    filters: surface.advanced_filters.clone(),
-    ..BrowsePreferences::from(filters)
-  };
+  let preferences = preferences(surface, kernel);
   let work = match surface
     .browser
     .configure(kernel.client.clone(), source, preferences)
@@ -655,6 +718,7 @@ pub(crate) fn reset(surface: &mut Surface) {
   leave_view(surface);
   surface.filters = None;
   surface.advanced_filters = VideoLibraryFilters::default();
+  surface.saved = None;
 }
 
 #[cfg(test)]

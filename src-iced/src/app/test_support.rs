@@ -43,6 +43,7 @@ impl FixtureRequest {
         (200, page_body(self.start_index, self.limit, total, artwork))
       }
       FixtureReply::Failure => (500, "{}".to_owned()),
+      FixtureReply::Json(body) => (200, body),
     };
     // A cancelled request may already have dropped the server thread's
     // receiver; the reply is best-effort.
@@ -55,9 +56,13 @@ impl FixtureRequest {
 pub(crate) enum FixtureReply {
   /// `BaseItemDtoQueryResult` covering the request's own range, with
   /// deterministic item ids (`fixture_item_id`).
-  Page { total: u32, artwork: bool },
+  Page {
+    total: u32,
+    artwork: bool,
+  },
   /// HTTP 500 with an empty JSON body.
   Failure,
+  Json(String),
 }
 
 /// The item id the fixture generates for global index `index`.
@@ -74,6 +79,9 @@ pub(crate) struct BrowseFixture {
 }
 
 impl BrowseFixture {
+  pub(crate) fn server_url(&self) -> &str {
+    &self.server_url
+  }
   pub(crate) fn new() -> Self {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind browse fixture");
     let address = listener.local_addr().expect("fixture address");

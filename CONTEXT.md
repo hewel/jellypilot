@@ -209,6 +209,10 @@ _Avoid_: Cross-server collection, merged favorite/watchlist state
 The current server user's expression of liking a media item, shared through Jellyfin or Emby with other clients. Favorites are independent of Watchlist membership and watched status.
 _Avoid_: Watchlist, planned viewing
 
+**Saved Filters**:
+A named set of library filter and sorting choices kept on this device for one Profile Scope, labeled “保存的筛选” in Simplified Chinese. Applying it retrieves current matching items from that same library; the saved definition is separate from results, Favorites, and Watchlist.
+_Avoid_: Saved media list, server playlist, frozen search results
+
 **Watchlist**:
 A viewing plan kept on this device for one Profile Scope, labeled “稍后观看” in Simplified Chinese. Its entries remain until explicitly removed, including after viewing or when an item becomes unavailable; Sign Out retains the list unless the user explicitly chooses to delete it.
 _Avoid_: Favorites, unwatched filter, cross-device list

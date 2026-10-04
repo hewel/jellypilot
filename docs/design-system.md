@@ -387,6 +387,23 @@ These measurements supersede the older generic browse geometry. Human visual acc
 - Counts, ratings, progress and landscape images come from real data. Jellyfin series episode totals use its episode-only recursive count; unknown Emby totals are omitted rather than relabeling descendants or issuing per-card count requests. Watchlist remains a local viewing plan, not Continue Watching.
 - Watch History merges server-played and resumable movie/episode records, newest first. It is a latest-item list, not a per-play event log. Timestamps show local calendar dates, with an honest Played fallback when absent; no sample counts or relative-time labels are fabricated. See [Personal Lists contract](sidebar-design-spec.md#3-personal-lists) for paging semantics.
 
+### Saved Filters
+
+The [saved-filter contract](saved-browse-filters-spec.md) adds an independent
+personal-navigation destination for device-local named queries. Records show
+their name, library snapshot and complete conditions, with Apply, Rename and
+Delete. The Browse save action retains the current query. Use existing surface,
+field and button Catalogs, wrapping text, bounded scrolling and at least 40px
+Desktop targets; TV uses its existing scaled 64px controls and text entry.
+
+Applying a definition retains every condition across Detail and presentation
+changes. Expose those conditions with individual removal and clear actions;
+mark later query edits Modified without silently overwriting the saved record.
+Loading, network failure and a confirmed missing library are separate states.
+Input and focus use stable record identity, and saving or renaming failures
+retain the entered name. Saved Filters does not merge with Personal Lists,
+Favorites, Watchlist or server playlists.
+
 ## 2026-09-09 Embedded Player
 
 **Implemented; human visual acceptance pending.** References: [Desktop - 播放器 Player](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/5QE-0) and [responsive player frames](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/4-0/735-0), not the neighboring Apple Blur variant. Scope is embedded playback only; the browser's docked playback bar and external Control-Only screen retain their existing treatment.

@@ -14,13 +14,42 @@ playback, account, or platform contracts.
 | 2 | Android controls an authorized living-room PC/TV Playback Target through the media server | Implemented; focused checks and independent review passed; human integration pending; [contract](remote-controller-spec.md) |
 | 3 | Editable, temporary viewing queue containing movies and episodes within one Profile Scope | Implemented; automated tests and independent review passed; human acceptance pending; [accepted contract](viewing-queue-spec.md) |
 | 4 | Secondary text subtitles and A/B loop for the active Playback Session | Implemented; automated checks and independent review passed; human acceptance pending; [contract](playback-tools-spec.md) |
-| 5 | Named, device-local saved browse filters within one Profile Scope | Contract prepared; implementation follows batch 4; [accepted contract](saved-browse-filters-spec.md) |
+| 5 | Named, device-local saved browse filters within one Profile Scope | Implemented; automated checks and independent review passed; human acceptance pending; [contract](saved-browse-filters-spec.md) |
 
 Later batches must use the established server and playback adapters. They do not
 authorize a new pairing service, background Android playback, Android TV, or a
 cross-server queue. Saved filters remain independent of Favorites and Watchlist.
-Implementation-specific contracts and evidence will be recorded as each batch
-is completed.
+All five batches are implemented. Their contracts and automated evidence are
+recorded below; actual device and visual acceptance remain separate.
+
+## Saved filters evidence
+
+Desktop and native TV share profile-scoped local definitions and complete
+queries across Detail and presentation changes. Focused tests passed 318 core,
+106 SDK and 676 iced tests. The final cross-crate pass completed `bun run check`,
+1638 independent workspace Rust tests and nonvisual native startup smoke,
+with zero failures. The existing ignored MPV lifecycle helper is launched by
+its parent tests; the private D-Bus test also executes once in a child and is
+not counted twice.
+
+Independent backend and UI review have no remaining findings. Review fixes
+cover ordinary TV Clear/Remove query updates, stable record focus after list
+replacement, and retry after an interrupted account handoff. Regression tests
+exercise actual HTTP queries, retained widget state and SDK handoff hooks.
+Clear restores BrowsePreferences defaults while retaining the applied baseline;
+deleting an applied definition retains its query and labels it deleted.
+
+Desktop long-text layout, TV directional reading and OSK, real-server missing
+libraries and unavailable facets, and account transition feedback remain human
+acceptance. Full command logs, file inventory and review reports are linked from
+`/tmp/jellypilot-saved-filters-result.md`.
+
+The completed Paper handoff `/tmp/media-streamer-saved-filters-handoff.md`
+records 27 new states (13 Desktop, 14 TV), finish OK and independent static
+review with no remaining findings. Inventories are Desktop 82, TV 80 and
+unchanged Mobile 86. The previous 69/66 IDs remain present. The TV naming form,
+complete-condition panel, short-window gaps and OSK Done/Save distinction follow
+the native contract; these static references add no native requirements.
 
 ## Active playback tools evidence
 
@@ -37,6 +66,12 @@ regressions, with actual widget/input tests. Real subtitle readability, primary
 ASS overlap, repeated media loops, remote focus and narrow-window appearance
 remain human acceptance. The engine's headless IPC contract and Paper states
 are supporting evidence, not native visual or decoder acceptance.
+
+The completed Paper handoff `/tmp/media-streamer-playback-tools-handoff.md`
+records 35 new states (18 Desktop, 17 TV), finish OK and static review with no
+remaining findings. Inventories are Desktop 69, TV 66 and unchanged Mobile 86.
+Desktop's 240px subtitle panel has primary and secondary sections sharing one
+280px-max scrolling body; TV retains the role-to-track navigation chain.
 
 ## Viewing queue evidence
 

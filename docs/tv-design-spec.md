@@ -57,7 +57,19 @@ Quality, production country and genre options come from this library's metadata.
 Neither audio language nor localization settings are evidence of production country.
 Series have no episode-wide quality index, so only country/genre filtering is available.
 Filters survive a TV Detail round trip, reset for a different library, and are cleared
-when restoring browsing in Desktop. They are not global saved desktop preferences.
+when restoring ordinary browsing in Desktop. They are not global saved desktop
+preferences. Explicitly applied [Saved Filters](saved-browse-filters-spec.md) are
+the exception: preserve all their conditions through Detail and Desktop/TV
+switches, including played state and Favorites. Show the full set through the
+All conditions entry; never retain an invisible condition without a removal action.
+
+Saved Filters adds a separate rail destination for the current Profile Scope's
+local definitions. Library adds a second toolbar row for Save current filters
+and All conditions, using a shared 272px-scaled header/grid offset. Existing
+All/Unwatched/Filters/Sort controls remain usable. Applying a saved definition
+first checks its exact library against refreshed server shortcuts; a missing
+library retains the record, while a network failure offers retry. The definition
+does not store results or change automatically with later query edits.
 
 Both server adapters build a bounded complete metadata snapshot for advanced filters,
 then apply filtering, count and pagination to the same snapshot. Loading, timeout,
@@ -205,6 +217,8 @@ Human acceptance on the actual television must check:
 9. In Library, open Filters, change a candidate and cancel; reopen and apply multiple
    dimensions. Confirm one truthful result count, stable paging, trigger focus return,
    Detail round-trip retention and no hidden filter after returning to Desktop.
+   An explicitly applied saved filter retains every condition in either
+   presentation, with a complete readable summary and removal actions.
 10. Compare compact playback/decoder/filter panels in normal and short windows;
     inspect contextual hints, failed-save retry and long localized text.
 11. Open a season longer than 30 episodes and an episode within that season. Traverse

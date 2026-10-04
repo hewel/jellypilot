@@ -22,6 +22,7 @@ pub(super) enum RailAction {
   Search,
   Home,
   Lists,
+  SavedBrowse,
   Upcoming,
   Library(usize),
   Settings,
@@ -34,6 +35,7 @@ pub(super) fn rail_actions(state: &State) -> Vec<RailAction> {
     RailAction::Search,
     RailAction::Home,
     RailAction::Lists,
+    RailAction::SavedBrowse,
     RailAction::Upcoming,
   ]
   .into_iter()
@@ -294,16 +296,26 @@ pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
   if focus == Focus::Header(2) {
     return super::filters::open(state);
   }
+  if focus == Focus::Header(4) {
+    return super::saved_browse::save_current(state);
+  }
+  if focus == Focus::Header(5) {
+    return super::saved_browse::open_conditions(state);
+  }
   if focus == Focus::DetailMenu {
     return focused_item(state)
       .cloned()
       .map_or_else(Task::none, |item| super::lists::open_menu(state, item));
   }
   let message = match focus {
+    Focus::SavedBrowse(focus) => return super::saved_browse::activate(state, focus),
     Focus::Rail(index) => match rail_actions(state).get(index) {
       Some(RailAction::Home) => Some(AppMessage::Home(HomeMessage::Navigate(Destination::Home))),
       Some(RailAction::Lists) => Some(AppMessage::Home(HomeMessage::Navigate(
         Destination::PersonalLists(crate::app::personal_lists::Route::Watchlist),
+      ))),
+      Some(RailAction::SavedBrowse) => Some(AppMessage::Home(HomeMessage::Navigate(
+        Destination::SavedBrowse,
       ))),
       Some(RailAction::Library(index)) => shortcuts(state).get(*index).map(|library| {
         AppMessage::Home(HomeMessage::Navigate(Destination::Library {
@@ -491,9 +503,17 @@ pub(super) fn input(state: &mut State, input: Input) -> Task<AppMessage> {
       GridMove::Rail => Focus::Rail(0),
       GridMove::Header => Focus::Header(0),
     },
-    (Focus::Header(0), Input::Left) => Focus::Rail(0),
+    (Focus::Header(0 | 4), Input::Left) => Focus::Rail(0),
     (Focus::Header(index), Input::Left) => Focus::Header(index.saturating_sub(1)),
-    (Focus::Header(index), Input::Right) => Focus::Header((index + 1).min(3)),
+    (Focus::Header(index), Input::Right) => {
+      Focus::Header((index + 1).min(if index < 4 { 3 } else { 5 }))
+    }
+    (Focus::Header(index @ 0..=3), Input::Down)
+      if matches!(state.shell.destination, Destination::Library { .. }) =>
+    {
+      Focus::Header(4 + index.min(1))
+    }
+    (Focus::Header(index @ 4..=5), Input::Up) => Focus::Header(index - 4),
     (Focus::Header(_), Input::Down) if total(state) > 0 => Focus::Grid(0),
     (Focus::Header(_), Input::Down) if browse_retry_available(state) => Focus::Retry,
     (Focus::Retry, Input::Up) => match state.shell.destination {
@@ -538,9 +558,8 @@ pub(super) fn sync_browse(state: &mut State) -> Task<AppMessage> {
     return Task::none();
   }
   let metrics = metrics(state);
-  let scale = style::scale(state.shell.window_size.width);
   let viewport = ArtworkGridViewport {
-    offset_y: state.tv.offset - 184.0 * scale,
+    offset_y: state.tv.offset - browse_header_height(state),
     height: viewport_height(state),
   };
   let total = total(state);
@@ -567,6 +586,14 @@ pub(super) fn sync_browse(state: &mut State) -> Task<AppMessage> {
 
 pub(super) fn scroll_id() -> iced::widget::Id {
   iced::widget::Id::new("tv-content")
+}
+
+pub(super) fn browse_header_height(state: &State) -> f32 {
+  (if matches!(state.shell.destination, Destination::Library { .. }) {
+    272.0
+  } else {
+    184.0
+  }) * style::scale(state.shell.window_size.width)
 }
 pub(super) fn shelf_id(row: usize) -> iced::widget::Id {
   iced::widget::Id::from(format!("tv-shelf-{row}"))
@@ -605,9 +632,8 @@ fn reveal(state: &mut State) -> Task<AppMessage> {
   let Focus::Grid(index) = state.tv.focus else {
     return reveal_measured(state);
   };
-  let scale = style::scale(state.shell.window_size.width);
   let metrics = metrics(state);
-  let top = 184.0 * scale + (index / 5) as f32 * metrics.row_height;
+  let top = browse_header_height(state) + (index / 5) as f32 * metrics.row_height;
   state.tv.offset = reveal_offset(
     top,
     top + metrics.cell_height,

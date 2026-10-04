@@ -97,6 +97,7 @@ pub(crate) fn page_key(destination: &Destination) -> u64 {
       item_id.hash(&mut hasher);
     }
     Destination::NowPlaying => 5u8.hash(&mut hasher),
+    Destination::SavedBrowse => 6u8.hash(&mut hasher),
   }
   hasher.finish()
 }

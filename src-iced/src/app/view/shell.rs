@@ -88,6 +88,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::PersonalLists(_) => personal_lists::view(state),
+    Destination::SavedBrowse => super::saved_browse::page(state),
     Destination::Detail(_) => detail::view(state),
     Destination::NowPlaying if crate::embedded::enabled() => player::full(state),
     Destination::NowPlaying => home::view(state),
@@ -222,6 +223,12 @@ fn sidebar_full(
       state.t("shell-personal-lists"),
       personal_destination,
       personal_active,
+    ))
+    .push(destination_button(
+      Icon::Filter,
+      state.t("saved-filters-title"),
+      Destination::SavedBrowse,
+      state.shell.destination == Destination::SavedBrowse,
     ));
 
   let libraries = match &state
@@ -459,12 +466,19 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       state.palette().colors.warning,
     )),
   };
-  let personal_navigation = personal_navigation.push(compact_destination_button(
-    Icon::Heart,
-    state.t("shell-personal-lists"),
-    personal_destination,
-    personal_active,
-  ));
+  let personal_navigation = personal_navigation
+    .push(compact_destination_button(
+      Icon::Heart,
+      state.t("shell-personal-lists"),
+      personal_destination,
+      personal_active,
+    ))
+    .push(compact_destination_button(
+      Icon::Filter,
+      state.t("saved-filters-title"),
+      Destination::SavedBrowse,
+      state.shell.destination == Destination::SavedBrowse,
+    ));
   let refreshing = crate::app::shell::refresh_busy(state);
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)

@@ -556,13 +556,21 @@ fn stable_rows<'a>(
   state: &State,
   entries: Vec<(String, Element<'a, Message>)>,
 ) -> Element<'a, Message> {
+  guarded_rows(scope(state), entries, TOKENS.spacing.s1)
+}
+
+pub(crate) fn guarded_rows<'a, S: Clone + Eq + 'static>(
+  scope: S,
+  entries: Vec<(String, Element<'a, Message>)>,
+  spacing: f32,
+) -> Element<'a, Message> {
   let (keys, children): (Vec<String>, Vec<Element<'a, Message>>) = entries.into_iter().unzip();
   Element::new(Guard {
-    scope: scope(state),
+    scope,
     keys,
     content: Column::with_children(children)
       .width(Fill)
-      .spacing(TOKENS.spacing.s1)
+      .spacing(spacing)
       .into(),
   })
 }
@@ -593,7 +601,7 @@ impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'
     }
     let state = tree.state.downcast_mut::<GuardState<S>>();
     if state.keys != self.keys {
-      // Preserve keyboard focus by track identity, including equal-length replacements/reorders.
+      // Preserve keyboard focus by identity, including equal-length replacements/reorders.
       let mut previous: HashMap<_, _> = state
         .keys
         .iter()

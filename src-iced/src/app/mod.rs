@@ -14,6 +14,7 @@ pub mod message;
 pub(crate) mod motion;
 pub mod personal_lists;
 pub mod playback;
+pub(crate) mod saved_browse;
 pub mod settings;
 pub mod shell;
 pub mod state;

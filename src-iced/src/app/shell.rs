@@ -417,6 +417,7 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
       } else if !matches!(
         state.shell.destination,
         Destination::Home
+          | Destination::SavedBrowse
           | Destination::Library { .. }
           | Destination::Search(_)
           | Destination::Detail(_)
@@ -443,12 +444,14 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
       tasks.push(super::tv::leave(state));
       let source = browse_source(state);
       if let Some(full) = state.full.as_mut() {
-        tasks.push(browse::apply_advanced_filters(
-          &mut full.browse,
-          &mut state.kernel,
-          source,
-          Default::default(),
-        ));
+        if full.browse.saved.is_none() {
+          tasks.push(browse::apply_advanced_filters(
+            &mut full.browse,
+            &mut state.kernel,
+            source,
+            Default::default(),
+          ));
+        }
       }
       let geometry = mode_geometry(state.app_mode(), state.shell.desktop_window_size.take());
       if let Some(id) = state.shell.window_id {
@@ -470,6 +473,7 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
 /// controller size; entering Full restores the window and lands on Home
 /// through the normal activation path.
 pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
+  super::saved_browse::leave(state);
   let fullscreen_exit = exit_player_fullscreen(state);
   state.shell.compact_search_open = false;
   state.shell.account_popover_open = false;
@@ -831,11 +835,91 @@ fn close_transient(surface: &mut Surface, kernel: &mut Kernel, now_playing: bool
 pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
   let previous = state.shell.destination.clone();
   if previous == destination {
+    if matches!(destination, Destination::Library { .. })
+      && state
+        .full
+        .as_ref()
+        .is_some_and(|full| full.browse.saved.is_some())
+    {
+      super::saved_browse::leave(state);
+      let source = browse_source(state);
+      let tv = state.tv_mode();
+      let full = state.full.as_mut().expect("library has FullUi");
+      full.browse.saved = None;
+      full.browse.filters = None;
+      full.browse.advanced_filters = Default::default();
+      if tv {
+        browse::normalize_tv_filters(&mut full.browse, &state.kernel);
+      }
+      return browse::start(&mut full.browse, &mut state.kernel, source);
+    }
     return Task::none();
   }
+  super::saved_browse::leave(state);
   state.shell.page_state = capture_page(state);
   state.shell.navigate_to(destination);
+  if matches!(state.shell.destination, Destination::Library { .. })
+    && matches!(state.shell.page_state.as_ref(), Some(PageState::Browse(snapshot)) if browse::snapshot_uses_saved(snapshot))
+  {
+    state.shell.page_state = None;
+  }
   activate_destination(state, previous)
+}
+
+/// Resolve has already validated the exact current library. Install the route
+/// and complete preference set before the single Browser configure call.
+pub(crate) fn apply_saved_browse(
+  state: &mut State,
+  resolved: jellypilot_sdk::saved_browse::ResolvedSavedBrowse,
+) -> Task<Message> {
+  let previous = state.shell.destination.clone();
+  let destination = Destination::Library {
+    library_id: resolved.library.id.clone(),
+    collection_type: resolved.library.collection_type.clone(),
+  };
+  if previous != destination {
+    state.shell.page_state = capture_page(state);
+    state.shell.navigate_to(destination);
+  }
+  state.shell.page_state = None;
+  state.shell.leave_refresh_target();
+  state.shell.scroll_memory = Default::default();
+  leave_destination(state, &previous);
+  super::saved_browse::leave(state);
+  let Some(full) = state.full.as_mut() else {
+    return Task::none();
+  };
+  if let jellypilot_core::LoadState::Ready(shortcuts) = &mut full.home.data.shortcuts {
+    if let Some(previous) = shortcuts
+      .iter_mut()
+      .find(|library| library.id == resolved.library.id)
+    {
+      *previous = resolved.library.clone();
+    } else {
+      shortcuts.push(resolved.library.clone());
+    }
+  } else {
+    full.home.data.shortcuts = jellypilot_core::LoadState::Ready(vec![resolved.library.clone()]);
+  }
+  browse::install_preferences(&mut full.browse, resolved.filter.preferences.clone());
+  full.browse.saved = Some(super::saved_browse::AppliedFilter {
+    filter: resolved.filter,
+    deleted: false,
+  });
+  full.browse.search_input.clear();
+  full.browse.browser.reset();
+  full.browse.viewport = Default::default();
+  full.browse.grid_viewport = None;
+  full.browse.scroll_id = iced::widget::Id::unique();
+  let session = state.kernel.request_gate.current_session();
+  browse::start(
+    &mut full.browse,
+    &mut state.kernel,
+    Some(BrowseSource::Library {
+      session,
+      shortcut: resolved.library,
+    }),
+  )
 }
 
 fn capture_page(state: &mut State) -> Option<PageState> {
@@ -859,7 +943,7 @@ fn capture_page(state: &mut State) -> Option<PageState> {
       std::mem::take(&mut full.personal_lists.history),
     )))),
     Destination::Home => Some(PageState::Home),
-    Destination::NowPlaying => None,
+    Destination::NowPlaying | Destination::SavedBrowse => None,
   }
 }
 
@@ -928,6 +1012,9 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
       Task::done(Message::Account(message))
     }
     ShellMessage::RefreshCurrent => {
+      if state.shell.destination == Destination::SavedBrowse {
+        return super::saved_browse::open(state);
+      }
       if refresh_busy(state) || state.full.is_none() {
         return Task::none();
       }
@@ -1073,6 +1160,7 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
       *route,
     ),
     Destination::NowPlaying => Task::none(),
+    Destination::SavedBrowse => super::saved_browse::open(state),
   }
 }
 
@@ -1148,6 +1236,7 @@ pub(crate) fn navigate_back(state: &mut State) -> Task<Message> {
   if !state.shell.navigate_back() {
     return Task::none();
   }
+  super::saved_browse::leave(state);
   activate_destination(state, previous)
 }
 pub(crate) fn open_settings(state: &mut State) {
@@ -1178,24 +1267,13 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Library { .. } | Destination::Search(_) => browse_source(state),
     _ => None,
   };
+  if previous != destination {
+    leave_destination(state, &previous);
+  }
   let full = state
     .full
     .as_mut()
     .expect("library destination activation requires FullUi");
-  if previous == Destination::Home && destination != Destination::Home {
-    home::leave_view(&mut full.home, &mut state.kernel);
-  } else if matches!(
-    previous,
-    Destination::Library { .. } | Destination::Search(_)
-  ) && previous != destination
-  {
-    browse::leave_view(&mut full.browse);
-  } else if matches!(previous, Destination::Detail(_)) && previous != destination {
-    detail::leave_view(&mut full.detail, &mut state.kernel);
-  }
-  if matches!(previous, Destination::PersonalLists(_)) && previous != destination {
-    super::personal_lists::leave_view(&mut full.personal_lists);
-  }
 
   if let Some(page_state) = state.shell.page_state.take() {
     return match page_state {
@@ -1235,6 +1313,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
   match destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } => {
+      full.browse.saved = None;
       full.browse.filters = None;
       full.browse.advanced_filters = Default::default();
       if allow_advanced_filters {
@@ -1244,6 +1323,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
       browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Search(query) => {
+      full.browse.saved = None;
       full.browse.search_input = query;
       full.browse.filters = None;
       full.browse.advanced_filters = Default::default();
@@ -1259,6 +1339,20 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
       route,
     ),
     Destination::NowPlaying => Task::none(),
+    Destination::SavedBrowse => super::saved_browse::open(state),
+  }
+}
+
+fn leave_destination(state: &mut State, previous: &Destination) {
+  let Some(full) = state.full.as_mut() else {
+    return;
+  };
+  match previous {
+    Destination::Home => home::leave_view(&mut full.home, &mut state.kernel),
+    Destination::Library { .. } | Destination::Search(_) => browse::leave_view(&mut full.browse),
+    Destination::Detail(_) => detail::leave_view(&mut full.detail, &mut state.kernel),
+    Destination::PersonalLists(_) => super::personal_lists::leave_view(&mut full.personal_lists),
+    _ => {}
   }
 }
 pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
@@ -1283,6 +1377,7 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       query: query.clone(),
     }),
     Destination::Home
+    | Destination::SavedBrowse
     | Destination::PersonalLists(_)
     | Destination::Detail(_)
     | Destination::NowPlaying => None,
@@ -1304,6 +1399,7 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
 
 /// Resets account-owned presentation after the playback handoff has already settled.
 pub(crate) fn reset_connected_content(state: &mut State) {
+  super::saved_browse::reset(state);
   state.shell.refresh = None;
   state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
   state.shell.compact_search_open = false;

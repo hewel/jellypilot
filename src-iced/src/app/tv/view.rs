@@ -34,6 +34,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     browse_view(state)
   };
   let list_overlay = (!super::filters::is_open(state)
+    && !super::saved_browse::overlay_open(state)
     && !state.tv.settings.open
     && !state.tv.search.open
     && !super::player::active(state)
@@ -41,6 +42,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   .then(|| super::lists::overlay(state))
   .flatten();
   let obscured = state.tv.search.open
+    || super::saved_browse::overlay_open(state)
     || super::lists::menu_open(state)
     || super::filters::is_open(state)
     || super::player::upcoming::is_open(state);
@@ -57,6 +59,9 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   if super::player::upcoming::is_open(state) {
     layers.push(super::player::upcoming::view(state));
   }
+  if let Some(overlay) = super::saved_browse::overlay(state) {
+    layers.push(overlay);
+  }
   iced::widget::Stack::with_children(layers)
     .width(Fill)
     .height(Fill)
@@ -66,13 +71,21 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
 fn browse_view(state: &State) -> Element<'_, AppMessage> {
   let scale = style::scale(state.shell.window_size.width);
   let width = content_width(state, scale);
-  let page_footer =
-    state.tv.settings.open || matches!(state.shell.destination, Destination::PersonalLists(_));
+  let page_footer = state.tv.settings.open
+    || matches!(
+      state.shell.destination,
+      Destination::PersonalLists(_) | Destination::SavedBrowse
+    );
   let height = navigation::viewport_height(state) + if page_footer { 80.0 * scale } else { 0.0 };
   // The viewport extends into the safe gutter. Content padding cancels its
   // translation, preserving the original slots while focused posters can grow.
   let page: Element<'_, AppMessage> = if state.tv.settings.open {
     container(super::settings::view(state))
+      .width(width)
+      .height(height)
+      .into()
+  } else if matches!(state.shell.destination, Destination::SavedBrowse) {
+    container(super::saved_browse::view(state))
       .width(width)
       .height(height)
       .into()
@@ -191,6 +204,17 @@ pub(super) fn context_hint(state: &State) -> String {
     Focus::Lists(super::lists::Focus::Empty) => "tv-hint-browse",
     Focus::Lists(super::lists::Focus::Retry) => "tv-hint-retry",
     Focus::Lists(super::lists::Focus::Tab(_)) => "tv-hint-select",
+    Focus::SavedBrowse(super::saved_browse::Focus::Back) => "tv-hint-back",
+    Focus::SavedBrowse(super::saved_browse::Focus::Reload) => "tv-hint-retry",
+    Focus::SavedBrowse(super::saved_browse::Focus::Record(_, _))
+      if state.saved_browse.pending.is_some() =>
+    {
+      "tv-action-pending"
+    }
+    Focus::SavedBrowse(super::saved_browse::Focus::Record(_, _)) => "tv-hint-select",
+    Focus::SavedBrowse(
+      super::saved_browse::Focus::Identity(_) | super::saved_browse::Focus::Summary(_, _),
+    ) => return String::new(),
   };
   state.t(key)
 }
@@ -246,6 +270,11 @@ fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         !state.tv.settings.open && matches!(state.shell.destination, Destination::PersonalLists(_)),
       ),
       RailAction::Upcoming => (state.t("viewing-queue-title"), Icon::Playlist, false),
+      RailAction::SavedBrowse => (
+        state.t("saved-filters-title"),
+        Icon::Filter,
+        matches!(state.shell.destination, Destination::SavedBrowse),
+      ),
       RailAction::Library(index) => {
         let Some(shortcut) = navigation::shortcuts(state).get(index) else {
           continue;
@@ -799,9 +828,31 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
       &[("title", title.into()), ("count", count.into())],
     )
   });
-  let header = column![page_title(title, scale), filters]
-    .spacing(24.0 * scale)
-    .height(184.0 * scale);
+  let mut header = column![page_title(title, scale), filters].spacing(24.0 * scale);
+  if matches!(state.shell.destination, Destination::Library { .. }) {
+    header = header.push(
+      row![
+        action(
+          state,
+          Focus::Header(4),
+          state.t("saved-filters-save-current"),
+          Some(Icon::Bookmark),
+          false,
+          scale
+        ),
+        action(
+          state,
+          Focus::Header(5),
+          super::saved_browse::conditions_label(state),
+          Some(Icon::Filter),
+          false,
+          scale
+        ),
+      ]
+      .spacing(16.0 * scale),
+    );
+  }
+  let header = header.height(navigation::browse_header_height(state));
   let body: Element<'_, AppMessage> = match &full.browse.view {
     LibraryBrowseView::Ready {
       total_record_count,
@@ -810,7 +861,7 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
     } => {
       let metrics = navigation::metrics(state);
       let viewport = ArtworkGridViewport {
-        offset_y: state.tv.offset - 184.0 * scale,
+        offset_y: state.tv.offset - navigation::browse_header_height(state),
         height: navigation::viewport_height(state),
       };
       let grid = artwork_grid_with_overflow(

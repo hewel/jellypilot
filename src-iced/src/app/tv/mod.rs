@@ -7,6 +7,7 @@ mod input;
 pub(crate) mod lists;
 mod navigation;
 pub(crate) mod player;
+pub(crate) mod saved_browse;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod text_entry;
@@ -44,6 +45,7 @@ pub enum Focus {
   DetailEpisodesMore,
   DetailEpisodesRetry,
   Lists(lists::Focus),
+  SavedBrowse(saved_browse::Focus),
   Season(usize),
   Episode(usize),
   Retry,
@@ -58,6 +60,7 @@ pub enum Message {
   Settings(settings::Message),
   Search(search::Message),
   Filters(filters::Message),
+  SavedBrowse(saved_browse::Message),
   ConfirmPressed,
   ConfirmReleased,
   ConfirmHeld(u64),
@@ -91,6 +94,7 @@ pub struct Surface {
   pub settings: settings::Surface,
   pub search: search::Surface,
   pub filters: filters::Surface,
+  pub saved_browse: saved_browse::Surface,
   pub focus: Focus,
   content_focus: Focus,
   pub offset: f32,
@@ -114,6 +118,7 @@ struct ConfirmPress {
 
 pub(super) fn browse_focus_visible(state: &State) -> bool {
   !player::upcoming::is_open(state)
+    && !saved_browse::overlay_open(state)
     && !filters::is_open(state)
     && !state.tv.settings.open
     && !state.tv.search.open
@@ -140,6 +145,9 @@ fn open_menu(state: &mut State) -> Task<AppMessage> {
 }
 
 fn route_input(state: &mut State, input: Input) -> Task<AppMessage> {
+  if saved_browse::overlay_open(state) {
+    return saved_browse::input(state, input);
+  }
   if player::upcoming::is_open(state) {
     return player::upcoming::input(state, input);
   }
@@ -160,6 +168,11 @@ fn route_input(state: &mut State, input: Input) -> Task<AppMessage> {
   }
   if matches!(state.tv.focus, Focus::Lists(_)) {
     return lists::input(state, input);
+  }
+  if matches!(state.shell.destination, Destination::SavedBrowse)
+    && !matches!(state.tv.focus, Focus::Rail(_))
+  {
+    return saved_browse::input(state, input);
   }
   if input == Input::Down && lists::focus_feedback(state) {
     return Task::none();
@@ -224,6 +237,7 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
     Message::Settings(message) => settings::update(state, message),
     Message::Search(message) => search::update(state, message),
     Message::Filters(message) => filters::update(state, message),
+    Message::SavedBrowse(message) => saved_browse::update(state, message),
     Message::Input(input) => {
       state.tv.press = None;
       route_input(state, input)
@@ -372,6 +386,7 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
 pub fn reconcile(state: &mut State) -> Task<AppMessage> {
   if !state.tv_mode() {
     filters::close(state);
+    saved_browse::leave(state);
     return Task::none();
   }
   if state.shell.pending_close.is_some()
@@ -419,6 +434,7 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
             Destination::Detail(_) => Focus::DetailPlay,
             Destination::Library { .. } | Destination::Search(_) => Focus::Header(0),
             Destination::PersonalLists(_) => Focus::Lists(lists::Focus::Card(0)),
+            Destination::SavedBrowse => Focus::SavedBrowse(saved_browse::Focus::Back),
             _ => Focus::HeroPlay,
           },
           0.0,
@@ -438,12 +454,14 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
   navigation::reconcile_focus(state);
   restore |= previous_focus != state.tv.focus;
   let lists = lists::reconcile(state);
+  let saved_browse = saved_browse::reconcile(state);
   let player = player::reconcile(state);
   let browse = navigation::sync_browse(state);
   Task::batch([
     account,
     settings,
     lists,
+    saved_browse,
     player,
     browse,
     if restore {
@@ -473,6 +491,7 @@ pub fn leave(state: &mut State) -> Task<AppMessage> {
   lists::leave(state);
   settings::close(state);
   filters::close(state);
+  saved_browse::leave(state);
   let search = search::close(state);
   let player = player::leave(state);
   if let Some(full) = state.full.as_mut() {

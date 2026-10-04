@@ -8,6 +8,7 @@ mod playback;
 mod product;
 #[path = "remote_control_tests.rs"]
 mod remote_control;
+mod saved_browse;
 mod server_probe;
 
 use std::future::Future;

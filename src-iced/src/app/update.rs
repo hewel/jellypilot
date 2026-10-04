@@ -247,12 +247,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     state.kernel.undo.clear();
     state.playback.viewing_queue = Default::default();
     super::playback::tools::close(&mut state.playback);
+    super::saved_browse::reset(state);
     state.tv = Default::default();
   }
   if was_fullscreen && !state.shell.player_fullscreen {
     playback::cancel_slider_drags(&mut state.playback);
   }
   shell::reconcile_refresh(state);
+  super::saved_browse::reconcile(state);
   let collections_task = super::collections::reconcile(state);
   super::undo::reconcile(state);
   let list_playback_task = super::list_playback::sync(state);
@@ -340,6 +342,7 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
     Message::ItemActions(message) => super::item_actions::update(state, message),
     Message::Undo(message) => super::undo::update(state, message),
     Message::ListPlayback(message) => super::list_playback::update(state, message),
+    Message::SavedBrowse(message) => super::saved_browse::update(state, message),
     Message::PersonalLists(message) => {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
@@ -1057,6 +1060,7 @@ pub(crate) mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      saved_browse: Default::default(),
       #[cfg(target_os = "linux")]
       system_media: Default::default(),
       tv: Default::default(),

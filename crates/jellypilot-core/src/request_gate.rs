@@ -1,5 +1,5 @@
 /// Session identity returned when authentication starts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SessionToken(u64);
 
 /// Identity of one Home request inside an authenticated session.

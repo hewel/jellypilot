@@ -77,6 +77,19 @@ Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-plat
 | 🎨 **Thoughtfully Crafted Native UI** | Light and Dark themes, title logo hero headers, native corner smoothing, and backdrop blur; instant English & Simplified Chinese switching, plus a compact Control-Only mode |
 | 🍏 **Pure Native Architecture & Diagnostics** | 100% safe Rust and iced with zero WebViews or Electron overhead; built-in diagnostic event viewer, MPV player log capture, and one-click support bundle export |
 
+### Playback and browsing tools
+
+- **Desktop seek previews:** the embedded timeline uses existing Jellyfin Trickplay images when available; otherwise it keeps the time and chapter hint. Full controls have a progressive video backdrop with a scrim fallback.
+- **Temporary viewing queue:** add movies or episodes from the current account, reorder them, play an entry, or clear upcoming items. This queue is separate from the season episode list and Watchlist. See the [queue contract](docs/viewing-queue-spec.md).
+- **Dual text subtitles and A/B repeat:** open Subtitles for the current file's primary and secondary tracks, or Playback settings for A/B. Marking points does not seek; Restart from A is explicit. See [supported tracks and loop behavior](docs/playback-tools-spec.md).
+- **Saved filters:** save a named library query locally for the current account, then apply, rename or delete it from Saved filters. Desktop and TV retain all applied conditions across presentation changes. See [saved-filter behavior](docs/saved-browse-filters-spec.md).
+
+The Android preview also offers a [remote controller](docs/remote-controller-spec.md)
+for server-authorized playback targets. Selecting a target does not send playback;
+starting playback on the selected device is a separate action. Native TV means the living-room PC
+presentation, not Android TV. Delivery checks and remaining human acceptance are
+tracked in the [feature delivery report](docs/playback-features-spec.md).
+
 ## 🧩 Server Support
 
 | Server       | Supported | Capabilities                                                                                                                                   |

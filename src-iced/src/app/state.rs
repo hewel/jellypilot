@@ -167,6 +167,7 @@ pub enum Destination {
   },
   Search(String),
   PersonalLists(crate::app::personal_lists::Route),
+  SavedBrowse,
   Detail(String),
   /// Full-window Now Playing; the Control-Only root destination, unused in
   /// Full mode where the player is a bar above the shell content.
@@ -624,6 +625,7 @@ pub struct FullUi {
 }
 
 pub struct State {
+  pub saved_browse: super::saved_browse::Surface,
   #[cfg(target_os = "linux")]
   pub(crate) system_media: super::system_media::Surface,
   pub(crate) tv: super::tv::Surface,
@@ -685,6 +687,7 @@ impl State {
     let (sdk, sdk_handoff) = kernel::account_runtime(&auth_store, &watchlist);
 
     let mut state = Self {
+      saved_browse: Default::default(),
       #[cfg(target_os = "linux")]
       system_media: Default::default(),
       tv: Default::default(),

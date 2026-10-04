@@ -12,6 +12,7 @@ mod personal_lists;
 pub(crate) mod playback_tools;
 pub(crate) mod player;
 mod player_info;
+pub(crate) mod saved_browse;
 pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;
@@ -80,7 +81,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .height(Fill);
   let layers: Element<'_, Message> = layers.into();
   let layers = stack![
-    if (state.playback.viewing_queue.open || super::playback::tools::is_open(state))
+    if (state.playback.viewing_queue.open
+      || super::playback::tools::is_open(state)
+      || state.saved_browse.editor.is_some())
       && !state.tv_mode()
     {
       inert(layers)
@@ -89,6 +92,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     },
     viewing_queue::layer(state),
     playback_tools::layer(state),
+    saved_browse::layer(state),
   ]
   .width(Fill)
   .height(Fill);

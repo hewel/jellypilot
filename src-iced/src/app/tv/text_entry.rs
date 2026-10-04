@@ -86,6 +86,18 @@ pub fn unfocus<Message: Send + 'static>() -> Task<Message> {
   iced::advanced::widget::operate(iced::advanced::widget::operation::focusable::unfocus())
 }
 
+pub(super) fn focused_id(surface: &Surface) -> iced::widget::Id {
+  if surface.native {
+    iced::widget::Id::new("tv-text-entry-field")
+  } else {
+    key_id(surface.row, surface.column)
+  }
+}
+
+fn key_id(row: usize, column: usize) -> iced::widget::Id {
+  iced::widget::Id::from(format!("tv-text-entry-key-{row}-{column}"))
+}
+
 pub fn update(
   surface: &mut Surface,
   value: &str,
@@ -197,6 +209,7 @@ pub fn view<'a>(
       .on_press(Message::Native)
       .into()
   };
+  let field = container(field).id("tv-text-entry-field");
   let mut keyboard = Column::new().spacing(12.0 * scale).width(Fill);
   for (row_index, keys) in rows(surface).into_iter().enumerate() {
     let mut row = row![].spacing(12.0 * scale).width(Fill);
@@ -225,7 +238,8 @@ pub fn view<'a>(
           .on_press(Message::Key(row_index, column_index))
           .into()
         }))
-        .width(Fill),
+        .width(Fill)
+        .id(key_id(row_index, column_index)),
       );
     }
     keyboard = keyboard.push(row);

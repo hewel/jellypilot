@@ -22,6 +22,7 @@ use jellypilot_media_server::{
     VideoLibraryFilters, VideoLibraryItem, VideoLibraryPage, VideoLibraryPlayedFilter,
     VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchPage,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::request_gate::SessionToken;
 
@@ -78,7 +79,7 @@ pub enum BrowseEffect {
     CancelPage { token: BrowseDeliveryToken },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BrowsePreferences {
     pub sort: VideoLibrarySort,
     pub sort_direction: VideoLibrarySortDirection,

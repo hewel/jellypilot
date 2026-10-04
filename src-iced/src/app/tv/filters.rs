@@ -83,6 +83,7 @@ fn available(state: &State) -> bool {
     && matches!(state.shell.destination, Destination::Library { .. })
     && !state.tv.settings.open
     && !state.tv.search.open
+    && !super::saved_browse::overlay_open(state)
     && !super::account::modal_open(state)
     && !super::lists::menu_open(state)
     && !super::player::active(state)
