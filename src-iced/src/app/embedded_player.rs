@@ -1,5 +1,7 @@
 //! Embedded-only presentation lifecycle and keyboard intent orchestration.
 
+mod seek_preview;
+
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,6 +39,7 @@ pub enum Message {
   SeekBy(f64),
   VolumeBy(f64),
   SeekHovered(Option<f64>),
+  SeekPreviewLoaded(seek_preview::Completion),
   Wake(Instant),
   OptionsToggled,
   OptionsDismissed,
@@ -73,6 +76,7 @@ impl std::fmt::Debug for Message {
       Self::SeekBy(_) => "SeekBy",
       Self::VolumeBy(_) => "VolumeBy",
       Self::SeekHovered(_) => "SeekHovered",
+      Self::SeekPreviewLoaded(_) => "SeekPreviewLoaded([redacted])",
       Self::Wake(_) => "Wake",
       Self::OptionsToggled => "OptionsToggled",
       Self::OptionsDismissed => "OptionsDismissed",
@@ -101,6 +105,7 @@ pub struct Surface {
   cursor_deadline: Option<Instant>,
   feedback: Option<(String, Instant)>,
   seek_hover: Option<f64>,
+  seek_preview: seek_preview::Surface,
   returning: bool,
   replacement_generation: u64,
   was_active: bool,
@@ -327,6 +332,15 @@ pub(super) fn seek_hover(state: &State) -> Option<f64> {
   state.shell.embedded_player.seek_hover
 }
 
+pub(super) fn seek_preview_frame(
+  state: &State,
+) -> Option<(
+  &iced::widget::image::Handle,
+  jellypilot_core::seek_preview::PreviewTile,
+)> {
+  state.shell.embedded_player.seek_preview.frame()
+}
+
 pub(super) fn is_seek_dragging(state: &State) -> bool {
   state.playback.adjustments.view().seek_dragging
 }
@@ -428,6 +442,7 @@ pub(super) fn reconcile(state: &mut State) {
   state
     .image_diagnostics
     .record(surface.queue_artwork.take_summary());
+  seek_preview::reconcile(state);
 }
 
 fn reconcile_queue(surface: &mut Surface, open: bool, observed: bool, item_count: usize) {
@@ -591,7 +606,12 @@ pub(super) fn subscription(state: &State) -> Subscription<AppMessage> {
     ),
     _ => Subscription::none(),
   };
-  Subscription::batch([wake, observation, chapters])
+  Subscription::batch([
+    wake,
+    observation,
+    chapters,
+    seek_preview::subscription(state),
+  ])
 }
 
 fn reconcile_observation(surface: &mut Surface, visible: bool, generation: u64, now: Instant) {
@@ -747,6 +767,7 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
   }
   let now = Instant::now();
   match message {
+    Message::SeekPreviewLoaded(completion) => seek_preview::settle(state, completion),
     Message::FocusChanged(region, focused) => {
       state.shell.embedded_player.focused_regions[region as usize] = focused;
     }

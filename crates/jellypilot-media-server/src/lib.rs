@@ -18,6 +18,8 @@ pub use client::{
   JellyfinClient, JellyfinLibrary, JellyfinLogin, JellyfinPlayback, LibraryImageHeaders,
   LibraryImageRequest,
 };
+#[cfg(feature = "raster")]
+pub use client::{TrickplayAtlas, TrickplayGeometry, TrickplayManifest};
 pub use error::JellyfinError;
 pub use image_ref::{
   image_id_for_url, normalize_server_url, sized_origin_url, user_image_id, ImageRefError,

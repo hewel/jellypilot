@@ -51,6 +51,8 @@ impl std::fmt::Debug for Message {
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
+      #[cfg(target_os = "linux")]
+      Self::SystemMedia(_) => formatter.write_str("SystemMedia"),
       Self::UiLanguageSelected(preference) => formatter
         .debug_tuple("UiLanguageSelected")
         .field(preference)
@@ -95,6 +97,8 @@ pub enum Message {
   Settings(SettingsMessage),
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
+  #[cfg(target_os = "linux")]
+  SystemMedia(super::system_media::Message),
   UiLanguageSelected(LanguagePreference),
   /// One-shot OS light/dark mode discovered at boot.
   SystemThemeDiscovered(iced::theme::Mode),

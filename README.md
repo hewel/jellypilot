@@ -97,7 +97,7 @@ Manual skip actions remain available while playback stays inside a range, unless
 
 ## 🗺️ Roadmap
 
-- [ ] **MPRIS support** — Linux desktop media-player integration for keys and widgets
+- [x] **MPRIS support** — Linux desktop media controls for the current JellyPilot session, with scoped commands and live capabilities. Paused next/previous remains unavailable; a missing or occupied session bus leaves playback working without system integration. See the [playback feature contract](docs/playback-features-spec.md).
 
 ## 🚀 Quick Start
 

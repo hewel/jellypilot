@@ -914,6 +914,48 @@ pub(crate) fn update_tray(
   }
 }
 
+/// System controls carry their observed account/media identity through window
+/// restoration. A later replacement can never inherit an old Resume or Next.
+#[cfg(target_os = "linux")]
+pub(super) fn update_system_media(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+  scope: super::system_media::Scope,
+  intent: PlaybackIntent,
+  player_visible: bool,
+) -> Task<Message> {
+  sync_account_admission(surface, kernel);
+  if quit_requested
+    || !scope.is_current()
+    || kernel.sdk.content_mutations_blocked()
+    || super::system_media::Scope::from_playback(surface, kernel).as_ref() != Some(&scope)
+  {
+    return Task::none();
+  }
+  let needs_window = matches!(
+    intent,
+    PlaybackIntent::SetPaused(false) | PlaybackIntent::PlayAdjacent(_)
+  );
+  let player_hidden = surface.presentation_hold.load(Ordering::Acquire)
+    || (crate::embedded::enabled() && !player_visible);
+  if needs_window && player_hidden {
+    if defer_play(surface, PendingPlay::SystemMedia(scope, Box::new(intent))) {
+      return Task::done(Message::Window(
+        super::message::WindowMessage::ShowForPlayback,
+      ));
+    }
+    return Task::none();
+  }
+  if matches!(
+    intent,
+    PlaybackIntent::SetPaused(true) | PlaybackIntent::Stop
+  ) {
+    surface.pending_play = None;
+  }
+  apply_local_playback_intent(surface, kernel, quit_requested, intent).task
+}
+
 /// Resets the playback session and discovers the MPV controller after the
 /// login surface connects. Called by the router's login arm.
 pub(crate) fn initialize_playback(
@@ -1964,6 +2006,8 @@ enum PendingPlay {
   Remote(RemoteToken, RemoteCommandAction),
   Resume,
   Adjacent(AdjacentDirection),
+  #[cfg(target_os = "linux")]
+  SystemMedia(super::system_media::Scope, Box<PlaybackIntent>),
 }
 
 /// Whether a translated remote command needs a visible embedded player before
@@ -2103,6 +2147,16 @@ pub(crate) fn window_opened(
     return None;
   }
   match surface.pending_play.take()? {
+    #[cfg(target_os = "linux")]
+    PendingPlay::SystemMedia(scope, intent) => {
+      if quit_requested
+        || !scope.is_current()
+        || super::system_media::Scope::from_playback(surface, kernel).as_ref() != Some(&scope)
+      {
+        return None;
+      }
+      Some(apply_local_playback_intent(surface, kernel, quit_requested, *intent).task)
+    }
     PendingPlay::Remote(remote, action) => {
       // A remote session that restarted while the command was deferred can no
       // longer run it; report instead of dispatching into a stale token.
@@ -2318,6 +2372,10 @@ fn execute_controller_command(
   // the lease it was admitted under even when a close later replaces the
   // surface's lease with a fresh held one.
   let lease = Arc::clone(&surface.presentation_hold);
+  #[cfg(target_os = "linux")]
+  let seek_scope = matches!(command, ControllerCommand::Seek(_))
+    .then(|| super::system_media::Scope::from_playback(surface, kernel))
+    .flatten();
   let Some(controller) = surface.controller.as_ref().map(Arc::clone) else {
     let settlement = command.missing_controller_settlement();
     return Task::done(Message::Playback(PlaybackMessage::ControllerSettled {
@@ -2342,11 +2400,19 @@ fn execute_controller_command(
       }
     },
     move |settlement| {
-      Message::Playback(PlaybackMessage::ControllerSettled {
+      let message = PlaybackMessage::ControllerSettled {
         id,
         settlement: Box::new(settlement),
         started: started.map(Box::new),
-      })
+      };
+      #[cfg(target_os = "linux")]
+      if let Some(scope) = seek_scope {
+        return Message::SystemMedia(super::system_media::Message::SeekSettled {
+          scope,
+          message: Box::new(message),
+        });
+      }
+      Message::Playback(message)
     },
   )
 }

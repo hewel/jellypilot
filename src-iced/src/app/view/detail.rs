@@ -2473,6 +2473,8 @@ mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      #[cfg(target_os = "linux")]
+      system_media: Default::default(),
       tv: Default::default(),
       kernel: Kernel {
         item_actions: Default::default(),

@@ -287,6 +287,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 }
 
 pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message> {
+  #[cfg(target_os = "linux")]
+  let (message, seek_scope) = match message {
+    Message::SystemMedia(super::system_media::Message::SeekSettled { scope, message }) => {
+      (Message::Playback(*message), Some(scope))
+    }
+    message => (message, None),
+  };
   match message {
     Message::Tv(message) => super::tv::update(state, message),
     Message::UiModeSelected(mode) => select_ui_mode(state, mode),
@@ -761,6 +768,8 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
 
       Task::batch(tasks)
     }
+    #[cfg(target_os = "linux")]
+    Message::SystemMedia(message) => super::system_media::update(state, message),
     Message::Playback(message) => {
       if state.kernel.sdk.content_mutations_blocked()
         && !matches!(&message, super::message::PlaybackMessage::Intent(intent)
@@ -793,6 +802,10 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       let started_ok = matches!(&message, super::message::PlaybackMessage::ControllerSettled {
         settlement, ..
       } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Started(Ok(_))));
+      #[cfg(target_os = "linux")]
+      let seek_succeeded = matches!(&message, super::message::PlaybackMessage::ControllerSettled {
+        settlement, ..
+      } if matches!(settlement.as_ref(), jellypilot_mpv::playback_session::ControllerSettlement::Controlled(Ok(_))));
       let had_playback = state.playback.view.now_playing.is_some();
       let playback_update = playback::update(
         &mut state.playback,
@@ -800,6 +813,17 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
         state.shell.quit_requested,
         message,
       );
+      #[cfg(target_os = "linux")]
+      if seek_succeeded
+        && matches!(
+          playback_update.transition.controller,
+          jellypilot_mpv::playback_session::ControllerAcceptance::Applied { .. }
+        )
+      {
+        if let Some(scope) = seek_scope {
+          super::system_media::seek_applied(state, scope);
+        }
+      }
       if started_ok
         && matches!(
           playback_update.transition.controller,
@@ -1021,6 +1045,8 @@ pub(crate) mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      #[cfg(target_os = "linux")]
+      system_media: Default::default(),
       tv: Default::default(),
       system_theme: iced::theme::Mode::None,
       motion: Default::default(),
@@ -2655,7 +2681,7 @@ pub(crate) mod tests {
     (*id, command.clone())
   }
 
-  fn active_intro_prompt_state() -> State {
+  pub(crate) fn active_intro_prompt_state() -> State {
     let mut state = test_state();
     let now = Instant::now();
     state.playback.session.handle(

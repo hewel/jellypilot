@@ -37,6 +37,7 @@ pub mod logs;
 pub mod now_playing_adjustments;
 pub mod player_logs;
 pub mod request_gate;
+pub mod seek_preview;
 #[cfg(feature = "portable")]
 pub mod settings;
 pub mod skeleton;

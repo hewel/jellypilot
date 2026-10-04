@@ -18,6 +18,8 @@ pub mod settings;
 pub mod shell;
 pub mod state;
 mod subscriptions;
+#[cfg(target_os = "linux")]
+pub(crate) mod system_media;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod tv;
@@ -145,7 +147,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   } else {
     None
   };
+  #[cfg(target_os = "linux")]
+  let sample_controls = system_media::should_sample(&message);
   let task = update::update(state, message);
+  #[cfg(target_os = "linux")]
+  let task = Task::batch([task, system_media::sync(state, sample_controls)]);
   let after = state.theme_mode();
   let enabled = motion_enabled(state) && !discovered;
   state.motion.sync(after, enabled, now);
@@ -193,6 +199,12 @@ pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Me
 
 pub fn subscription(state: &State) -> Subscription<Message> {
   let base = subscriptions::subscription(state);
+  #[cfg(target_os = "linux")]
+  let base = if !state.shell.smoke && !state.shell.quit_requested {
+    Subscription::batch([base, system_media::subscription(&state.system_media)])
+  } else {
+    base
+  };
   let regression = if crate::regression::active() {
     crate::regression::subscription()
   } else {

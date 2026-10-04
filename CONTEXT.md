@@ -10,6 +10,8 @@ The [UI internationalization specification](docs/i18n-design-spec.md) records UI
 
 The [embedded player design contract](docs/design-system.md#embedded-player-synchronization) records the accepted player-state and Intro Skipper revisions separately from their implementation status.
 
+The [playback feature delivery specification](docs/playback-features-spec.md) records the accepted 2026-10-05 additions and their implementation status.
+
 The desktop [motion contract](docs/design-system.md#2026-09-15-desktop-motion-contract) and [Background Residency decision](docs/adr/0043-desktop-background-residency.md) are implemented and code-level validated. Their desktop appearance, tray usability, and window-manager acceptance remain human checks.
 
 ## Language
@@ -21,6 +23,10 @@ _Avoid_: Server discovery, server selection
 **Playback Target**:
 The JellyPilot install as it appears to media-server users when they choose where media should play. The Playback Target is identified by the configured device name.
 _Avoid_: Generic app instance
+
+**Remote Controller**:
+The Android interface for selecting a server-authorized Playback Target and controlling its playback through the current media server. It is distinct from the local Playback Target receiver and local Playback Session; selecting a remote target does not redirect ordinary local Play actions.
+_Avoid_: Pairing service, remote login, local player
 
 **Playback Session**:
 One active presentation of a media item through a desktop Playback Backend or Android MPV Playback.
@@ -51,6 +57,10 @@ _Avoid_: Startup Auto Login, automatic playback, Continue Watching
 
 **Provider Transcode**:
 Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source and does not request a Provider Transcode.
+
+**Seek Preview**:
+A server-provided still for a proposed position in the current media source, shown with the existing time and available chapter label while inspecting the playback timeline. It does not change playback position or generate video frames locally; unavailable images leave the text preview usable.
+_Avoid_: Episode Still, playback seek, client-side video decoding
 
 **Quick Connect**:
 A Jellyfin authentication method where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default Jellyfin login method and authenticates to a known Server URL; it does not discover or choose servers.

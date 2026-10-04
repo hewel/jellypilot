@@ -467,6 +467,24 @@ pub struct PlaybackController {
 }
 
 impl PlaybackController {
+  /// Token-free identity of the media version currently owned by this player.
+  /// Unsettled loads and unloading never expose a preview identity. Callers
+  /// must still correlate asynchronous work with their session generation.
+  pub fn seek_preview_identity(&self) -> Option<(&str, &str)> {
+    if !self.active_transport_matches_mpv
+      || self.unloading
+      || self.load_event_boundary != LoadEventBoundary::Settled
+    {
+      return None;
+    }
+    self.active.as_ref().map(|active| {
+      (
+        active.now_playing.item_id.as_str(),
+        active.media_source_id.as_str(),
+      )
+    })
+  }
+
   /// Discover MPV and create a controller without starting the process.
   ///
   /// # Errors
@@ -4472,6 +4490,31 @@ mod tests {
     controller.active = Some(active_playback(position_seconds));
     controller.active_transport_matches_mpv = true;
     controller
+  }
+
+  #[test]
+  fn seek_preview_identity_retires_during_replacement_and_unload() {
+    let mut controller = controller_with_active(0.0);
+    assert_eq!(
+      controller.seek_preview_identity(),
+      Some(("item-1", "source-1"))
+    );
+    controller.load_event_boundary = LoadEventBoundary::Loading;
+    assert_eq!(controller.seek_preview_identity(), None);
+    controller.load_event_boundary = LoadEventBoundary::Settled;
+    controller.unloading = true;
+    assert_eq!(controller.seek_preview_identity(), None);
+    controller.unloading = false;
+    controller.active_transport_matches_mpv = false;
+    assert_eq!(controller.seek_preview_identity(), None);
+    controller.active_transport_matches_mpv = true;
+    let active = controller.active.as_mut().unwrap();
+    active.now_playing.item_id = "item-2".to_owned();
+    active.media_source_id = "alternate-source".to_owned();
+    assert_eq!(
+      controller.seek_preview_identity(),
+      Some(("item-2", "alternate-source"))
+    );
   }
 
   #[test]

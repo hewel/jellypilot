@@ -1443,17 +1443,40 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
         IntroSkipKind::Credits => "player-range-credits",
       }));
     }
-    let rail: Element<'_, Message> = iced::widget::tooltip(
-      rail,
-      text(tooltip_text).font(MONO_FONT).size(12),
-      iced::widget::tooltip::Position::FollowCursor,
-    )
-    .delay(std::time::Duration::ZERO)
-    .gap(TOKENS.spacing.s3)
-    .padding(TOKENS.spacing.s2)
-    .snap_within_viewport(true)
-    .style(cinema::popover)
-    .into();
+    let label = text(tooltip_text).font(MONO_FONT).size(12);
+    let preview: Element<'_, Message> =
+      if let Some((handle, tile)) = embedded_player::seek_preview_frame(state) {
+        let width = bounds.width.clamp(1.0, 240.0);
+        let height = (width * tile.height as f32 / tile.width as f32).min(135.0);
+        column![
+          rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
+            .crop(iced::Rectangle {
+              x: tile.x,
+              y: tile.y,
+              width: tile.width,
+              height: tile.height,
+            })
+            .content_fit(ContentFit::Contain)
+            .width(width)
+            .height(height),
+          label,
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .width(width)
+        .into()
+      } else {
+        container(label)
+          .width(Length::Fit.max(bounds.width.clamp(1.0, 280.0)))
+          .into()
+      };
+    let rail: Element<'_, Message> =
+      iced::widget::tooltip(rail, preview, iced::widget::tooltip::Position::FollowCursor)
+        .delay(std::time::Duration::ZERO)
+        .gap(TOKENS.spacing.s3)
+        .padding(TOKENS.spacing.s2)
+        .snap_within_viewport(true)
+        .style(cinema::popover)
+        .into();
     if state.playback.view.busy && !embedded_player::is_seek_dragging(state) {
       inert(rail)
     } else {

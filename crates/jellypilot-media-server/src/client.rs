@@ -73,6 +73,12 @@ mod library_filters;
 
 #[path = "client/server_probe.rs"]
 mod server_probe;
+#[cfg(feature = "raster")]
+#[path = "client/trickplay.rs"]
+mod trickplay;
+#[cfg(feature = "raster")]
+pub use trickplay::{TrickplayAtlas, TrickplayGeometry, TrickplayManifest};
+
 /// Login/session lifecycle interface for the Jellyfin HTTP adapter.
 pub struct JellyfinLogin<'a> {
   client: &'a JellyfinClient,

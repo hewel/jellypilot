@@ -41,6 +41,7 @@ iced_wgpu = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 fluent-syntax = "0.12"
