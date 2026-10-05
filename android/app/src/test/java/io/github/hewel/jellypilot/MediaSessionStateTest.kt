@@ -95,6 +95,7 @@ class MediaSessionStateTest {
     override fun setMuted(muted: Boolean) = error("business layer owns playback")
     override fun setSpeed(speed: Double) = error("business layer owns playback")
     override fun setPictureBrightness(percent: Int) = error("business layer owns playback")
+    override fun setSubtitleTiming(context: SubtitleTimingContext, offsetTenths: Int): Boolean = false
     override fun selectTrack(kind: TrackKind, mpvId: Int) = error("business layer owns playback")
     override fun setSurfaceSize(width: Int, height: Int) = Unit
     override fun attachSurface(surface: Surface) = Unit

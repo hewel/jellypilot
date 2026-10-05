@@ -50,7 +50,8 @@ internal data class MediaUi(
     ?.let { (resumeSeconds / it).toFloat().coerceIn(0f, 1f) } ?: 0f
 }
 internal data class CastUi(val id: String, val name: String, val role: String, val artwork: ArtworkUi? = null)
-internal data class SeasonUi(val id: String, val title: String)
+internal data class SeasonUi(val id: String, val title: String, val number: Int? = null)
+internal data class DetailPreviewUi(val ownerId: String, val seasonId: String?, val item: MediaUi)
 internal data class HomeRowUi(val id: String, val title: String, val items: List<MediaUi>, val landscape: Boolean = false, val libraryId: String? = null)
 internal enum class PersonalListKind(@StringRes val title: Int) { Watchlist(R.string.watchlist), Favorites(R.string.favorites) }
 internal enum class PlayedFilter(@StringRes val title: Int) { All(R.string.all_media), Played(R.string.watched), Unplayed(R.string.unwatched) }
@@ -106,6 +107,9 @@ internal data class PlaybackUi(
 internal data class LibraryUi(val id: String, val title: String)
 internal data class ProfileUi(val key: String, val name: String, val server: String, val provider: String, val active: Boolean, val url: String = "")
 
+/** Only a completed authenticated probe confirms connectivity; an active profile alone does not. */
+internal enum class ConnectionHealth { Unchecked, Checking, Connected, Failed, AuthenticationRequired }
+
 /** Lifecycle of one SDK browse session, mirrored from `BrowseStatus`. */
 internal enum class BrowseUiStatus { Inactive, Loading, Empty, Ready, Failed }
 
@@ -152,6 +156,7 @@ internal data class AppUiState(
   val profiles: List<ProfileUi> = emptyList(),
   val activeName: String? = null,
   val activeProfileKey: String? = null,
+  val connectionHealth: ConnectionHealth = ConnectionHealth.Unchecked,
   val selectedProfileKey: String? = null,
   val watchlistCleanupKeys: List<String> = emptyList(),
   val libraries: List<LibraryUi> = emptyList(),
@@ -159,6 +164,7 @@ internal data class AppUiState(
   val items: List<MediaUi> = emptyList(),
   val browser: BrowserUi = BrowserUi(),
   val detail: MediaUi? = null,
+  val detailPreview: DetailPreviewUi? = null,
   val detailItems: List<MediaUi> = emptyList(),
   val detailTracks: DetailTracksUi? = null,
   val busy: Boolean = false,
@@ -168,6 +174,7 @@ internal data class AppUiState(
   val notice: String? = null,
   val showSignIn: Boolean = false,
   val showPlayer: Boolean = false,
+  val remoteController: RemoteControllerUiState? = null,
   /** Raw search field text; mirrors the retained SDK query so a recreated field never shows stale or empty input. */
   val searchQuery: String = "",
   /** SDK sign-out deleted the saved credentials but teardown failed; the session stays connected for a cleanup retry and new playback/writes stay blocked. */
@@ -177,7 +184,8 @@ internal data class AppUiState(
   val selectedList: PersonalListKind = PersonalListKind.Watchlist,
   val listItems: List<MediaUi> = emptyList(),
   val listCount: Int = 0,
-  val favoriteCount: Int = 0,
+  /** Unknown until the server confirms a count; loading/failure must not look like an empty collection. */
+  val favoriteCount: Int? = null,
   val listBusy: Boolean = false,
   val listHasMore: Boolean = false,
   val historyHasMore: Boolean = false,

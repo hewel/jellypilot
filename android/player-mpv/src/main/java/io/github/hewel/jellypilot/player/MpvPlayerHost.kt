@@ -9,6 +9,8 @@ import java.io.File
 import kotlin.math.roundToInt
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * [PlayerHost] backed by one libmpv instance.
@@ -124,6 +126,11 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   private var surfaceAttached = false
   private data class TemporarySpeed(val token: Long, val generation: Long, val original: Double)
   private var temporarySpeed: TemporarySpeed? = null
+  private val subtitleTiming = SubtitleTimingSession()
+  private data class TimingRequest(val context: SubtitleTimingContext, val tenths: Int, val epoch: Long)
+  private val timingRequest = AtomicReference<TimingRequest?>(null)
+  // Revocation must also reach commands already queued behind native work.
+  private val timingEpoch = AtomicLong()
   private val secrets = mutableSetOf<String>()
 
   override val snapshot: PlayerSnapshot
@@ -183,6 +190,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     // after it must observe the revocation, not the stale snapshot value.
     admissionEligible = eligible
     if (!eligible) {
+      timingEpoch.incrementAndGet()
       // Losing admission revokes play intent immediately, so a queued
       // play/load or a FILE_LOADED callback cannot resurrect it.
       revokePlay()
@@ -224,6 +232,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     // A fresh explicit load asserts play intent from its own request, never
     // from the outgoing snapshot's playWhenReady.
     val revision = requestPlay(!request.startPaused)
+    timingEpoch.incrementAndGet()
     enqueue {
       when {
         released || shuttingDown -> emitLoadRejected(request, RejectionReason.RELEASED)
@@ -297,6 +306,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
   override fun stop(preserveSessionSettings: Boolean) {
     if (ifReleased("stop")) return
     revokePlay()
+    timingEpoch.incrementAndGet()
     enqueue {
       if (released) return@enqueue
       executeStop(preserveSessionSettings)
@@ -424,6 +434,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
 
   override fun selectTrack(kind: TrackKind, mpvId: Int) {
     if (ifReleased("selectTrack")) return
+    if (kind == TrackKind.SUBTITLE) timingEpoch.incrementAndGet()
     enqueue {
       when {
         released -> reject("selectTrack", RejectionReason.RELEASED)
@@ -435,9 +446,70 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
             TrackKind.SUBTITLE -> "sid"
           }
           runCommand("selectTrack", "set", property, mpvTrackIdValue(mpvId))
+          // Read immediately so rapid A → B → A selections each retire their
+          // timing context even if mpv coalesces the property notifications.
+          if (kind == TrackKind.SUBTITLE) refreshTracks()
         }
       }
     }
+  }
+
+  override fun setSubtitleTiming(context: SubtitleTimingContext, offsetTenths: Int): Boolean {
+    val state = current.subtitleTiming
+    if (released || shuttingDown || !admissionEligible || state.context != context ||
+      state.availability != SubtitleTimingAvailability.AVAILABLE || state.pending) return false
+    val request = TimingRequest(context, offsetTenths.coerceIn(-100, 100), timingEpoch.get())
+    if (!timingRequest.compareAndSet(null, request)) return false
+    val posted = handler.post {
+      try {
+        if (released || shuttingDown || !admissionEligible || timingEpoch.get() != request.epoch ||
+          liveStartedRecord()?.fileLoaded != true || !subtitleTiming.begin(context)) {
+          subtitleTiming.cancel(context)
+          timingRequest.compareAndSet(request, null)
+          publishSubtitleTiming()
+          reject("subtitleTiming", RejectionReason.CANCELLED)
+          return@post
+        }
+        publishSubtitleTiming()
+        if (released || shuttingDown || !admissionEligible || timingEpoch.get() != request.epoch) {
+          subtitleTiming.cancel(context)
+          timingRequest.compareAndSet(request, null)
+          publishSubtitleTiming()
+          reject("subtitleTiming", RejectionReason.CANCELLED)
+          return@post
+        }
+        val previous = subtitleTiming.state.offsetTenths
+        val applied = try { writeSubtitleTiming(request.tenths) } catch (_: Exception) { false }
+        if (!applied) {
+          // A rejected/mismatched write must not leave an unacknowledged offset
+          // behind. The user continues to see only the last confirmed value.
+          try { writeSubtitleTiming(previous) } catch (_: Exception) { }
+        }
+        subtitleTiming.complete(context, request.tenths, applied)
+        timingRequest.compareAndSet(request, null)
+        publishSubtitleTiming()
+      } finally {
+        timingRequest.compareAndSet(request, null)
+      }
+    }
+    if (!posted) timingRequest.compareAndSet(request, null)
+    return posted
+  }
+
+  private fun writeSubtitleTiming(tenths: Int): Boolean {
+    val seconds = tenths / 10.0
+    if (MpvJni.nativeSetPropertyDouble(handle, "sub-delay", seconds) < 0) return false
+    val observed = MpvJni.nativeGetPropertyString(handle, "sub-delay")?.toDoubleOrNull() ?: return false
+    return observed.isFinite() && kotlin.math.abs(observed - seconds) < 0.00001
+  }
+
+  private fun publishSubtitleTiming() {
+    if (current.subtitleTiming != subtitleTiming.state) mutate { copy(subtitleTiming = this@MpvPlayerHost.subtitleTiming.state) }
+  }
+
+  private fun clearSubtitleTiming() {
+    subtitleTiming.clear()
+    publishSubtitleTiming()
   }
 
   override fun setSurfaceSize(width: Int, height: Int) {
@@ -472,6 +544,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     // Revoke play intent before queueing so callbacks already in flight
     // cannot resurrect it while teardown runs.
     shuttingDown = true
+    timingEpoch.incrementAndGet()
     revokePlay()
     runBlocking {
       if (released) return@runBlocking
@@ -490,6 +563,8 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       // A queued replacement never reached mpv.
       pending?.let { emitLoadRejected(it, RejectionReason.RELEASED) }
       pending = null
+      clearSubtitleTiming()
+      timingRequest.set(null)
       secrets.clear()
       mutate {
         copy(
@@ -670,6 +745,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
    */
   private fun acceptLoad(request: MediaLoad, revision: Long) {
     restoreTemporarySpeed()
+    clearSubtitleTiming()
     if (active != null) {
       pending?.let { emitLoadRejected(it, RejectionReason.CANCELLED) }
       pending = request
@@ -770,6 +846,9 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     val wantPlay = shouldPlay(revision)
     val startPaused = !wantPlay
     MpvJni.nativeSetPropertyFlag(handle, "pause", startPaused)
+    // sub-delay is a persistent mpv option; every new media starts at zero,
+    // including a continuous episode replacement that keeps picture settings.
+    MpvJni.nativeSetPropertyDouble(handle, "sub-delay", 0.0)
 
     eofReached = false
     pausedForCache = false
@@ -817,6 +896,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
 
   private fun executeStop(preserveSessionSettings: Boolean) {
     restoreTemporarySpeed()
+    clearSubtitleTiming()
     // A queued replacement is cancelled outright; the active load's terminal
     // event is deferred until its native lifetime provably ends.
     pending?.let { emitLoadRejected(it, RejectionReason.CANCELLED) }
@@ -882,6 +962,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
       }
       "idle-active" -> {
         if (value && liveStartedRecord()?.fileLoaded == true) {
+          clearSubtitleTiming()
           // mpv went idle without an END_FILE we acted on; reflect the unload
           // in the snapshot. The record stays active: its real END_FILE (or
           // release) still delivers the terminal retirement.
@@ -1028,6 +1109,7 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     // superseded load's END_FILE must not clobber the replacement's snapshot.
     if (current.status != PlayerStatus.IDLE &&
       current.generation == generation && current.mediaId == mediaId) {
+      clearSubtitleTiming()
       if (reason == END_FILE_REASON_ERROR) {
         mutate {
           copy(
@@ -1103,6 +1185,8 @@ class MpvPlayerHost(context: Context, private val config: PlayerHostConfig) : Pl
     if (tracks != current.tracks) {
       mutate { copy(tracks = tracks) }
     }
+    subtitleTiming.select(current.generation, tracks, ::writeSubtitleTiming)
+    publishSubtitleTiming()
   }
 
   // ------------------------------------------------------------------

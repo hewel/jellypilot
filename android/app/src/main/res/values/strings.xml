@@ -243,4 +243,21 @@
   <string name="gesture_brightness_value">Picture brightness %1$d%%</string>
   <string name="gesture_volume_value">Volume %1$d%%</string>
   <string name="gesture_volume_unavailable">Use your device volume keys</string>
+  <string name="subtitle_timing_title">Subtitle timing</string>
+  <string name="subtitle_timing_seconds">%1$s s</string>
+  <string name="subtitle_timing_unadjusted">Not adjusted</string>
+  <string name="subtitle_timing_delayed">Delayed by %1$s s</string>
+  <string name="subtitle_timing_advanced">Earlier by %1$s s</string>
+  <string name="subtitle_timing_earlier">Earlier 0.1 s</string>
+  <string name="subtitle_timing_later">Later 0.1 s</string>
+  <string name="subtitle_timing_earlier_accessibility">Show subtitles 0.1 seconds earlier</string>
+  <string name="subtitle_timing_later_accessibility">Show subtitles 0.1 seconds later</string>
+  <string name="subtitle_timing_help">Subtitles too early? Choose Later. Too late? Choose Earlier.\nHold to keep adjusting.</string>
+  <string name="subtitle_timing_reset">Reset</string>
+  <string name="subtitle_timing_reset_accessibility">Reset subtitle timing</string>
+  <string name="subtitle_timing_off">Turn on subtitles first</string>
+  <string name="subtitle_timing_no_tracks">No subtitles available</string>
+  <string name="subtitle_timing_unsupported">Timing adjustment is unavailable for these subtitles</string>
+  <string name="subtitle_timing_failure">Couldn’t adjust subtitle timing. Try again.</string>
+  <string name="subtitle_timing_pending">Applying subtitle timing</string>
 </resources>

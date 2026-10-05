@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="remote_control">Remote control</string>
+  <string name="play_on_another_device">Play on another device</string>
+  <string name="remote_loading">Looking for devices…</string>
+  <string name="remote_inactive">Remote control is inactive. Keep this page open to connect.</string>
+  <string name="remote_load_failed">Could not refresh devices. Retry to reconnect.</string>
+  <string name="remote_empty">No controllable devices found on this server. Open a player on another device, then refresh.</string>
+  <string name="remote_devices">Devices</string>
+  <string name="remote_choose_target">Choose a device to see its playback controls.</string>
+  <string name="remote_choose_play_target">Choose a device, then confirm where to play this item.</string>
+  <string name="remote_play_on">Play on %1$s</string>
+  <string name="remote_resume_saved">Resume from saved progress</string>
+  <string name="remote_start_at">Resume from %1$s</string>
+  <string name="remote_play_unsupported">This device does not support starting an item remotely.</string>
+  <string name="remote_now_playing_on">Now playing on %1$s</string>
+  <string name="remote_no_media">This device is not reporting a playing item.</string>
+  <string name="remote_playing">Playing</string>
+  <string name="remote_paused">Paused</string>
+  <string name="remote_state_unknown">Playback state unavailable</string>
+  <string name="remote_resume">Resume</string>
+  <string name="remote_volume_unavailable">Volume unavailable</string>
+  <string name="remote_position_of_duration">%1$s / %2$s</string>
+  <string name="remote_volume_percent">%1$d%%</string>
+  <string name="remote_command_pending">Sending command…</string>
+  <string name="remote_command_failed">Could not send the command. Refresh the device and try again.</string>
+  <string name="remote_command_accepted">Command sent.</string>
+</resources>

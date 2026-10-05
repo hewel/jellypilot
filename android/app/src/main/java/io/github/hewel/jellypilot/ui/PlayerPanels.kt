@@ -3,6 +3,8 @@ package io.github.hewel.jellypilot.ui
 import android.icu.util.ULocale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,10 +58,11 @@ import io.github.hewel.jellypilot.R
 import io.github.hewel.jellypilot.player.PlayerHost
 import io.github.hewel.jellypilot.player.PlayerSnapshot
 import io.github.hewel.jellypilot.player.PlayerStatus
+import io.github.hewel.jellypilot.player.SubtitleTimingContext
 import io.github.hewel.jellypilot.player.TrackKind
 import java.text.NumberFormat
 
-internal enum class PlayerPanel { Audio, Subtitles, Queue, Video, More, Speed, Picture, GestureHelp }
+internal enum class PlayerPanel { Audio, Subtitles, SubtitleTiming, Queue, Video, More, Speed, Picture, GestureHelp }
 
 internal data class PlayerPanelActions(
   val selectTrack: (TrackKind, Int) -> Unit,
@@ -76,6 +79,7 @@ internal data class PlayerPanelActions(
   val setPictureBrightness: (Int) -> Unit = {},
   val gesturesEnabled: Boolean = true,
   val setGesturesEnabled: (Boolean) -> Unit = {},
+  val setSubtitleTiming: (SubtitleTimingContext, Int) -> Boolean = { _, _ -> false },
 )
 
 @Composable
@@ -106,6 +110,7 @@ internal fun PlayerPanelContent(
     setPictureBrightness = model.player::pictureBrightness,
     gesturesEnabled = ui.preferences.playerGestures,
     setGesturesEnabled = model::setPlayerGestures,
+    setSubtitleTiming = model.player::subtitleTiming,
   ), restoreRow = restoreRow, phone = phone)
 }
 
@@ -130,6 +135,7 @@ internal fun PlayerPanelContent(
   val title = stringResource(when (panel) {
     PlayerPanel.Audio -> R.string.audio_tracks
     PlayerPanel.Subtitles -> R.string.subtitle_tracks
+    PlayerPanel.SubtitleTiming -> R.string.subtitle_timing_title
     PlayerPanel.Queue -> R.string.queue
     PlayerPanel.Video -> if (phone) R.string.player_video_details else R.string.video_options
     PlayerPanel.More -> R.string.player_playback_settings
@@ -141,7 +147,7 @@ internal fun PlayerPanelContent(
     PlayerPanel.Audio -> pluralStringResource(R.plurals.player_audio_track_count, tracks.size, tracks.size)
     PlayerPanel.Subtitles -> pluralStringResource(R.plurals.player_subtitle_track_count, tracks.size, tracks.size)
     PlayerPanel.Queue -> playback?.queue?.size?.let { pluralStringResource(R.plurals.items_count, it, it) }
-    PlayerPanel.Video, PlayerPanel.More, PlayerPanel.Speed, PlayerPanel.Picture, PlayerPanel.GestureHelp -> null
+    PlayerPanel.Video, PlayerPanel.More, PlayerPanel.Speed, PlayerPanel.Picture, PlayerPanel.GestureHelp, PlayerPanel.SubtitleTiming -> null
   }
   val listState = key(panel) { rememberLazyListState() }
   val rowFocus = remember { PlayerPanel.entries.associateWith { FocusRequester() } }
@@ -162,6 +168,9 @@ internal fun PlayerPanelContent(
       listState.scrollToItem(2)
       withFrameNanos { }
       rowFocus.getValue(PlayerPanel.GestureHelp).requestFocus()
+    } else if (panel == PlayerPanel.Subtitles && restoreRow == PlayerPanel.SubtitleTiming) {
+      withFrameNanos { }
+      rowFocus.getValue(PlayerPanel.SubtitleTiming).requestFocus()
     }
   }
   val remainingTracks by remember(listState) {
@@ -209,7 +218,9 @@ internal fun PlayerPanelContent(
         }
       }
     }
-    LazyColumn(
+    if (panel == PlayerPanel.SubtitleTiming) {
+      SubtitleTimingContent(snapshot, actions.setSubtitleTiming, Modifier.weight(1f).verticalScroll(rememberScrollState()))
+    } else LazyColumn(
       Modifier.weight(1f).fillMaxWidth().then(if (trackKind != null || panel == PlayerPanel.Speed) Modifier.selectableGroup() else Modifier),
       state = listState,
       verticalArrangement = Arrangement.spacedBy(if (phone && panel != PlayerPanel.GestureHelp) 4.dp else 8.dp),
@@ -396,6 +407,11 @@ internal fun PlayerPanelContent(
       Text(pluralStringResource(R.plurals.player_tracks_remaining, remainingTracks, remainingTracks),
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
         color = LocalPilotColors.current.metadata)
+    }
+    if (panel == PlayerPanel.Subtitles) {
+      SubtitleTimingEntry(snapshot.subtitleTiming,
+        Modifier.focusRequester(rowFocus.getValue(PlayerPanel.SubtitleTiming)),
+        open = { actions.open(PlayerPanel.SubtitleTiming) })
     }
   }
 }

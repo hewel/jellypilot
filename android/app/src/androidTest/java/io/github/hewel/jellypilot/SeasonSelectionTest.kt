@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -36,6 +37,78 @@ import org.junit.runner.RunWith
 /** Real ViewModel → UniFFI → HTTP ordering, without the application's saved account. */
 @RunWith(AndroidJUnit4::class)
 class SeasonSelectionTest {
+  @Test fun cancelledTracksCanReloadAndRestoredOffPageEpisodeMustBelongToTheCurrentSeason() = runBlocking {
+    val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as JellyPilotApplication
+    val directory = File(app.cacheDir, "detail-track-retry-${UUID.randomUUID()}").apply { mkdirs() }
+    val credentials = object : SecureCredentialStore {
+      override fun read(): ByteArray? = null
+      override fun write(secret: ByteArray) = Unit
+      override fun delete() = Unit
+    }
+    val sdk = JellypilotSdk(SdkConfig(directory.path, "Detail track retry fixture"), credentials, null)
+    val store = ViewModelStore()
+    val oldHandoff = app.beforePlaybackHandoff
+    val oldIntent = app.player.businessIntent
+    val oldEligibility = app.player.admissionEligible
+    try {
+      SeasonSelectionServer(holdFirstTracks = true).use { server ->
+        val candidate = withTimeout(15_000) { sdk.passwordLogin(Provider.JELLYFIN, server.baseUrl, "fixture-user", "fixture-password") }
+        try { withTimeout(15_000) { sdk.activateCandidate(candidate, false) } }
+        finally { candidate.destroy() }
+        val model = withContext(Dispatchers.Main.immediate) { AppViewModel(app, sdk).also { store.put("track-retry", it) } }
+        withTimeout(15_000) { model.state.first { !it.busy && it.items.any { item -> item.id == SERIES } } }
+        withContext(Dispatchers.Main.immediate) { model.showDetail(SERIES) }
+        withTimeout(15_000) { model.state.first { !it.busy && it.detail?.id == SERIES && it.detailItems.isNotEmpty() } }
+        withContext(Dispatchers.Main.immediate) { model.loadDetailTracks(EPISODE_A1) }
+        server.tracks.awaitStarted("the original track request")
+        withContext(Dispatchers.Main.immediate) { model.selectSeason(SEASON_B) }
+        server.newSeason.awaitStarted("season B while tracks are pending")
+        server.tracks.releaseAndAwaitFinished()
+        server.newSeason.releaseAndAwaitFinished()
+        withTimeout(15_000) { model.state.first { !it.busy && it.selectedSeasonId == SEASON_B && it.detailItems.isNotEmpty() } }
+        withContext(Dispatchers.Main.immediate) { model.selectSeason(SEASON_A) }
+        withTimeout(15_000) { model.state.first { !it.busy && it.selectedSeasonId == SEASON_A && it.detailItems.isNotEmpty() } }
+        withContext(Dispatchers.Main.immediate) { model.loadDetailTracks(EPISODE_A1) }
+        withTimeout(15_000) { model.state.first { it.detailTracks?.let { tracks -> !tracks.busy && tracks.audio.any { it.index == 41 } } == true } }
+        assertEquals(2, server.trackRequests.get())
+
+        val offPage = withContext(Dispatchers.Main.immediate) { model.loadDetailEpisodePreview(EPISODE_A70) }
+        assertEquals(EPISODE_A70, offPage?.id)
+        assertEquals(EPISODE_A70, model.state.value.detailPreview?.item?.id)
+        withContext(Dispatchers.Main.immediate) { model.loadDetailTracks(EPISODE_A70) }
+        withTimeout(15_000) { model.state.first { it.detailTracks?.let { tracks -> tracks.targetId == EPISODE_A70 && !tracks.busy && tracks.audio.isNotEmpty() } == true } }
+        assertEquals(3, server.trackRequests.get())
+        assertNull(withContext(Dispatchers.Main.immediate) { model.loadDetailEpisodePreview(EPISODE_B1) })
+        assertNull(withContext(Dispatchers.Main.immediate) { model.loadDetailEpisodePreview(OTHER_SERIES_EPISODE) })
+        assertEquals(EPISODE_A70, model.state.value.detailPreview?.item?.id)
+        withContext(Dispatchers.Main.immediate) { model.loadDetailTracks(EPISODE_A1) }
+        server.relatedTracks.awaitStarted("tracks before navigating to a related detail")
+        withContext(Dispatchers.Main.immediate) { model.showDetail(EPISODE_B1) }
+        withTimeout(15_000) { model.state.first { !it.busy && it.detail?.id == EPISODE_B1 } }
+        server.relatedTracks.releaseAndAwaitFinished()
+        withContext(Dispatchers.Main.immediate) {
+          model.back()
+          assertEquals(SERIES, model.state.value.detail?.id)
+          assertFalse(model.state.value.detailTracks?.busy == true)
+          model.loadDetailTracks(EPISODE_A1)
+        }
+        withTimeout(15_000) { model.state.first { it.detailTracks?.let { tracks -> tracks.targetId == EPISODE_A1 && !tracks.busy && tracks.audio.any { it.index == 41 } } == true } }
+        assertEquals(5, server.trackRequests.get())
+        assertTrue("unexpected endpoints: ${server.unexpectedPaths}", server.unexpectedPaths.isEmpty())
+        assertTrue("fixture failures: ${server.failures}", server.failures.isEmpty())
+      }
+    } finally {
+      withContext(Dispatchers.Main.immediate) {
+        store.clear()
+        app.beforePlaybackHandoff = oldHandoff
+        app.player.businessIntent = oldIntent
+        app.player.setEligible(oldEligibility)
+      }
+      try { withTimeout(15_000) { sdk.disconnect() } }
+      finally { sdk.shutdown(); sdk.destroy(); directory.deleteRecursively() }
+    }
+  }
+
   @Test fun switchingSeasonReplacesPendingPageAndLeavingDetailRejectsLateEpisodes() = runBlocking {
     val instrumentation = InstrumentationRegistry.getInstrumentation()
     val app = instrumentation.targetContext.applicationContext as JellyPilotApplication
@@ -145,13 +218,16 @@ private class EpisodeResponseGate {
   }
 }
 
-private class SeasonSelectionServer : AutoCloseable {
+private class SeasonSelectionServer(private val holdFirstTracks: Boolean = false) : AutoCloseable {
   private val listener = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
   private val workers = Executors.newCachedThreadPool()
   private val sockets = ConcurrentLinkedQueue<Socket>()
   val olderPage = EpisodeResponseGate()
   val newSeason = EpisodeResponseGate()
   val leavingPage = EpisodeResponseGate()
+  val tracks = EpisodeResponseGate()
+  val relatedTracks = EpisodeResponseGate()
+  val trackRequests = AtomicInteger()
   val episodeRequests = ConcurrentLinkedQueue<Pair<String, Int>>()
   val unexpectedPaths = ConcurrentLinkedQueue<String>()
   val failures = ConcurrentLinkedQueue<String>()
@@ -185,6 +261,23 @@ private class SeasonSelectionServer : AutoCloseable {
     }
     while (remaining > 0) { check(input.read() >= 0); remaining-- }
     val path = uri.path
+    if (path in listOf(EPISODE_A1, EPISODE_A70, EPISODE_B1, OTHER_SERIES_EPISODE).map { "/Items/$it" }) {
+      val id = path.substringAfterLast('/')
+      val isTrackRequest = uri.rawQuery.orEmpty().contains("fields=MediaStreams")
+      val requestNumber = if (isTrackRequest) trackRequests.incrementAndGet() else 0
+      val gate = if (!holdFirstTracks) null else when (requestNumber) { 1 -> tracks; 4 -> relatedTracks; else -> null }
+      try {
+        gate?.hold()
+        val item = media(if (id == EPISODE_A70) 0x145 else if (id == EPISODE_B1) 0x200 else if (id == OTHER_SERIES_EPISODE) 0x146 else 0x100, "Episode detail", "Episode")
+          .put("SeriesId", if (id == OTHER_SERIES_EPISODE) "00000000000000000000000000000099" else SERIES)
+          .put("OriginalLanguage", "en").put("ParentIndexNumber", if (id == EPISODE_B1) 2 else 1)
+          .put("IndexNumber", if (id == EPISODE_A70) 70 else 1)
+          .put("MediaStreams", JSONArray().put(JSONObject().put("Type", "Audio").put("Index", 41).put("Codec", "aac").put("Language", "en")))
+        try { json(socket, item.toString()) }
+        catch (error: java.io.IOException) { if (gate == null) throw error }
+      } finally { gate?.finish() }
+      return
+    }
     if (path == "/Shows/$SERIES/Episodes") {
       val query = uri.rawQuery.orEmpty().split('&').associate {
         URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('='), "UTF-8")
@@ -219,7 +312,7 @@ private class SeasonSelectionServer : AutoCloseable {
       "/System/Info/Public" -> "{\"ServerName\":\"Fixture\",\"Version\":\"10.10.0\",\"Id\":\"fixture-server\"}"
       "/UserViews" -> page(JSONArray().put(media(0x20, "Fixture TV", "CollectionFolder").put("CollectionType", "tvshows")), 1).toString()
       "/Items/Latest" -> JSONArray().put(show()).toString()
-      "/UserItems/Resume", "/Shows/NextUp", "/Items/$SERIES/Similar" -> page(JSONArray(), 0).toString()
+      "/UserItems/Resume", "/Shows/NextUp", "/Items/$SERIES/Similar", "/Items/$EPISODE_B1/Similar" -> page(JSONArray(), 0).toString()
       "/Items/$SERIES" -> show().toString()
       "/Shows/$SERIES/Seasons" -> page(JSONArray()
         .put(media(0xa0, "Season A", "Season").put("IndexNumber", 1))
@@ -259,7 +352,7 @@ private class SeasonSelectionServer : AutoCloseable {
 
   override fun close() {
     listener.close()
-    listOf(olderPage, newSeason, leavingPage).forEach { it.unblock() }
+    listOf(olderPage, newSeason, leavingPage, tracks, relatedTracks).forEach { it.unblock() }
     sockets.forEach { it.close() }
     workers.shutdownNow()
   }
@@ -269,3 +362,7 @@ private const val USER = "00000000000000000000000000000001"
 private const val SERIES = "00000000000000000000000000000010"
 private const val SEASON_A = "000000000000000000000000000000a0"
 private const val SEASON_B = "000000000000000000000000000000b0"
+private const val EPISODE_A1 = "00000000000000000000000000000100"
+private const val EPISODE_A70 = "00000000000000000000000000000145"
+private const val EPISODE_B1 = "00000000000000000000000000000200"
+private const val OTHER_SERIES_EPISODE = "00000000000000000000000000000146"

@@ -22,7 +22,7 @@ import io.github.hewel.jellypilot.R
 internal fun AccountScreen(state: AppUiState, model: AppViewModel) {
   val actions = AccountActions(model::openAccountPage, model::activate,
     model::disconnect, model::signOut, model::addAccount, model::updatePreferences, model::retryCleanup,
-    model::retryWatchlistCleanup)
+    model::retryWatchlistCleanup, model::retryConnectionCheck, model::openRemoteController)
   Column(Modifier.fillMaxSize()) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
       if (state.accountPage != AccountPage.Overview) IconButton(onClick = model::back) { PilotIcon(R.drawable.ic_chevron_left, stringResource(R.string.back)) }

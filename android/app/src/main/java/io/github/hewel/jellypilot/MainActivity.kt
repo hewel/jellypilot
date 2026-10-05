@@ -9,6 +9,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,7 +41,9 @@ class MainActivity : AppCompatActivity() {
         ThemePreference.Dark -> true
         ThemePreference.Light -> false
       }
-      val immersive = !state.showSignIn && (state.showPlayer || state.detail != null || (state.destination == Destination.Home && state.activeName != null))
+      val compact = LocalConfiguration.current.screenWidthDp < 600
+      val immersive = !state.showSignIn && state.remoteController == null && (state.showPlayer ||
+        (compact && (state.detail != null || (state.destination == Destination.Home && state.activeName != null))))
       SideEffect {
         WindowCompat.getInsetsController(window, window.decorView).apply {
           isAppearanceLightStatusBars = !dark && !immersive

@@ -97,7 +97,7 @@ internal fun playbackLabel(item: MediaUi): String {
 }
 
 @Composable
-internal fun PlayAction(item: MediaUi, modifier: Modifier = Modifier, play: () -> Unit) {
+internal fun PlayAction(item: MediaUi, modifier: Modifier = Modifier, progressEdge: Boolean = false, play: () -> Unit) {
   val enabled = item.playable && !item.updating
   Surface(
     onClick = play, enabled = enabled,
@@ -106,7 +106,9 @@ internal fun PlayAction(item: MediaUi, modifier: Modifier = Modifier, play: () -
   ) {
     Box(contentAlignment = Alignment.Center) {
       if (item.progress > 0f && !item.played) Box(Modifier.matchParentSize()) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(item.progress).background(Color.White.copy(alpha = 0.12f)))
+        Box(Modifier.fillMaxHeight().fillMaxWidth(item.progress).background(Color.White.copy(alpha = 0.12f))) {
+          if (progressEdge) Box(Modifier.align(Alignment.CenterEnd).width(2.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.6f)))
+        }
       }
       Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         PilotIcon(R.drawable.ic_player_play)

@@ -72,7 +72,7 @@ internal class CatalogPresentation(
     inWatchlist = show.id in watchlist, playable = show.canPlay,
     playTargetId = show.nextEpisode?.id ?: show.id,
     episodeCode = show.nextEpisode?.let { episode(it.seasonNumber, it.episodeNumber) },
-    cast = cast(show.metadata), seasons = show.seasons.map { SeasonUi(it.id, it.name) },
+    cast = cast(show.metadata), seasons = show.seasons.map { SeasonUi(it.id, it.name, it.seasonNumber) },
   )
 
   /** Unavailable saved items remain identifiable and removable, without claiming playable metadata. */

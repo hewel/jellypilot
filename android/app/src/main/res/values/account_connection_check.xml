@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="account_connection_check_unchecked">Connection not checked</string>
+  <string name="account_connection_check_pending">Checking connection…</string>
+  <string name="account_connection_check_failed">Unable to confirm connection</string>
+  <string name="account_connection_check_authentication">Authentication required</string>
+  <string name="account_connection_check_action">Check connection</string>
+</resources>

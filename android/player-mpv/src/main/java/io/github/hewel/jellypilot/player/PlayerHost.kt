@@ -124,6 +124,15 @@ interface PlayerHost {
   fun selectTrack(kind: TrackKind, mpvId: Int)
 
   /**
+   * Requests an absolute subtitle offset in tenths, clamped to -100..100.
+   * Returns false if no request was admitted. At most one request may be outstanding;
+   * its exact selection context and foreground admission are rechecked on execution.
+   * Only native acknowledgement changes [PlayerSnapshot.subtitleTiming]; failures
+   * remain local to that state and never fail otherwise healthy playback.
+   */
+  fun setSubtitleTiming(context: SubtitleTimingContext, offsetTenths: Int): Boolean
+
+  /**
    * Reports the current surface size (`android-surface-size`) so mpv
    * reconfigures video output on resize without a surface recreation.
    */

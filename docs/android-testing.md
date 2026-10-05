@@ -65,6 +65,18 @@ drag preview, a completed drag/accessible seek commits once, and unknown duratio
 volume/brightness semantics, speed selection, and scrolling lists with 200% text.
 `PlayerChromeInteractionTest` uses a controlled Compose clock for playing/paused control visibility,
 slider interaction and panel dismissal. These tests do not establish visual fidelity.
+`SubtitleTimingInteractionTest` covers acknowledged values, repeated failures, pending admission,
+long-press cancellation, limits, nested focus/Back and 200% text. `SubtitleTimingBoundaryTest`
+uses actual libmpv property readback to verify per-track offsets, subtitle Off restoration,
+replacement/reset, unchanged paused position, and rejection of stale or concurrent requests.
+`SubtitleTimingPlayerTest` connects the real MainActivity panels to libmpv and checks that the
+confirmed offset and paused position survive rotation and nested Back. These checks do not
+measure rendered subtitle alignment or accessibility-service announcements.
+On a fresh emulator, the test acknowledges Android's specific first-use fullscreen hint through
+its accessibility action before asserting window-focused controls; it does not change system settings.
+`TabletLayoutTest` and `TabletDetailInteractionTest` cover usable-width/font-scale adaptation,
+selection without autoplay, explicit selected-episode playback, empty seasons and selection
+retention between one and two panes. Physical layout acceptance remains human-owned.
 `SignInInteractionTest`, `AccountInteractionTest` and `LibraryControlsInteractionTest` exercise
 the two-step form, optional password, saved-profile identity, destructive-action confirmation,
 library selection/sorting, and narrow/large-text navigation. `MediaSessionStateTest` checks the
@@ -77,6 +89,13 @@ public-info 403 with explicit provider selection and successful Emby login, and 
 Back/address changes. The fixture never accesses saved real accounts.
 `SeasonSelectionTest` holds an old season's page response while switching seasons, then verifies
 new queries start at zero and late responses cannot overwrite the selected season or closed detail.
+It also validates a restored episode beyond the loaded page against its actual series/season and
+checks that cancelled track reads can be retried after changing seasons or returning from a related item.
+`PersonalListRetentionTest` exercises real HTTP/UniFFI paging, per-account retained lists,
+membership mutation/Undo, cancelled pages and unknown Favorites totals after a failed count.
+`AccountConnectionHealthTest` verifies the authenticated read-only connection probe, retry
+deduplication, content errors that do not imply lost connectivity, and late-response isolation
+after switching or disconnecting. Its fixtures never access saved real accounts.
 `PictureSettingsBoundaryTest` exercises the packaged shader controls on actual libmpv: brightness
 clamping/readback, unchanged paused state and selected subtitles, settings retained across continuous
 media replacement, explicit-exit resets, and initialization failure when the shader cannot be staged.
@@ -97,6 +116,51 @@ It checks that repeated range changes return and deliver the matching snapshot i
 deadlocking during an inline continuation. It never uses the app's saved server or credentials.
 `RemoteTargetLifecycleTest` uses a synthetic HTTP/WebSocket peer to verify repeated background
 cleanup and reconnect, failed registration, and replacement while an older registration is pending.
+
+The 2026-10-04 phone reconciliation adds `SeekFeedbackLayoutTest` and extends
+`PlayerGestureMachineTest` / `PlayerGestureInputTest` for locked-height positioning, safe edges,
+cancelled-anchor freezing and passive feedback input. `DetailPredictiveBackTest` uses the pinned
+AndroidX NavigationEvent dispatcher in a host composition. It checks preview/commit scroll
+restoration through the same keyed rendering entry, cancellation, nested Back priority,
+same-ID route replacement, synchronous player/login handoff rejection before recomposition,
+and preview suppression of collection Undo expiry. These tests do not drive system edge gestures
+on a device or establish visual fidelity, IME behavior or TalkBack output.
+
+### Phone reconciliation results — 2026-10-04
+
+- `bun run task android doctor` passed with the installed SDK/NDK, JDK and staged native inputs.
+- `bun run task android check` passed: all 91 app host tests passed; lint reports for app,
+  player-mpv and core-bridge each contain zero issues. The unchanged player-mpv host test task
+  was up to date, reusing its nine passing cases; it was not freshly executed in this run.
+- `bun run task android build` passed. Debug APK:
+  `android/app/build/outputs/apk/debug/app-debug.apk`, 959,611,702 bytes,
+  SHA256 `7fd2c817444eb1a21279aba0c5133b42a1ac84395bd6c7bc34e55ef912c69a95`.
+- Independent read-only review found and rechecked the synchronous player/login handoff guard.
+  The scroll-restoration regression exposed different saveable keys between preview and active
+  composition; the shared keyed content entry fixes that boundary. All four predictive Back
+  host cases passed before the final check. Initial failures from the old test dispatcher and
+  clock setup were corrected using the pinned AndroidX event path and controlled test scheduling.
+- Final logs: `/tmp/jellypilot-android-check-final.log` and
+  `/tmp/jellypilot-android-build-final.log`. `git diff --check` and local documentation links passed.
+
+This pass did not launch a device/emulator, run instrumentation, capture screenshots or inject
+system input. Device gesture/IME behavior, visuals, subtitles and output acceptance remain human
+checks below; an APK build is not that evidence. Existing Android changes were retained.
+
+### Commit readiness — 2026-10-05
+
+`bun run task android check` passed for the pending phone/tablet, Remote Controller,
+subtitle timing, retained-list and connection-check changes. All 108 app host tests
+ran and passed; the player-mpv task was up to date and reused its nine passing cases.
+Lint reported no errors and 60 warnings (58 app, one core-bridge, one player-mpv).
+These are the current results; the zero-issue lint count above belongs to the earlier
+phone reconciliation checkpoint. Binding generation introduced no tracked source changes.
+
+Independent read-only review found no blocking standards or specification issues in
+remote target/generation admission, predictive Back route replacement, Profile Scope
+list retention or acknowledged subtitle timing. `git diff --check` and glossary-link
+checks passed. The check log is `/tmp/jellypilot-android-commit-check.log`.
+No device/emulator, instrumentation or visual acceptance was run for this commit pass.
 
 ## Human acceptance after implementation
 
@@ -120,8 +184,21 @@ test account whose Favorites and Played flags can be changed deliberately.
 2. Check Home, both personal lists, Library and Search in light/dark/system themes and English/
    Simplified Chinese. Inspect narrow and tablet windows, large text, touch targets, keyboard
    focus and TalkBack. Search/back and detail/back must retain the source filter and position.
+   On a predictive-Back-capable device, open a detail from a filtered/scrolled Library,
+   Search, Personal List and related detail. Partially swipe Back and cancel: the same detail
+   must remain, with no hidden-source action or load. Commit: return once to the actual source
+   with its filter/sort/position retained. Repeat with a sheet or IME open, Reduced motion,
+   both gesture edges and after changing accounts; a retired gesture must not pop a new route.
    Verify library title/filter/sort menus, independent Settings navigation, and switching back to
    Home/Library after opening an account subpage. Change seasons rapidly while a page is loading.
+   On tablets, inspect the navigation rail, three Continue Watching cards, five/seven poster
+   columns, and the static episode preview. Selecting a row must not start playback; its Play
+   action must start that episode. Resize between one and two panes and increase text size:
+   selection and list position should remain usable. Fold posture and hinge layouts are excluded.
+   Load more than 50 personal-list entries, switch tabs, edit membership from a detail page and
+   return: loaded depth, position and current membership should remain consistent. While a
+   connection probe is pending or failing, My must keep the account identity visible and allow
+   retry without interrupting playback; it must not report an unverified connection as connected.
 3. Remove one and several Watchlist/Favorites entries, undo within the feedback period, and
    simulate a failed server write. Hide a History record and undo it; server progress and Played
    must remain unchanged. Unavailable saved media must remain removable.
@@ -145,6 +222,11 @@ test account whose Favorites and Played flags can be changed deliberately.
    compact bottom-right skip/Undo feedback. Exercise left/right double taps and repeated same-side
    taps near both endpoints. Drag horizontally and release, then repeat with a downward cancellation
    and with playback paused. Rewind into an intro marker and verify it is not immediately skipped.
+   During a horizontal drag, the feedback bubble follows the finger horizontally without
+   vertical drift; it stays within safe bounds and away from the reserved lower subtitle lane.
+   Downward cancellation freezes its position and shows the captured starting time. Check
+   near-top/near-bottom locks, display cutouts, long timecodes and enlarged text; arbitrary
+   ASS subtitle placement can still overlap the passive Compose feedback.
    Swipe left/right vertically for picture brightness/volume, cancel with a second finger, and
    check mute/zero. Hold the center from a non-2× base rate, then release, pause, open settings,
    background or switch episodes: the original rate must return and an explicit pause must stay
@@ -152,6 +234,11 @@ test account whose Favorites and Played flags can be changed deliberately.
    off and reopen the app: single taps and visible controls must still work. Check TalkBack,
    Reduced motion, system edge navigation and large text. Check ordinary/circular launcher masks,
    themed icons and the system startup icon on the device's launcher.
+   In Subtitles → Subtitle timing, compare Earlier/Later adjustments with spoken dialogue.
+   Check 0.1-second steps, long-press repetition, both 10-second limits, reset, inline failure,
+   subtitle Off/on and switching tracks. Rotation and nested Back must retain the confirmed
+   offset without seeking or resuming a paused video; a new media item starts at zero. Check
+   large text, TalkBack feedback, and disabled explanations when no subtitle can be adjusted.
 7. Reclaim the process during playback, reopen, and explicitly restore the local position as a
    new session. Check this separately from server Continue Watching. Send remote start/control
    commands while visible, backgrounded, locked and switching accounts; stale commands must not

@@ -4,10 +4,13 @@ import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.hewel.jellypilot.R
 import org.junit.Assert.assertEquals
@@ -25,6 +28,46 @@ class PersonalListsInteractionTest {
   private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
   private fun text(id: Int) = context.getString(id)
   private fun media(id: String) = MediaUi(id, id, "Movie", "2026", null, "", false, false)
+
+  @Test fun unknownFavoriteCountAndLoadingNeverClaimAnEmptyCollection() {
+    val state = mutableStateOf(AppUiState(busy = true))
+    var retries = 0
+    compose.setContent {
+      MaterialTheme {
+        PersonalLists(state.value, PersonalListActions({}, {}, {}, {}, {}, {}, {}, { retries++ }))
+      }
+    }
+    compose.onNodeWithText(text(R.string.favorites)).assertExists()
+    compose.onNodeWithText("${text(R.string.favorites)}  0").assertDoesNotExist()
+    compose.onNodeWithText(text(R.string.empty_watchlist)).assertDoesNotExist()
+    compose.runOnIdle { state.value = state.value.copy(busy = false, error = "Connection failed") }
+    compose.onNodeWithText("Connection failed").assertExists()
+    compose.onNodeWithText(text(R.string.retry)).performClick()
+    compose.runOnIdle { assertEquals(1, retries) }
+    compose.onNodeWithText(text(R.string.empty_watchlist)).assertDoesNotExist()
+  }
+
+  @Test fun switchingCollectionsRestoresEachDeepScrollPosition() {
+    val watchlist = (0..74).map { media("Watch $it") }
+    val favorites = (0..74).map { media("Favorite $it") }
+    val state = mutableStateOf(AppUiState(listItems = watchlist, listCount = 75, favoriteCount = 75))
+    compose.setContent {
+      MaterialTheme {
+        PersonalLists(state.value, PersonalListActions({ kind ->
+          state.value = state.value.copy(selectedList = kind, listItems = if (kind == PersonalListKind.Watchlist) watchlist else favorites)
+        }, {}, {}, {}, {}, {}, {}))
+      }
+    }
+    compose.onNode(hasScrollAction()).performScrollToIndex(60)
+    compose.onNodeWithText("Watch 60").assertIsDisplayed()
+    compose.onNodeWithText("${text(R.string.favorites)}  75").performClick()
+    compose.onNode(hasScrollAction()).performScrollToIndex(54)
+    compose.onNodeWithText("Favorite 54").assertIsDisplayed()
+    compose.onNodeWithText("${text(R.string.watchlist)}  75").performClick()
+    compose.onNodeWithText("Watch 60").assertIsDisplayed()
+    compose.onNodeWithText("${text(R.string.favorites)}  75").performClick()
+    compose.onNodeWithText("Favorite 54").assertIsDisplayed()
+  }
 
   @Test fun failedRemovalKeepsSelectionAndAllowsRetry() {
     val alpha = media("Alpha")

@@ -212,7 +212,7 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
               panelTriggers, snapshot.tracks.any { it.kind == TrackKind.AUDIO }, labelled = phone, open = chrome::open)
             PanelButton(PlayerPanel.Subtitles, R.drawable.ic_subtitles,
               stringResource(if (phone) R.string.player_subtitles else R.string.subtitle_tracks), panelTriggers,
-              snapshot.tracks.any { it.kind == TrackKind.SUBTITLE }, labelled = phone, open = chrome::open)
+              ready && snapshot.status in listOf(PlayerStatus.READY, PlayerStatus.BUFFERING), labelled = phone, open = chrome::open)
             if (!phone) PanelButton(PlayerPanel.Video, R.drawable.ic_adjustments, stringResource(R.string.video_options),
               panelTriggers, true, open = chrome::open)
           }
@@ -265,15 +265,18 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
               .width(panelWidth).fillMaxHeight(), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
               PlayerPanelContent(selected, snapshot, playback, model, chrome::close,
                 open = chrome::open,
-                back = if (chrome.panelOrigin == PlayerPanel.More && selected != PlayerPanel.More) chrome::back else null,
+                back = if (chrome.panelOrigin != null && selected != chrome.panelOrigin) chrome::back else null,
                 restoreRow = chrome.restoreRow, phone = phone)
             }
           }
-        } else ModalBottomSheet(onDismissRequest = chrome::back, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        } else ModalBottomSheet(onDismissRequest = chrome::close,
+          properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
+          containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+          BackHandler { chrome.back() }
           PlayerDialogSystemBars()
           Box(Modifier.fillMaxWidth().heightIn(max = panelHeight)) {
             PlayerPanelContent(selected, snapshot, playback, model, chrome::close, open = chrome::open,
-              back = if (chrome.panelOrigin == PlayerPanel.More && selected != PlayerPanel.More) chrome::back else null,
+              back = if (chrome.panelOrigin != null && selected != chrome.panelOrigin) chrome::back else null,
               restoreRow = chrome.restoreRow, phone = phone)
           }
         }

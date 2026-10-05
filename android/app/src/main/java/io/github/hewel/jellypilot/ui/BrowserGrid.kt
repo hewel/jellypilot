@@ -23,10 +23,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  */
 @Composable
 internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: LazyGridState) {
+  val backPreview = LocalBackPreview.current
   val count = if (browser.isVirtual) browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt() else browser.slots.size
   // Report the visible window expanded by one viewport on each side, rounded
   // outward to complete rows; the SDK owns page scheduling from this demand.
-  LaunchedEffect(gridState, count) {
+  LaunchedEffect(gridState, count, backPreview) {
+    if (backPreview) return@LaunchedEffect
     snapshotFlow {
       val visible = gridState.layoutInfo.visibleItemsInfo
       if (visible.isEmpty() || count == 0) return@snapshotFlow null

@@ -2,7 +2,7 @@
 
 _Status: Accepted design, 2026-09-14; mobile product implementation added on 2026-09-21 and synchronized with the 2026-09-22 Mobile design. Validation and pending acceptance are recorded below. The user deferred physical-device testing until completion; the earlier bring-up device pass does not validate these new flows._
 
-Architecture: [ADR 0042](adr/0042-native-android-frontend-and-shared-sdk.md). Domain terminology: [CONTEXT.md](../CONTEXT.md). Visual source: [Paper, Media Streamer / Mobile](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/5UF-0). Repository investigation used `22555b4`; the earlier proposal cited `92fba0e3` and is not current implementation evidence.
+Architecture: [ADR 0042](adr/0042-native-android-frontend-and-shared-sdk.md). Domain terminology: [GLOSSARY.md](../GLOSSARY.md). Visual source: [Paper, Media Streamer / Mobile](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/5UF-0). Repository investigation used `22555b4`; the earlier proposal cited `92fba0e3` and is not current implementation evidence.
 
 ## Product scope
 
@@ -20,7 +20,7 @@ The first release inherits currently implemented business capabilities that appl
 | User Data Actions | Favorite/unfavorite and played/unplayed changes become authoritative after server acceptance, with consistent state across visible and retained content. |
 | Playback | Direct Playback, server resume and play-from-beginning, audio/subtitle selection including supported external subtitles, existing track/language preferences, original-audio preference, applicable season-volume memory, episode selection, previous/next episode, and natural-end episode advance. |
 | Intro Skipper | Existing Automatic, Manual, and Off semantics, including once-per-range automatic attempts and natural-end-driven episode advance after credit skipping. Respect provider capabilities. |
-| Remote control | Foreground Playback Target with the currently supported provider command set, including starting playback and controlling the active item. This is not a phone-to-desktop remote-controller feature. |
+| Remote control | Foreground Playback Target with the currently supported provider command set, including starting playback and controlling the active item. A separate phone-to-PC/TV Remote Controller was authorized on 2026-10-05; its scope and delivery status are tracked in the [Remote Controller specification](remote-controller-spec.md). |
 | Platform controls | MediaSession-backed system media controls, audio-focus handling, headphone-disconnection handling, standard Android navigation/text/focus input, and media keys. |
 | Settings and support | Dark/light/system theme, English/Simplified Chinese and UI Language Preference, reduced-motion preference, applicable business playback settings, target naming, image-cache control, and sanitized diagnostics/export. Platform-specific controls are not copied mechanically. |
 | Android addition | Local Playback Recovery Point and a distinct Restore Local Playback action for interrupted playback. |
@@ -80,8 +80,8 @@ Manual picture brightness is an application-owned OUTPUT shader multiplying vide
 brightness, dim controls or subtitles, or expose user shaders/configuration. It defaults to 100%;
 brightness and speed stay with the open player during continuous media replacement and reset on
 exit. This is a signal multiplier, not calibrated screen luminance or
-HDR acceptance. Custom double-tap, swipe and long-press playback gestures, their HUD, help and
-preferences are excluded from this design synchronization at the user's request.
+HDR acceptance. Custom double-tap, swipe and long-press playback gestures, their feedback, help
+and device-local preference were implemented in the later, explicitly authorized gesture pass.
 
 A prototype entry is not automatic feature authorization. In particular, the current “快捷键” entry must not become a dead settings item: the implemented Android settings navigation must omit or revise it to match the standard-input-only decision. Likewise “MPV” does not authorize arbitrary configuration. Missing prototype pages do not silently remove inherited business capabilities. Paper itself was not modified in this design session; final visual acceptance is human-owned.
 
@@ -122,6 +122,82 @@ The synchronization also fences season queries when replacing pending pagination
 season immediately starts its first page and late old-season results cannot overwrite it.
 MediaSession discards unconfirmed play/seek intents on admission loss, generation replacement
 and terminal states, preventing those intents from reappearing in a later session.
+
+### Phone and tablet completion — 2026-09-23
+
+Playback subtitles now have a fixed timing entry beneath the scrolling track list. The nested
+panel adjusts by 0.1 seconds within −10 to +10 seconds, supports hold-to-repeat and reset, and
+shows only the offset acknowledged by libmpv. Positive offsets delay subtitles. Pending writes
+disable controls; failures keep the confirmed value and allow retry. Capability is established
+by applying and reading back `sub-delay` for an active subtitle, not by its format name. No
+burned-in-subtitle detector is claimed: the current direct-play stream model supplies no such
+fact. Off, missing tracks and unavailable adjustment have distinct disabled explanations.
+
+Offsets belong to a media/track selection within the player lifetime. Off retains track memory;
+switching back restores it. Every new media load and explicit stop clears it, even when continuous
+episode playback retains picture brightness and speed. Generation and selection revisions reject
+stale requests, including A → B → A. Back returns to the subtitle list, while Close/backdrop
+dismisses the whole stack. Rotation preserves the playback origin and confirmed value. Preplay
+detail sheets do not expose timing. Adjustment never seeks or changes paused/playing intent.
+
+The [tablet reference](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/p-8-0)
+now has its own responsive Home and detail composition. Wide Home uses a docked navigation rail,
+24 dp content insets, a rounded 400 dp Hero, and shelves whose card widths derive from the available
+space. Detail presents a static preview and explicit playback action; selecting an episode updates
+the detail without autoplay. A two-pane layout requires at least 960 dp of available content width
+and sufficient room for enlarged text. Narrower tablet windows show the same content in one column;
+episode selection and pane scroll positions survive layout changes. Actual metadata and controls
+come from the selected episode. Hinge/Tabletop posture behavior remains excluded.
+Restored selections beyond the loaded page are resolved and checked against the current series
+and season before playback or episode actions become available. Cancelling a track read retires
+its loading state, including when returning from a related detail.
+
+Personal Lists retains each collection's loaded pages and scroll position within its Profile Scope.
+The Favorites count remains unknown until the server supplies it; opening Watchlist also loads
+that count. Confirmed removal/undo updates retained membership, and profile changes clear caches.
+My keeps selected account identity separate from a scoped authenticated connection check. Checking,
+failure and retry do not restore the saved profile, switch accounts or interrupt playback. A failed
+content request triggers a separate check instead of being treated as proof that the network is down.
+
+Physical-device visual, subtitle-rendering and output acceptance remains pending. Automated
+coverage and the concrete acceptance checklist are maintained in [Android testing](android-testing.md).
+
+### Phone reference reconciliation — 2026-10-04
+
+The user delegated the remaining presentation choices and implementation after the Desktop
+reconciliation. This pass adopts the Mobile [seek preview](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/LIA-0),
+[cancel preview](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/LIS-0), and
+[predictive Back trial](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/5-0/N6W-0).
+The existing subtitle timing, retained lists, account checks and tablet changes remain in place.
+
+Seek feedback uses a 112×56 dp minimum surface, growing for large text and long timecodes.
+Its horizontal position follows the finger; its vertical position is chosen at horizontal lock,
+with the bottom edge 36 dp above that point when there is space. Otherwise choose below it,
+or a safe top-center fallback if neither side fits. Keep the existing system-edge and bottom
+64 dp subtitle reservations. Downward cancellation freezes the bubble at its last position and
+shows the captured start time with the cancellation label. The captured seek transaction,
+single release commit, cancellation latch and permission to resume remain unchanged. Passive
+Compose feedback stays behind actionable controls; arbitrary ASS placement can still overlap it.
+
+Predictive Back applies to a detail page returning to its actual retained source. Previewing
+must not change the route, load source data or enable hidden source actions. Cancellation leaves
+the detail in place; committing pops only the route whose gesture began. Profile or route
+replacement retires that gesture. Source filters, sort and scroll state remain intact; nested
+panels and Android input handling keep their existing priority. Reduced motion suppresses the
+page transform while keeping the same cancel/commit semantics. This does not introduce a new
+independent detail stack for each navigation tab.
+Preview and active pages share the same keyed rendering entry so saveable state uses the same
+keys in both layers. Commit also checks live navigation/player/login state synchronously; it
+cannot rely on recomposition to retire a gesture after asynchronous playback preparation.
+
+Android targets remain at least 48 dp. Detail track sheets still select tracks for the next
+playback, unlike Desktop's read-only source-track facts. Android Intro Skipper remains session
+scoped with automatic-skip Undo; Desktop's persisted series preference is not imported. Short
+seasons already show all loaded episodes, and long seasons retain native pagination. Obsolete
+Paper MPV-configuration and editable-hotkey entries do not expand the accepted Android scope.
+
+Code checks and human acceptance for this pass are recorded separately in
+[Android testing](android-testing.md); the reference boards do not establish device acceptance.
 
 ### Earlier mobile design integration checkpoint — 2026-09-21
 

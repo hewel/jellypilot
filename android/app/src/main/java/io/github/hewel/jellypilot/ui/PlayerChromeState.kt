@@ -44,7 +44,11 @@ internal class PlayerChromeState(visible: Boolean, paused: Boolean) {
     reveal()
   }
   fun back() {
-    if (panel == PlayerPanel.GestureHelp) {
+    if (panel == PlayerPanel.SubtitleTiming) {
+      restoreRow = PlayerPanel.SubtitleTiming
+      panel = PlayerPanel.Subtitles
+      interacted()
+    } else if (panel == PlayerPanel.GestureHelp) {
       restoreRow = PlayerPanel.GestureHelp
       panel = PlayerPanel.Picture
       interacted()

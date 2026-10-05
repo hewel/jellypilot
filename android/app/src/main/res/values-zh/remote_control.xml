@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="remote_control">远程控制</string>
+  <string name="play_on_another_device">在其他设备上播放</string>
+  <string name="remote_loading">正在查找设备…</string>
+  <string name="remote_inactive">远程控制尚未启用。请保持此页面在前台以建立连接。</string>
+  <string name="remote_load_failed">无法刷新设备。请重试以重新连接。</string>
+  <string name="remote_empty">此服务器上没有可控制的设备。请在其他设备上打开播放器，然后刷新。</string>
+  <string name="remote_devices">设备</string>
+  <string name="remote_choose_target">选择设备以查看其播放控制。</string>
+  <string name="remote_choose_play_target">选择设备，然后确认在该设备上播放此内容。</string>
+  <string name="remote_play_on">在%1$s上播放</string>
+  <string name="remote_resume_saved">从已保存的进度继续播放</string>
+  <string name="remote_start_at">从%1$s继续播放</string>
+  <string name="remote_play_unsupported">此设备不支持远程启动播放。</string>
+  <string name="remote_now_playing_on">%1$s正在播放</string>
+  <string name="remote_no_media">此设备未报告正在播放的内容。</string>
+  <string name="remote_playing">播放中</string>
+  <string name="remote_paused">已暂停</string>
+  <string name="remote_state_unknown">无法获取播放状态</string>
+  <string name="remote_resume">继续播放</string>
+  <string name="remote_volume_unavailable">无法获取音量</string>
+  <string name="remote_position_of_duration">%1$s / %2$s</string>
+  <string name="remote_volume_percent">%1$d%%</string>
+  <string name="remote_command_pending">正在发送命令…</string>
+  <string name="remote_command_failed">无法发送命令。请刷新设备后重试。</string>
+  <string name="remote_command_accepted">命令已发送。</string>
+</resources>

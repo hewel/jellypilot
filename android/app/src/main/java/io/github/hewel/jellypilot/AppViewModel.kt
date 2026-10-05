@@ -9,6 +9,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -41,12 +43,23 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     onOpenPlayer = ::openPlayer,
     onRecoveryChanged = ::refreshRecovery,
   )
-  private val visibility = PlaybackVisibility(application, playback::setEligible)
+  private val remoteController = RemoteControllerCoordinator(viewModelScope,
+    { SdkRemoteController(sdk.openRemoteController()) },
+    { remote -> mutableState.update { it.copy(remoteController = remote) } },
+  )
+  private val visibility = PlaybackVisibility(application) { eligible ->
+    playback.setEligible(eligible)
+    remoteController.setEligible(eligible)
+  }
   private val preferenceWrites = Mutex()
   private var recoveryJob: Job? = null
   private var queryJob: Job? = null
   private var loginJob: Job? = null
   private var queryToken: OperationToken? = null
+  private class ConnectionCheck(val scope: ProfileScopeRef, val token: OperationToken, val job: Job)
+  private var connectionCheck: ConnectionCheck? = null
+  private var connectionCheckGeneration = 0L
+  private var cleared = false
   private var quickSession: QuickConnectSession? = null
   private var authGeneration = 0L
   private var queryGeneration = 0L
@@ -68,8 +81,14 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   private val accountPageHistory = ArrayDeque<AccountPage>()
   private data class DetailPage(val item: MediaUi, val children: List<MediaUi>, val seasonId: String?, val hasMore: Boolean, val tracks: DetailTracksUi?)
   private val details = ArrayDeque<DetailPage>()
+  /** Changes even when leaving and reopening the same item before Compose receives a frame. */
+  var detailNavigationEpoch = 0L
+    private set
   private data class RetainedBrowser(val session: BrowseSession, val generation: Long, val ui: BrowserUi)
   private val retainedBrowsers = mutableMapOf<Destination, RetainedBrowser>()
+  private data class RetainedPersonalList(val scope: ProfileScopeRef, val items: List<MediaUi>, val hasMore: Boolean, val refresh: Boolean = false)
+  private val retainedPersonalLists = mutableMapOf<PersonalListKind, RetainedPersonalList>()
+  private var personalListRevision = 0L
   private var watchlistEntries = emptyList<WatchlistEntry>()
   private var watchlistRevision = 0L
   private var batchWriteIds = emptySet<String>()
@@ -117,12 +136,15 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
       when (state.value.destination) {
         Destination.Search -> search(searchText)
         Destination.Library -> openLibraryQuery()
+        Destination.Account -> retryConnectionCheck()
         else -> Unit
       }
     }
   }
   fun activityFinished() {
+    remoteController.close()
     cancelLogin()
+    cancelConnectionCheck()
     cancelQuery()
     closeBrowserSession()
     closeRetainedBrowsers()
@@ -133,6 +155,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   fun dismissNotice() { mutableState.update { it.copy(notice = null) } }
   fun addAccount() {
     if (state.value.loginBusy || rejectWhileCleanupPending()) return
+    remoteController.close()
     mutableState.update { it.copy(showSignIn = true, loginStep = LoginStep.Server, loginIdentity = null, loginPassword = "", loginError = null, loginConnectionLost = false, loginPublicInfoRestricted = false, error = null) }
   }
   fun openPlayer() {
@@ -140,19 +163,35 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
       if (sdk.signOutCleanupPending()) showCleanupPending()
       return
     }
+    remoteController.close()
     suspendBrowser()
     cancelQuery()
     mutableState.update { it.copy(showPlayer = true, busy = false) }
   }
+  /** Read-only projection of the exact page back() will restore; no query or stack mutation. */
+  fun detailBackPreview(): AppUiState? {
+    val current = state.value
+    if (current.detail == null || current.showPlayer || current.showSignIn || current.remoteController != null) return null
+    val previous = details.lastOrNull()
+    return current.copy(detail = previous?.item, detailPreview = null, detailItems = previous?.children.orEmpty(),
+      selectedSeasonId = previous?.seasonId, episodesHaveMore = previous?.hasMore ?: false,
+      detailTracks = previous?.tracks?.takeUnless { it.busy }, busy = false, error = null, notice = null)
+  }
+
   fun back() {
+    if (state.value.remoteController != null) {
+      remoteController.close()
+      return
+    }
     if (state.value.showPlayer) {
       playback.stop()
       mutableState.update { it.copy(showPlayer = false) }
       resumeBrowser()
     } else if (state.value.detail != null) {
       cancelQuery()
+      ++detailNavigationEpoch
       val previous = details.removeLastOrNull()
-      mutableState.update { it.copy(detail = previous?.item, detailItems = previous?.children.orEmpty(), selectedSeasonId = previous?.seasonId, episodesHaveMore = previous?.hasMore ?: false, detailTracks = previous?.tracks, busy = false) }
+      mutableState.update { it.copy(detail = previous?.item, detailPreview = null, detailItems = previous?.children.orEmpty(), selectedSeasonId = previous?.seasonId, episodesHaveMore = previous?.hasMore ?: false, detailTracks = previous?.tracks?.takeUnless { tracks -> tracks.busy }, busy = false) }
       resumeBrowser()
     } else if (state.value.destination == Destination.Search) {
       navigate(searchSource)
@@ -160,19 +199,22 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
       val previous = accountPageHistory.removeLastOrNull() ?: AccountPage.Overview
       mutableState.update { it.copy(accountPage = previous) }
     }
+    refreshSelectedListIfNeeded()
   }
 
   fun navigate(destination: Destination) {
+    remoteController.close()
     if (state.value.destination == destination && state.value.detail == null) return
     if (destination == Destination.Search && state.value.destination != Destination.Search) searchSource = state.value.destination
     cancelQuery()
     searchDebounce?.cancel()
     searchDebounce = null
     retainBrowser()
+    ++detailNavigationEpoch
     details.clear()
-    mutableState.update { it.copy(destination = destination, detail = null, detailItems = emptyList(), items = emptyList(), browser = BrowserUi(), busy = false) }
+    mutableState.update { it.copy(destination = destination, detail = null, detailPreview = null, detailItems = emptyList(), items = emptyList(), browser = BrowserUi(), busy = false) }
     when (destination) {
-      Destination.Account -> viewModelScope.launch { refreshIdentity() }
+      Destination.Account -> viewModelScope.launch { refreshIdentity(); retryConnectionCheck() }
       Destination.Search -> if (!restoreBrowser(destination)) search(searchText)
       Destination.Library -> if (!restoreBrowser(destination)) openLibraryQuery()
       Destination.Home -> refresh()
@@ -297,6 +339,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   }
   fun disconnect() {
     accountOperation {
+      cancelConnectionCheck()
       withContext(NonCancellable) {
         playback.blockForHandoff()
         sdk.disconnect()
@@ -312,7 +355,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         val activeBefore = sdk.activeProfile()?.key
         // Media-session commands bypass this ViewModel. Block the native
         // player before deletion starts, not only when the teardown hook runs.
-        if (activeBefore == key) playback.blockForHandoff()
+        if (activeBefore == key) { cancelConnectionCheck(); playback.blockForHandoff() }
         val outcome = sdk.signOut(key, deleteWatchlist)
         // A failed teardown keeps the session connected for a cleanup retry:
         // only the saved-profile list changes, never the connection reset.
@@ -356,6 +399,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
 
   private fun accountOperation(action: suspend () -> Unit) {
     if (state.value.loginBusy) return
+    remoteController.close()
     val generation = ++authGeneration
     mutableState.update { it.copy(loginBusy = true, error = null, loginError = null) }
     loginJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
@@ -454,11 +498,15 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   }
 
   private suspend fun connectionChanged(saved: List<SavedProfile>? = null) {
+    remoteController.close()
+    cancelConnectionCheck()
     accountPageHistory.clear()
     cancelQuery()
     closeBrowserSession()
     closeRetainedBrowsers()
     cancelUserDataWrites()
+    retainedPersonalLists.clear()
+    ++personalListRevision
     confirmedUserData.clear()
     libraries = emptyList()
     watchlistIds = emptySet()
@@ -470,9 +518,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     historyUndo = null
     historyOffset = 0
     batchWriteIds = emptySet()
+    ++detailNavigationEpoch
     details.clear()
     searchText = ""
-    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, activeProfileKey = sdk.activeProfile()?.key, showPlayer = false, playbackUi = null, listBusy = false, listUndo = null, historyBusy = false, historyUndo = null, detailTracks = null, items = emptyList(), featured = emptyList(), homeRows = emptyList(), listItems = emptyList(), historyItems = emptyList(), listCount = 0, favoriteCount = 0, recovery = null, browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "", accountPage = AccountPage.Overview) }
+    mutableState.update { it.copy(activeName = sdk.activeProfile()?.userName, activeProfileKey = sdk.activeProfile()?.key, showPlayer = false, playbackUi = null, listBusy = false, listUndo = null, historyBusy = false, historyUndo = null, detailTracks = null, detailPreview = null, items = emptyList(), featured = emptyList(), homeRows = emptyList(), listItems = emptyList(), historyItems = emptyList(), listCount = 0, favoriteCount = null, recovery = null, browser = BrowserUi(), detail = null, detailItems = emptyList(), libraries = emptyList(), libraryId = null, busy = false, destination = Destination.Home, searchQuery = "", accountPage = AccountPage.Overview) }
     refreshIdentity(saved)
     playback.profileChanged()
     refreshRecovery()
@@ -485,6 +534,63 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     queryJob?.cancel()
     queryToken = null
     queryJob = null
+    // Track reads use this same query slot; a retired request cannot remain a loading cache hit.
+    mutableState.update { if (it.detailTracks?.busy == true) it.copy(detailTracks = null) else it }
+  }
+
+  /** Checks the current credentials without restoring a saved profile or disturbing playback. */
+  fun retryConnectionCheck() = checkConnection()
+
+  private fun checkConnection(expectedScope: ProfileScopeRef? = null) {
+    if (cleared || state.value.loginBusy || state.value.signOutCleanupPending ||
+      (expectedScope != null && !sdk.isScopeActive(expectedScope))) return
+    if (connectionCheck?.let { sdk.isScopeActive(it.scope) } == true) return
+    cancelConnectionCheck()
+    if (sdk.activeProfile() == null) return
+    val token = try { sdk.newOperationToken() } catch (error: Exception) { showError(error); return }
+    val scope = token.scopeRef()
+    if (expectedScope != null && expectedScope != scope) { token.cancel(); token.destroy(); return }
+    val generation = connectionCheckGeneration
+    mutableState.update { it.copy(connectionHealth = ConnectionHealth.Checking) }
+    // Install ownership before starting: a cached/fast completion must not leave a completed job pending.
+    val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+      try {
+        withTimeout(15_000) { sdk.libraryShortcuts(token) }
+        currentCoroutineContext().ensureActive()
+        publishConnectionHealth(scope, generation, ConnectionHealth.Connected)
+      } catch (_: TimeoutCancellationException) {
+        publishConnectionHealth(scope, generation, ConnectionHealth.Failed)
+      } catch (cancelled: CancellationException) { throw cancelled }
+      catch (error: Exception) {
+        val health = when (error) {
+          is SdkException.Cancelled, is SdkException.Stale, is SdkException.NoActiveProfile -> ConnectionHealth.Unchecked
+          is SdkException.Authentication -> ConnectionHealth.AuthenticationRequired
+          else -> ConnectionHealth.Failed
+        }
+        publishConnectionHealth(scope, generation, health)
+      } finally {
+        if (connectionCheck?.token === token) connectionCheck = null
+        token.cancel()
+        token.destroy()
+      }
+    }
+    connectionCheck = ConnectionCheck(scope, token, job)
+    job.start()
+  }
+
+  private fun publishConnectionHealth(scope: ProfileScopeRef, generation: Long, health: ConnectionHealth) {
+    if (!cleared && generation == connectionCheckGeneration && sdk.isScopeActive(scope)) {
+      mutableState.update { it.copy(connectionHealth = health) }
+    }
+  }
+
+  private fun cancelConnectionCheck() {
+    ++connectionCheckGeneration
+    val pending = connectionCheck
+    connectionCheck = null
+    pending?.token?.cancel()
+    pending?.job?.cancel()
+    mutableState.update { it.copy(connectionHealth = ConnectionHealth.Unchecked) }
   }
 
   private fun query(action: suspend (OperationToken, ProfileScopeRef, Long) -> Unit) {
@@ -497,13 +603,20 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     mutableState.update { it.copy(busy = true, error = null) }
     queryJob = viewModelScope.launch {
       var token: OperationToken? = null
+      var scope: ProfileScopeRef? = null
       try {
         val operation = sdk.newOperationToken()
         token = operation
         queryToken = operation
-        action(operation, operation.scopeRef(), base)
+        scope = operation.scopeRef()
+        action(operation, scope, base)
       } catch (cancelled: CancellationException) { throw cancelled }
-      catch (error: Exception) { showError(error) }
+      catch (error: Exception) {
+        showError(error)
+        if (queryGeneration == generation && (error is SdkException.Request || error is SdkException.Authentication)) {
+          scope?.let(::checkConnection)
+        }
+      }
       finally {
         token?.cancel()
         token?.destroy()
@@ -567,6 +680,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   private fun publish(session: BrowseSession, snapshot: BrowseSnapshot, generation: Long, base: Long) {
     if (browseSession !== session || browserGeneration != generation || !sdk.isScopeActive(snapshot.scope)) return
     val scope = snapshot.scope
+    val previous = state.value.browser
+    val newFailure = (snapshot.status == BrowseStatus.FAILED &&
+      (previous.generation != generation || previous.status != BrowseUiStatus.Failed || previous.error != snapshot.error)) ||
+      (snapshot.refreshError != null && (previous.generation != generation || previous.refreshError != snapshot.refreshError))
     mutableState.update {
       it.copy(
         browser = BrowserUi(
@@ -592,6 +709,8 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         ),
       )
     }
+    // An item/query failure does not prove disconnection. Confirm through a separate authenticated endpoint.
+    if (newFailure) checkConnection(scope)
   }
 
   private fun closeBrowserSession() {
@@ -702,10 +821,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   fun refresh() {
     state.value.detail?.let { showDetail(it.id); return }
     when (state.value.destination) {
-      Destination.Account -> viewModelScope.launch { refreshIdentity() }
+      Destination.Account -> viewModelScope.launch { refreshIdentity(); retryConnectionCheck() }
       Destination.Search -> if (browseSession != null) browserCall { it.refresh() } else search(searchText)
       Destination.Library -> if (browseSession != null) browserCall { it.refresh() } else openLibraryQuery()
-      Destination.Lists -> selectList(state.value.selectedList)
+      Destination.Lists -> refreshPersonalList()
       Destination.Home -> query { token, scope, base ->
         loadLibraries(token)
         refreshWatchlist(token)
@@ -800,7 +919,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
 
   fun showDetail(id: String) {
     val suspendEpoch = suspendBrowser()
-    val previous = state.value.detail?.takeIf { it.id != id }?.let { DetailPage(it, state.value.detailItems, state.value.selectedSeasonId, state.value.episodesHaveMore, state.value.detailTracks) }
+    val previous = state.value.detail?.takeIf { it.id != id }?.let { DetailPage(it, state.value.detailItems, state.value.selectedSeasonId, state.value.episodesHaveMore, state.value.detailTracks?.takeUnless { tracks -> tracks.busy }) }
     query { token, scope, base ->
       var detailShown = false
       try {
@@ -825,7 +944,8 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         }
         currentCoroutineContext().ensureActive()
         previous?.takeIf { it.item.id != id }?.let(details::addLast)
-        mutableState.update { it.copy(detail = presented(detail, base), detailTracks = null, detailItems = episodes, selectedSeasonId = selectedSeason, episodesHaveMore = more) }
+        ++detailNavigationEpoch
+        mutableState.update { it.copy(detail = presented(detail, base), detailPreview = null, detailTracks = null, detailItems = episodes, selectedSeasonId = selectedSeason, episodesHaveMore = more) }
         detailShown = true
         val related = sdk.similarVideo(token, id)
         currentCoroutineContext().ensureActive()
@@ -845,22 +965,53 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     selectLibrary(id)
   }
 
-  fun loadDetailTracks() {
+  /** The preview owns its coroutine; cancellation never replaces the library's paging query. */
+  suspend fun loadDetailEpisodePreview(id: String): MediaUi? {
+    val detail = state.value.detail ?: return null
+    val owner = detail.id
+    val season = state.value.selectedSeasonId
+    val knownInSeason = state.value.detailItems.any { it.id == id }
+    val seasonNumber = detail.seasons.firstOrNull { it.id == season }?.number
+    if (detail.itemType != "Series" && detail.playTargetId != id) return null
+    val base = confirmedRevision
+    val token = sdk.newOperationToken()
+    return try {
+      val item = sdk.itemDetail(token, id)
+      currentCoroutineContext().ensureActive()
+      if (state.value.detail?.id != owner || state.value.selectedSeasonId != season || !sdk.isScopeActive(token.scopeRef())) null
+      else if (item.id != id || (detail.itemType == "Series" && (item.itemType != "Episode" || item.seriesId != owner ||
+        (!knownInSeason && season != null && (seasonNumber == null || item.seasonNumber != seasonNumber))))) null
+      else presented(CatalogPresentation(token.scopeRef(), watchlistIds).item(item), base).also { loaded ->
+        mutableState.update { it.copy(detailPreview = DetailPreviewUi(owner, season, loaded)) }
+      }
+    } finally {
+      token.cancel()
+      token.destroy()
+    }
+  }
+
+  private fun isDetailPlaybackTarget(id: String): Boolean = state.value.detail?.let { detail ->
+    detail.playTargetId == id || (detail.itemType == "Series" && state.value.detailItems.any { it.id == id }) ||
+      state.value.detailPreview?.let { it.ownerId == detail.id && it.seasonId == state.value.selectedSeasonId && it.item.id == id } == true
+  } == true
+
+  fun loadDetailTracks(targetId: String? = null) {
     val detail = state.value.detail ?: return
-    val target = detail.playTargetId ?: return
+    val target = targetId ?: detail.playTargetId ?: return
+    if (!isDetailPlaybackTarget(target)) return
     val existing = state.value.detailTracks
     if (existing?.targetId == target && (existing.busy || existing.error == null)) return
-    mutableState.update { it.copy(detailTracks = DetailTracksUi(target, busy = true)) }
     query { token, _, _ ->
+      mutableState.update { it.copy(detailTracks = DetailTracksUi(target, busy = true)) }
       try {
         val streams = sdk.itemStreams(token, target)
         currentCoroutineContext().ensureActive()
-        if (state.value.detail?.playTargetId != target) return@query
+        if (state.value.detail?.id != detail.id || !isDetailPlaybackTarget(target) || state.value.detailTracks?.targetId != target) return@query
         fun option(value: VideoPlaybackStreamOption) = DetailTrackUi(value.index, value.label, value.language, value.codec, value.isDefault, value.isExternal)
         mutableState.update { it.copy(detailTracks = DetailTracksUi(target, streams.audioStreams.map(::option), streams.subtitleStreams.map(::option))) }
       } catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) {
-        if (state.value.detail?.playTargetId == target) mutableState.update { it.copy(detailTracks = DetailTracksUi(target, error = app.localizedString(R.string.sdk_request_failed))) }
+        if (state.value.detail?.id == detail.id && isDetailPlaybackTarget(target) && state.value.detailTracks?.targetId == target) mutableState.update { it.copy(detailTracks = DetailTracksUi(target, error = app.localizedString(R.string.sdk_request_failed))) }
       }
     }
   }
@@ -875,6 +1026,26 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     if (index != null && index != -1 && tracks.subtitles.none { it.index == index }) return
     mutableState.update { it.copy(detailTracks = tracks.copy(selectedSubtitle = index)) }
   }
+
+  fun openRemoteController() = openRemotePage(null)
+
+  fun playOnAnotherDevice(item: MediaUi) {
+    val itemToPlay = state.value.remotePlayItem(item) ?: return
+    openRemotePage(itemToPlay)
+  }
+
+  private fun openRemotePage(item: RemotePlayItem?) {
+    val current = state.value
+    if (current.loginBusy || current.showSignIn || current.showPlayer || sdk.contentMutationsBlocked()) return
+    val active = sdk.activeProfile() ?: return
+    val server = active.serverName?.takeIf { it.isNotBlank() }
+      ?: if (active.provider == Provider.JELLYFIN) "Jellyfin" else "Emby"
+    remoteController.open(item, server)
+  }
+  fun refreshRemoteController() = remoteController.refresh()
+  fun selectRemoteTarget(key: RemoteControlTargetKey) = remoteController.select(key)
+  fun sendRemoteCommand(generation: ULong, key: RemoteControlTargetKey, command: RemoteControlCommand) = remoteController.execute(generation, key, command)
+  fun playRemoteItem(generation: ULong, key: RemoteControlTargetKey) = remoteController.play(generation, key)
 
   fun playItem(id: String, fromBeginning: Boolean = false) {
     if (rejectWhileCleanupPending()) return
@@ -1032,7 +1203,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     val current = state.value
     val detail = current.detail ?: return
     if (detail.itemType != "Series" || current.selectedSeasonId == id) return
-    mutableState.update { it.copy(selectedSeasonId = id, detailItems = emptyList(), episodesHaveMore = true) }
+    mutableState.update { it.copy(selectedSeasonId = id, detailPreview = null, detailItems = emptyList(), episodesHaveMore = true) }
     // A new season replaces the pending query even while its previous page is loading.
     loadEpisodes(detail.id, id, 0)
   }
@@ -1067,37 +1238,75 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   }
 
   fun selectList(kind: PersonalListKind) {
-    mutableState.update { it.copy(selectedList = kind, listItems = emptyList(), listHasMore = false) }
-    loadListPage(reset = true)
+    cancelQuery()
+    val retained = retainedPersonalLists[kind]?.takeIf { sdk.isScopeActive(it.scope) }
+    mutableState.update { it.copy(selectedList = kind, listItems = retained?.items.orEmpty(), listHasMore = retained?.hasMore ?: false, busy = false, error = null) }
+    if (retained == null || retained.refresh || state.value.favoriteCount == null) loadListPage(reset = true)
   }
+
+  fun refreshPersonalList() = loadListPage(reset = true)
 
   fun loadMoreList() {
     if (state.value.listHasMore && !state.value.busy) loadListPage(reset = false)
   }
 
   private fun loadListPage(reset: Boolean) {
+    // A membership transaction owns the visible count until its confirmed removal/Undo settles.
+    if (state.value.listBusy || state.value.listUndo?.busy == true) return
     val kind = state.value.selectedList
-    val start = if (reset) 0 else state.value.listItems.size
+    val retained = retainedPersonalLists[kind]?.takeIf { sdk.isScopeActive(it.scope) }
+    // Membership changes invalidate offsets as well as rows. Rebuild the loaded prefix before
+    // continuing; appending to its old offset can otherwise skip a newly inserted first item.
+    val replace = reset || retained == null || retained.refresh
+    val target = if (replace) maxOf(50, (retained?.items?.size ?: 0) + if (reset) 0 else 50) else 50
+    val existing = if (replace) emptyList() else retained.items
     query { token, scope, base ->
+      val revision = personalListRevision
       refreshWatchlist(token)
       val presenter = CatalogPresentation(scope, watchlistIds)
-      val page: List<MediaUi>
-      val more: Boolean
-      if (kind == PersonalListKind.Watchlist) {
-        val entries = watchlistEntries.drop(start).take(50)
-        val actual = if (entries.isEmpty()) emptyMap() else sdk.videoItemsByIds(token, entries.map { it.itemId }).associateBy { it.id }
-        page = entries.map { actual[it.itemId]?.let(presenter::library) ?: presenter.unavailable(it) }
-        more = start + entries.size < watchlistEntries.size
-      } else {
-        val result = sdk.favorites(token, start, 50)
-        page = result.items.map(presenter::library)
-        more = result.hasMore
-        mutableState.update { it.copy(favoriteCount = result.totalRecordCount) }
+      val loaded = mutableListOf<MediaUi>()
+      var more: Boolean
+      var favoriteCount: Int? = null
+      do {
+        val start = existing.size + loaded.size
+        if (kind == PersonalListKind.Watchlist) {
+          val entries = watchlistEntries.drop(start).take(50)
+          val actual = if (entries.isEmpty()) emptyMap() else sdk.videoItemsByIds(token, entries.map { it.itemId }).associateBy { it.id }
+          loaded += entries.map { actual[it.itemId]?.let(presenter::library) ?: presenter.unavailable(it) }
+          more = start + entries.size < watchlistEntries.size
+        } else {
+          val result = sdk.favorites(token, start, 50)
+          loaded += result.items.map(presenter::library)
+          more = result.hasMore && result.items.isNotEmpty()
+          favoriteCount = result.totalRecordCount
+        }
+        currentCoroutineContext().ensureActive()
+      } while (more && loaded.size < target)
+      if (revision != personalListRevision) {
+        loadListPage(reset = true)
+        return@query
       }
-      currentCoroutineContext().ensureActive()
+      val items = (existing + loaded.map { presented(it, base) }).distinctBy { it.id }
+      retainedPersonalLists[kind] = RetainedPersonalList(scope, items, more)
       mutableState.update {
-        it.copy(listItems = ((if (reset) emptyList() else it.listItems) + page.map { item -> presented(item, base) }).distinctBy { item -> item.id }, listHasMore = more)
+        it.copy(listItems = items, listHasMore = more, favoriteCount = favoriteCount ?: it.favoriteCount)
       }
+      // The other tab's badge describes its actual collection even before it is opened.
+      // Keep the usable local Watchlist visible if this remote count cannot be fetched.
+      if (kind == PersonalListKind.Watchlist && state.value.favoriteCount == null) {
+        val count = sdk.favorites(token, 0, 1).totalRecordCount
+        currentCoroutineContext().ensureActive()
+        if (revision == personalListRevision) mutableState.update { it.copy(favoriteCount = count) }
+      }
+    }
+  }
+
+  private fun invalidatePersonalList(kind: PersonalListKind) {
+    ++personalListRevision
+    retainedPersonalLists[kind]?.let { retained ->
+      retainedPersonalLists[kind] = retained.copy(refresh = true, items = retained.items.filter {
+        if (kind == PersonalListKind.Watchlist) it.inWatchlist else it.favorite
+      })
     }
   }
 
@@ -1194,6 +1403,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         ++watchlistRevision
         refreshWatchlist(token)
         projectAll { item -> if (item.id == id) item.copy(inWatchlist = added) else item }
+        invalidatePersonalList(PersonalListKind.Watchlist)
         if (!added && state.value.selectedList == PersonalListKind.Watchlist) mutableState.update { it.copy(listItems = it.listItems.filterNot { item -> item.id == id }) }
       } catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) { showError(error) }
@@ -1201,6 +1411,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         token.cancel(); token.destroy()
         if (userDataWrites[id]?.job === currentCoroutineContext().job) {
           userDataWrites.remove(id); setWritePending(id, false)
+          refreshSelectedListIfNeeded()
         }
       }
     }
@@ -1217,6 +1428,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     val order = state.value.listItems.map { it.id }
     dismissListUndo()
     val token = try { sdk.newOperationToken() } catch (error: Exception) { showError(error); return }
+    if (state.value.destination == Destination.Lists && state.value.detail == null) {
+      cancelQuery()
+      mutableState.update { it.copy(busy = false) }
+    }
     batchWriteIds = selected.map { it.id }.toSet()
     batchWriteIds.forEach { setWritePending(it, true) }
     mutableState.update { it.copy(listBusy = true) }
@@ -1251,15 +1466,17 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
             collectionUndo = CollectionUndo(scope, kind, removed, order, receipt)
             mutableState.update { it.copy(
               listItems = if (it.selectedList == kind) it.listItems.filterNot { item -> item.id in removedIds } else it.listItems,
-              favoriteCount = if (kind == PersonalListKind.Favorites) (it.favoriteCount - removed.size).coerceAtLeast(0) else it.favoriteCount,
+              favoriteCount = if (kind == PersonalListKind.Favorites) it.favoriteCount?.let { count -> (count - removed.size).coerceAtLeast(0) } else it.favoriteCount,
               listUndo = ListUndoUi(++undoSequence, removed.size),
             ) }
             if (kind == PersonalListKind.Watchlist) projectAll { if (it.id in removedIds) it.copy(inWatchlist = false) else it }
+            invalidatePersonalList(kind)
           } else receipt?.destroy()
           val pending = batchWriteIds
           batchWriteIds = emptySet()
           pending.forEach { setWritePending(it, false) }
           mutableState.update { it.copy(listBusy = false) }
+          refreshSelectedListIfNeeded()
         } else receipt?.destroy()
       }
     }
@@ -1268,6 +1485,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   fun undoListRemoval() {
     val undo = collectionUndo ?: return
     if (state.value.listBusy || state.value.listUndo?.busy == true || !sdk.isScopeActive(undo.scope)) return
+    if (state.value.destination == Destination.Lists && state.value.detail == null) {
+      cancelQuery()
+      mutableState.update { it.copy(busy = false) }
+    }
     batchWriteIds = undo.items.map { it.id }.toSet()
     batchWriteIds.forEach { setWritePending(it, true) }
     mutableState.update { it.copy(listUndo = it.listUndo?.copy(busy = true, error = null)) }
@@ -1309,11 +1530,19 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
           mutableState.update { current ->
             val combined = if (current.selectedList == undo.kind) (current.listItems + restored).distinctBy { it.id }.sortedBy { item -> undo.order.indexOf(item.id).takeIf { it >= 0 } ?: Int.MAX_VALUE } else current.listItems
             current.copy(listItems = combined,
-              favoriteCount = if (undo.kind == PersonalListKind.Favorites) current.favoriteCount + restored.size else current.favoriteCount,
+              favoriteCount = if (undo.kind == PersonalListKind.Favorites) current.favoriteCount?.plus(restored.size) else current.favoriteCount,
               listUndo = current.listUndo?.copy(busy = false))
+          }
+          if (restored.isNotEmpty()) {
+            ++personalListRevision
+            retainedPersonalLists[undo.kind]?.let { retained ->
+              retainedPersonalLists[undo.kind] = retained.copy(items = (retained.items + restored).distinctBy { it.id }
+                .sortedBy { item -> undo.order.indexOf(item.id).takeIf { it >= 0 } ?: Int.MAX_VALUE })
+            }
           }
           val remaining = undo.items.filterNot { it.id in restoredIds }
           if (remaining.isEmpty()) dismissListUndo() else collectionUndo = undo.copy(items = remaining)
+          refreshSelectedListIfNeeded()
         }
       }
     }
@@ -1326,6 +1555,17 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     mutableState.update { it.copy(listUndo = null) }
   }
 
+  private fun refreshSelectedListIfNeeded() {
+    val current = state.value
+    val retained = retainedPersonalLists[current.selectedList]?.takeIf { sdk.isScopeActive(it.scope) }
+    if (current.destination == Destination.Lists && current.detail == null && !current.showPlayer && !current.busy &&
+      (retained == null || retained.refresh || current.favoriteCount == null)) {
+      loadListPage(reset = true)
+      // Automatic membership reconciliation must not dismiss a partial mutation's failure.
+      current.error?.let { error -> mutableState.update { it.copy(error = it.error ?: error) } }
+    }
+  }
+
   private fun projectAll(transform: (MediaUi) -> MediaUi) {
     fun projected(item: MediaUi): MediaUi = transform(item).let { it.copy(related = it.related.map(transform)) }
     mutableState.update { state -> state.copy(
@@ -1334,9 +1574,11 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
       listItems = state.listItems.map(::projected), historyItems = state.historyItems.map(::projected),
       browser = state.browser.copy(slots = state.browser.slots.map { it?.let(::projected) }),
       detail = state.detail?.let(::projected), detailItems = state.detailItems.map(::projected),
+      detailPreview = state.detailPreview?.let { it.copy(item = projected(it.item)) },
     ) }
     details.indices.forEach { index -> details[index] = details[index].let { it.copy(item = projected(it.item), children = it.children.map(::projected)) } }
     retainedBrowsers.replaceAll { _, retained -> retained.copy(ui = retained.ui.copy(slots = retained.ui.slots.map { it?.let(::projected) })) }
+    retainedPersonalLists.replaceAll { _, retained -> retained.copy(items = retained.items.map(::projected)) }
   }
 
   fun setFavorite(id: String, favorite: Boolean) { updateUserData(id, if (favorite) VideoUserDataAction.FAVORITE else VideoUserDataAction.UNFAVORITE) }
@@ -1367,6 +1609,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         confirmedUserData[id] = ConfirmedUserData(++confirmedRevision, result.played, result.favorite)
         fun reconciled(item: MediaUi) = if (item.id == result.itemId) item.copy(played = result.played, favorite = result.favorite, updating = false) else item
         projectAll(::reconciled)
+        if (action == VideoUserDataAction.FAVORITE || action == VideoUserDataAction.UNFAVORITE) {
+          invalidatePersonalList(PersonalListKind.Favorites)
+          mutableState.update { it.copy(favoriteCount = null) }
+        }
         if (state.value.selectedList == PersonalListKind.Favorites && !result.favorite) {
           mutableState.update { current -> current.copy(listItems = current.listItems.filterNot { it.id == id }) }
         }
@@ -1380,6 +1626,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         if (userDataWrites[id]?.job === currentCoroutineContext().job) {
           userDataWrites.remove(id)
           setWritePending(id, false)
+          refreshSelectedListIfNeeded()
         }
       }
     }
@@ -1426,6 +1673,9 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   }
 
   override fun onCleared() {
+    cleared = true
+    remoteController.close()
+    cancelConnectionCheck()
     ++authGeneration
     quickSession?.cancel()
     quickSession?.destroy()

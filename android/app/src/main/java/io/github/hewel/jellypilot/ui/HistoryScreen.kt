@@ -18,6 +18,7 @@ import io.github.hewel.jellypilot.R
 
 @Composable
 internal fun HistoryScreen(state: AppUiState, model: AppViewModel) {
+  val backPreview = LocalBackPreview.current
   val scroll = rememberLazyListState()
   val focusers = remember { mutableMapOf<String, FocusRequester>() }
   var removedId by remember { mutableStateOf<String?>(null) }
@@ -25,7 +26,8 @@ internal fun HistoryScreen(state: AppUiState, model: AppViewModel) {
   var restoring by remember { mutableStateOf(false) }
   var focused by remember { mutableStateOf(false) }
   val touchExploration = rememberTouchExploration()
-  LaunchedEffect(state.historyUndo?.id, state.historyItems, restoring) {
+  LaunchedEffect(state.historyUndo?.id, state.historyItems, restoring, backPreview) {
+    if (backPreview) return@LaunchedEffect
     if (focused || touchExploration) {
       val target = if (restoring && state.historyUndo == null) removedId else if (state.historyUndo != null) nextId else null
       val index = state.historyItems.indexOfFirst { it.id == target }

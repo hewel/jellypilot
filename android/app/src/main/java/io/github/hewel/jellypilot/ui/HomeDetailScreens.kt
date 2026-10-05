@@ -27,11 +27,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.github.hewel.jellypilot.remotePlayItem
 import io.github.hewel.jellypilot.AppViewModel
 import io.github.hewel.jellypilot.R
 
 @Composable
-internal fun HomeScreen(state: AppUiState, model: AppViewModel, scroll: LazyListState) {
+internal fun HomeScreen(state: AppUiState, model: AppViewModel, scroll: LazyListState, tablet: Boolean = false) {
+  if (tablet) {
+    TabletHomeScreen(state, model, scroll)
+    return
+  }
   val featured = state.featured.ifEmpty { state.items.take(5) }
   val rows = state.homeRows.ifEmpty {
     if (state.items.isEmpty()) emptyList() else listOf(HomeRowUi("latest", stringResource(R.string.latest_media), state.items))
@@ -115,7 +120,7 @@ private fun ContinueCard(item: MediaUi, model: AppViewModel) {
 }
 
 @Composable
-internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, onAudio: (() -> Unit)? = null, onSubtitles: (() -> Unit)? = null, dots: @Composable () -> Unit = {}) {
+internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, onAudio: (() -> Unit)? = null, onSubtitles: (() -> Unit)? = null, itemActionsEnabled: Boolean = true, dots: @Composable () -> Unit = {}) {
   val background = MaterialTheme.colorScheme.background
   val fontScale = LocalDensity.current.fontScale
   BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -160,10 +165,10 @@ internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, 
         Text(if (detail) detailMetadata else mediaCaption(item), color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
         Row(Modifier.widthIn(max = if (wide) 392.dp else 480.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           PlayAction(item, Modifier.weight(1f)) { model.playItem(item.playTargetId ?: item.id, item.played) }
-          IconButton(onClick = { model.setFavorite(item.actionItemId, !item.favorite) }, enabled = !item.updating) {
+          IconButton(onClick = { model.setFavorite(item.actionItemId, !item.favorite) }, enabled = itemActionsEnabled && !item.updating) {
             PilotIcon(if (item.favorite) R.drawable.ic_heart_filled else R.drawable.ic_heart, stringResource(if (item.favorite) R.string.unfavorite else R.string.favorite), tint = if (item.favorite) LocalPilotColors.current.favorite else Color.White)
           }
-          IconButton(onClick = { model.setWatchlist(item.actionItemId, !item.inWatchlist) }, enabled = !item.updating) {
+          IconButton(onClick = { model.setWatchlist(item.actionItemId, !item.inWatchlist) }, enabled = itemActionsEnabled && !item.updating) {
             PilotIcon(if (item.inWatchlist) R.drawable.ic_bookmark_filled else R.drawable.ic_bookmark, stringResource(if (item.inWatchlist) R.string.remove_watchlist else R.string.add_watchlist), tint = Color.White)
           }
         }
@@ -174,7 +179,7 @@ internal fun ImmersiveHero(item: MediaUi, detail: Boolean, model: AppViewModel, 
 }
 
 @Composable
-internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
+internal fun PhoneDetailScreen(state: AppUiState, model: AppViewModel, itemActionsEnabled: Boolean = true) {
   val detail = state.detail ?: return
   val tracks = state.detailTracks?.takeIf { it.targetId == detail.playTargetId }
   val preferencesLabel = stringResource(R.string.playback_preferences_default)
@@ -188,17 +193,21 @@ internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
   LazyColumn(contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     item(key = "hero") {
       Box {
-        ImmersiveHero(hero, true, model, onAudio = { audioSheet = true; model.loadDetailTracks() }, onSubtitles = { audioSheet = false; model.loadDetailTracks() })
+        ImmersiveHero(hero, true, model, onAudio = { audioSheet = true; model.loadDetailTracks(detail.playTargetId) }, onSubtitles = { audioSheet = false; model.loadDetailTracks(detail.playTargetId) }, itemActionsEnabled = itemActionsEnabled)
         IconButton(onClick = model::back, modifier = Modifier.statusBarsPadding().padding(12.dp)) { PilotIcon(R.drawable.ic_chevron_left, stringResource(R.string.back), tint = Color.White) }
       }
     }
     item(key = "status") {
       Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(if (detail.played) R.string.watch_status_watched else R.string.watch_status_unwatched), Modifier.weight(1f), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
-        TextButton(onClick = { model.setPlayed(detail.id, !detail.played) }, enabled = !detail.updating) { Text(stringResource(if (detail.played) R.string.mark_unplayed else R.string.mark_played)) }
+        TextButton(onClick = { model.setPlayed(detail.id, !detail.played) }, enabled = itemActionsEnabled && !detail.updating) { Text(stringResource(if (detail.played) R.string.mark_unplayed else R.string.mark_played)) }
       }
     }
-    if (detail.resumeSeconds > 0 && !detail.played) item { TextButton(onClick = { model.playItem(detail.playTargetId ?: detail.id, true) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text(stringResource(R.string.play_from_start)) } }
+    item {
+      OutlinedButton(onClick = { model.playOnAnotherDevice(detail) }, enabled = itemActionsEnabled && state.remotePlayItem(detail) != null && !detail.updating,
+        modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 48.dp)) { Text(stringResource(R.string.play_on_another_device)) }
+    }
+    if (detail.playable && detail.resumeSeconds > 0 && !detail.played) item { TextButton(onClick = { model.playItem(detail.playTargetId ?: detail.id, true) }, enabled = !detail.updating, modifier = Modifier.padding(horizontal = 16.dp)) { Text(stringResource(R.string.play_from_start)) } }
     if (detail.genres.isNotEmpty()) item { Text(detail.genres.joinToString(" · "), Modifier.padding(horizontal = 16.dp), color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall) }
     if (detail.overview.isNotBlank()) item(key = "overview") {
       Column(Modifier.padding(horizontal = 16.dp)) {
@@ -236,8 +245,8 @@ internal fun DetailScreen(state: AppUiState, model: AppViewModel) {
       }
     }
   }
-  audioSheet?.let { audio ->
-    DetailTrackSheet(audio, tracks, { audioSheet = null }, model::loadDetailTracks,
+  audioSheet?.takeUnless { LocalBackPreview.current }?.let { audio ->
+    DetailTrackSheet(audio, tracks, { audioSheet = null }, { model.loadDetailTracks(detail.playTargetId) },
       if (audio) model::selectDetailAudio else model::selectDetailSubtitle)
   }
 }

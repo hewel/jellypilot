@@ -31,6 +31,8 @@ internal data class AccountActions(
   val changePreferences: (PreferencesUi) -> Unit,
   val retryCleanup: () -> Unit,
   val retryWatchlistCleanup: (String) -> Unit,
+  val retryConnectionCheck: () -> Unit,
+  val remoteControl: () -> Unit = {},
 )
 
 internal fun AppUiState.currentSavedConnection(): ProfileUi? = profiles.firstOrNull { it.active }
@@ -50,6 +52,10 @@ internal fun AccountOverview(state: AppUiState, actions: AccountActions, connect
       item(key = "destinations") {
         AccountGroup {
           AccountLink(stringResource(R.string.settings), R.drawable.ic_settings) { actions.openPage(AccountPage.Settings) }
+          AccountDivider()
+          AccountLink(stringResource(R.string.remote_control), R.drawable.ic_device_tv,
+            enabled = state.activeName != null && !state.loginBusy && !state.signOutCleanupPending,
+            open = actions.remoteControl)
         }
       }
     }
@@ -60,6 +66,9 @@ internal fun AccountOverview(state: AppUiState, actions: AccountActions, connect
           TextButton(onClick = actions.retryCleanup, enabled = !state.loginBusy) { Text(stringResource(R.string.retry_cleanup)) }
         }
       }
+    }
+    if (state.activeName != null && state.connectionHealth != ConnectionHealth.Connected) item(key = "connection-check") {
+      ConnectionCheckControls(state, actions.retryConnectionCheck)
     }
     item(key = "connections") {
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -75,7 +84,7 @@ internal fun AccountOverview(state: AppUiState, actions: AccountActions, connect
             .forEachIndexed { index, profile ->
               if (index > 0) AccountDivider()
               SavedConnectionRow(profile, selected = profile.active || (state.activeName == null && profile.key == state.selectedProfileKey),
-                enabled = !state.loginBusy, onClick = {
+                enabled = !state.loginBusy, health = state.connectionHealth, onClick = {
                   if (profile.active) actions.openPage(AccountPage.CurrentAccount) else actions.activate(profile.key)
                 })
               if (connectionsOnly) {
@@ -140,6 +149,9 @@ internal fun CurrentAccount(state: AppUiState, actions: AccountActions) {
         }
       }
     }
+    if (state.activeName != null && state.connectionHealth != ConnectionHealth.Connected) item(key = "connection-check") {
+      ConnectionCheckControls(state, actions.retryConnectionCheck)
+    }
     item {
       AccountGroup {
         if (state.activeName != null) {
@@ -164,7 +176,7 @@ internal fun CurrentAccount(state: AppUiState, actions: AccountActions) {
 }
 
 @Composable
-internal fun SavedConnectionRow(profile: ProfileUi, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+internal fun SavedConnectionRow(profile: ProfileUi, selected: Boolean, enabled: Boolean, health: ConnectionHealth, onClick: () -> Unit) {
   val color = if (selected) MaterialTheme.colorScheme.primaryContainer else LocalPilotColors.current.accountSurface
   Row(Modifier.fillMaxWidth().background(color)
     .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
@@ -175,12 +187,12 @@ internal fun SavedConnectionRow(profile: ProfileUi, selected: Boolean, enabled: 
       Text(profile.server, style = MaterialTheme.typography.titleSmall,
         color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else LocalPilotColors.current.body)
       val status = when {
-        profile.active -> stringResource(R.string.account_current_connection)
+        profile.active -> stringResource(if (health == ConnectionHealth.Connected) R.string.account_current_connection else health.label())
         selected -> stringResource(R.string.connection_disconnected)
         else -> profile.provider
       }
       Text(stringResource(R.string.account_connection_identity, profile.name, status), style = MaterialTheme.typography.bodySmall,
-        color = if (selected && !profile.active) MaterialTheme.colorScheme.error else LocalPilotColors.current.insetMetadata)
+        color = if (selected && (!profile.active || health.failed)) MaterialTheme.colorScheme.error else LocalPilotColors.current.insetMetadata)
     }
     Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
       if (selected) PilotIcon(R.drawable.ic_check, tint = MaterialTheme.colorScheme.secondary)
@@ -191,7 +203,9 @@ internal fun SavedConnectionRow(profile: ProfileUi, selected: Boolean, enabled: 
 @Composable
 internal fun AccountIdentity(state: AppUiState, modifier: Modifier = Modifier, compact: Boolean = false, showChevron: Boolean = false) {
   val current = state.currentSavedConnection()
-  val connected = state.activeName != null
+  val active = state.activeName != null
+  val connected = active && state.connectionHealth == ConnectionHealth.Connected
+  val failed = !active || state.connectionHealth.failed
   val name = state.activeName ?: current?.name ?: stringResource(R.string.connection_disconnected)
   Row(modifier.fillMaxWidth().padding(if (compact) 12.dp else 16.dp),
     horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -199,14 +213,42 @@ internal fun AccountIdentity(state: AppUiState, modifier: Modifier = Modifier, c
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text(name, style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.sectionHeading)
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(6.dp).background(if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error, CircleShape))
-        val status = stringResource(if (connected) R.string.account_connected else R.string.connection_disconnected)
+        Box(Modifier.size(6.dp).background(when {
+          connected -> MaterialTheme.colorScheme.tertiary
+          failed -> MaterialTheme.colorScheme.error
+          else -> LocalPilotColors.current.metadata
+        }, CircleShape))
+        val status = stringResource(if (active) state.connectionHealth.label() else R.string.connection_disconnected)
         Text(current?.let { stringResource(R.string.account_server_status, it.server, status) } ?: status,
           style = MaterialTheme.typography.bodySmall,
-          color = if (connected) LocalPilotColors.current.insetMetadata else MaterialTheme.colorScheme.error)
+          color = if (failed) MaterialTheme.colorScheme.error else LocalPilotColors.current.insetMetadata)
       }
     }
     if (showChevron) PilotIcon(R.drawable.ic_chevron_right, tint = LocalPilotColors.current.metadata)
+  }
+}
+
+private val ConnectionHealth.failed: Boolean
+  get() = this == ConnectionHealth.Failed || this == ConnectionHealth.AuthenticationRequired
+
+private fun ConnectionHealth.label(): Int = when (this) {
+  ConnectionHealth.Unchecked -> R.string.account_connection_check_unchecked
+  ConnectionHealth.Checking -> R.string.account_connection_check_pending
+  ConnectionHealth.Connected -> R.string.account_connected
+  ConnectionHealth.Failed -> R.string.account_connection_check_failed
+  ConnectionHealth.AuthenticationRequired -> R.string.account_connection_check_authentication
+}
+
+@Composable
+private fun ConnectionCheckControls(state: AppUiState, retry: () -> Unit) {
+  Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (state.connectionHealth == ConnectionHealth.Checking) {
+      CircularProgressIndicator(Modifier.padding(start = 16.dp).size(18.dp), strokeWidth = 2.dp)
+    }
+    TextButton(onClick = retry, enabled = state.connectionHealth != ConnectionHealth.Checking && !state.loginBusy && !state.signOutCleanupPending) {
+      Text(stringResource(if (state.connectionHealth == ConnectionHealth.Unchecked) R.string.account_connection_check_action else R.string.retry_connection))
+    }
   }
 }
 

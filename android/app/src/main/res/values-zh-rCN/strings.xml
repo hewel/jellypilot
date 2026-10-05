@@ -237,4 +237,21 @@
   <string name="gesture_brightness_value">画面亮度 %1$d%%</string>
   <string name="gesture_volume_value">音量 %1$d%%</string>
   <string name="gesture_volume_unavailable">请使用设备音量键</string>
+  <string name="subtitle_timing_title">字幕时间</string>
+  <string name="subtitle_timing_seconds">%1$s 秒</string>
+  <string name="subtitle_timing_unadjusted">未调整</string>
+  <string name="subtitle_timing_delayed">已延后 %1$s 秒</string>
+  <string name="subtitle_timing_advanced">已提前 %1$s 秒</string>
+  <string name="subtitle_timing_earlier">提前 0.1 秒</string>
+  <string name="subtitle_timing_later">延后 0.1 秒</string>
+  <string name="subtitle_timing_earlier_accessibility">字幕时间提前 0.1 秒</string>
+  <string name="subtitle_timing_later_accessibility">字幕时间延后 0.1 秒</string>
+  <string name="subtitle_timing_help">字幕太早选延后，太晚选提前\n按住可连续调整</string>
+  <string name="subtitle_timing_reset">重置</string>
+  <string name="subtitle_timing_reset_accessibility">重置字幕时间</string>
+  <string name="subtitle_timing_off">请先开启字幕</string>
+  <string name="subtitle_timing_no_tracks">无可用字幕</string>
+  <string name="subtitle_timing_unsupported">当前字幕不支持调整</string>
+  <string name="subtitle_timing_failure">字幕时间调整失败，请重试</string>
+  <string name="subtitle_timing_pending">正在调整字幕时间</string>
 </resources>

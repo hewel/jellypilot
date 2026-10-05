@@ -420,6 +420,10 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   fun mute(value: Boolean) { host?.setMuted(value) }
   fun speed(value: Double) { synchronized(policyLock) { speedGesture?.let { host?.endTemporarySpeed(it) }; speedGesture = null; host?.setSpeed(value) } }
   fun pictureBrightness(percent: Int) { host?.setPictureBrightness(percent) }
+  fun subtitleTiming(context: SubtitleTimingContext, offsetTenths: Int): Boolean = synchronized(policyLock) {
+    if (!ready.value || !admissionEligible || snapshot.value.generation != context.generation) false
+    else host?.setSubtitleTiming(context, offsetTenths) == true
+  }
   fun select(kind: TrackKind, id: Int) { host?.selectTrack(kind, id) }
 
   fun beginGestureSeek(): GestureSeek? = synchronized(policyLock) {

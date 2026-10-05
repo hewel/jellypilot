@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -41,7 +42,8 @@ class AccountInteractionTest {
   private fun actions(
     activate: (String) -> Unit = {},
     signOut: (String, Boolean) -> Unit = { _, _ -> },
-  ) = AccountActions({}, activate, {}, signOut, {}, {}, {}, {})
+    retryConnectionCheck: () -> Unit = {},
+  ) = AccountActions({}, activate, {}, signOut, {}, {}, {}, {}, retryConnectionCheck)
 
   @Test fun disconnectedSelectionKeepsBothAccountsOnOneServerAndAllowsRetryOrSwitch() {
     val state = mutableStateOf(AppUiState(profiles = listOf(child, parent), selectedProfileKey = parent.key))
@@ -56,11 +58,48 @@ class AccountInteractionTest {
     compose.runOnIdle {
       assertEquals(listOf(parent.key, child.key), activations)
       state.value = state.value.copy(activeName = child.name, activeProfileKey = child.key,
-        profiles = listOf(parent, child.copy(active = true)))
+        profiles = listOf(parent, child.copy(active = true)), connectionHealth = ConnectionHealth.Connected)
     }
     compose.onNodeWithText(context.getString(R.string.account_connection_identity, child.name, text(R.string.account_current_connection)))
       .performScrollTo().assertIsSelected()
     compose.onNodeWithText(context.getString(R.string.account_connection_identity, parent.name, parent.provider)).assertExists()
+  }
+
+  @Test fun activeConnectionFailureRetriesWithoutReactivatingAndDisablesRetryUntilSettled() {
+    val state = mutableStateOf(AppUiState(activeName = parent.name, activeProfileKey = parent.key,
+      profiles = listOf(parent.copy(active = true)), connectionHealth = ConnectionHealth.Failed))
+    val currentAccount = mutableStateOf(false)
+    val activations = mutableListOf<String>()
+    var checks = 0
+    val actions = actions(activate = activations::add, retryConnectionCheck = {
+      checks++
+      state.value = state.value.copy(connectionHealth = ConnectionHealth.Checking)
+    })
+    compose.setContent {
+      MaterialTheme {
+        if (currentAccount.value) CurrentAccount(state.value, actions) else AccountOverview(state.value, actions)
+      }
+    }
+    compose.onNodeWithText(context.getString(R.string.account_server_status, parent.server,
+      text(R.string.account_connection_check_failed))).assertIsDisplayed()
+    compose.onNodeWithText(text(R.string.retry_connection)).performScrollTo().performClick()
+    compose.onNodeWithText(text(R.string.retry_connection)).assertIsNotEnabled()
+    compose.onNodeWithText(context.getString(R.string.account_server_status, parent.server,
+      text(R.string.account_connection_check_pending))).assertExists()
+    compose.runOnIdle {
+      assertEquals(1, checks)
+      assertEquals(emptyList<String>(), activations)
+      state.value = state.value.copy(connectionHealth = ConnectionHealth.Connected)
+    }
+    compose.onNodeWithText(text(R.string.retry_connection)).assertDoesNotExist()
+    compose.runOnIdle {
+      currentAccount.value = true
+      state.value = state.value.copy(connectionHealth = ConnectionHealth.Failed)
+    }
+    compose.onNodeWithText(context.getString(R.string.account_server_status, parent.server,
+      text(R.string.account_connection_check_failed))).assertIsDisplayed()
+    compose.onNodeWithText(text(R.string.retry_connection)).performClick().assertIsNotEnabled()
+    compose.runOnIdle { assertEquals(2, checks); assertEquals(emptyList<String>(), activations) }
   }
 
   @Test fun signOutIsConfirmedAndWatchlistDeletionIsOptIn() {

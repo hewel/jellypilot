@@ -42,9 +42,10 @@ internal fun LibraryScreen(state: AppUiState, model: AppViewModel, grid: LazyGri
 
 @Composable
 internal fun SearchScreen(state: AppUiState, model: AppViewModel, grid: LazyGridState) {
+  val backPreview = LocalBackPreview.current
   val searchFocus = remember { FocusRequester() }
   var focusedOnce by rememberSaveable { mutableStateOf(false) }
-  LaunchedEffect(Unit) { if (!focusedOnce) { searchFocus.requestFocus(); focusedOnce = true } }
+  LaunchedEffect(backPreview) { if (!backPreview && !focusedOnce) { searchFocus.requestFocus(); focusedOnce = true } }
   Column(Modifier.fillMaxSize().imePadding()) {
     Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
       IconButton(onClick = model::back) { PilotIcon(R.drawable.ic_chevron_left, stringResource(R.string.back)) }
@@ -78,16 +79,19 @@ internal data class PersonalListActions(
   val undo: () -> Unit,
   val dismissUndo: () -> Unit,
   val loadMore: () -> Unit,
+  val retry: () -> Unit = loadMore,
 )
 
 @Composable
 internal fun ListsScreen(state: AppUiState, model: AppViewModel) = PersonalLists(state, PersonalListActions(
   model::selectList, model::showDetail, { model.navigate(Destination.Library) }, model::removeListItems,
   model::undoListRemoval, model::dismissListUndo, model::loadMoreList,
+  model::refreshPersonalList,
 ))
 
 @Composable
 internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
+  val backPreview = LocalBackPreview.current
   var managing by remember(state.selectedList) { mutableStateOf(false) }
   var selected by remember(state.selectedList) { mutableStateOf(emptyList<String>()) }
   val watchlistGrid = rememberLazyGridState()
@@ -100,8 +104,9 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
   var focusActive by remember { mutableStateOf(false) }
   val accessibilityFocus = rememberTouchExploration()
   val emptyFocus = remember { FocusRequester() }
-  BackHandler(managing) { managing = false; selected = emptyList() }
-  LaunchedEffect(state.listUndo?.id) {
+  BackHandler(managing && !backPreview) { managing = false; selected = emptyList() }
+  LaunchedEffect(state.listUndo?.id, backPreview) {
+    if (backPreview) return@LaunchedEffect
     if (state.listUndo != null) {
       managing = false
       selected = emptyList()
@@ -112,7 +117,8 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
       }
     }
   }
-  LaunchedEffect(state.listUndo?.id, state.listItems, restorePending) {
+  LaunchedEffect(state.listUndo?.id, state.listItems, restorePending, backPreview) {
+    if (backPreview) return@LaunchedEffect
     if (restorePending && state.listUndo == null) {
       val restoredIndex = state.listItems.indexOfFirst { it.id == removedAnchor }
       if (restoredIndex >= 0 && (focusActive || accessibilityFocus)) {
@@ -126,7 +132,7 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
   Column(Modifier.fillMaxSize().onFocusChanged { focusActive = it.hasFocus }) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
       Text(stringResource(if (managing) { if (state.selectedList == PersonalListKind.Watchlist) R.string.manage_watchlist else R.string.manage_favorites } else R.string.personal_lists), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
-      TextButton(onClick = { managing = !managing; selected = emptyList() }, enabled = state.listItems.isNotEmpty() && !state.listBusy) { Text(stringResource(if (managing) R.string.done else R.string.manage)) }
+      TextButton(onClick = { managing = !managing; selected = emptyList() }, enabled = state.listItems.isNotEmpty() && !state.listBusy && !state.busy) { Text(stringResource(if (managing) R.string.done else R.string.manage)) }
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       PersonalListKind.entries.forEach { kind ->
@@ -138,17 +144,23 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
           color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
           border = if (active) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.secondary) else null,
         ) {
-          Text("${stringResource(kind.title)}  ${if (kind == PersonalListKind.Watchlist) state.listCount else state.favoriteCount}",
+          val count = if (kind == PersonalListKind.Watchlist) state.listCount else state.favoriteCount
+          Text(stringResource(kind.title) + (count?.let { "  $it" } ?: ""),
             Modifier.padding(horizontal = 12.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyLarge,
             color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else LocalPilotColors.current.body,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
       }
     }
-    if (state.listBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (state.listBusy || state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     BoxWithConstraints(Modifier.weight(1f)) {
       val titleLines = if (maxWidth < 360.dp) 2 else 1
-      if (state.listItems.isEmpty() && !state.listBusy) EmptyState(
+      if (state.listItems.isEmpty() && state.busy) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+      } else if (state.listItems.isEmpty() && state.error != null) EmptyState(
+        state.error, action = stringResource(R.string.retry), onAction = actions.retry,
+        modifier = Modifier.align(Alignment.Center),
+      ) else if (state.listItems.isEmpty() && !state.listBusy) EmptyState(
         stringResource(if (state.selectedList == PersonalListKind.Watchlist) R.string.empty_watchlist else R.string.empty_favorites),
         stringResource(if (state.selectedList == PersonalListKind.Watchlist) R.string.empty_watchlist_hint else R.string.empty_favorites_hint),
         stringResource(R.string.browse_library), modifier = Modifier.align(Alignment.Center).focusRequester(emptyFocus),
@@ -186,10 +198,12 @@ internal fun PersonalLists(state: AppUiState, actions: PersonalListActions) {
 
 @Composable
 internal fun CollectionUndo(undo: ListUndoUi, message: String, onUndo: () -> Unit, dismiss: () -> Unit) {
+  val backPreview = LocalBackPreview.current
   var focused by remember { mutableStateOf(false) }
   val touchExploration = rememberTouchExploration()
   var remaining by remember(undo.id) { mutableLongStateOf(8_000L) }
-  LaunchedEffect(undo.id, focused, touchExploration, undo.busy, undo.error) {
+  LaunchedEffect(undo.id, focused, touchExploration, undo.busy, undo.error, backPreview) {
+    if (backPreview) return@LaunchedEffect
     if (!focused && !touchExploration && !undo.busy && undo.error == null) {
       while (remaining > 0) { delay(250); remaining -= 250 }
       dismiss()

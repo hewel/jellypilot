@@ -170,6 +170,7 @@ data class PlayerSnapshot(
   val pictureBrightnessPercent: Int = 100,
   val pictureBrightnessAvailable: Boolean = false,
   val tracks: List<PlayerTrack> = emptyList(),
+  val subtitleTiming: SubtitleTimingState = SubtitleTimingState(),
   val videoWidth: Int = 0,
   val videoHeight: Int = 0,
   /** Correlation tokens of the currently loaded [MediaLoad]; null/0 when idle. */
