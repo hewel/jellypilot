@@ -4,7 +4,7 @@
 
 ## References and Existing Boundaries
 
-- Domain vocabulary: [CONTEXT.md](../CONTEXT.md).
+- Domain vocabulary: [GLOSSARY.md](../GLOSSARY.md).
 - Native frontend and External MPV Playback: [ADR 0027](adr/0027-cross-platform-iced-frontend.md).
 - Surface ownership and shared application state: [ADR 0029](adr/0029-iced-surface-modules.md).
 - Accepted localization and language-save decisions: [ADR 0035](adr/0035-ui-language-presentation-and-isolated-settings.md).

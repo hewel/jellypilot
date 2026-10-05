@@ -335,7 +335,7 @@ flowchart LR
 
 - **Rust 格式与安全**：必须符合 `rustfmt.toml`（2 空格缩进）；整个工作区严禁使用 `unsafe_code`（仅在极少数受控底层 FFI 模块中隔离）；Clippy 告警视为编译错误。
 - **无 UI 领域逻辑下沉**：纯逻辑与数据处理下沉至 `jellypilot-core` 并在其内部配套完善测试；`src-iced` 仅负责界面渲染与事件编排。
-- **领域通用语言**：术语遵循 [CONTEXT.md](CONTEXT.md)；架构变更记录于 [docs/adr/](docs/adr/)。
+- **领域通用语言**：术语遵循 [GLOSSARY.md](GLOSSARY.md)；架构变更记录于 [docs/adr/](docs/adr/)。
 
 ## 📜 项目演进历史
 

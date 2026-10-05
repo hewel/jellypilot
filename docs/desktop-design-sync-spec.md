@@ -22,7 +22,7 @@ verification and human acceptance are recorded separately below.
 - Reference proposals and archived explorations remain identified as such; whole
   Desktop coverage does not itself accept them as implementation targets.
 
-Native terminology remains in [CONTEXT.md](../CONTEXT.md). Existing accepted
+Native terminology remains in [GLOSSARY.md](../GLOSSARY.md). Existing accepted
 presentation and interaction rules remain in the [design system](design-system.md),
 [Sidebar specification](sidebar-design-spec.md), and
 [Home Hero specification](home-hero-design-spec.md).
@@ -351,7 +351,7 @@ Verification for this pass:
 
 ### Previous delivery
 
-Product terms are recorded in [CONTEXT.md](../CONTEXT.md); the consequential History
+Product terms are recorded in [GLOSSARY.md](../GLOSSARY.md); the consequential History
 ownership and persistence choice is in [ADR 0046](adr/0046-local-desktop-history-visibility.md).
 The desktop implementation includes shared filled-action styles, Library and
 Personal Lists playback targets and layout, independent collection-removal Undo,

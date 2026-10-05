@@ -74,7 +74,7 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
 - **Display-free logic lives in `jellypilot-core`** and is tested there; `src-iced` keeps
   orchestration (Tasks, subscriptions, view). Follow ADR 0028's replace-don't-layer testing:
   adapters are tested through their external seam.
-- **Domain language**: root `CONTEXT.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md).
+- **Domain language**: root `GLOSSARY.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md).
   ADRs record accepted decisions; do not re-litigate them, amend them with new ADRs.
 - **Styling**: the only styling system is `jellypilot-ui` tokens + Catalog styles (ADR 0027).
   Do not add CSS frameworks, per-widget ad-hoc colors outside tokens, or a second theme mechanism.
@@ -112,7 +112,7 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
 
 - **Issue tracker**: GitHub Issues for `hewel/jmsr` — see [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)
 - **Triage labels**: five-label vocabulary — see [docs/agents/triage-labels.md](docs/agents/triage-labels.md)
-- **Domain docs**: root `CONTEXT.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md)
+- **Domain docs**: root `GLOSSARY.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md)
 
 ## Docs
 

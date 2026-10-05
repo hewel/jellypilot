@@ -597,7 +597,7 @@ another close.
 
 - **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
 - **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
-- **Domain language**: [CONTEXT.md](CONTEXT.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
+- **Domain language**: [GLOSSARY.md](GLOSSARY.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
 - **Design and promo artwork**: logo sources, screenshots, fonts, and the renderer live in the separate `jellypilot-design` project. From that checkout, run `bun run promo`, then preview publication with `bun run sync:app -- /absolute/path/to/jellypilot`; add `--write` to copy the selected exports. This repository keeps the published files in `assets/promo/` and `assets/screenshots/`, plus the logo used by those assets. `assets/promo/demo.webm` and `demo-poster.webp` are a recorded demo, not design-project exports.
 
 ## 📜 Project History

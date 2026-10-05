@@ -4,7 +4,7 @@
 
 Source reference: `hero_carousel_design_spec_en.md` v2.1, supplied from the user's external prototype workspace. Its Web implementation, credentials, mock data, and claimed acceptance results are not native requirements or implementation evidence. Credentials must not be copied into project documentation.
 
-This specification follows [CONTEXT.md](../CONTEXT.md), the [jellypilot-ui design system](design-system.md), [ADR 0027](adr/0027-cross-platform-iced-frontend.md), and [ADR 0028](adr/0028-library-image-raster-pipeline.md). The existing [Sidebar specification](sidebar-design-spec.md) continues to own shell geometry and account interaction.
+This specification follows [GLOSSARY.md](../GLOSSARY.md), the [jellypilot-ui design system](design-system.md), [ADR 0027](adr/0027-cross-platform-iced-frontend.md), and [ADR 0028](adr/0028-library-image-raster-pipeline.md). The existing [Sidebar specification](sidebar-design-spec.md) continues to own shell geometry and account interaction.
 
 ## Accepted Paper Home Synchronization
 

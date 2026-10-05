@@ -13,7 +13,7 @@ Source references:
 This document remains the authority for the native implementation. The external documents' Web code paths, simulated data, and checked acceptance items are not native implementation evidence. The visual revision borrows the reference's surface hierarchy, not its product semantics or exact geometry.
 
 This specification uses iced, the [jellypilot-ui design system](design-system.md), and External MPV Playback, following
-[ADR 0027](adr/0027-cross-platform-iced-frontend.md). Domain names follow [CONTEXT.md](../CONTEXT.md);
+[ADR 0027](adr/0027-cross-platform-iced-frontend.md). Domain names follow [GLOSSARY.md](../GLOSSARY.md);
 [ADR 0032](adr/0032-separate-server-favorites-and-local-watchlist.md) records list ownership, and
 [ADR 0033](adr/0033-validate-before-active-profile-handoff.md) records the account-switching lifecycle.
 Quoted Chinese UI labels below preserve the copy agreed during the interview; the specification itself is written in English.
