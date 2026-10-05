@@ -196,7 +196,7 @@ mod tests {
         let cursor = mouse::Cursor::Available(Point::new(100.0, 140.0));
         let mut layer = bottom::<(), Recorder>(
             size.height,
-            crate::tokens::TOKENS.artwork_blur.landscape,
+            crate::tokens::TOKENS.artwork_blur.hero,
             12.0.into(),
         );
         let mut tree = widget::Tree::new(layer.as_widget());

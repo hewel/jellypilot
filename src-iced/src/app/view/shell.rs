@@ -502,7 +502,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     compact_settings_button(state.kernel.locale),
     refresh,
     tooltip(
-      control_button(Some(Icon::Sliders), None, ButtonVariant::Tonal)
+      control_button(Some(Icon::ControlMode), None, ButtonVariant::Tonal)
         .style(sidebar::action)
         .icon_size(IconSize::Sm)
         .min_height(40.0)
@@ -626,7 +626,7 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     TooltipOptions::default(),
   );
   let control = tooltip(
-    control_button(Some(Icon::Sliders), None, ButtonVariant::Text)
+    control_button(Some(Icon::ControlMode), None, ButtonVariant::Text)
       .style(sidebar::action)
       .icon_size(IconSize::Sm)
       .padding(TOKENS.spacing.s2)

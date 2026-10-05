@@ -477,21 +477,7 @@ fn art<'a>(
       .into(),
   };
   let image = if backdrop {
-    let fade = iced::gradient::Linear::new(iced::Degrees(90.0))
-      .add_stop(0.0, style::PALETTE.colors.background)
-      .add_stop(0.65, style::PALETTE.colors.background.scale_alpha(0.84))
-      .add_stop(1.0, style::PALETTE.colors.background.scale_alpha(0.3));
-    stack![
-      image,
-      container(space())
-        .width(width)
-        .height(height)
-        .style(move |_| iced::widget::container::Style {
-          background: Some(Background::Gradient(fade.into())),
-          ..Default::default()
-        })
-    ]
-    .into()
+    backdrop_scrims(image)
   } else {
     image
   };
@@ -499,6 +485,37 @@ fn art<'a>(
     Some(spec) => observe_image(image, surface, collection.epoch(), spec, axis),
     None => image,
   }
+}
+
+fn backdrop_scrims(image: Element<'_, AppMessage>) -> Element<'_, AppMessage> {
+  let fade = iced::gradient::Linear::new(iced::Degrees(90.0))
+    .add_stop(0.0, style::PALETTE.colors.background)
+    .add_stop(0.65, style::PALETTE.colors.background.scale_alpha(0.84))
+    .add_stop(1.0, style::PALETTE.colors.background.scale_alpha(0.3));
+  let bottom = iced::gradient::Linear::new(iced::Degrees(180.0))
+    .add_stop(0.0, style::PALETTE.colors.background.scale_alpha(0.0))
+    .add_stop(0.55, style::PALETTE.colors.background.scale_alpha(0.0))
+    .add_stop(1.0, style::PALETTE.colors.background);
+  // Stack may grow the image to a parent's minimum size. Cover its resolved
+  // bounds instead of keeping the artwork request's original fixed size.
+  stack![
+    image,
+    container(space())
+      .width(Fill)
+      .height(Fill)
+      .style(move |_| iced::widget::container::Style {
+        background: Some(Background::Gradient(fade.into())),
+        ..Default::default()
+      }),
+    container(space())
+      .width(Fill)
+      .height(Fill)
+      .style(move |_| iced::widget::container::Style {
+        background: Some(Background::Gradient(bottom.into())),
+        ..Default::default()
+      })
+  ]
+  .into()
 }
 
 pub(super) fn media_card<'a>(
@@ -596,6 +613,7 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
   };
   let mut content = Column::new().width(Fill);
   if let Some(item) = full.home.data.featured_item() {
+    let hero_height = 540.0 * scale;
     let width = (state.shell.window_size.width
       - (style::RAIL + style::CONTENT_INSET + style::SAFE_X) * scale)
       .max(1.0);
@@ -604,7 +622,7 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
       ArtworkSurface::Home,
       ArtworkPlacement::HeroBackdrop.spec(item),
       width,
-      500.0 * scale,
+      hero_height,
       true,
       ImageAxis::Vertical,
     );
@@ -663,7 +681,7 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .spacing(24.0 * scale),
     ]
     .spacing(20.0 * scale);
-    content = content.push(stack![hero, copy].height(540.0 * scale));
+    content = content.push(stack![hero, copy].height(hero_height));
   } else {
     content = content.push(container(page_title(state.t("tv-home"), scale)).height(100.0 * scale));
   }
@@ -1252,6 +1270,55 @@ pub(super) mod tests {
       season_number: None, episode_number: None, index_number_end: None, series_id: None, series_name: None, end_year: None,
       series_continuing: false, unplayed_item_count: None, resume_position_seconds: None, played_percentage: None,
       overview: Some("A real detail synopsis can span several lines without shifting the focus and paging geometry.".to_owned()), season_poster_image_id: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn tv_backdrop_scrims_cover_the_image_when_the_parent_grows() {
+    let renderer = iced::Renderer::new(
+      renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("headless layout renderer");
+    let handle = iced::widget::image::Handle::from_rgba(16, 9, vec![255; 16 * 9 * 4]);
+    for scale in [1.0, 1280.0 / 1920.0] {
+      let width = 1488.0 * scale;
+      let image_height = 500.0 * scale;
+      let parent_height = 540.0 * scale;
+      let background = backdrop_scrims(
+        image(handle.clone())
+          .width(width)
+          .height(image_height)
+          .content_fit(ContentFit::Cover)
+          .into(),
+      );
+      let mut hero: Element<'_, AppMessage> = stack![background, space()]
+        .width(width)
+        .height(parent_height)
+        .into();
+      let mut tree = Tree::new(&hero);
+      tree.diff(hero.as_widget_mut());
+      let node = hero.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(iced::Size::ZERO, iced::Size::new(width, parent_height)),
+      );
+      let layers = node.children()[0].children();
+      let image_bounds = layers[0].bounds();
+      assert_eq!(image_bounds.height, parent_height);
+      for scrim in &layers[1..] {
+        assert_eq!(
+          scrim.bounds(),
+          image_bounds,
+          "uncovered backdrop band at scale {scale}"
+        );
+      }
     }
   }
 

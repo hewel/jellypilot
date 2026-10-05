@@ -386,7 +386,6 @@ pub struct PlayerChrome {
 #[derive(Debug, Clone, Copy)]
 pub struct ArtworkBlur {
     pub hero: ArtworkBlurProfile,
-    pub landscape: ArtworkBlurProfile,
 }
 
 /// A bottom band whose Gaussian sigma increases from zero to `sigma`.
@@ -413,11 +412,6 @@ pub const TOKENS: DesignTokens = DesignTokens {
             sigma: 12.0,
             fraction: 0.55,
             max_height: 240.0,
-        },
-        landscape: ArtworkBlurProfile {
-            sigma: 6.0,
-            fraction: 0.35,
-            max_height: 64.0,
         },
     },
     fonts: Fonts {

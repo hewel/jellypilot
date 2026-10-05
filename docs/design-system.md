@@ -147,19 +147,17 @@ Detail Backdrops use the two-layer canvas scrim and fixed-height composition spe
 
 ### 2026-10-05 Progressive Artwork Trial
 
-The user authorized trying gradual blur in three Desktop artwork transitions:
-Home Hero, Detail Hero and the full-size landscape Continue Watching/Next Up
-cards. Keep the existing layout, scrims, copy, image loading and interaction
-targets. Text, Title Logos, buttons, progress indicators and focus treatment
+The current trial applies gradual blur to the Desktop Home Hero and Detail
+Hero. Continue Watching/Next Up landscape artwork stays sharp after the user
+removed the card effect. Keep the existing layout, scrims, copy, image loading
+and interaction targets. Text, Title Logos, buttons, progress indicators and focus treatment
 are drawn after the effect and stay sharp. Missing/loading artwork, portrait
 posters and the small Hero-selection rail do not request this effect.
 
 Use the shared `artwork_blur` tokens: Hero sigma 0–12 over the lower 55% of its
-transition frame, capped at 240 logical pixels; landscape sigma 0–6 over the
-lower 35%, capped at 64px. Home ends this frame at its existing copy-fade point,
-not the image's opaque tail. Detail uses its fixed Hero frame. Landscape titles
-remain below the image; only the image's bottom edge softens toward them. The
-effect preserves the image's bottom corner radii and smoothing, and scrolling
+transition frame, capped at 240 logical pixels. Home ends this frame at its
+existing copy-fade point, not the image's opaque tail. Detail uses its fixed Hero
+frame. The effect preserves the image's bottom corner radii and smoothing, and scrolling
 clips the output without restarting the gradient.
 
 This uses the current fork's scene-backdrop API after the image and before
@@ -212,6 +210,11 @@ Bundled local fonts only; no network font imports. Body text uses Inter (`sans`)
 All UI icons are vendored from the Reicon set (MIT, `crates/jellypilot-ui/assets/icons/`, see [ADR 0034](adr/0034-reicon-icon-set.md)) and render on a 24×24 grid. The default weight is Outline; the Filled weight marks active state only where the vocabulary already pairs them (favorited heart, watchlist bookmark, the played-filter disc). Icons are consumed exclusively through the semantic `Icon` enum and the `icon*` helpers in `jellypilot-ui`, which tint via `currentColor` — never hardcode colors in vendored SVGs, and extend the enum from Reicon rather than importing one-off artwork.
 
 Missing icon assets may be obtained directly from [Reicon](https://reicon.dev); reuse suitable vendored glyphs first rather than drawing approximations. Add retrieved assets through the existing semantic icon pipeline and preserve their source and license attribution.
+
+The Sidebar's `ControlMode` glyph matches Paper's window-with-inward-arrow:
+it reuses the vendored Reicon window geometry with the arrow from the accepted
+Paper SVG. Both Sidebar widths keep the Control mode label and existing
+Control-Only action; the icon is not a picture-in-picture capability declaration.
 
 ## Motion
 

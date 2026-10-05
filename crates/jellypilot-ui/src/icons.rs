@@ -168,6 +168,7 @@ pub enum Icon {
     User,
     UserCheck,
     // App mode switching
+    ControlMode,
     PictureInPicture,
     ArrowsMaximize,
     ArrowsMinimize,
@@ -246,6 +247,7 @@ impl Icon {
             Self::Lock => include_bytes!("../assets/icons/lock.svg"),
             Self::User => include_bytes!("../assets/icons/user.svg"),
             Self::UserCheck => include_bytes!("../assets/icons/user-check.svg"),
+            Self::ControlMode => include_bytes!("../assets/icons/control-mode.svg"),
             Self::PictureInPicture => include_bytes!("../assets/icons/picture-in-picture.svg"),
             Self::ArrowsMaximize => include_bytes!("../assets/icons/arrows-maximize.svg"),
             Self::ArrowsMinimize => include_bytes!("../assets/icons/arrows-minimize.svg"),
@@ -343,6 +345,7 @@ impl Icon {
             Self::Lock,
             Self::User,
             Self::UserCheck,
+            Self::ControlMode,
             Self::PictureInPicture,
             Self::ArrowsMaximize,
             Self::ArrowsMinimize,

@@ -39,6 +39,12 @@ the final state immediately. Indigo and checked indicators retain selection inde
 Runtime metadata and
 artwork come from the connected server, never from the design's fixture values.
 
+Home uses one 540px-scaled Hero frame for its image and foreground. Home and
+Detail backdrop scrims fill the image's resolved layout bounds, including any
+parent-imposed growth; a bottom gradient reaches the opaque page background at
+the image edge. This avoids uncovered strips and hard cuts into the following
+content. These are color scrims, independent of Desktop's progressive blur trial.
+
 Directional keys move focus; Enter confirms; Esc/Backspace returns. Keyboard-style
 remotes use the same mapping. Gamepad and HDMI-CEC adapters are not included. Browsing
 preserves source focus and scroll on return from Detail or playback. Library navigation

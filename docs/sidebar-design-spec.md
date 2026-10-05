@@ -166,7 +166,7 @@ A network failure does not mean an item was deleted and must not cause bulk mark
 
 ### Presentation and Entry Points
 
-The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. The expanded Sidebar groups the account and tools below one top divider. Settings retains its text label, followed by separate Refresh and Control mode actions. Control mode uses the Sliders icon and opens the existing fixed-size Control-Only composition; it does not introduce picture-in-picture. Refresh retains the native current-context scope, pending guard and error feedback.
+The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. The expanded Sidebar groups the account and tools below one top divider. Settings retains its text label, followed by separate Refresh and Control mode actions. Control mode uses the Paper window-with-inward-arrow glyph (`Icon::ControlMode`) in both expanded and compact Sidebars, with the Control mode tooltip. It opens the existing fixed-size Control-Only composition; the glyph does not introduce picture-in-picture. Refresh retains the native current-context scope, pending guard and error feedback.
 The Playback Target's device identity must not masquerade as a server node code. The quick menu shows one connection-state badge without repeating it as avatar dots; Settings separately describes existing remote-control connection status.
 "Signed in" does not mean continuously reachable; do not display unmeasured Mbps or latency.
 

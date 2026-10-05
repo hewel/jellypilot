@@ -1393,23 +1393,11 @@ fn render_card_artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ImageStatus::Ready {
       if let Some(handle) = cell.handle() {
-        let image = rounded_image(handle.clone(), radius)
+        return rounded_image(handle.clone(), radius)
           .content_fit(ContentFit::Cover)
           .width(width)
-          .height(height);
-        // Full-size action cards blend toward their existing copy below the
-        // image. Small Hero selectors and portrait posters stay sharp.
-        return if width >= THUMB_FRAME_WIDTH && width > height {
-          stack![
-            image,
-            artwork_blur::bottom(height, TOKENS.artwork_blur.landscape, radius),
-          ]
-          .width(width)
           .height(height)
-          .into()
-        } else {
-          image.into()
-        };
+          .into();
       }
     }
   }
