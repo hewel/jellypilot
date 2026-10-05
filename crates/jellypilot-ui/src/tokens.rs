@@ -379,10 +379,6 @@ pub struct Modal {
 #[derive(Debug, Clone, Copy)]
 pub struct PlayerChrome {
     pub backdrop_height: f32,
-    /// Maximum approximate Gaussian sigma in logical pixels at the bottom edge.
-    pub backdrop_blur_sigma: f32,
-    /// Fraction of the region kept sharp before the progressive falloff starts.
-    pub backdrop_blur_start: f32,
 }
 
 /// Mode-independent JellyPilot tokens.
@@ -392,8 +388,6 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
     player_chrome: PlayerChrome {
         backdrop_height: 340.0,
-        backdrop_blur_sigma: 16.0,
-        backdrop_blur_start: 0.15,
     },
     fonts: Fonts {
         display: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",

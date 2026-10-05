@@ -10,7 +10,7 @@ playback, account, or platform contracts.
 | Batch | Accepted scope | Delivery status |
 | --- | --- | --- |
 | 1 | Desktop seek thumbnails and Linux MPRIS | Implemented; automated checks and independent review passed; human acceptance pending |
-| 1, addition | Progressive blur for embedded player controls | Implemented; published iced pin, remote cold preparation, app checks and independent review passed; human acceptance pending |
+| 1, addition | Progressive blur for embedded player controls | Removed at the user's request on 2026-10-05; Full controls retain their ordinary dark scrim |
 | 2 | Android controls an authorized living-room PC/TV Playback Target through the media server | Implemented; focused checks and independent review passed; human integration pending; [contract](remote-controller-spec.md) |
 | 3 | Editable, temporary viewing queue containing movies and episodes within one Profile Scope | Implemented; automated tests and independent review passed; human acceptance pending; [accepted contract](viewing-queue-spec.md) |
 | 4 | Secondary text subtitles and A/B loop for the active Playback Session | Implemented; automated checks and independent review passed; human acceptance pending; [contract](playback-tools-spec.md) |
@@ -149,46 +149,18 @@ live bus integration; protocol tests use an isolated D-Bus service and client.
 
 ## Embedded player progressive blur
 
-The user's new direction supersedes the earlier temporary no-blur exception for
-the embedded player's Full controls. Blur should progressively sample the live
-video scene behind the bottom controls, leaving the upper picture, controls,
-and Seek Preview sharp. Blurring a poster is not equivalent. MPV-rendered
-subtitles may already be composited into the video texture; the backdrop cannot
-independently exclude those pixels. Subtitle legibility within the effect region
-therefore needs human acceptance, not a promise of a separate sharp subtitle plane.
+Removed at the user's request on 2026-10-05. Full controls use the existing
+340px bottom scrim without requesting video sampling or a blur effect. The
+player-specific blur parameters and backdrop widget integration have been
+removed. The scrim remains below every control, including in short windows.
+Minimal/Full visibility, independent top controls and Floating Popovers,
+focus/drag retention, seek previews and input semantics are unchanged.
 
-Minimal/Full states, independent top-corner controls and Floating Popovers,
-focus/drag retention, input semantics, reduced-motion usability, and the FP16
-embedded composition remain intact. Hidden control surfaces must not leave a
-blur effect running. The docked browser footer and external Control-Only screen
-are outside this visual change.
-
-The local integration uses an isolated compatible backport on the previous iced
-pin, preserving the existing scalar blur, Widget and embedded-engine interfaces.
-Revision `3cf722cd8c33ca2afe1ae88cfc8ce20f31fd1a2c` is recorded in the application
-manifest and, after explicit user approval, published on the iced fork's
-`player-progressive-backdrop` branch. Remote ref readback matches exactly.
-Fresh application sources with no vendor checkout successfully ran
-`bun install --frozen-lockfile` and `bun run task iced prepare` without `--source`;
-the fetched checkout is clean at that revision. All 18 declared iced path
-dependencies point within that same vendor checkout.
-
-Native Full retains its existing 340px bottom scrim height. The blur progresses
-from zero to 16px sigma, starting after the first 15% of that region. These values
-live in `jellypilot-ui` tokens, not in the application view. The existing scrim is
-drawn after the sampled video and remains available on the software/no-effect
-path. Full visibility gates the effect independently from Minimal and popovers;
-no animation timer or redraw subscription is added. The Paper 320px height is a
-static reference, not a required replacement of the native region.
-
-A Paper image cannot prove live-frame, HDR, performance, or lifecycle correctness.
-
-Independent consumer review caught the backdrop sampling top buttons in short
-fullscreen windows. It now draws immediately after video and before every
-control. The final order passed precise re-review, 624 focused iced tests,
-focused Clippy, the joint 1537-test workspace suite and native startup smoke.
-The one existing ignored test remains ignored; the D-Bus test also executes
-once in a private child process.
+The compatible iced revision `3cf722cd8c33ca2afe1ae88cfc8ce20f31fd1a2c` remains
+pinned. Its published `player-progressive-backdrop` branch and prior remote cold
+preparation are historical dependency evidence, not an enabled player effect.
+Other accepted image/modal blur treatments remain independent of this removal.
+The earlier Paper blur states are superseded for the native player.
 
 ## Verification and acceptance
 
@@ -220,5 +192,6 @@ regression. Final review has no remaining findings.
 The first-batch Paper handoff is `/tmp/media-streamer-player-features-handoff.md`:
 nine new Desktop boards, 39 total, finish returned OK with token hash `28f17849`.
 Its [contract board](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/QMK-0)
-records the adaptive preview and provisional blur material. Paper completion is
-separate from the completed progressive-blur app integration and pending human checks.
+records the adaptive preview and provisional blur material. The preview contract
+remains current; the player blur material is superseded by the removal above.
+Paper completion is separate from native human acceptance.

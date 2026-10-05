@@ -589,9 +589,9 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     ]
     .width(Fill)
     .height(Fill);
-    // Sample video before any chrome: their regions can overlap in short fullscreen windows.
+    // Keep the scrim below every control when their regions overlap in short windows.
     layers = layers.push(reveal_player_chrome(
-      container(cinema::full_backdrop(visible))
+      container(cinema::full_backdrop())
         .width(Fill)
         .height(Fill)
         .align_y(Alignment::End),
