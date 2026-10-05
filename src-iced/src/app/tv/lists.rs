@@ -599,7 +599,7 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
           .unwrap_or(0),
       );
       sync_pause(state);
-      return Task::none();
+      return super::navigation::reveal_rail(state);
     }
     _ => focus,
   };

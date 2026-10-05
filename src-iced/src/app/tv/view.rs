@@ -633,17 +633,28 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
         .width(Fill)
         .height(80.0 * scale)
         .align_x(Alignment::End),
-      heading(hero_headline(item), scale),
+      container(
+        ellipsis_text(hero_headline(item))
+          .size(style::TITLE * scale)
+          .line_height(iced::Pixels(48.0 * scale))
+          .font(DISPLAY_FONT)
+          .color(style::PALETTE.text.heading)
+      )
+      .width(Fill)
+      .height(48.0 * scale),
       text(hero_metadata(state.kernel.locale, item))
         .size(style::META * scale)
         .line_height(iced::Pixels(28.0 * scale))
         .color(style::PALETTE.text.body),
-      text(item.overview.as_deref().unwrap_or_default())
-        .size(style::BODY * scale)
-        .line_height(iced::Pixels(32.0 * scale))
-        .color(style::PALETTE.text.body)
-        .width(850.0 * scale)
-        .height(100.0 * scale),
+      container(
+        text(item.overview.as_deref().unwrap_or_default())
+          .size(style::BODY * scale)
+          .line_height(iced::Pixels(32.0 * scale))
+          .color(style::PALETTE.text.body)
+      )
+      .width(850.0 * scale)
+      .height(96.0 * scale)
+      .clip(true),
       row![
         action(
           state,
@@ -1270,6 +1281,87 @@ pub(super) mod tests {
       season_number: None, episode_number: None, index_number_end: None, series_id: None, series_name: None, end_year: None,
       series_continuing: false, unplayed_item_count: None, resume_position_seconds: None, played_percentage: None,
       overview: Some("A real detail synopsis can span several lines without shifting the focus and paging geometry.".to_owned()), season_poster_image_id: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn home_long_copy_keeps_hero_actions_inside_the_hero_frame() {
+    use iced::advanced::{widget, Layout};
+
+    #[derive(Default)]
+    struct Actions(Vec<iced::Rectangle>);
+    impl widget::Operation for Actions {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+        if [Focus::HeroPlay, Focus::HeroDetail, Focus::HeroWatchlist]
+          .iter()
+          .any(|focus| id == Some(&navigation::focus_id(*focus)))
+        {
+          self.0.push(bounds);
+        }
+      }
+    }
+
+    let renderer = iced::Renderer::new(
+      renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("headless layout renderer");
+    let mut state = State::boot(true);
+    state.full = Some(crate::app::state::FullUi::default());
+    state.shell.ui_mode = jellypilot_core::config::UiMode::Tv;
+    let mut media = item("long-copy");
+    media.name = "A long movie title with many words and translated characters 电视剧 ".repeat(12);
+    media.overview =
+      Some("A lengthy synopsis must not displace the Home playback actions. ".repeat(50));
+    media.resume_position_seconds = Some(60.0);
+    state
+      .full
+      .as_mut()
+      .expect("full")
+      .home
+      .data
+      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+        continue_watching: vec![media],
+        next_up: vec![],
+      }));
+    for bounds in [Size::new(1920.0, 1080.0), Size::new(1280.0, 720.0)] {
+      state.shell.window_size = bounds;
+      let scale = style::scale(bounds.width);
+      let mut page = home(&state, scale);
+      let mut tree = Tree::new(&page);
+      tree.diff(page.as_widget_mut());
+      let node = page.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(
+          Size::ZERO,
+          Size::new(content_width(&state, scale), f32::INFINITY),
+        ),
+      );
+      let mut actions = Actions::default();
+      page
+        .as_widget_mut()
+        .operate(&mut tree, Layout::new(&node), &renderer, &mut actions);
+      assert_eq!(actions.0.len(), 3);
+      for action in actions.0 {
+        assert!(
+          action.height >= style::CONTROL * scale - 0.1,
+          "squeezed action: {action:?}"
+        );
+        assert!(
+          action.y + action.height <= 540.0 * scale + 0.1,
+          "action outside Hero: {action:?}"
+        );
+      }
     }
   }
 

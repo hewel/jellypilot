@@ -44,12 +44,18 @@ Detail backdrop scrims fill the image's resolved layout bounds, including any
 parent-imposed growth; a bottom gradient reaches the opaque page background at
 the image edge. This avoids uncovered strips and hard cuts into the following
 content. These are color scrims, independent of Desktop's progressive blur trial.
+Home keeps its title to one ellipsized line and its synopsis preview to three
+32px-scaled lines, clipped to that region. Full copy remains in Detail; long
+server metadata must not consume the 64px-scaled Play/Details/Watchlist targets.
 
 Directional keys move focus; Enter confirms; Esc/Backspace returns. Keyboard-style
 remotes use the same mapping. Gamepad and HDMI-CEC adapters are not included. Browsing
 preserves source focus and scroll on return from Detail or playback. Library navigation
 keeps the column when moving vertically and clamps to the final row's existing items;
 focus-driven loading uses the shared paged browser and bounded artwork materialization.
+Rail focus scrolling uses measured button and viewport bounds, including short
+windows. Back from content and Left from Personal Lists or Saved Filters reveal
+the restored rail target even when the rail was previously scrolled far down.
 
 The 2026-09-22 subtraction revision uses short contextual action hints instead of a
 persistent directional-key tutorial. Long-press actions, Undo and seek commit/cancel

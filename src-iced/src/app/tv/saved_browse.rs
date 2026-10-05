@@ -560,7 +560,7 @@ pub fn input(state: &mut State, input: Input) -> Task<AppMessage> {
           .position(|action| *action == super::navigation::RailAction::SavedBrowse)
           .unwrap_or(0),
       );
-      return Task::none();
+      return super::navigation::reveal_rail(state);
     }
     _ => old,
   };

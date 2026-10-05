@@ -429,7 +429,7 @@ pub(super) fn input(state: &mut State, input: Input) -> Task<AppMessage> {
     }
     state.tv.content_focus = state.tv.focus;
     state.tv.focus = Focus::Rail(1);
-    return Task::none();
+    return reveal_rail(state);
   }
   if input == Input::PlayPause {
     if state.tv.focus == Focus::DetailPlay {
@@ -620,15 +620,6 @@ pub(super) fn restore_scroll(state: &State) -> Task<AppMessage> {
 }
 
 fn reveal(state: &mut State) -> Task<AppMessage> {
-  if let Focus::Rail(index) = state.tv.focus {
-    return operation::scroll_to(
-      iced::widget::Id::new("tv-rail"),
-      AbsoluteOffset {
-        x: 0.0,
-        y: (index.saturating_sub(3) as f32) * 80.0 * style::scale(state.shell.window_size.width),
-      },
-    );
-  }
   let Focus::Grid(index) = state.tv.focus else {
     return reveal_measured(state);
   };
@@ -643,10 +634,64 @@ fn reveal(state: &mut State) -> Task<AppMessage> {
   Task::batch([restore_scroll(state), sync_browse(state)])
 }
 
+pub(super) fn reveal_rail(state: &State) -> Task<AppMessage> {
+  use iced::advanced::widget;
+  if !matches!(state.tv.focus, Focus::Rail(_)) {
+    return Task::none();
+  }
+  struct Reveal {
+    focus: widget::Id,
+    target: Option<iced::Rectangle>,
+    viewport: Option<(iced::Rectangle, iced::Rectangle, iced::Vector)>,
+  }
+  impl widget::Operation<AppMessage> for Reveal {
+    fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
+      visit(self);
+    }
+    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      if id == Some(&self.focus) {
+        self.target = Some(bounds);
+      }
+    }
+    fn scrollable(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      content: iced::Rectangle,
+      translation: iced::Vector,
+      _state: &mut dyn widget::operation::Scrollable,
+    ) {
+      if id == Some(&widget::Id::new("tv-rail")) {
+        self.viewport = Some((bounds, content, translation));
+      }
+    }
+    fn finish(&self) -> widget::operation::Outcome<AppMessage> {
+      let (Some(target), Some((viewport, content, translation))) = (self.target, self.viewport)
+      else {
+        return widget::operation::Outcome::None;
+      };
+      let top = target.y - content.y;
+      let y = reveal_offset(top, top + target.height, translation.y, viewport.height);
+      widget::operation::Outcome::Chain(Box::new(widget::operation::scrollable::scroll_to(
+        widget::Id::new("tv-rail"),
+        AbsoluteOffset {
+          x: None,
+          y: Some(y),
+        },
+      )))
+    }
+  }
+  widget::operate(Reveal {
+    focus: focus_id(state.tv.focus),
+    target: None,
+    viewport: None,
+  })
+}
+
 /// Nonvirtual shelves use their actual layout, including translated text and nested scrolls.
 pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
   if matches!(state.tv.focus, Focus::Rail(_)) {
-    return Task::none();
+    return reveal_rail(state);
   }
   use iced::advanced::widget;
   struct Reveal {
@@ -740,4 +785,186 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
     offset: state.tv.offset,
     scale: style::scale(state.shell.window_size.width),
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use iced::advanced::{renderer, renderer::Headless, widget};
+  use iced::futures::StreamExt;
+
+  fn state(size: iced::Size) -> State {
+    let mut state = crate::app::update::tests::test_state();
+    state.full = Some(crate::app::state::FullUi::default());
+    state.shell.ui_mode = jellypilot_core::config::UiMode::Tv;
+    state.shell.window_id = Some(iced::window::Id::unique());
+    state.shell.window_size = size;
+    state.shell.destination = Destination::Home;
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    state.full.as_mut().expect("full").home.data.shortcuts = LoadState::Ready(
+      (0..12)
+        .map(|index| VideoLibraryShortcut {
+          id: index.to_string(),
+          name: format!("Library {index}"),
+          collection_type: "movies".into(),
+          item_count: None,
+          artwork_image_id: None,
+        })
+        .collect(),
+    );
+    state.tv.focus = Focus::Rail(0);
+    state
+  }
+
+  async fn drive(
+    state: &State,
+    renderer: &mut iced::Renderer,
+    cache: iced_runtime::user_interface::Cache,
+    task: Task<AppMessage>,
+  ) -> iced_runtime::user_interface::Cache {
+    let mut ui = iced_runtime::UserInterface::build(
+      super::super::view::view(state),
+      state.shell.window_size,
+      cache,
+      renderer,
+    );
+    if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+      while let Some(action) = stream.next().await {
+        let iced_runtime::Action::Widget(mut operation) = action else {
+          panic!("rail reveal must only operate on widgets");
+        };
+        loop {
+          ui.operate(renderer, operation.as_mut());
+          match operation.finish() {
+            widget::operation::Outcome::Chain(next) => operation = next,
+            widget::operation::Outcome::None => break,
+            widget::operation::Outcome::Some(_) => panic!("unexpected output"),
+          }
+        }
+      }
+    }
+    ui.into_cache()
+  }
+
+  fn assert_visible(
+    state: &State,
+    renderer: &mut iced::Renderer,
+    cache: iced_runtime::user_interface::Cache,
+  ) -> iced_runtime::user_interface::Cache {
+    struct Bounds {
+      focus: widget::Id,
+      target: Option<iced::Rectangle>,
+      scroll: Option<(iced::Rectangle, iced::Vector)>,
+    }
+    impl widget::Operation for Bounds {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+        if id == Some(&self.focus) {
+          self.target = Some(bounds);
+        }
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: iced::Rectangle,
+        _content: iced::Rectangle,
+        translation: iced::Vector,
+        _state: &mut dyn widget::operation::Scrollable,
+      ) {
+        if id == Some(&widget::Id::new("tv-rail")) {
+          self.scroll = Some((bounds, translation));
+        }
+      }
+    }
+    let mut ui = iced_runtime::UserInterface::build(
+      super::super::view::view(state),
+      state.shell.window_size,
+      cache,
+      renderer,
+    );
+    let mut bounds = Bounds {
+      focus: focus_id(state.tv.focus),
+      target: None,
+      scroll: None,
+    };
+    ui.operate(renderer, &mut bounds);
+    let target = bounds.target.expect("focused rail button");
+    let (viewport, translation) = bounds.scroll.expect("rail scrollable");
+    let top = target.y - translation.y;
+    assert!(
+      top >= viewport.y - 0.5 && top + target.height <= viewport.y + viewport.height + 0.5,
+      "{:?} at {:?}: target={target:?}, viewport={viewport:?}, translation={translation:?}",
+      state.tv.focus,
+      state.shell.window_size,
+    );
+    ui.into_cache()
+  }
+
+  #[tokio::test]
+  async fn every_rail_button_is_revealed_in_short_and_720p_windows() {
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("headless renderer");
+    for size in [
+      iced::Size::new(1920.0, 320.0),
+      iced::Size::new(1280.0, 720.0),
+    ] {
+      let mut state = state(size);
+      let mut cache = Default::default();
+      for direction in [Input::Down, Input::Up] {
+        for _ in 1..rail_actions(&state).len() {
+          let task = input(&mut state, direction);
+          cache = drive(&state, &mut renderer, cache, task).await;
+          cache = assert_visible(&state, &mut renderer, cache);
+        }
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn returning_from_home_lists_and_saved_filters_reveals_the_rail() {
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("headless renderer");
+    for size in [
+      iced::Size::new(1920.0, 320.0),
+      iced::Size::new(1280.0, 720.0),
+    ] {
+      for route in 0..3 {
+        let mut state = state(size);
+        state.tv.focus = Focus::Rail(rail_actions(&state).len() - 1);
+        let mut cache = drive(
+          &state,
+          &mut renderer,
+          Default::default(),
+          reveal_rail(&state),
+        )
+        .await;
+        cache = assert_visible(&state, &mut renderer, cache);
+        let task = match route {
+          0 => {
+            state.tv.content_focus = Focus::HeroPlay;
+            drop(input(&mut state, Input::Right));
+            input(&mut state, Input::Back)
+          }
+          1 => {
+            state.shell.destination =
+              Destination::PersonalLists(crate::app::personal_lists::Route::Watchlist);
+            state.tv.focus = Focus::Lists(super::super::lists::Focus::Empty);
+            super::super::lists::input(&mut state, Input::Left)
+          }
+          _ => {
+            state.shell.destination = Destination::SavedBrowse;
+            state.tv.focus = Focus::SavedBrowse(super::super::saved_browse::Focus::Back);
+            super::super::saved_browse::input(&mut state, Input::Left)
+          }
+        };
+        assert_eq!(state.tv.focus, Focus::Rail(route + 1));
+        cache = drive(&state, &mut renderer, cache, task).await;
+        let _ = assert_visible(&state, &mut renderer, cache);
+      }
+    }
+  }
 }
