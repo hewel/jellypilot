@@ -145,6 +145,33 @@ Detail Backdrops use the two-layer canvas scrim and fixed-height composition spe
 - Matching sources and effective blur parameters can share cached results. Position, opacity, mask, tint, or progress-only changes do not require another convolution; source, crop, scale, and sigma changes can miss. Scene-cache hits neither freeze the background nor eliminate all lower-scene drawing. Large software-blurred scenes remain expensive.
 - Advanced WGPU drawing with `Renderer::draw(None)` rejects positive scene blur; the ordinary window compositor supplies a clear color. Human acceptance must check both themes, scrolling/resize alignment, the card's bottom corners, live modal backgrounds, sharp Toasts, and keyboard focus. Code-level/headless checks do not establish visual acceptance.
 
+### 2026-10-05 Progressive Artwork Trial
+
+The user authorized trying gradual blur in three Desktop artwork transitions:
+Home Hero, Detail Hero and the full-size landscape Continue Watching/Next Up
+cards. Keep the existing layout, scrims, copy, image loading and interaction
+targets. Text, Title Logos, buttons, progress indicators and focus treatment
+are drawn after the effect and stay sharp. Missing/loading artwork, portrait
+posters and the small Hero-selection rail do not request this effect.
+
+Use the shared `artwork_blur` tokens: Hero sigma 0–12 over the lower 55% of its
+transition frame, capped at 240 logical pixels; landscape sigma 0–6 over the
+lower 35%, capped at 64px. Home ends this frame at its existing copy-fade point,
+not the image's opaque tail. Detail uses its fixed Hero frame. Landscape titles
+remain below the image; only the image's bottom edge softens toward them. The
+effect preserves the image's bottom corner radii and smoothing, and scrolling
+clips the output without restarting the gradient.
+
+This uses the current fork's scene-backdrop API after the image and before
+foreground content. It is not a separately cached progressive image filter:
+each visible band takes a scene snapshot, and filtering can sample neighboring
+pixels near its edges. Keep one narrow band per eligible image, no marker when
+its band is offscreen, and no added timer or animation. Software rendering
+retains the sharp image and existing scrim. Actual scrolling cost, edge color,
+two themes, long copy, narrow windows and Hero switching require human trial.
+Player progressive blur remains removed; modal and existing image blur keep
+their separate settings.
+
 ## Slop Prohibitions
 
 - **No translucency without blur.** Surfaces, fields, and badges are 100% opaque semantic colors. (Text placeholders, selection, and disabled-state alpha are not surfaces.)

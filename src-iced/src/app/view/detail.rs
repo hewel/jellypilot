@@ -1991,11 +1991,25 @@ fn render_artwork<'a>(
   });
   if let Some(cell) = cell {
     if let Some(handle) = cell.handle() {
-      return rounded_image(handle.clone(), radius)
+      let image = rounded_image(handle.clone(), radius)
         .content_fit(ContentFit::Cover)
         .width(width)
+        .height(height);
+      return if matches!(kind, ArtworkKind::Hero) {
+        stack![
+          image,
+          jellypilot_ui::widgets::artwork_blur::bottom(
+            HERO_HEIGHT,
+            TOKENS.artwork_blur.hero,
+            radius,
+          ),
+        ]
+        .width(width)
         .height(height)
-        .into();
+        .into()
+      } else {
+        image.into()
+      };
     }
   }
   match cell.map(|cell| cell.state) {

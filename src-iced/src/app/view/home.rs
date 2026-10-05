@@ -26,6 +26,7 @@ use jellypilot_ui::icons::{icon_sized, icon_with_color, Icon, IconControlState, 
 use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::artwork_blur;
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{
@@ -862,10 +863,20 @@ fn hero_imagery<'a>(
   let fade = backdrop.fade;
   (
     observe_home(
-      stack![image, hero_fade(fade)]
-        .width(Fill)
-        .height(height)
-        .into(),
+      stack![
+        image,
+        // The image may extend far below the Hero; end at the actual copy
+        // fade, not at the image's already-opaque tail.
+        artwork_blur::bottom(
+          scrim_start.clamp(0.0, height),
+          TOKENS.artwork_blur.hero,
+          TOKENS.radii.none.into(),
+        ),
+        hero_fade(fade),
+      ]
+      .width(Fill)
+      .height(height)
+      .into(),
       state,
       spec,
       ImageAxis::Vertical,
@@ -1382,11 +1393,23 @@ fn render_card_artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ImageStatus::Ready {
       if let Some(handle) = cell.handle() {
-        return rounded_image(handle.clone(), radius)
+        let image = rounded_image(handle.clone(), radius)
           .content_fit(ContentFit::Cover)
           .width(width)
+          .height(height);
+        // Full-size action cards blend toward their existing copy below the
+        // image. Small Hero selectors and portrait posters stay sharp.
+        return if width >= THUMB_FRAME_WIDTH && width > height {
+          stack![
+            image,
+            artwork_blur::bottom(height, TOKENS.artwork_blur.landscape, radius),
+          ]
+          .width(width)
           .height(height)
-          .into();
+          .into()
+        } else {
+          image.into()
+        };
       }
     }
   }

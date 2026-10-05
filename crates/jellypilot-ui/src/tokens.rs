@@ -25,6 +25,7 @@ pub struct DesignTokens {
     pub breakpoints: Breakpoints,
     pub modal: Modal,
     pub player_chrome: PlayerChrome,
+    pub artwork_blur: ArtworkBlur,
 }
 
 /// Semantic color roles.
@@ -381,6 +382,24 @@ pub struct PlayerChrome {
     pub backdrop_height: f32,
 }
 
+/// Progressive backdrop profiles for decoded browsing artwork.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtworkBlur {
+    pub hero: ArtworkBlurProfile,
+    pub landscape: ArtworkBlurProfile,
+}
+
+/// A bottom band whose Gaussian sigma increases from zero to `sigma`.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtworkBlurProfile {
+    /// Maximum Gaussian sigma in logical pixels.
+    pub sigma: f32,
+    /// Fraction of the complete artwork height occupied by the band.
+    pub fraction: f32,
+    /// Maximum band height in logical pixels.
+    pub max_height: f32,
+}
+
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
     modal: Modal {
@@ -388,6 +407,18 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
     player_chrome: PlayerChrome {
         backdrop_height: 340.0,
+    },
+    artwork_blur: ArtworkBlur {
+        hero: ArtworkBlurProfile {
+            sigma: 12.0,
+            fraction: 0.55,
+            max_height: 240.0,
+        },
+        landscape: ArtworkBlurProfile {
+            sigma: 6.0,
+            fraction: 0.35,
+            max_height: 64.0,
+        },
     },
     fonts: Fonts {
         display: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",
