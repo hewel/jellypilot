@@ -31,7 +31,7 @@ impl ImageToken {
         // Exhaustion must fail rather than let an old completion match a new attempt.
         // Relaxed ordering suffices: the serial establishes identity, not publication.
         let serial = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .unwrap_or_else(|_| panic!("Library Image token identity exhausted"));
