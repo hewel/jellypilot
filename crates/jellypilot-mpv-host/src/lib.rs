@@ -13,8 +13,8 @@
 //! Three producer images are borrowed until mpv's scheduled release and the
 //! subsequent private GPU copy complete. The copy is three ordered command buffers
 //! (tracked COPY_DST transition, raw copy, tracked RESOURCE transition); no CPU
-//! readback or color conversion is performed by this copy. Windows presentation
-//! may use an eight-bit UNORM surface while the private texture remains ten-bit.
+//! readback or color conversion is performed by this copy. Presentation may use
+//! an eight-bit UNORM surface while the private texture remains ten-bit.
 //!
 //! The application must serialize all compositor queue operations with
 //! `DeviceContext::queue_lock`; never hold it across Host methods or synchronous

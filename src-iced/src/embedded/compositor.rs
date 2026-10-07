@@ -108,10 +108,13 @@ fn unavailable(reason: impl std::fmt::Display) -> iced::advanced::graphics::core
 }
 
 impl Compositor {
-  /// The surface must support PQ signaling. This describes the presentation
-  /// chain, not the physical display's current HDR mode or peak luminance.
+  /// The surface must be 10-bit and support PQ signaling. This describes the
+  /// presentation chain, not the physical display's current HDR mode or peak luminance.
   fn hdr_capable(&self, native: &wgpu::Surface) -> bool {
-    if !cfg!(target_os = "linux") || std::env::var_os("WAYLAND_DISPLAY").is_none() {
+    if !cfg!(target_os = "linux")
+      || std::env::var_os("WAYLAND_DISPLAY").is_none()
+      || self.context.surface_format() != wgpu::TextureFormat::Rgb10a2Unorm
+    {
       return false;
     }
     native
