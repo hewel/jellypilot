@@ -223,6 +223,10 @@ pub struct PlaybackSession {
 
 /// A physical native load or resume, settled only after the player acknowledges it.
 #[uniffi::export(with_foreign)]
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait injects must_use on boxed futures; rust-clippy#17529"
+)]
 #[async_trait::async_trait]
 pub trait PlaybackHostOperation: Send + Sync {
     async fn execute(&self) -> bool;
