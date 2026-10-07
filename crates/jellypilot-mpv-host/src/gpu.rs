@@ -141,15 +141,12 @@ impl DeviceContext {
         let adapter =
             wgpu::util::initialize_adapter_from_env_or_default(instance, Some(surface)).await?;
         let capabilities = surface.get_capabilities(&adapter);
-        let surface_format =
-            select_surface_format(&capabilities.formats, cfg!(target_os = "windows")).ok_or_else(
-                || {
-                    Error::from(format!(
-                        "the Vulkan surface has no supported SDR output format; available: {:?}",
-                        capabilities.formats
-                    ))
-                },
-            )?;
+        let surface_format = select_surface_format(&capabilities.formats).ok_or_else(|| {
+            Error::from(format!(
+                "the Vulkan surface has no supported SDR output format; available: {:?}",
+                capabilities.formats
+            ))
+        })?;
         let format = adapter.get_texture_format_features(wgpu::TextureFormat::Rgb10a2Unorm);
         if !format.allowed_usages.contains(
             wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -338,10 +335,7 @@ impl DeviceContext {
     }
 }
 
-fn select_surface_format(
-    formats: &[wgpu::TextureFormat],
-    allow_8bit: bool,
-) -> Option<wgpu::TextureFormat> {
+fn select_surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
     // mpv supplies gamma-encoded SDR values. An sRGB attachment would encode
     // them again; use only UNORM targets, preserving the existing color path.
     let preferred = [
@@ -351,7 +345,6 @@ fn select_surface_format(
     ];
     preferred
         .into_iter()
-        .take(if allow_8bit { 3 } else { 1 })
         .find(|format| formats.contains(format))
 }
 
@@ -361,22 +354,21 @@ mod tests {
     use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgb10a2Unorm};
 
     #[test]
-    fn windows_surface_without_ten_bit_output_can_start_without_double_encoding() {
+    fn surface_without_ten_bit_output_can_start_without_double_encoding() {
         // Drivers commonly advertise the sRGB view first. It must not win over
         // the UNORM view when presenting mpv's already gamma-encoded pixels.
         let formats = [Bgra8UnormSrgb, Bgra8Unorm];
-        assert_eq!(select_surface_format(&formats, true), Some(Bgra8Unorm));
-        assert_eq!(select_surface_format(&formats, false), None);
+        assert_eq!(select_surface_format(&formats), Some(Bgra8Unorm));
     }
 
     #[test]
     fn driver_order_does_not_downgrade_supported_ten_bit_output() {
         let formats = [Bgra8Unorm, Rgb10a2Unorm];
-        assert_eq!(select_surface_format(&formats, true), Some(Rgb10a2Unorm));
+        assert_eq!(select_surface_format(&formats), Some(Rgb10a2Unorm));
     }
 
     #[test]
     fn srgb_only_surface_is_rejected_instead_of_changing_video_gamma() {
-        assert_eq!(select_surface_format(&[Bgra8UnormSrgb], true), None);
+        assert_eq!(select_surface_format(&[Bgra8UnormSrgb]), None);
     }
 }
