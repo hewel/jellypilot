@@ -411,7 +411,7 @@ impl VolumeMemoryPreference {
   }
 
   pub fn set_enabled(&self, enabled: bool) {
-    let _ = self.0.fetch_update(
+    let _ = self.0.try_update(
       std::sync::atomic::Ordering::AcqRel,
       std::sync::atomic::Ordering::Acquire,
       |current| {
