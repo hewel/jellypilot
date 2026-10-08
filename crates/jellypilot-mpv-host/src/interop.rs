@@ -37,12 +37,14 @@ pub struct TargetColor {
     pub depth: c_int,
 }
 impl TargetColor {
-    /// mpv's fixed BT.709 gamma-2.2 SDR target (every field unknown).
+    /// BT.709 gamma-2.2 SDR target with a near-zero black level.
     pub const SDR: Self = Self {
         primaries: 0,
         transfer: 0,
         ref_luma: 0.0,
-        min_luma: 0.0,
+        // Zero selects the host's 0.203-nit fallback and lifts SDR blacks.
+        // Match mpv's infinite-contrast target instead.
+        min_luma: 1e-7,
         max_luma: 0.0,
         depth: 0,
     };
