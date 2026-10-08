@@ -11,6 +11,8 @@ use crate::variants::ButtonVariant;
 pub fn card_play(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let mut style = super::button::style(theme, variant, status);
     style.border.radius = TOKENS.radii.full.into();
+    // Continuous corner smoothing would turn the circular target into a superellipse.
+    style.border.smoothing = 0.0;
     style
 }
 
@@ -117,5 +119,44 @@ pub fn rating(_theme: &Theme) -> container::Style {
         text_color: Some(palette.text.secondary),
         border: Border::default().rounded(TOKENS.radii.lg),
         ..container::Style::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{theme, ThemeMode};
+    use iced::advanced::graphics::shape::RoundedRectangle;
+    use iced::{Point, Rectangle, Size};
+
+    #[test]
+    fn artwork_play_action_has_a_circular_contour_in_every_state() {
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(48.0, 48.0));
+        let radius = bounds.width / 2.0;
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let theme = theme(mode);
+            for status in [
+                button::Status::Active,
+                button::Status::Hovered,
+                button::Status::Pressed,
+                button::Status::Disabled,
+            ] {
+                let border = card_play(&theme, ButtonVariant::Primary, status).border;
+                let contour = RoundedRectangle::new(bounds, border.radius, border.smoothing)
+                    .expect("valid play action contour");
+                for angle in [
+                    0.0,
+                    std::f32::consts::FRAC_PI_4,
+                    std::f32::consts::FRAC_PI_2,
+                ] {
+                    let point = bounds.center()
+                        + iced::Vector::new(radius * angle.cos(), radius * angle.sin());
+                    assert!(
+                        contour.distance(point).abs() < 0.001,
+                        "a circular action must have the same radius in every direction: {status:?}, angle={angle}"
+                    );
+                }
+            }
+        }
     }
 }

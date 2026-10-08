@@ -371,7 +371,7 @@ pub fn pause_chip(_theme: &Theme) -> container::Style {
         background: Some(Background::Color(FRAMED_FILL)),
         border: Border {
             radius: (PAUSE_CHIP / 2.0).into(),
-            smoothing: super::container::SURFACE_SMOOTHING,
+            smoothing: 0.0,
             color: FRAMED_EDGE,
             width: 1.0,
         },
@@ -397,7 +397,7 @@ pub fn skip_toggle_pill(state: crate::icons::IconControlState) -> container::Sty
         background: Some(Background::Color(fill)),
         border: Border {
             radius: (PILL_HEIGHT / 2.0).into(),
-            smoothing: super::container::SURFACE_SMOOTHING,
+            smoothing: 0.0,
             color: Color::TRANSPARENT,
             width: 0.0,
         },
@@ -786,5 +786,46 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod contour_tests {
+    use super::*;
+    use iced::advanced::graphics::shape::RoundedRectangle;
+    use iced::Point;
+
+    #[test]
+    fn pause_indicator_and_skip_pill_have_circular_caps() {
+        let pause = pause_chip(&theme()).border;
+        let mut surfaces = vec![(Size::new(PAUSE_CHIP, PAUSE_CHIP), pause)];
+        for state in [
+            crate::icons::IconControlState::Rest,
+            crate::icons::IconControlState::Hovered,
+            crate::icons::IconControlState::Disabled,
+        ] {
+            surfaces.push((
+                Size::new(140.0, PILL_HEIGHT),
+                skip_toggle_pill(state).border,
+            ));
+        }
+        for (size, border) in surfaces {
+            let bounds = Rectangle::new(Point::ORIGIN, size);
+            let radius = size.height / 2.0;
+            let cap_center = Point::new(size.width - radius, radius);
+            let contour = RoundedRectangle::new(bounds, border.radius, border.smoothing)
+                .expect("valid cinema control contour");
+            for angle in [
+                0.0,
+                std::f32::consts::FRAC_PI_4,
+                std::f32::consts::FRAC_PI_2,
+            ] {
+                let point = cap_center + Vector::new(radius * angle.cos(), radius * angle.sin());
+                assert!(
+                    contour.distance(point).abs() < 0.001,
+                    "cinema control cap must stay circular: {size:?}, angle={angle}"
+                );
+            }
+        }
     }
 }

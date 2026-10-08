@@ -728,7 +728,11 @@ pub(crate) fn play_button<'a>(
   .id(iced::widget::Id::from(control_id))
   .on_press_maybe(action);
   if circular {
-    control = control.width(48.into()).style(library::card_play);
+    control = control
+      .width(48.into())
+      .icon_size(IconSize::Custom(18.0))
+      .content_centered(true)
+      .style(library::card_play);
   }
   focus_tooltip(control, tooltip, TooltipOptions::default())
 }
@@ -1544,6 +1548,45 @@ mod tests {
   #[test]
   fn non_retryable_incremental_failure_has_no_retry_action() {
     assert!(retry_action(false, false).is_none());
+  }
+
+  #[tokio::test]
+  async fn artwork_play_and_replay_glyphs_are_centered_in_their_targets() {
+    fn glyph_bounds(layout: iced::advanced::Layout<'_>) -> Option<iced::Rectangle> {
+      if layout.children().next().is_none() {
+        let bounds = layout.bounds();
+        return (bounds.width > 0.0 && bounds.height > 0.0).then_some(bounds);
+      }
+      layout.children().find_map(glyph_bounds)
+    }
+
+    let renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let mut state = crate::app::update::tests::test_state();
+    let mut item = video_item("play-target");
+    for enabled in [false, true] {
+      state.playback.view.engine_available = enabled;
+      for played in [false, true] {
+        item.played = played;
+        let mut control = play_button(&state, &item, true, "artwork-play".to_owned());
+        let mut tree = Tree::new(&control);
+        tree.diff(control.as_widget_mut());
+        let node = control.as_widget_mut().layout(
+          &mut tree,
+          &renderer,
+          &layout::Limits::new(Size::ZERO, Size::new(175.0, 262.0)),
+        );
+        let glyph = glyph_bounds(iced::advanced::Layout::new(&node)).expect("play/replay glyph");
+        assert_eq!(
+          glyph.center(),
+          node.bounds().center(),
+          "artwork action must center its glyph with enabled={enabled}, played={played}"
+        );
+        assert_eq!(node.size(), Size::new(48.0, 48.0));
+        assert_eq!(glyph.size(), Size::new(18.0, 18.0));
+      }
+    }
   }
 
   #[tokio::test]
