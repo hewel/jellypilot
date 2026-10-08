@@ -162,7 +162,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   } else if modal_was_open && !modal_is_open {
     state.motion.retained_modal = retained;
   }
-  if let Some(toast) = &state.kernel.active_toast {
+  if state.playback.view.lifecycle.playback_active {
+    // Discard popup state, including its exit snapshot, so playback notices
+    // cannot interrupt viewing or reappear when the session ends.
+    state.kernel.active_toast = None;
+    state.motion.toast = None;
+  } else if let Some(toast) = &state.kernel.active_toast {
     if state.motion.toast.as_ref().map(|last| last.id) != Some(toast.id) {
       state.motion.toast = Some(toast.clone());
     }

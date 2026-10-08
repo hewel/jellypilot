@@ -96,11 +96,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
   ]
   .width(Fill)
   .height(Fill);
+  let playback_active = state.playback.view.lifecycle.playback_active;
   let toast = state
     .kernel
     .active_toast
     .as_ref()
-    .or(state.motion.toast.as_ref());
+    .or(state.motion.toast.as_ref())
+    .filter(|_| !playback_active);
   let toast_content: Element<'_, Message> = match toast {
     Some(toast) => container(toast_view(state.palette(), state.kernel.locale, toast))
       .width(Fill)
@@ -116,8 +118,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
   };
   let layers = layers.push(jellypilot_ui::widgets::motion::reveal(
     toast_content,
-    state.kernel.active_toast.is_some(),
-    state.shell.images_visible && !state.kernel.settings.snapshot().reduced_motion(),
+    !playback_active && state.kernel.active_toast.is_some(),
+    !playback_active
+      && state.shell.images_visible
+      && !state.kernel.settings.snapshot().reduced_motion(),
     TOKENS.durations.ms200,
   ));
   player::guard_activation(layers, state)

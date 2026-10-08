@@ -2557,6 +2557,96 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  async fn playback_suppresses_toasts_and_does_not_replay_them_after_exit() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{Font, Rectangle, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Default)]
+    struct VisibleText(Vec<String>);
+    impl widget::Operation for VisibleText {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+        self.0.push(text.to_owned());
+      }
+    }
+
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let window = iced::window::Id::unique();
+    let mut cache = Cache::new();
+    let mut state = test_state();
+    let warning = UiText::new("player-setup-incomplete");
+    let error = UiText::new("language-save-failed");
+    drop(
+      state
+        .kernel
+        .show_toast(NoticeLevel::Warning, warning.clone()),
+    );
+    drop(crate::app::update(
+      &mut state,
+      Message::DismissNotice(u64::MAX),
+    ));
+
+    for phase in 0..5 {
+      match phase {
+        1 => state.playback = active_intro_prompt_state().playback,
+        2 => {
+          state.playback.view.now_playing.as_mut().unwrap().paused = true;
+          state.shell.player_fullscreen = true;
+          drop(state.kernel.show_toast(NoticeLevel::Error, error.clone()));
+          drop(crate::app::update(
+            &mut state,
+            Message::DismissNotice(u64::MAX),
+          ));
+          assert!(state.kernel.active_toast.is_none());
+          assert!(state.motion.toast.is_none());
+          assert_eq!(state.kernel.notice, Some(error.clone()));
+        }
+        3 => {
+          state.playback = test_state().playback;
+          state.shell.player_fullscreen = false;
+        }
+        4 => drop(
+          state
+            .kernel
+            .show_toast(NoticeLevel::Warning, warning.clone()),
+        ),
+        _ => {}
+      }
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, window),
+        Size::new(1600.0, 900.0),
+        cache,
+        &mut renderer,
+      );
+      let mut visible = VisibleText::default();
+      ui.operate(&renderer, &mut visible);
+      assert_eq!(
+        visible.0.contains(&state.kernel.locale.message(&warning)),
+        phase == 0 || phase == 4,
+        "warning visibility in phase {phase}"
+      );
+      assert!(
+        !visible.0.contains(&state.kernel.locale.message(&error)),
+        "playback errors must not pop up during playback or replay after exit"
+      );
+      cache = ui.into_cache();
+    }
+  }
+
+  #[tokio::test]
   async fn toast_appearance_and_dismissal_preserve_login_input_focus() {
     use iced::advanced::{renderer::Headless, widget};
     use iced::{mouse, Event, Font, Rectangle, Size};
