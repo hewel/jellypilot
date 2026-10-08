@@ -1978,7 +1978,6 @@ fn render_artwork<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
-  let initial_size = kind.initial_size();
   let radius = kind.radius();
   let cell = key.and_then(|key| {
     state
@@ -2015,24 +2014,12 @@ fn render_artwork<'a>(
   match cell.map(|cell| cell.state) {
     // The server carries no image for this slot, so no load was ever planned:
     // settle on a neutral placeholder instead of shimmering forever.
-    None if key.is_none() => artwork_placeholder(
-      palette,
-      name,
-      initial_size,
-      width,
-      height,
-      radius,
-      palette.text.metadata,
-    ),
-    Some(ImageStatus::Failed) => artwork_placeholder(
-      palette,
-      name,
-      initial_size,
-      width,
-      height,
-      radius,
-      palette.colors.warning,
-    ),
+    None if key.is_none() => {
+      artwork_placeholder(palette, name, kind, width, height, palette.text.metadata)
+    }
+    Some(ImageStatus::Failed) => {
+      artwork_placeholder(palette, name, kind, width, height, palette.colors.warning)
+    }
     _ => skeleton_panel(
       width,
       height,
@@ -2048,20 +2035,23 @@ fn render_artwork<'a>(
 fn artwork_placeholder<'a>(
   palette: &'static ThemePalette,
   name: &str,
-  initial_size: u32,
+  kind: ArtworkKind,
   width: Length,
   height: Length,
-  radius: iced::border::Radius,
   color: iced::Color,
 ) -> Element<'a, Message> {
-  let initial = name
-    .trim()
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().collect::<String>())
-    .unwrap_or_else(|| "•".to_owned());
+  let initial_size = kind.initial_size();
+  let radius = kind.radius();
   let icon_dim = (initial_size as f32).max(28.0);
-  container(
+  let content: Element<'a, Message> = if matches!(kind, ArtworkKind::Cast) {
+    icon_with_color(Icon::User2, icon_dim, color).into()
+  } else {
+    let initial = name
+      .trim()
+      .chars()
+      .next()
+      .map(|character| character.to_uppercase().collect::<String>())
+      .unwrap_or_else(|| "•".to_owned());
     column![
       icon_with_color(Icon::Movie, icon_dim, color),
       text(initial)
@@ -2070,23 +2060,25 @@ fn artwork_placeholder<'a>(
         .color(color),
     ]
     .spacing(TOKENS.spacing.s1)
-    .align_x(Alignment::Center),
-  )
-  .center_x(width)
-  .center_y(height)
-  .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(
-      palette.colors.surfaceContainerLowest,
-    )),
-    border: iced::Border {
-      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-      radius,
-      width: 0.0,
-      color: iced::Color::TRANSPARENT,
-    },
-    ..container::Style::default()
-  })
-  .into()
+    .align_x(Alignment::Center)
+    .into()
+  };
+  container(content)
+    .center_x(width)
+    .center_y(height)
+    .style(move |_theme| container::Style {
+      background: Some(iced::Background::Color(
+        palette.colors.surfaceContainerLowest,
+      )),
+      border: iced::Border {
+        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
+        radius,
+        width: 0.0,
+        color: iced::Color::TRANSPARENT,
+      },
+      ..container::Style::default()
+    })
+    .into()
 }
 
 fn detail_skeleton(

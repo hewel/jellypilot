@@ -166,6 +166,7 @@ pub enum Icon {
     QrCode,
     Lock,
     User,
+    User2,
     UserCheck,
     // App mode switching
     ControlMode,
@@ -246,6 +247,7 @@ impl Icon {
             Self::QrCode => include_bytes!("../assets/icons/qrcode.svg"),
             Self::Lock => include_bytes!("../assets/icons/lock.svg"),
             Self::User => include_bytes!("../assets/icons/user.svg"),
+            Self::User2 => include_bytes!("../assets/icons/user2.svg"),
             Self::UserCheck => include_bytes!("../assets/icons/user-check.svg"),
             Self::ControlMode => include_bytes!("../assets/icons/control-mode.svg"),
             Self::PictureInPicture => include_bytes!("../assets/icons/picture-in-picture.svg"),
@@ -344,6 +346,7 @@ impl Icon {
             Self::QrCode,
             Self::Lock,
             Self::User,
+            Self::User2,
             Self::UserCheck,
             Self::ControlMode,
             Self::PictureInPicture,
