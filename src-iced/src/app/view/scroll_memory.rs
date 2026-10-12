@@ -224,6 +224,14 @@ impl widget::Operation for Positions<'_> {
     state: &mut dyn widget::operation::Scrollable,
   ) {
     let Some(id) = id else { return };
+    // Operations expose the last presented translation for coordinate consistency.
+    // Navigation memory instead samples logical offsets before/after input so an
+    // on_scroll-driven rebuild cannot restore over an unpresented wheel delta.
+    // Third-party scrollables without this query retain the presented fallback.
+    let offset = state
+      .absolute_offset(bounds, content)
+      .map(|offset| Vector::new(offset.x, offset.y))
+      .unwrap_or(translation);
     let position = self.positions.entry(id.clone()).or_default();
     match self.mode {
       Mode::Restore => state.scroll_to(
@@ -232,16 +240,17 @@ impl widget::Operation for Positions<'_> {
         bounds,
         content,
       ),
-      Mode::Observe => position.observed = translation,
+      Mode::Observe => position.observed = offset,
       Mode::Capture => {
-        // Iced reports clamped translations, not the underlying absolute offsets.
+        // The logical query is clamped to the current viewport, just like the
+        // presented fallback. A layout change alone is not an input change.
         // Only an actual input change replaces an axis; idle/loading frames cannot
         // erase a saved offset while the content is shorter than its destination.
-        if translation.x != position.observed.x {
-          position.offset.x = translation.x;
+        if offset.x != position.observed.x {
+          position.offset.x = offset.x;
         }
-        if translation.y != position.observed.y {
-          position.offset.y = translation.y;
+        if offset.y != position.observed.y {
+          position.offset.y = offset.y;
         }
       }
     }
@@ -276,6 +285,10 @@ impl widget::Operation for RememberOperation<'_> {
   ) {
     if let Some(id) = id {
       let position = self.positions.entry(id.clone()).or_default();
+      let current_translation = state
+        .absolute_offset(bounds, content)
+        .map(|offset| Vector::new(offset.x, offset.y))
+        .unwrap_or(translation);
       self.operation.scrollable(
         id.into(),
         bounds,
@@ -286,7 +299,7 @@ impl widget::Operation for RememberOperation<'_> {
           position,
           bounds,
           content,
-          translation,
+          translation: current_translation,
         },
       );
     } else {
@@ -360,6 +373,10 @@ impl RememberScrollable<'_> {
 }
 
 impl widget::operation::Scrollable for RememberScrollable<'_> {
+  fn absolute_offset(&self, bounds: Rectangle, content: Size) -> Option<AbsoluteOffset> {
+    self.state.absolute_offset(bounds, content)
+  }
+
   fn snap_to(
     &mut self,
     offset: RelativeOffset<Option<f32>>,
@@ -575,6 +592,13 @@ mod tests {
     let memory = ScrollMemory::default();
     let mut page = Page::new(&memory);
     page.scroll_to("page", 0.0, 450.0);
+    assert_eq!(page.offsets()[&widget::Id::new("page")].y, 450.0);
+    // A ready viewport can also become temporarily shorter without changing
+    // identity. Committing the clamped frame must not consume its saved offset.
+    page.rebuild(&memory, 0.0, true);
+    assert_eq!(page.offsets()[&widget::Id::new("page")].y, 0.0);
+    page.rebuild(&memory, 1800.0, true);
+    assert_eq!(page.offsets()[&widget::Id::new("page")].y, 450.0);
     page.tree = widget::Tree::empty();
     page.rebuild(&memory, 1800.0, false);
     page.input(Event::Mouse(mouse::Event::CursorLeft));
@@ -604,11 +628,162 @@ mod tests {
     page.scroll_to("page", 0.0, 450.0);
     page.tree = widget::Tree::empty();
     page.rebuild(&memory, 1800.0, true);
+    assert_eq!(page.offsets()[&widget::Id::new("page")].y, 450.0);
     page.input(Event::Mouse(mouse::Event::WheelScrolled {
       delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -60.0 },
     }));
+    // An on_scroll message can rebuild the view before the next presentation
+    // frame. The wheel delta must already belong to this navigation entry.
     page.tree = widget::Tree::empty();
     page.rebuild(&memory, 1800.0, true);
     assert_eq!(page.offsets()[&widget::Id::new("page")].y, 510.0);
+  }
+
+  fn ui_page(memory: &ScrollMemory, height: f32) -> Element<'static, Message> {
+    remember(
+      scrollable(space().width(Fill).height(height))
+        .smooth_scroll(false)
+        .id(widget::Id::new("page"))
+        .on_scroll(|scroll| {
+          Message::Browse(crate::app::message::BrowseMessage::Scrolled(
+            scroll.viewport,
+          ))
+        })
+        .width(Fill)
+        .height(Fill)
+        .boxed(),
+      memory,
+    )
+  }
+
+  fn presented_ui_offset(
+    ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, Theme, iced::Renderer>,
+    renderer: &iced::Renderer,
+  ) -> f32 {
+    #[derive(Default)]
+    struct Probe(Option<f32>);
+    impl widget::Operation for Probe {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        _bounds: Rectangle,
+        _content: Size,
+        translation: Vector,
+        _state: &mut dyn widget::operation::Scrollable,
+      ) {
+        if id == Some(&widget::Id::new("page")) {
+          self.0 = Some(translation.y);
+        }
+      }
+    }
+    let mut probe = Probe::default();
+    ui.operate(renderer, &mut probe);
+    probe.0.expect("identified page")
+  }
+
+  #[test]
+  fn scroll_message_rebuild_before_next_frame_preserves_the_wheel_offset() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let memory = ScrollMemory::default();
+    let mut renderer = headless_renderer();
+    let bounds = Size::new(200.0, 200.0);
+    let mut ui = UserInterface::build(
+      ui_page(&memory, 1800.0),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::scrollable::scroll_to::<()>(
+        widget::Id::new("page"),
+        AbsoluteOffset {
+          x: None,
+          y: Some(450.0),
+        },
+        widget::operation::Animation::Instant,
+      ),
+    );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
+    assert_eq!(presented_ui_offset(&mut ui, &renderer), 450.0);
+
+    let mut bus = iced::advanced::shell::Bus::new();
+    ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[Event::Mouse(mouse::Event::WheelScrolled {
+        delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -60.0 },
+      })],
+      mouse::Cursor::Available(Point::new(80.0, 150.0)),
+      &mut renderer,
+      &mut bus,
+    );
+    let requested_offset = bus.drain().find_map(|(message, _)| match message {
+      Message::Browse(crate::app::message::BrowseMessage::Scrolled(viewport)) => {
+        Some(viewport.absolute_offset().y)
+      }
+      _ => None,
+    });
+    assert_eq!(
+      requested_offset,
+      Some(510.0),
+      "wheel emitted the real application viewport message"
+    );
+    // The runtime may handle on_scroll and rebuild the view before another
+    // RedrawRequested. Reuse its cache, rather than committing a synthetic frame.
+    let mut ui = UserInterface::build(
+      ui_page(&memory, 1800.0),
+      bounds,
+      ui.into_cache(),
+      &mut renderer,
+    );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
+    assert_eq!(presented_ui_offset(&mut ui, &renderer), 510.0);
+  }
+
+  #[test]
+  fn committed_clamped_ui_frame_preserves_the_ready_pages_pending_offset() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let memory = ScrollMemory::default();
+    let mut renderer = headless_renderer();
+    let bounds = Size::new(200.0, 200.0);
+    let mut ui = UserInterface::build(
+      ui_page(&memory, 1800.0),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::scrollable::scroll_to::<()>(
+        widget::Id::new("page"),
+        AbsoluteOffset {
+          x: None,
+          y: Some(450.0),
+        },
+        widget::operation::Animation::Instant,
+      ),
+    );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
+    assert_eq!(presented_ui_offset(&mut ui, &renderer), 450.0);
+    let mut ui = UserInterface::build(
+      ui_page(&memory, 0.0),
+      bounds,
+      ui.into_cache(),
+      &mut renderer,
+    );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
+    assert_eq!(presented_ui_offset(&mut ui, &renderer), 0.0);
+    let mut ui = UserInterface::build(
+      ui_page(&memory, 1800.0),
+      bounds,
+      ui.into_cache(),
+      &mut renderer,
+    );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
+    assert_eq!(presented_ui_offset(&mut ui, &renderer), 450.0);
   }
 }
