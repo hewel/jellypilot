@@ -1,5 +1,6 @@
 //! Rounded image widget and radius helpers for JellyPilot design tokens.
 
+use iced::advanced::Widget as _;
 use iced::border::Radius;
 use iced::widget::image::{FilterMethod, Handle, Image};
 use iced::{ContentFit, Element, Length, Rectangle, Rotation};
@@ -160,6 +161,55 @@ impl<H> RoundedImage<H> {
     }
 }
 
+impl<H> iced::advanced::widget::Meta for RoundedImage<H> {}
+
+impl<Message, Theme, Renderer, H> iced::advanced::Widget<Message, Theme, Renderer>
+    for RoundedImage<H>
+where
+    Renderer: iced::advanced::image::Renderer<Handle = H>,
+    H: Clone,
+{
+    fn size(&self) -> iced::Size<Length> {
+        iced::Size::new(self.width, self.height)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut iced::advanced::widget::Tree,
+        renderer: &Renderer,
+        limits: &iced::advanced::layout::Limits,
+    ) {
+        <Image<H> as iced::advanced::Widget<Message, Theme, Renderer>>::layout(
+            &mut self.to_widget(),
+            tree,
+            renderer,
+            limits,
+        );
+    }
+
+    fn draw(
+        &self,
+        tree: &iced::advanced::widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &iced::advanced::renderer::Style,
+        layout: iced::advanced::Layout,
+        cursor: iced::mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        <Image<H> as iced::advanced::Widget<Message, Theme, Renderer>>::draw(
+            &self.to_widget(),
+            tree,
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+}
+
 impl<'a, Message, Theme, Renderer, H> From<RoundedImage<H>>
     for Element<'a, Message, Theme, Renderer>
 where
@@ -167,7 +217,7 @@ where
     H: Clone + 'a,
 {
     fn from(image: RoundedImage<H>) -> Self {
-        image.to_widget().into()
+        image.to_widget()._boxed()
     }
 }
 

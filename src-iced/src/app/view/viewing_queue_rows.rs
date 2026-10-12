@@ -1,5 +1,6 @@
 //! Stable queue row state and cancellation of pointer gestures across queue edits.
 
+use iced::widget::Widget as _;
 use std::collections::HashMap;
 
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
@@ -10,15 +11,15 @@ use crate::app::{message::Message, state::State};
 
 pub(crate) fn guard<'a>(
   state: &State,
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
 ) -> Element<'a, Message> {
-  Element::new(Rows {
+  iced::advanced::Widget::_boxed(Rows {
     keys: Vec::new(),
     scope: (
       state.kernel.request_gate.current_session(),
       state.playback.view.upcoming.revision,
     ),
-    content: content.into(),
+    content: content.boxed(),
   })
 }
 
@@ -28,7 +29,7 @@ pub(crate) fn rows<'a>(
   spacing: f32,
 ) -> Element<'a, Message> {
   let (keys, children): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
-  Element::new(Rows {
+  iced::advanced::Widget::_boxed(Rows {
     keys,
     scope: (
       state.kernel.request_gate.current_session(),
@@ -37,7 +38,7 @@ pub(crate) fn rows<'a>(
     content: iced::widget::Column::with_children(children)
       .spacing(spacing)
       .width(Length::Fill)
-      .into(),
+      .boxed(),
   })
 }
 
@@ -50,6 +51,8 @@ struct RowState {
   keys: Vec<QueueEntryId>,
   pressed: Option<(SessionToken, u64)>,
 }
+impl widget::Meta for Rows<'_> {}
+
 impl Widget<Message, Theme, iced::Renderer> for Rows<'_> {
   fn tag(&self) -> widget::tree::Tag {
     widget::tree::Tag::of::<RowState>()
@@ -81,39 +84,38 @@ impl Widget<Message, Theme, iced::Renderer> for Rows<'_> {
         .collect();
       state.keys.clone_from(&self.keys);
     }
-    self.content.as_widget_mut().diff(&mut tree.children[0]);
+    self.content.diff(&mut tree.children[0]);
   }
   fn size(&self) -> Size<Length> {
-    self.content.as_widget().size()
+    self.content.size()
   }
   fn layout(
     &mut self,
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits)
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     self
       .content
-      .as_widget_mut()
-      .operate(&mut tree.children[0], layout, renderer, operation);
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
   }
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -137,7 +139,7 @@ impl Widget<Message, Theme, iced::Renderer> for Rows<'_> {
       .is_some_and(|scope| scope != self.scope);
     // Deliver release without a hit so controls clear their pressed state, without
     // applying a newly rendered revision to an older pointer gesture.
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -157,11 +159,11 @@ impl Widget<Message, Theme, iced::Renderer> for Rows<'_> {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
@@ -174,33 +176,31 @@ impl Widget<Message, Theme, iced::Renderer> for Rows<'_> {
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }

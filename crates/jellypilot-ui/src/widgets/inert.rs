@@ -5,26 +5,32 @@ use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
 /// Draws `content` while excluding it from input, overlays, and focus traversal.
 /// Preserves the content's widget state when the wrapper is added or removed.
-pub fn inert<'a, Message>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message>
+pub fn inert<'a, Message>(
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
+) -> Element<'a, Message>
 where
     Message: 'a + 'static,
 {
-    Element::new(Inert {
-        content: content.into(),
+    (Inert {
+        content: content._boxed(),
         visible: true,
     })
+    ._boxed()
 }
 
 /// Keeps layout and widget state, but suppresses drawing and interaction.
 /// Used when an opaque replacement must not render a second native video surface.
-pub fn concealed<'a, Message>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message>
+pub fn concealed<'a, Message>(
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
+) -> Element<'a, Message>
 where
     Message: 'a + 'static,
 {
-    Element::new(Inert {
-        content: content.into(),
+    (Inert {
+        content: content._boxed(),
         visible: false,
     })
+    ._boxed()
 }
 
 struct Inert<'a, Message> {
@@ -32,24 +38,26 @@ struct Inert<'a, Message> {
     visible: bool,
 }
 
+impl<Message> iced::advanced::widget::Meta for Inert<'_, Message> where Message: 'static {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for Inert<'_, Message>
 where
     Message: 'static,
 {
     fn tag(&self) -> widget::tree::Tag {
-        self.content.as_widget().tag()
+        self.content.tag()
     }
 
     fn state(&self) -> widget::tree::State {
-        self.content.as_widget().state()
+        self.content.state()
     }
 
     fn diff(&mut self, tree: &mut widget::Tree) {
-        self.content.as_widget_mut().diff(tree);
+        self.content.diff(tree);
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
     fn layout(
@@ -57,15 +65,15 @@ where
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.content.as_widget_mut().layout(tree, renderer, limits)
+    ) {
+        self.content.layout(tree, renderer, limits)
     }
 
     fn update(
         &mut self,
         _tree: &mut widget::Tree,
         _event: &Event,
-        _layout: Layout<'_>,
+        _layout: Layout,
         _cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
         _shell: &mut Shell<'_, Message>,
@@ -79,7 +87,7 @@ where
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -87,14 +95,13 @@ where
             return;
         }
         self.content
-            .as_widget()
             .draw(tree, renderer, theme, style, layout, cursor, viewport);
     }
 
     fn mouse_interaction(
         &self,
         _tree: &widget::Tree,
-        _layout: Layout<'_>,
+        _layout: Layout,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &iced::Renderer,
@@ -105,10 +112,11 @@ where
     fn overlay<'a>(
         &'a mut self,
         _tree: &'a mut widget::Tree,
-        _layout: Layout<'a>,
+        _layout: Layout,
         _renderer: &iced::Renderer,
         _viewport: &Rectangle,
         _translation: Vector,
+        _window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         Vec::new()
     }
@@ -152,53 +160,52 @@ mod tests {
         tree.diff(&mut visible);
         let viewport = Rectangle::with_size(Size::new(368.0, 300.0));
         let limits = layout::Limits::new(Size::ZERO, viewport.size());
-        let node = visible
-            .as_widget_mut()
-            .layout(&mut tree, &renderer, &limits);
-        visible.as_widget_mut().operate(
+        visible.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
+        visible.operate(
             &mut tree,
-            Layout::new(&node),
+            node,
+            &viewport,
             &renderer,
             &mut focusable::focus::<()>(widget::Id::new("background-control")),
         );
 
         let mut obscured = inert(control());
         tree.diff(&mut obscured);
-        let node = obscured
-            .as_widget_mut()
-            .layout(&mut tree, &renderer, &limits);
+        obscured.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
         assert!(obscured
-            .as_widget_mut()
             .overlay(
                 &mut tree,
-                Layout::new(&node),
+                node,
                 &renderer,
                 &viewport,
-                Vector::ZERO
+                Vector::ZERO,
+                viewport.size()
             )
             .is_empty());
         // A focus operation must not traverse the obscured background.
-        obscured.as_widget_mut().operate(
+        obscured.operate(
             &mut tree,
-            Layout::new(&node),
+            node,
+            &viewport,
             &renderer,
             &mut focusable::focus::<()>(widget::Id::new("another-control")),
         );
 
         let mut restored = control();
         tree.diff(&mut restored);
-        let node = restored
-            .as_widget_mut()
-            .layout(&mut tree, &renderer, &limits);
+        restored.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
         assert!(
             !restored
-                .as_widget_mut()
                 .overlay(
                     &mut tree,
-                    Layout::new(&node),
+                    node,
                     &renderer,
                     &viewport,
-                    Vector::ZERO
+                    Vector::ZERO,
+                    viewport.size()
                 )
                 .is_empty(),
             "the original keyboard focus hint returns after the modal closes"

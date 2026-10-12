@@ -24,6 +24,7 @@ pub mod search_field;
 pub mod settings;
 pub mod sidebar;
 pub mod skeleton;
+pub mod sticky_navigation;
 pub mod switch;
 pub mod tracked_slider;
 pub mod tv_focus;
@@ -33,3 +34,15 @@ pub use control_button::{control_button, ControlButton};
 pub use poster_card::{poster_card, PosterCard};
 pub use rounded_image::{card_top_radius, full_radius, rounded_image, RoundedImage};
 pub use search_field::{search_field, SearchField};
+
+/// Copies a child layout while preserving its parent bounds.
+pub(crate) fn child_layout(
+    layout: iced::advanced::Layout,
+    tree: &iced::advanced::widget::Tree,
+    index: usize,
+) -> Option<iced::advanced::Layout> {
+    layout
+        .iter(&tree.children)
+        .nth(index)
+        .map(|(layout, _)| layout)
+}

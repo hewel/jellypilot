@@ -1,5 +1,6 @@
 //! The temporary Up next list; the current-season browser remains in `player`.
 
+use iced::widget::Widget as _;
 use iced::widget::{column, container, row, scrollable, space, text, Column};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::viewing_queue::{
@@ -105,14 +106,14 @@ pub(super) fn trigger(state: &State, icon_only: bool) -> Element<'_, Message> {
       TooltipOptions::default(),
     )
   } else {
-    button.into()
+    button.boxed()
   }
 }
 
 /// Kept above video and other content so the opaque floating surface remains sharp.
 pub(super) fn layer(state: &State) -> Element<'_, Message> {
   if !state.playback.viewing_queue.open || state.tv_mode() {
-    return space().into();
+    return space().boxed();
   }
   let width = (state.shell.window_size.width - 32.0).clamp(0.0, 520.0);
   container(popover(
@@ -132,7 +133,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
   .height(Fill)
   .align_x(Alignment::End)
   .padding(16)
-  .into()
+  .boxed()
 }
 
 fn content(state: &State) -> Element<'_, Message> {
@@ -157,16 +158,19 @@ fn content(state: &State) -> Element<'_, Message> {
   ]
   .align_y(Alignment::Center)
   .spacing(8);
-  let mut rows = Column::new().spacing(12).width(Fill);
+  let mut rows = Column::<Element<'_, Message>>::new()
+    .spacing(12)
+    .width(Fill);
   if let Some(current) = &view.now_playing {
     rows = rows.push(
-      column![
+      (column![
         text(state.t("viewing-queue-current"))
           .size(12)
           .color(palette.text.metadata),
         text(current.item.title.clone()).size(15)
       ]
-      .spacing(4),
+      .spacing(4))
+      .boxed(),
     );
   }
   if let Some(error) = state
@@ -177,23 +181,26 @@ fn content(state: &State) -> Element<'_, Message> {
     .or(state.playback.notice.as_ref())
   {
     rows = rows.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(13)
-        .color(palette.colors.error),
+        .color(palette.colors.error))
+      .boxed(),
     );
   }
   if busy {
     rows = rows.push(
-      text(state.t("viewing-queue-starting"))
+      (text(state.t("viewing-queue-starting"))
         .size(13)
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
   if upcoming.entries.is_empty() {
     rows = rows.push(
-      text(state.t("viewing-queue-empty"))
+      (text(state.t("viewing-queue-empty"))
         .size(14)
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
   let mut entries = Vec::new();
@@ -255,15 +262,16 @@ fn content(state: &State) -> Element<'_, Message> {
       )
       .width(Fill)
       .padding([8, 0])
-      .into(),
+      .boxed(),
     ));
   }
-  rows = rows.push(queue_rows(state, entries, 0.0));
+  rows = rows.push((queue_rows(state, entries, 0.0)).boxed());
   if upcoming.entries.len() >= VIEWING_QUEUE_CAPACITY {
     rows = rows.push(
-      text(state.t("viewing-queue-full"))
+      (text(state.t("viewing-queue-full"))
         .size(13)
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
   let clear = queue_guard(
@@ -286,6 +294,7 @@ fn content(state: &State) -> Element<'_, Message> {
     column![
       heading,
       scrollable(rows)
+        .smooth_scroll(false)
         .id("viewing-queue-list")
         .height(Length::Fill)
         .direction(iced::widget::scrollable::Direction::Vertical(
@@ -298,7 +307,7 @@ fn content(state: &State) -> Element<'_, Message> {
     .width(Fill),
   )
   .id("viewing-queue-content")
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]
@@ -316,7 +325,12 @@ pub(crate) mod tests {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if let Some(id) = id {
         self.0.push((id.clone(), bounds));
       }

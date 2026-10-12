@@ -337,7 +337,12 @@ pub(super) fn read_overview(state: &State, direction: Input) -> Task<AppMessage>
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&widget::Id::new("tv-detail-overview")) {
         self.overview = Some(bounds);
       }
@@ -349,10 +354,11 @@ pub(super) fn read_overview(state: &State, direction: Input) -> Task<AppMessage>
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       _translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&navigation::scroll_id()) {
         self.viewport = Some((bounds, content));
       }
@@ -837,7 +843,12 @@ mod tests {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn iced::advanced::widget::Operation)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&iced::widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&iced::widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&iced::widget::Id::new("tv-detail-overview")) {
         self.overview = Some(bounds);
       }
@@ -849,10 +860,11 @@ mod tests {
       &mut self,
       id: Option<&iced::widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       translation: iced::Vector,
       _state: &mut dyn iced::advanced::widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&navigation::scroll_id()) {
         self.scroll = Some((bounds, content, translation));
       }

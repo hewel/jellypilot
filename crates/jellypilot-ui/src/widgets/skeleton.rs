@@ -16,9 +16,10 @@
 //! opaque surface tones (Low ↔ High), which reads clearly on the dark theme
 //! while staying strictly tone-on-tone.
 
+use iced::advanced::Widget as _;
 use iced::border::Radius;
 use iced::widget::{container, space, Container};
-use iced::{Background, Border, Color, Length, Shadow, Theme};
+use iced::{Background, Border, Color, Element, Length, Shadow, Theme};
 
 use crate::tokens::{palette, TOKENS};
 
@@ -53,8 +54,8 @@ pub fn skeleton_block<'a, Message: 'a>(
     height: impl Into<Length>,
     phase: f32,
     reduced_motion: bool,
-) -> Container<'a, Message> {
-    container(space::horizontal())
+) -> Container<'a, Element<'a, Message>> {
+    container(space::horizontal()._boxed())
         .width(width)
         .height(height)
         .style(move |theme: &Theme| skeleton_style(theme, phase, reduced_motion))
@@ -67,8 +68,8 @@ pub fn skeleton_block_with_radius<'a, Message: 'a>(
     radius: Radius,
     phase: f32,
     reduced_motion: bool,
-) -> Container<'a, Message> {
-    container(space::horizontal())
+) -> Container<'a, Element<'a, Message>> {
+    container(space::horizontal()._boxed())
         .width(width)
         .height(height)
         .style(move |theme: &Theme| {
@@ -87,8 +88,8 @@ pub fn skeleton_panel<'a, Message: 'a>(
     radius: iced::border::Radius,
     phase: f32,
     reduced_motion: bool,
-) -> Container<'a, Message> {
-    container(space::horizontal())
+) -> Container<'a, Element<'a, Message>> {
+    container(space::horizontal()._boxed())
         .width(width)
         .height(height)
         .style(move |theme: &Theme| {

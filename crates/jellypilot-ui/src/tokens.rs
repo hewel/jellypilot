@@ -26,6 +26,7 @@ pub struct DesignTokens {
     pub modal: Modal,
     pub player_chrome: PlayerChrome,
     pub artwork_blur: ArtworkBlur,
+    pub navigation_blur: NavigationBlur,
 }
 
 /// Semantic color roles.
@@ -399,8 +400,24 @@ pub struct ArtworkBlurProfile {
     pub max_height: f32,
 }
 
+/// Live navigation surface: blur fades to clear within its measured height.
+#[derive(Debug, Clone, Copy)]
+pub struct NavigationBlur {
+    /// Gaussian sigma in logical pixels.
+    pub sigma: f32,
+    /// Falloff within the bottom of navigation, capped to its measured height.
+    pub fade_height: f32,
+    /// Canvas tint under navigation controls; fades to zero with the blur.
+    pub tint_alpha: f32,
+}
+
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
+    navigation_blur: NavigationBlur {
+        sigma: 20.0,
+        fade_height: 88.0,
+        tint_alpha: 0.92,
+    },
     modal: Modal {
         backdrop_blur_sigma: 40.0,
     },

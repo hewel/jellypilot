@@ -1,5 +1,6 @@
 //! TV list presentation over the shared, account-fenced list and mutation services.
 
+use iced::widget::Widget as _;
 use iced::widget::{button, column, container, mouse_area, row, space, stack, text, Column, Row};
 use iced::{Alignment, Element, Fill, Task};
 use jellypilot_core::item_actions::{Action, Receipt};
@@ -247,12 +248,13 @@ fn reveal_menu(state: &State) -> Task<AppMessage> {
   let Some(menu) = &state.tv.lists.menu else {
     return Task::none();
   };
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     "tv-list-action-menu",
-    iced::widget::operation::AbsoluteOffset {
+    iced::widget::operation::scrollable::AbsoluteOffset {
       x: 0.0,
       y: menu.row.saturating_sub(1) as f32 * 96.0 * style::scale(state.shell.window_size.width),
     },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
@@ -325,12 +327,13 @@ fn scroll(state: &mut State, kind: Kind, index: usize) -> Task<AppMessage> {
   if right > saved.offset + available {
     saved.offset = (right - available + 24.0 * scale).max(0.0);
   }
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     scroll_id(kind),
-    iced::widget::operation::AbsoluteOffset {
+    iced::widget::operation::scrollable::AbsoluteOffset {
       x: saved.offset,
       y: 0.0,
     },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
@@ -1057,20 +1060,23 @@ pub fn view(state: &State, width: f32) -> Element<'_, AppMessage> {
   let scale = style::scale(state.shell.window_size.width);
   let kind = kind(state);
   let tabs = [Kind::Watchlist, Kind::Favorites].into_iter().fold(
-    Row::new().spacing(16.0 * scale),
+    Row::<Element<'_, AppMessage>>::new().spacing(16.0 * scale),
     |row, candidate| {
       let count = list_page(state, candidate)
         .and_then(|page| page.known_total)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_owned());
-      row.push(super::view::action(
-        state,
-        TvFocus::Lists(Focus::Tab(candidate)),
-        format!("{}   {count}", title(state, candidate)),
-        None,
-        candidate == kind,
-        scale,
-      ))
+      row.push(
+        (super::view::action(
+          state,
+          TvFocus::Lists(Focus::Tab(candidate)),
+          format!("{}   {count}", title(state, candidate)),
+          None,
+          candidate == kind,
+          scale,
+        ))
+        .boxed(),
+      )
     },
   );
   let mut content = column![
@@ -1080,11 +1086,11 @@ pub fn view(state: &State, width: f32) -> Element<'_, AppMessage> {
   .spacing(28.0 * scale)
   .width(width);
   let Some(page) = list_page(state, kind) else {
-    return content.into();
+    return content.boxed();
   };
   if let Some(error) = &page.error {
     content = content.push(
-      row![
+      (row![
         text(state.kernel.locale.message(error))
           .size(style::META * scale)
           .color(style::PALETTE.colors.error),
@@ -1097,14 +1103,15 @@ pub fn view(state: &State, width: f32) -> Element<'_, AppMessage> {
           scale
         )
       ]
-      .spacing(16.0 * scale),
+      .spacing(16.0 * scale))
+      .boxed(),
     );
   }
   if page.total == 0 {
     let body = if page.loading {
       column![text(state.t("tv-loading")).size(style::BODY * scale)]
     } else if page.error.is_some() {
-      column![]
+      iced::widget::Column::<Element<'_, AppMessage>>::new()
     } else {
       column![
         text(state.t("tv-lists-empty-title"))
@@ -1127,21 +1134,23 @@ pub fn view(state: &State, width: f32) -> Element<'_, AppMessage> {
     };
     return content
       .push(
-        container(body)
+        (container(body)
           .width(Fill)
           .height(620.0 * scale)
           .center_x(Fill)
-          .center_y(Fill),
+          .center_y(Fill))
+        .boxed(),
       )
       .push(
-        text(super::view::context_hint(state))
+        (text(super::view::context_hint(state))
           .size(style::META * scale)
-          .color(style::PALETTE.text.metadata),
+          .color(style::PALETTE.text.metadata))
+        .boxed(),
       )
-      .into();
+      .boxed();
   }
   if page.loading && page.entries.is_empty() {
-    content = content.push(text(state.t("tv-loading")).size(style::BODY * scale));
+    content = content.push((text(state.t("tv-loading")).size(style::BODY * scale)).boxed());
   }
   let carousel = super::view::horizontal_shelf(
     state,
@@ -1151,27 +1160,29 @@ pub fn view(state: &State, width: f32) -> Element<'_, AppMessage> {
     move |offset| dispatch(Message::Scrolled(kind, offset)),
   );
   content
-    .push(carousel)
+    .push((carousel).boxed())
     .push(
-      text(super::view::context_hint(state))
+      (text(super::view::context_hint(state))
         .size(style::META * scale)
-        .color(style::PALETTE.text.metadata),
+        .color(style::PALETTE.text.metadata))
+      .boxed(),
     )
-    .into()
+    .boxed()
 }
 
 fn carousel_cards(state: &State, kind: Kind, scale: f32) -> Element<'_, AppMessage> {
   let Some(full) = state.full.as_ref() else {
-    return space().into();
+    return space().boxed();
   };
   let Some(page) = list_page(state, kind) else {
-    return space().into();
+    return space().boxed();
   };
   let pitch = 344.0 * scale;
   let card_width = 320.0 * scale;
-  let mut cards = Row::new().spacing(24.0 * scale);
+  let mut cards = Row::<Element<'_, AppMessage>>::new().spacing(24.0 * scale);
   if page.offset > 0 {
-    cards = cards.push(space().width((page.offset as f32 * pitch - 24.0 * scale).max(0.0)));
+    cards =
+      cards.push((space().width((page.offset as f32 * pitch - 24.0 * scale).max(0.0))).boxed());
   }
   for (local, entry) in page.entries.iter().enumerate() {
     let focus = TvFocus::Lists(Focus::Card(page.offset + local));
@@ -1201,15 +1212,15 @@ fn carousel_cards(state: &State, kind: Kind, scale: f32) -> Element<'_, AppMessa
         .size(style::META * scale)
       ]
       .spacing(12.0 * scale)
-      .into()
+      .boxed()
     };
-    cards = cards.push(card);
+    cards = cards.push((card).boxed());
   }
   let remaining = page.total.saturating_sub(page.offset + page.entries.len());
   if remaining > 0 {
-    cards = cards.push(space().width((remaining as f32 * pitch - 24.0 * scale).max(0.0)));
+    cards = cards.push((space().width((remaining as f32 * pitch - 24.0 * scale).max(0.0))).boxed());
   }
-  cards.into()
+  cards.boxed()
 }
 
 fn title(state: &State, kind: Kind) -> String {
@@ -1241,9 +1252,9 @@ fn control<'a>(
     .padding(0)
     .style(style::button_progress(style::PALETTE, progress, false))
     .on_press_maybe(enabled.then_some(message.clone()))
-    .into()
+    .boxed()
   })
-  .into()
+  .boxed()
 }
 
 pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
@@ -1335,33 +1346,39 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
         .width(Fill)
         .style(style::button_progress(style::PALETTE, progress, false))
         .on_press_maybe(enabled.then_some(message.clone()))
-        .into()
+        .boxed()
       })
-      .into();
+      .boxed();
       actions = actions.push(
-        mouse_area(container(action).width(Fill)).on_enter(dispatch(Message::MenuFocus(row))),
+        (mouse_area(container(action).width(Fill)).on_enter(dispatch(Message::MenuFocus(row))))
+          .boxed(),
       );
     }
     if menu.error {
       actions = actions.push(
-        text(state.t("tv-lists-action-failed"))
+        (text(state.t("tv-lists-action-failed"))
           .size(style::META * scale)
-          .color(style::PALETTE.colors.error),
+          .color(style::PALETTE.colors.error))
+        .boxed(),
       );
     }
     if menu.pending.is_some() {
-      actions = actions.push(text(state.t("common-loading")).size(style::META * scale));
+      actions = actions.push((text(state.t("common-loading")).size(style::META * scale)).boxed());
     }
-    actions = actions.push(control(
-      state,
-      state.t("common-close"),
-      false,
-      true,
-      dispatch(Message::CloseMenu),
-      scale,
-    ));
+    actions = actions.push(
+      (control(
+        state,
+        state.t("common-close"),
+        false,
+        true,
+        dispatch(Message::CloseMenu),
+        scale,
+      ))
+      .boxed(),
+    );
     let panel = container(
       iced::widget::scrollable(actions)
+        .smooth_scroll(false)
         .id("tv-list-action-menu")
         .height(iced::Length::Fit.max(
           (state.shell.window_size.height - 2.0 * style::SAFE_Y * scale - 64.0 * scale).max(1.0),
@@ -1387,9 +1404,11 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
         bottom: 60.0 * scale,
         left: 0.0,
       });
-    return Some(stack![shade, positioned].into());
+    return Some(stack![shade, positioned].boxed());
   }
-  let mut notices = Column::new().spacing(12.0 * scale).width(960.0 * scale);
+  let mut notices = Column::<Element<'_, AppMessage>>::new()
+    .spacing(12.0 * scale)
+    .width(960.0 * scale);
   let mut any = false;
   for id in state.kernel.undo.queue.visible() {
     let Some(notice) = state.kernel.undo.notices.get(&id) else {
@@ -1401,9 +1420,10 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
     ];
     if notice.failed {
       copy = copy.push(
-        text(state.t("lists-undo-failed"))
+        (text(state.t("lists-undo-failed"))
           .size(style::META * scale)
-          .color(style::PALETTE.colors.error),
+          .color(style::PALETTE.colors.error))
+        .boxed(),
       );
     }
     let row = row![
@@ -1433,12 +1453,15 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
     ]
     .spacing(16.0 * scale)
     .align_y(Alignment::Center);
-    notices = notices.push(notice_interaction(
-      container(row)
-        .padding([8.0 * scale, 24.0 * scale])
-        .style(style::panel),
-      move |interaction| dispatch(Message::NoticeInteraction(id, interaction)),
-    ));
+    notices = notices.push(
+      (notice_interaction(
+        container(row)
+          .padding([8.0 * scale, 24.0 * scale])
+          .style(style::panel),
+        move |interaction| dispatch(Message::NoticeInteraction(id, interaction)),
+      ))
+      .boxed(),
+    );
   }
   if let Some(added) = &state.tv.lists.added {
     any = true;
@@ -1448,7 +1471,7 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
       "tv-lists-added-watchlist"
     });
     notices = notices.push(
-      container(
+      (container(
         row![
           text(message).size(style::BODY * scale).width(Fill),
           control(
@@ -1464,7 +1487,8 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
         .align_y(Alignment::Center),
       )
       .padding([16.0 * scale, 24.0 * scale])
-      .style(style::panel),
+      .style(style::panel))
+      .boxed(),
     );
   }
   any.then(|| {
@@ -1479,7 +1503,7 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
         right: style::SAFE_X * scale,
         top: style::SAFE_Y * scale,
       })
-      .into()
+      .boxed()
   })
 }
 

@@ -9,16 +9,18 @@ pub(crate) mod retained;
 mod video;
 
 pub(crate) fn view<'a, Message: 'a>() -> iced::Element<'a, Message> {
+  use iced::Widget as _;
+
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   {
     iced::widget::shader(video::Video)
       .width(iced::Fill)
       .height(iced::Fill)
-      .into()
+      .boxed()
   }
   #[cfg(not(any(target_os = "linux", target_os = "windows")))]
   {
-    iced::widget::text("Embedded MPV is unavailable on this platform").into()
+    iced::widget::text("Embedded MPV is unavailable on this platform").boxed()
   }
 }
 

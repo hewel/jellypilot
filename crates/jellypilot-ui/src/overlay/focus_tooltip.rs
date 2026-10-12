@@ -1,5 +1,6 @@
 //! Opt-in text hints for controls whose full value must also be readable by keyboard.
 
+use iced::advanced::Renderer as _;
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::widget::{container, text};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
@@ -9,20 +10,21 @@ use crate::tokens::TOKENS;
 
 /// Adds a full-value hint on keyboard focus while retaining the ordinary delayed hover tooltip.
 pub fn focus_tooltip<'a, Message: 'a>(
-    trigger: impl Into<Element<'a, Message>>,
+    trigger: impl Widget<Message, Theme, iced::Renderer> + 'a,
     content: impl Into<String>,
     options: TooltipOptions,
 ) -> Element<'a, Message> {
     if !options.enabled {
-        return trigger.into();
+        return trigger._boxed();
     }
     let content = content.into();
-    Element::new(FocusTooltip {
+    FocusTooltip {
         trigger: tooltip_element(
-            trigger,
+            trigger._boxed(),
             text(content.clone())
                 .size(TOKENS.font_sizes.s12)
-                .wrapping(text::Wrapping::WordOrGlyph),
+                .wrapping(text::Wrapping::WordOrGlyph)
+                ._boxed(),
             options,
         ),
         hint: container(
@@ -33,9 +35,10 @@ pub fn focus_tooltip<'a, Message: 'a>(
         .width(Length::Fit.max(options.max_width))
         .padding(TOKENS.spacing.s2)
         .style(super::style::tooltip_surface)
-        .into(),
+        ._boxed(),
         options,
-    })
+    }
+    ._boxed()
 }
 
 struct FocusTooltip<'a, Message> {
@@ -73,13 +76,15 @@ impl widget::Operation for FocusProbe {
     }
 }
 
+impl<Message> widget::Meta for FocusTooltip<'_, Message> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Message> {
     fn diff(&mut self, tree: &mut widget::Tree) {
         tree.diff_children(&mut [&mut self.trigger, &mut self.hint]);
     }
 
     fn size(&self) -> Size<Length> {
-        self.trigger.as_widget().size()
+        self.trigger.size()
     }
 
     fn layout(
@@ -87,23 +92,23 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.trigger
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    ) {
+        self.trigger.layout(&mut tree.children[0], renderer, limits);
+        tree.children[0].translation = Vector::ZERO;
+        tree.size = tree.children[0].size;
     }
 
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        self.trigger.as_widget_mut().update(
+        self.trigger.update(
             &mut tree.children[0],
             event,
             layout,
@@ -120,11 +125,11 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.trigger.as_widget().draw(
+        self.trigger.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -138,58 +143,77 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        self.trigger.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.trigger
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
         self.trigger
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut widget::Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let mut focus = FocusProbe::default();
-        self.trigger
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut focus);
+        self.trigger.operate(
+            &mut tree.children[0],
+            layout,
+            viewport,
+            renderer,
+            &mut focus,
+        );
         if focus.0 {
+            let hint_tree = &mut tree.children[1];
+            let hint_viewport = Rectangle::with_size(window);
+            self.hint.layout(
+                hint_tree,
+                renderer,
+                &layout::Limits::new(Size::ZERO, window),
+            );
+            let position = position_layer(
+                layout.bounds() + translation,
+                hint_tree.size,
+                hint_viewport,
+                PositioningOptions {
+                    preferred: self.options.placement,
+                    gap: TOKENS.spacing.s1_5,
+                    alignment: super::Alignment::Center,
+                    clamp_to_viewport: true,
+                    flip_when_overflow: true,
+                },
+            );
             vec![overlay::Element::new(Box::new(FocusHint {
                 content: &mut self.hint,
-                tree: &mut tree.children[1],
-                anchor: layout.bounds() + translation,
-                options: self.options,
+                layout: Layout::new(hint_tree.size).move_to(position.point),
+                tree: hint_tree,
             }))]
         } else {
-            self.trigger.as_widget_mut().overlay(
+            self.trigger.overlay(
                 &mut tree.children[0],
                 layout,
                 renderer,
                 viewport,
                 translation,
+                window,
             )
         }
     }
@@ -198,49 +222,37 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
 struct FocusHint<'a, 'b, Message> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut widget::Tree,
-    anchor: Rectangle,
-    options: TooltipOptions,
+    layout: Layout,
 }
 
 impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusHint<'_, '_, Message> {
-    fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-        let viewport = Rectangle::with_size(bounds);
-        let node = self.content.as_widget_mut().layout(
-            self.tree,
-            renderer,
-            &layout::Limits::new(Size::ZERO, bounds),
-        );
-        let position = position_layer(
-            self.anchor,
-            node.size(),
-            viewport,
-            PositioningOptions {
-                preferred: self.options.placement,
-                gap: TOKENS.spacing.s1_5,
-                alignment: super::Alignment::Center,
-                clamp_to_viewport: true,
-                flip_when_overflow: true,
-            },
-        );
-        node.move_to(position.point)
-    }
-
     fn draw(
         &self,
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
     ) {
-        self.content.as_widget().draw(
+        renderer.with_layer(self.layout.bounds(), |renderer| {
+            self.content.draw(
+                self.tree,
+                renderer,
+                theme,
+                style,
+                self.layout,
+                cursor,
+                &self.layout.bounds(),
+            );
+        });
+    }
+
+    fn operate(&mut self, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
+        self.content.operate(
             self.tree,
+            self.layout,
+            &self.layout.bounds(),
             renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            &layout.bounds(),
+            operation,
         );
     }
 }
@@ -279,35 +291,59 @@ mod tests {
         let mut tree = widget::Tree::new(&control);
         tree.diff(&mut control);
         let viewport = Rectangle::with_size(Size::new(368.0, 300.0));
-        let node = control
-            .as_widget_mut()
-            .layout(
-                &mut tree,
-                &renderer,
-                &layout::Limits::new(Size::ZERO, viewport.size()),
-            )
-            .move_to(Point::new(0.0, 250.0));
-        let layout = Layout::new(&node);
+        control.layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, viewport.size()),
+        );
+        let layout = Layout::new(tree.size).move_to(Point::new(0.0, 250.0));
         assert!(control
-            .as_widget_mut()
-            .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO,)
+            .overlay(
+                &mut tree,
+                layout,
+                &renderer,
+                &viewport,
+                Vector::ZERO,
+                viewport.size()
+            )
             .is_empty());
-        control.as_widget_mut().operate(
+        control.operate(
             &mut tree,
             layout,
+            &viewport,
             &renderer,
             &mut focusable::focus::<()>(widget::Id::new("selected-profile")),
         );
         let mut hint = control
-            .as_widget_mut()
-            .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO)
+            .overlay(
+                &mut tree,
+                layout,
+                &renderer,
+                &viewport,
+                Vector::ZERO,
+                viewport.size(),
+            )
             .into_iter()
             .next()
             .expect("keyboard focus reveals the selected account's full value");
-        let hint_bounds = hint
-            .as_overlay_mut()
-            .layout(&renderer, viewport.size())
-            .bounds();
+        #[derive(Default)]
+        struct HintBounds(Option<Rectangle>);
+        impl widget::Operation for HintBounds {
+            fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+                visit(self);
+            }
+            fn container(
+                &mut self,
+                _id: Option<&widget::Id>,
+                bounds: Rectangle,
+                _viewport: &Rectangle,
+            ) {
+                self.0 = Some(bounds);
+            }
+        }
+        let mut hint_bounds = HintBounds::default();
+        hint.as_overlay_mut().operate(&renderer, &mut hint_bounds);
+        let hint_bounds = hint_bounds.0.expect("hint exposes its container");
         assert!(viewport.contains(hint_bounds.position()));
         assert!(hint_bounds.x + hint_bounds.width <= viewport.width);
         assert!(hint_bounds.y + hint_bounds.height <= viewport.height);
@@ -317,7 +353,7 @@ mod tests {
         );
         drop(hint);
         let mut messages = iced::advanced::shell::Bus::new();
-        control.as_widget_mut().update(
+        control.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
@@ -331,8 +367,14 @@ mod tests {
             &viewport,
         );
         assert!(control
-            .as_widget_mut()
-            .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO,)
+            .overlay(
+                &mut tree,
+                layout,
+                &renderer,
+                &viewport,
+                Vector::ZERO,
+                viewport.size()
+            )
             .is_empty());
     }
 }

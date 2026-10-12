@@ -1,4 +1,5 @@
 use iced::widget::scrollable::{Direction, Scrollbar};
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, image, mouse_area, row, scrollable, space, stack, text, Column, Row,
 };
@@ -48,24 +49,24 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     || super::player::upcoming::is_open(state);
   let mut layers = vec![if obscured { inert(base) } else { base }];
   if let Some(overlay) = list_overlay {
-    layers.push(overlay);
+    layers.push((overlay).boxed());
   }
   if state.tv.search.open {
-    layers.push(super::search::view(state));
+    layers.push((super::search::view(state)).boxed());
   }
   if super::filters::is_open(state) {
-    layers.push(super::filters::view(state));
+    layers.push((super::filters::view(state)).boxed());
   }
   if super::player::upcoming::is_open(state) {
-    layers.push(super::player::upcoming::view(state));
+    layers.push((super::player::upcoming::view(state)).boxed());
   }
   if let Some(overlay) = super::saved_browse::overlay(state) {
-    layers.push(overlay);
+    layers.push((overlay).boxed());
   }
   iced::widget::Stack::with_children(layers)
     .width(Fill)
     .height(Fill)
-    .into()
+    .boxed()
 }
 
 fn browse_view(state: &State) -> Element<'_, AppMessage> {
@@ -83,12 +84,12 @@ fn browse_view(state: &State) -> Element<'_, AppMessage> {
     container(super::settings::view(state))
       .width(width)
       .height(height)
-      .into()
+      .boxed()
   } else if matches!(state.shell.destination, Destination::SavedBrowse) {
     container(super::saved_browse::view(state))
       .width(width)
       .height(height)
-      .into()
+      .boxed()
   } else {
     tv_focus::focus(false, move |_| {
       let page = match state.shell.destination {
@@ -104,26 +105,30 @@ fn browse_view(state: &State) -> Element<'_, AppMessage> {
         right: 8.0 * scale,
         bottom: 0.0,
       }))
+      .smooth_scroll(false)
       .id(navigation::scroll_id())
-      .on_scroll(|viewport| AppMessage::Tv(Message::Scrolled(viewport.absolute_offset().y)))
+      .on_scroll(|viewport| {
+        AppMessage::Tv(Message::Scrolled(viewport.viewport.absolute_offset().y))
+      })
       .width(width + 16.0 * scale)
       .height(height + style::POSTER_CLEARANCE * scale)
-      .into()
+      .boxed()
     })
     .frame(Size::new(width, height), Alignment::Center, Alignment::End)
-    .into()
+    .boxed()
   };
   let mut content = column![page].spacing(16.0 * scale).width(Fill).height(Fill);
   if !page_footer {
     content = content.push(
-      container(
+      (container(
         text(context_hint(state))
           .size(style::META * scale)
           .line_height(iced::Pixels(28.0 * scale))
           .color(style::PALETTE.text.metadata),
       )
       .height(64.0 * scale)
-      .align_y(Alignment::Center),
+      .align_y(Alignment::Center))
+      .boxed(),
     );
   }
   let content = container(content)
@@ -140,7 +145,7 @@ fn browse_view(state: &State) -> Element<'_, AppMessage> {
       .style(style::canvas)
       .width(Fill)
       .height(Fill)
-      .into(),
+      .boxed(),
   )
 }
 
@@ -242,20 +247,21 @@ pub(super) fn horizontal_shelf<'a>(
       right: 8.0 * scale,
       bottom: 0.0,
     }))
+    .smooth_scroll(false)
     .direction(Direction::Horizontal(Scrollbar::new()))
     .id(id.clone())
-    .on_scroll(move |viewport| on_scroll(viewport.absolute_offset().x))
+    .on_scroll(move |viewport| on_scroll(viewport.viewport.absolute_offset().x))
     .width(width + 16.0 * scale)
     .height(height + style::POSTER_CLEARANCE * scale)
-    .into()
+    .boxed()
   })
   .frame(Size::new(width, height), Alignment::Center, Alignment::End)
-  .into()
+  .boxed()
 }
 
 fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
   use super::navigation::RailAction;
-  let mut items = Column::new().spacing(16.0 * scale);
+  let mut items = Column::<Element<'_, AppMessage>>::new().spacing(16.0 * scale);
   for (index, destination) in navigation::rail_actions(state).into_iter().enumerate() {
     let (label, icon, selected) = match destination {
       RailAction::Search => (state.t("tv-search"), Icon::Search, false),
@@ -292,7 +298,7 @@ fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
       RailAction::Exit => (state.t("tv-exit"), Icon::ChevronLeft, false),
     };
     items = items.push(
-      action(
+      (action(
         state,
         Focus::Rail(index),
         label,
@@ -300,11 +306,13 @@ fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         selected,
         scale,
       )
-      .width(184.0 * scale),
+      .width(184.0 * scale))
+      .boxed(),
     );
   }
   container(
     scrollable(items)
+      .smooth_scroll(false)
       .id(iced::widget::Id::new("tv-rail"))
       .height(Fill),
   )
@@ -317,7 +325,7 @@ fn rail(state: &State, scale: f32) -> Element<'_, AppMessage> {
   .width(style::RAIL * scale)
   .height(Fill)
   .style(style::rail)
-  .into()
+  .boxed()
 }
 
 pub(super) fn action<'a>(
@@ -327,7 +335,7 @@ pub(super) fn action<'a>(
   icon: Option<Icon>,
   selected: bool,
   scale: f32,
-) -> iced::widget::Container<'a, AppMessage> {
+) -> iced::widget::Container<'a, Element<'a, AppMessage>> {
   let focused = state.tv.focus == focus && super::browse_focus_visible(state);
   let enabled = navigation::action_enabled(state, focus);
   let width = match focus {
@@ -342,9 +350,12 @@ pub(super) fn action<'a>(
       } else {
         style::PALETTE.text.muted
       };
-      let mut content = Row::new().spacing(12.0 * scale).align_y(Alignment::Center);
+      let mut content = Row::<Element<'_, AppMessage>>::new()
+        .spacing(12.0 * scale)
+        .align_y(Alignment::Center);
       if let Some(icon) = icon {
-        content = content.push(icon_with_color(icon, IconSize::Custom(28.0 * scale), color));
+        content =
+          content.push((icon_with_color(icon, IconSize::Custom(28.0 * scale), color)).boxed());
       }
       let label = container(
         ellipsis_text(label.clone())
@@ -353,22 +364,28 @@ pub(super) fn action<'a>(
           .font(HEADING_FONT)
           .color(color),
       );
-      content = content.push(if matches!(focus, Focus::Rail(_) | Focus::Season(_)) {
-        label.width(Fill)
-      } else {
-        label
-      });
+      content = content.push(
+        (if matches!(focus, Focus::Rail(_) | Focus::Season(_)) {
+          label.width(Fill)
+        } else {
+          label
+        })
+        .boxed(),
+      );
       // The check remains visible when focus temporarily replaces the selected fill.
       if selected {
-        content = content.push(icon_with_color(
-          Icon::Check,
-          IconSize::Custom(if matches!(focus, Focus::Rail(_)) {
-            16.0 * scale
-          } else {
-            22.0 * scale
-          }),
-          color,
-        ));
+        content = content.push(
+          (icon_with_color(
+            Icon::Check,
+            IconSize::Custom(if matches!(focus, Focus::Rail(_)) {
+              16.0 * scale
+            } else {
+              22.0 * scale
+            }),
+            color,
+          ))
+          .boxed(),
+        );
       }
       button(
         container(content)
@@ -381,9 +398,10 @@ pub(super) fn action<'a>(
       .height(style::CONTROL * scale)
       .style(style::button_progress(style::PALETTE, progress, selected))
       .on_press_maybe(enabled.then_some(AppMessage::Tv(Message::Activate(focus))))
-      .into()
+      .boxed()
     }))
-    .on_enter(AppMessage::Tv(Message::Focus(focus))),
+    .on_enter(AppMessage::Tv(Message::Focus(focus)))
+    .boxed(),
   )
   .id(navigation::focus_id(focus))
 }
@@ -397,7 +415,7 @@ pub(super) fn clock(scale: f32) -> Element<'static, AppMessage> {
   )
   .width(112.0 * scale)
   .align_x(Alignment::End)
-  .into()
+  .boxed()
 }
 
 pub(super) fn page_title(title: String, scale: f32) -> Element<'static, AppMessage> {
@@ -415,7 +433,7 @@ pub(super) fn page_title(title: String, scale: f32) -> Element<'static, AppMessa
   .spacing(32.0 * scale)
   .align_y(Alignment::Center)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn heading<'a>(value: String, scale: f32) -> iced::widget::Text<'a> {
@@ -443,7 +461,7 @@ fn status<'a>(state: &State, message: String, scale: f32) -> Element<'a, AppMess
   ]
   .spacing(24.0 * scale)
   .padding([36.0 * scale, 0.0])
-  .into()
+  .boxed()
 }
 
 fn art<'a>(
@@ -469,12 +487,12 @@ fn art<'a>(
       } else {
         jellypilot_ui::tokens::TOKENS.radii.xl
       })
-      .into(),
+      .boxed(),
     None => container(space())
       .width(width)
       .height(height)
       .style(style::panel)
-      .into(),
+      .boxed(),
   };
   let image = if backdrop {
     backdrop_scrims(image)
@@ -515,7 +533,7 @@ fn backdrop_scrims(image: Element<'_, AppMessage>) -> Element<'_, AppMessage> {
         ..Default::default()
       })
   ]
-  .into()
+  .boxed()
 }
 
 pub(super) fn media_card<'a>(
@@ -573,7 +591,7 @@ pub(super) fn media_card<'a>(
     .height(expanded_height)
     .style(style::poster(progress))
     .on_press(AppMessage::Tv(Message::Activate(focus)))
-    .into()
+    .boxed()
   })
   .frame(
     Size::new(width, image_height),
@@ -604,14 +622,14 @@ pub(super) fn media_card<'a>(
   .width(width);
   mouse_area(container(content).id(navigation::focus_id(focus)))
     .on_enter(AppMessage::Tv(Message::Focus(focus)))
-    .into()
+    .boxed()
 }
 
 fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let Some(full) = state.full.as_ref() else {
     return status(state, state.t("tv-loading"), scale);
   };
-  let mut content = Column::new().width(Fill);
+  let mut content = Column::<Element<'_, AppMessage>>::new().width(Fill);
   if let Some(item) = full.home.data.featured_item() {
     let hero_height = 540.0 * scale;
     let width = (state.shell.window_size.width
@@ -692,19 +710,23 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .spacing(24.0 * scale),
     ]
     .spacing(20.0 * scale);
-    content = content.push(stack![hero, copy].height(hero_height));
+    content = content.push((stack![hero, copy].height(hero_height)).boxed());
   } else {
-    content = content.push(container(page_title(state.t("tv-home"), scale)).height(100.0 * scale));
+    content = content
+      .push((container(page_title(state.t("tv-home"), scale)).height(100.0 * scale)).boxed());
   }
   for (index, shelf) in full.home.data.rows().iter().enumerate() {
     let title = state.kernel.locale.message(&shelf.title);
-    let mut section = Column::new().spacing(20.0 * scale).push(
-      text(title)
-        .size(style::SECTION * scale)
-        .line_height(iced::Pixels(40.0 * scale))
-        .font(HEADING_FONT)
-        .color(style::PALETTE.text.heading),
-    );
+    let mut section = Column::<Element<'_, AppMessage>>::new()
+      .spacing(20.0 * scale)
+      .push(
+        (text(title)
+          .size(style::SECTION * scale)
+          .line_height(iced::Pixels(40.0 * scale))
+          .font(HEADING_FONT)
+          .color(style::PALETTE.text.heading))
+        .boxed(),
+      );
     match &shelf.items {
       LoadState::Ready(items) if !items.is_empty() => {
         let cards = move || {
@@ -723,62 +745,74 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
             )
           }))
           .spacing(24.0 * scale)
-          .into()
+          .boxed()
         };
-        section = section.push(horizontal_shelf(
-          state,
-          navigation::shelf_id(index),
-          if shelf.section.is_action() {
-            320.0 * scale
-          } else {
-            620.0 * scale
-          },
-          cards,
-          move |offset| {
-            AppMessage::Tv(Message::HorizontalScrolled(
-              navigation::shelf_id(index),
-              offset,
-            ))
-          },
-        ));
+        section = section.push(
+          (horizontal_shelf(
+            state,
+            navigation::shelf_id(index),
+            if shelf.section.is_action() {
+              320.0 * scale
+            } else {
+              620.0 * scale
+            },
+            cards,
+            move |offset| {
+              AppMessage::Tv(Message::HorizontalScrolled(
+                navigation::shelf_id(index),
+                offset,
+              ))
+            },
+          ))
+          .boxed(),
+        );
       }
       LoadState::Ready(_) => {
         section = section.push(
-          text(state.t("tv-empty-shelf"))
+          (text(state.t("tv-empty-shelf"))
             .size(style::BODY * scale)
-            .line_height(iced::Pixels(32.0 * scale)),
+            .line_height(iced::Pixels(32.0 * scale)))
+          .boxed(),
         );
       }
       LoadState::Failed(error) => {
         section = section.push(
-          text(state.kernel.locale.message(error))
+          (text(state.kernel.locale.message(error))
             .size(style::BODY * scale)
-            .line_height(iced::Pixels(32.0 * scale)),
+            .line_height(iced::Pixels(32.0 * scale)))
+          .boxed(),
         );
       }
       _ => {
         section = section.push(
-          text(state.t("tv-loading"))
+          (text(state.t("tv-loading"))
             .size(style::BODY * scale)
-            .line_height(iced::Pixels(32.0 * scale)),
+            .line_height(iced::Pixels(32.0 * scale)))
+          .boxed(),
         );
       }
     }
-    content = content.push(container(section).padding(iced::Padding {
-      bottom: 36.0 * scale,
-      ..Default::default()
-    }));
+    content = content.push(
+      (container(section).padding(iced::Padding {
+        bottom: 36.0 * scale,
+        ..Default::default()
+      }))
+      .boxed(),
+    );
   }
   content
-    .push(action(
-      state,
-      Focus::Retry,
-      state.t("home-retry"),
-      None,
-      false,
-      scale,
-    ))
-    .into()
+    .push(
+      (action(
+        state,
+        Focus::Retry,
+        state.t("home-retry"),
+        None,
+        false,
+        scale,
+      ))
+      .boxed(),
+    )
+    .boxed()
 }
 
 fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
@@ -860,7 +894,7 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let mut header = column![page_title(title, scale), filters].spacing(24.0 * scale);
   if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(
-      row![
+      (row![
         action(
           state,
           Focus::Header(4),
@@ -878,7 +912,8 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
           scale
         ),
       ]
-      .spacing(16.0 * scale),
+      .spacing(16.0 * scale))
+      .boxed(),
     );
   }
   let header = header.height(navigation::browse_header_height(state));
@@ -944,10 +979,10 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
                 )
                 .style(style::button_progress(style::PALETTE, progress, false))
                 .on_press(AppMessage::Tv(Message::Activate(Focus::Retry)))
-                .into()
+                .boxed()
               },
             )
-            .into(),
+            .boxed(),
           }
         },
       );
@@ -958,9 +993,9 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
     LibraryBrowseView::Inactive | LibraryBrowseView::Loading => text(state.t("tv-loading"))
       .size(style::BODY * scale)
       .color(style::PALETTE.text.metadata)
-      .into(),
+      .boxed(),
   };
-  column![header, body].width(Fill).into()
+  column![header, body].width(Fill).boxed()
 }
 
 fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
@@ -983,12 +1018,12 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         back,
         status(state, state.kernel.locale.message(error), scale)
       ]
-      .into()
+      .boxed()
     }
     _ => {
       return column![back, detail_notice(state.t("tv-loading"), scale)]
         .spacing(24.0 * scale)
-        .into()
+        .boxed()
     }
   };
   let (title, metadata, overview) = match content {
@@ -1034,43 +1069,50 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .color(style::PALETTE.text.body)
       .width((850.0 * scale).min(width));
     hero = hero
-      .push(action(
-        state,
-        Focus::DetailOverview,
-        state.t(if expanded {
-          "tv-overview-collapse"
-        } else {
-          "tv-overview-expand"
-        }),
-        Some(if expanded {
-          Icon::ChevronUp
-        } else {
-          Icon::ChevronDown
-        }),
-        false,
-        scale,
-      ))
       .push(
-        container(copy)
+        (action(
+          state,
+          Focus::DetailOverview,
+          state.t(if expanded {
+            "tv-overview-collapse"
+          } else {
+            "tv-overview-expand"
+          }),
+          Some(if expanded {
+            Icon::ChevronUp
+          } else {
+            Icon::ChevronDown
+          }),
+          false,
+          scale,
+        ))
+        .boxed(),
+      )
+      .push(
+        (container(copy)
           .height(if expanded {
             iced::Length::Fit
           } else {
             iced::Length::Fixed(128.0 * scale)
           })
           .clip(true)
-          .id(iced::widget::Id::new("tv-detail-overview")),
+          .id(iced::widget::Id::new("tv-detail-overview")))
+        .boxed(),
       );
   }
-  let mut actions = Row::new().spacing(20.0 * scale);
+  let mut actions = Row::<Element<'_, AppMessage>>::new().spacing(20.0 * scale);
   if navigation::detail_playable(state).is_some() {
-    actions = actions.push(action(
-      state,
-      Focus::DetailPlay,
-      detail_state::play_label(state),
-      Some(Icon::Play),
-      false,
-      scale,
-    ));
+    actions = actions.push(
+      (action(
+        state,
+        Focus::DetailPlay,
+        detail_state::play_label(state),
+        Some(Icon::Play),
+        false,
+        scale,
+      ))
+      .boxed(),
+    );
   }
   let (item_id, favorite) = match content {
     DetailContent::Item(item) => (&item.id, item.favorite),
@@ -1078,47 +1120,56 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
   };
   let watchlisted = full.personal_lists.watchlist_ids.contains(item_id);
   actions = actions
-    .push(action(
-      state,
-      Focus::DetailWatchlist,
-      state.t(if watchlisted {
-        "detail-watchlisted"
-      } else {
-        "detail-watchlist-add"
-      }),
-      Some(if watchlisted {
-        Icon::BookmarkFilled
-      } else {
-        Icon::Bookmark
-      }),
-      watchlisted,
-      scale,
-    ))
-    .push(action(
-      state,
-      Focus::DetailFavorite,
-      state.t(if favorite {
-        "detail-favorited"
-      } else {
-        "detail-favorite"
-      }),
-      Some(if favorite {
-        Icon::HeartFilled
-      } else {
-        Icon::Heart
-      }),
-      favorite,
-      scale,
-    ))
-    .push(action(
-      state,
-      Focus::DetailMenu,
-      state.t("tv-more"),
-      Some(Icon::List),
-      false,
-      scale,
-    ));
-  hero = hero.push(actions);
+    .push(
+      (action(
+        state,
+        Focus::DetailWatchlist,
+        state.t(if watchlisted {
+          "detail-watchlisted"
+        } else {
+          "detail-watchlist-add"
+        }),
+        Some(if watchlisted {
+          Icon::BookmarkFilled
+        } else {
+          Icon::Bookmark
+        }),
+        watchlisted,
+        scale,
+      ))
+      .boxed(),
+    )
+    .push(
+      (action(
+        state,
+        Focus::DetailFavorite,
+        state.t(if favorite {
+          "detail-favorited"
+        } else {
+          "detail-favorite"
+        }),
+        Some(if favorite {
+          Icon::HeartFilled
+        } else {
+          Icon::Heart
+        }),
+        favorite,
+        scale,
+      ))
+      .boxed(),
+    )
+    .push(
+      (action(
+        state,
+        Focus::DetailMenu,
+        state.t("tv-more"),
+        Some(Icon::List),
+        false,
+        scale,
+      ))
+      .boxed(),
+    );
+  hero = hero.push((actions).boxed());
   let mut page = column![
     stack![container(hero).height(iced::Length::Fit.min(570.0 * scale))].push_under(backdrop)
   ]
@@ -1135,41 +1186,46 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
         scale,
       )
       .width(196.0 * scale)
-      .into()
+      .boxed()
     }))
     .spacing(24.0 * scale);
     page = page.push(
-      scrollable(seasons)
+      (scrollable(seasons)
+        .smooth_scroll(false)
         .direction(Direction::Horizontal(Scrollbar::new()))
         .id(iced::widget::Id::new("tv-seasons"))
         .on_scroll(|viewport| {
           AppMessage::Tv(Message::HorizontalScrolled(
             iced::widget::Id::new("tv-seasons"),
-            viewport.absolute_offset().x,
+            viewport.viewport.absolute_offset().x,
           ))
         })
-        .height(80.0 * scale),
+        .height(80.0 * scale))
+      .boxed(),
     );
     if show.seasons.is_empty() {
-      page = page.push(detail_notice(state.t("detail-no-seasons"), scale));
+      page = page.push((detail_notice(state.t("detail-no-seasons"), scale)).boxed());
     }
   }
   if let Some(episodes) = detail_state::episodes(state) {
     if !matches!(episodes, LoadState::Idle) {
       if matches!(content, DetailContent::Item(_)) {
-        page = page.push(heading(state.t("detail-season-neighbors"), scale));
+        page = page.push((heading(state.t("detail-season-neighbors"), scale)).boxed());
       }
       match episodes {
         LoadState::Ready(episodes) => {
           if episodes.episodes.is_empty() && !episodes.has_more {
-            page = page.push(detail_notice(
-              state.t(if matches!(content, DetailContent::Show(_)) {
-                "detail-no-episodes"
-              } else {
-                "detail-no-neighbors"
-              }),
-              scale,
-            ));
+            page = page.push(
+              (detail_notice(
+                state.t(if matches!(content, DetailContent::Show(_)) {
+                  "detail-no-episodes"
+                } else {
+                  "detail-no-neighbors"
+                }),
+                scale,
+              ))
+              .boxed(),
+            );
           } else {
             let cards = move || {
               let mut cards =
@@ -1207,37 +1263,42 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
                 .spacing(24.0 * scale)
                 .width(320.0 * scale);
                 if let Some(LoadState::Failed(error)) = append {
-                  more = more.push(detail_notice(state.kernel.locale.message(error), scale));
+                  more =
+                    more.push((detail_notice(state.kernel.locale.message(error), scale)).boxed());
                 }
                 cards = cards.push(
-                  container(more)
+                  (container(more)
                     .width(320.0 * scale)
                     .height(320.0 * scale)
-                    .align_y(Alignment::Center),
+                    .align_y(Alignment::Center))
+                  .boxed(),
                 );
               }
-              cards.into()
+              cards.boxed()
             };
-            page = page.push(horizontal_shelf(
-              state,
-              iced::widget::Id::new("tv-episodes"),
-              340.0 * scale,
-              cards,
-              |offset| {
-                AppMessage::Tv(Message::HorizontalScrolled(
-                  iced::widget::Id::new("tv-episodes"),
-                  offset,
-                ))
-              },
-            ));
+            page = page.push(
+              (horizontal_shelf(
+                state,
+                iced::widget::Id::new("tv-episodes"),
+                340.0 * scale,
+                cards,
+                |offset| {
+                  AppMessage::Tv(Message::HorizontalScrolled(
+                    iced::widget::Id::new("tv-episodes"),
+                    offset,
+                  ))
+                },
+              ))
+              .boxed(),
+            );
             if !episodes.has_more {
-              page = page.push(detail_notice(state.t("tv-episodes-complete"), scale));
+              page = page.push((detail_notice(state.t("tv-episodes-complete"), scale)).boxed());
             }
           }
         }
         LoadState::Failed(error) => {
           page = page.push(
-            column![
+            (column![
               detail_notice(state.kernel.locale.message(error), scale),
               action(
                 state,
@@ -1248,15 +1309,18 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
                 scale
               )
             ]
-            .spacing(24.0 * scale),
+            .spacing(24.0 * scale))
+            .boxed(),
           );
         }
-        LoadState::Loading => page = page.push(detail_notice(state.t("tv-loading"), scale)),
+        LoadState::Loading => {
+          page = page.push((detail_notice(state.t("tv-loading"), scale)).boxed())
+        }
         LoadState::Idle => {}
       }
     }
   }
-  page.into()
+  page.boxed()
 }
 
 fn detail_notice<'a>(message: String, scale: f32) -> Element<'a, AppMessage> {
@@ -1264,12 +1328,13 @@ fn detail_notice<'a>(message: String, scale: f32) -> Element<'a, AppMessage> {
     .size(style::BODY * scale)
     .line_height(iced::Pixels(32.0 * scale))
     .color(style::PALETTE.text.body)
-    .into()
+    .boxed()
 }
 
 #[cfg(test)]
 pub(super) mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
   use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
 
   pub(crate) fn item(id: &str) -> VideoLibraryItem {
@@ -1286,7 +1351,7 @@ pub(super) mod tests {
 
   #[tokio::test]
   async fn home_long_copy_keeps_hero_actions_inside_the_hero_frame() {
-    use iced::advanced::{widget, Layout};
+    use iced::advanced::widget;
 
     #[derive(Default)]
     struct Actions(Vec<iced::Rectangle>);
@@ -1294,7 +1359,12 @@ pub(super) mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: iced::Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if [Focus::HeroPlay, Focus::HeroDetail, Focus::HeroWatchlist]
           .iter()
           .any(|focus| id == Some(&navigation::focus_id(*focus)))
@@ -1338,8 +1408,9 @@ pub(super) mod tests {
       let scale = style::scale(bounds.width);
       let mut page = home(&state, scale);
       let mut tree = Tree::new(&page);
-      tree.diff(page.as_widget_mut());
-      let node = page.as_widget_mut().layout(
+      tree.diff(&mut page);
+      let node = crate::app::test_support::layout_widget(
+        &mut page,
         &mut tree,
         &renderer,
         &layout::Limits::new(
@@ -1348,9 +1419,13 @@ pub(super) mod tests {
         ),
       );
       let mut actions = Actions::default();
-      page
-        .as_widget_mut()
-        .operate(&mut tree, Layout::new(&node), &renderer, &mut actions);
+      page.operate(
+        &mut tree,
+        node.layout(),
+        &iced::Rectangle::with_size(node.size()),
+        &renderer,
+        &mut actions,
+      );
       assert_eq!(actions.0.len(), 3);
       for action in actions.0 {
         assert!(
@@ -1388,15 +1463,16 @@ pub(super) mod tests {
           .width(width)
           .height(image_height)
           .content_fit(ContentFit::Cover)
-          .into(),
+          .boxed(),
       );
       let mut hero: Element<'_, AppMessage> = stack![background, space()]
         .width(width)
         .height(parent_height)
-        .into();
+        .boxed();
       let mut tree = Tree::new(&hero);
-      tree.diff(hero.as_widget_mut());
-      let node = hero.as_widget_mut().layout(
+      tree.diff(&mut hero);
+      let node = crate::app::test_support::layout_widget(
+        &mut hero,
         &mut tree,
         &renderer,
         &layout::Limits::new(iced::Size::ZERO, iced::Size::new(width, parent_height)),
@@ -1454,8 +1530,9 @@ pub(super) mod tests {
         scale,
       );
       let mut tree = Tree::new(&cell);
-      tree.diff(cell.as_widget_mut());
-      let node = cell.as_widget_mut().layout(
+      tree.diff(&mut cell);
+      let node = crate::app::test_support::layout_widget(
+        &mut cell,
         &mut tree,
         &renderer,
         &layout::Limits::new(
@@ -1471,8 +1548,9 @@ pub(super) mod tests {
       assert!(node.size().width <= metrics.cell_width + 0.1);
       let mut page = view(&state);
       let mut tree = Tree::new(&page);
-      tree.diff(page.as_widget_mut());
-      let node = page.as_widget_mut().layout(
+      tree.diff(&mut page);
+      let node = crate::app::test_support::layout_widget(
+        &mut page,
         &mut tree,
         &renderer,
         &layout::Limits::new(iced::Size::ZERO, bounds),
@@ -1483,7 +1561,7 @@ pub(super) mod tests {
 
   #[tokio::test]
   async fn tv_settings_keeps_its_nested_scroll_viewport_bounded_at_1080p_and_720p() {
-    use iced::advanced::{widget, Layout};
+    use iced::advanced::widget;
 
     #[derive(Default)]
     struct SettingsViewport(Option<iced::Rectangle>);
@@ -1497,7 +1575,7 @@ pub(super) mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: iced::Rectangle,
-        _content: iced::Rectangle,
+        _content: iced::Size,
         _translation: iced::Vector,
         _state: &mut dyn widget::operation::Scrollable,
       ) {
@@ -1507,7 +1585,7 @@ pub(super) mod tests {
       }
     }
 
-    fn assert_finite(node: &layout::Node) {
+    fn assert_finite(node: &crate::app::test_support::LayoutGeometry) {
       let bounds = node.bounds();
       assert!(
         [bounds.x, bounds.y, bounds.width, bounds.height]
@@ -1532,8 +1610,9 @@ pub(super) mod tests {
       state.shell.window_size = bounds;
       let mut page = view(&state);
       let mut tree = Tree::new(&page);
-      tree.diff(page.as_widget_mut());
-      let node = page.as_widget_mut().layout(
+      tree.diff(&mut page);
+      let node = crate::app::test_support::layout_widget(
+        &mut page,
         &mut tree,
         &renderer,
         &layout::Limits::new(Size::ZERO, bounds),
@@ -1541,9 +1620,13 @@ pub(super) mod tests {
       assert_eq!(node.size(), bounds);
       assert_finite(&node);
       let mut viewport = SettingsViewport::default();
-      page
-        .as_widget_mut()
-        .operate(&mut tree, Layout::new(&node), &renderer, &mut viewport);
+      page.operate(
+        &mut tree,
+        node.layout(),
+        &iced::Rectangle::with_size(node.size()),
+        &renderer,
+        &mut viewport,
+      );
       let viewport = viewport.0.expect("settings detail scroll viewport");
       assert!(viewport.height > 0.0 && viewport.height < bounds.height);
       assert!(viewport.y >= 0.0 && viewport.y + viewport.height <= bounds.height);

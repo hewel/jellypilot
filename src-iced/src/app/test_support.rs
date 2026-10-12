@@ -366,3 +366,83 @@ pub(crate) async fn drain_state_task(
     }
   }
 }
+
+/// Captures the geometry produced by a real widget layout without retaining its
+/// state or borrowing the widget tree. Child bounds remain relative to parents.
+#[derive(Debug)]
+pub(crate) struct LayoutGeometry {
+  bounds: iced::Rectangle,
+  children: Vec<LayoutGeometry>,
+}
+
+impl LayoutGeometry {
+  pub(crate) fn from_tree(tree: &iced::advanced::widget::Tree) -> Self {
+    Self {
+      bounds: iced::Rectangle::new(iced::Point::ORIGIN + tree.translation, tree.size),
+      children: tree.children.iter().map(Self::from_tree).collect(),
+    }
+  }
+
+  pub(crate) fn move_to(mut self, position: iced::Point) -> Self {
+    self.bounds.x = position.x;
+    self.bounds.y = position.y;
+    self
+  }
+
+  pub(crate) fn bounds(&self) -> iced::Rectangle {
+    self.bounds
+  }
+  pub(crate) fn size(&self) -> iced::Size {
+    self.bounds.size()
+  }
+  pub(crate) fn children(&self) -> &[Self] {
+    &self.children
+  }
+  pub(crate) fn layout(&self) -> iced::advanced::Layout {
+    iced::advanced::Layout::new(self.size()).move_to(self.bounds.position())
+  }
+
+  pub(crate) fn absolute_bounds(&self) -> Vec<iced::Rectangle> {
+    fn visit(node: &LayoutGeometry, parent: iced::Vector, result: &mut Vec<iced::Rectangle>) {
+      let bounds = node.bounds + parent;
+      result.push(bounds);
+      for child in &node.children {
+        visit(child, iced::Vector::new(bounds.x, bounds.y), result);
+      }
+    }
+    let mut result = Vec::new();
+    visit(self, iced::Vector::ZERO, &mut result);
+    result
+  }
+}
+
+pub(crate) fn layout_widget(
+  widget: &mut dyn iced::advanced::Widget<Message, iced::Theme, iced::Renderer>,
+  tree: &mut iced::advanced::widget::Tree,
+  renderer: &iced::Renderer,
+  limits: &iced::advanced::layout::Limits,
+) -> LayoutGeometry {
+  widget.layout(tree, renderer, limits);
+  LayoutGeometry::from_tree(tree)
+}
+
+/// Process the presentation frame after a layout or widget operation, as the native
+/// runtime does before drawing. Returns messages for callers that also advance
+/// application state; geometry-only fixtures can discard them.
+pub(crate) fn redraw_ui(
+  ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+  renderer: &mut iced::Renderer,
+) -> Vec<Message> {
+  let mut bus = iced::advanced::shell::Bus::new();
+  ui.update(
+    &iced::window::Headless,
+    &iced::advanced::shell::Waker::noop(),
+    &[iced::Event::Window(iced::window::Event::RedrawRequested(
+      iced::time::Instant::now(),
+    ))],
+    iced::mouse::Cursor::Unavailable,
+    renderer,
+    &mut bus,
+  );
+  bus.drain().map(|(message, _)| message).collect()
+}

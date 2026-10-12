@@ -1,5 +1,6 @@
 //! Living-room settings presentation over the shared preference and account reducers.
 
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, mouse_area, opaque, row, rule, scrollable, space, stack, text, Column,
 };
@@ -484,12 +485,13 @@ fn reveal(state: &State) -> Task<AppMessage> {
   let index = state.tv.settings.focus.row().unwrap_or(0);
   let scale = style::scale(state.shell.window_size.width);
   // The standard eight rows fit at reference size; longer profile lists scroll by row.
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     "tv-settings-detail",
-    iced::widget::operation::AbsoluteOffset {
+    iced::widget::operation::scrollable::AbsoluteOffset {
       x: 0.0,
       y: index.saturating_sub(6) as f32 * 88.0 * scale,
     },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
@@ -1079,45 +1081,50 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     .and_then(|index| values.get(index))
     .map(|row| row.help.clone())
     .unwrap_or_default();
-  let mut categories = Column::new().spacing(8.0 * scale).width(Fill);
+  let mut categories = Column::<Element<'_, AppMessage>>::new()
+    .spacing(8.0 * scale)
+    .width(Fill);
   for (index, category) in Category::ALL.into_iter().enumerate() {
     let focused = !modal && state.tv.settings.focus == Focus::Category(index);
     let label = state.t(category.key());
-    categories = categories.push(focus(focused, move |progress| {
-      button(
-        row![
-          icon_with_color(
-            category.icon(),
-            IconSize::Custom(28.0 * scale),
-            style::foreground(
-              style::PALETTE,
-              progress,
-              category == state.tv.settings.category
-            )
-          ),
-          text(label.clone())
-            .size(style::BODY * scale)
-            .width(Fill)
-            .color(style::foreground(
-              style::PALETTE,
-              progress,
-              category == state.tv.settings.category
-            ))
-        ]
-        .spacing(14.0 * scale)
-        .align_y(Alignment::Center),
-      )
-      .width(Fill)
-      .height(80.0 * scale)
-      .padding([0.0, 16.0 * scale])
-      .style(style::button_progress(
-        style::PALETTE,
-        progress,
-        category == state.tv.settings.category,
-      ))
-      .on_press(message(Message::Category(category)))
-      .into()
-    }));
+    categories = categories.push(
+      (focus(focused, move |progress| {
+        button(
+          row![
+            icon_with_color(
+              category.icon(),
+              IconSize::Custom(28.0 * scale),
+              style::foreground(
+                style::PALETTE,
+                progress,
+                category == state.tv.settings.category
+              )
+            ),
+            text(label.clone())
+              .size(style::BODY * scale)
+              .width(Fill)
+              .color(style::foreground(
+                style::PALETTE,
+                progress,
+                category == state.tv.settings.category
+              ))
+          ]
+          .spacing(14.0 * scale)
+          .align_y(Alignment::Center),
+        )
+        .width(Fill)
+        .height(80.0 * scale)
+        .padding([0.0, 16.0 * scale])
+        .style(style::button_progress(
+          style::PALETTE,
+          progress,
+          category == state.tv.settings.category,
+        ))
+        .on_press(message(Message::Category(category)))
+        .boxed()
+      }))
+      .boxed(),
+    );
   }
   let categories = column![
     categories,
@@ -1131,7 +1138,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   .spacing(24.0 * scale)
   .width(360.0 * scale)
   .height(Fill);
-  let mut detail = Column::new().width(Fill);
+  let mut detail = Column::<Element<'_, AppMessage>>::new().width(Fill);
   if state.tv.settings.category == Category::Remote {
     for (label, value) in [
       ("tv-settings-directions", "tv-settings-navigation"),
@@ -1140,44 +1147,47 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
       ("tv-settings-playpause", "tv-settings-space"),
     ] {
       detail = detail.push(
-        container(
+        (container(
           row![
             text(state.t(label)).size(style::BODY * scale).width(Fill),
             text(state.t(value)).size(style::META * scale)
           ]
           .spacing(24.0 * scale),
         )
-        .padding([20.0 * scale, 24.0 * scale]),
+        .padding([20.0 * scale, 24.0 * scale]))
+        .boxed(),
       );
     }
     detail = detail.push(
-      container(
+      (container(
         text(state.t("tv-settings-remote-help"))
           .size(style::META * scale)
           .color(style::PALETTE.text.metadata),
       )
-      .padding(24.0 * scale),
+      .padding(24.0 * scale))
+      .boxed(),
     );
   }
   if state.tv.settings.category == Category::About {
     detail = detail.push(
-      container(
+      (container(
         text(state.format(
           "settings-version",
           &[("version", env!("CARGO_PKG_VERSION").into())],
         ))
         .size(style::BODY * scale),
       )
-      .padding([20.0 * scale, 24.0 * scale]),
+      .padding([20.0 * scale, 24.0 * scale]))
+      .boxed(),
     );
   }
   for (index, item) in values.into_iter().enumerate() {
     if let Some(group) = item.group {
       if group == "tv-settings-related" {
-        detail = detail.push(space::vertical().height(24.0 * scale));
+        detail = detail.push((space::vertical().height(24.0 * scale)).boxed());
       } else {
         detail = detail.push(
-          container(
+          (container(
             text(state.t(group))
               .size(style::SECTION * scale)
               .font(HEADING_FONT)
@@ -1187,30 +1197,34 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
             top: if index == 0 { 0.0 } else { 24.0 * scale },
             bottom: 12.0 * scale,
             ..Default::default()
-          }),
+          }))
+          .boxed(),
         );
       }
     }
-    detail = detail.push(setting_row(state, index, item, !modal, scale));
+    detail = detail.push((setting_row(state, index, item, !modal, scale)).boxed());
   }
   if state.tv.settings.category == Category::About {
     if let Some(saved) = &state.settings.view.saved {
-      detail = detail.push(text(state.kernel.locale.message(saved)).size(style::META * scale));
+      detail =
+        detail.push((text(state.kernel.locale.message(saved)).size(style::META * scale)).boxed());
     }
     if let Some(error) = &state.settings.view.error {
       detail = detail.push(
-        text(state.kernel.locale.message(error))
+        (text(state.kernel.locale.message(error))
           .size(style::META * scale)
-          .color(style::PALETTE.colors.error),
+          .color(style::PALETTE.colors.error))
+        .boxed(),
       );
     }
   }
   if state.tv.settings.category == Category::Account {
     if let Some(error) = accounts::view(state).error {
       detail = detail.push(
-        text(state.kernel.locale.message(error))
+        (text(state.kernel.locale.message(error))
           .size(style::META * scale)
-          .color(style::PALETTE.colors.error),
+          .color(style::PALETTE.colors.error))
+        .boxed(),
       );
     }
   }
@@ -1228,6 +1242,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     row![
       categories,
       scrollable(detail)
+        .smooth_scroll(false)
         .id("tv-settings-detail")
         .width(Fill)
         .height(Fill)
@@ -1272,9 +1287,9 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
           .align_x(Alignment::End)
       )
     ]
-    .into()
+    .boxed()
   } else {
-    content.into()
+    content.boxed()
   }
 }
 
@@ -1309,7 +1324,7 @@ fn setting_row(
       ]
       .spacing(12.0 * scale)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     } else {
       let mut content = row![text(item.value.clone())
         .size(style::META * scale)
@@ -1317,13 +1332,16 @@ fn setting_row(
       .spacing(12.0 * scale)
       .align_y(Alignment::Center);
       if !matches!(item.action, Action::Unavailable) {
-        content = content.push(icon_with_color(
-          Icon::ChevronRight,
-          IconSize::Custom(24.0 * scale),
-          foreground,
-        ));
+        content = content.push(
+          (icon_with_color(
+            Icon::ChevronRight,
+            IconSize::Custom(24.0 * scale),
+            foreground,
+          ))
+          .boxed(),
+        );
       }
-      content.into()
+      content.boxed()
     };
     let control = button(
       row![
@@ -1352,9 +1370,9 @@ fn setting_row(
     }));
     mouse_area(control)
       .on_enter(message(Message::Focus(Focus::Row(index))))
-      .into()
+      .boxed()
   })
-  .into()
+  .boxed()
 }
 
 fn focus_hint(state: &State) -> String {
@@ -1430,34 +1448,39 @@ fn selector_scroll(state: &State) -> Task<AppMessage> {
   } else {
     return Task::none();
   };
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     "tv-settings-selector",
-    iced::widget::operation::AbsoluteOffset { x: 0.0, y },
+    iced::widget::operation::scrollable::AbsoluteOffset { x: 0.0, y },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
 fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let surface = &state.tv.settings;
-  let mut content = Column::new().spacing(24.0 * scale).width(Fill);
+  let mut content = Column::<Element<'_, AppMessage>>::new()
+    .spacing(24.0 * scale)
+    .width(Fill);
   if let Some(selector) = &surface.selector {
     content = content.push(
-      text(selector.title.clone())
+      (text(selector.title.clone())
         .size(style::TITLE * scale)
         .line_height(iced::Pixels(48.0 * scale))
-        .font(HEADING_FONT),
+        .font(HEADING_FONT))
+      .boxed(),
     );
     if let Some(saved) = selector
       .selected
       .and_then(|index| selector.choices.get(index))
     {
       content = content.push(
-        text(state.format(
+        (text(state.format(
           "tv-settings-saved-value",
           &[("value", saved.label.clone().into())],
         ))
         .size(style::META * scale)
         .line_height(iced::Pixels(28.0 * scale))
-        .color(style::PALETTE.text.metadata),
+        .color(style::PALETTE.text.metadata))
+        .boxed(),
       );
     }
     for (index, choice) in selector.choices.iter().enumerate() {
@@ -1469,66 +1492,72 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
       } else {
         choice.detail.clone()
       };
-      content = content.push(focus(focused, move |progress| {
-        let mut labels = column![text(choice.label.clone())
-          .size(style::BODY * scale)
-          .line_height(iced::Pixels(32.0 * scale))
-          .color(style::foreground(style::PALETTE, progress, selected))]
-        .spacing(4.0 * scale);
-        if !detail.is_empty() {
-          labels = labels.push(
-            text(detail.clone())
-              .size(style::META * scale)
-              .line_height(iced::Pixels(28.0 * scale))
-              .color(style::secondary_foreground(style::PALETTE, progress)),
-          );
-        }
-        container(
-          button(
-            row![
-              icon_with_color(
-                if selected {
-                  Icon::CircleDot
-                } else {
-                  Icon::Circle
-                },
-                IconSize::Custom(28.0 * scale),
-                if selected {
-                  style::PALETTE.colors.secondary
-                } else {
-                  style::secondary_foreground(style::PALETTE, progress)
-                }
-              ),
-              labels.width(Fill)
-            ]
-            .spacing(20.0 * scale)
-            .align_y(Alignment::Center),
+      content = content.push(
+        (focus(focused, move |progress| {
+          let mut labels = column![text(choice.label.clone())
+            .size(style::BODY * scale)
+            .line_height(iced::Pixels(32.0 * scale))
+            .color(style::foreground(style::PALETTE, progress, selected))]
+          .spacing(4.0 * scale);
+          if !detail.is_empty() {
+            labels = labels.push(
+              text(detail.clone())
+                .size(style::META * scale)
+                .line_height(iced::Pixels(28.0 * scale))
+                .color(style::secondary_foreground(style::PALETTE, progress))
+                .boxed(),
+            );
+          }
+          container(
+            button(
+              row![
+                icon_with_color(
+                  if selected {
+                    Icon::CircleDot
+                  } else {
+                    Icon::Circle
+                  },
+                  IconSize::Custom(28.0 * scale),
+                  if selected {
+                    style::PALETTE.colors.secondary
+                  } else {
+                    style::secondary_foreground(style::PALETTE, progress)
+                  }
+                ),
+                labels.width(Fill)
+              ]
+              .spacing(20.0 * scale)
+              .align_y(Alignment::Center),
+            )
+            .width(Fill)
+            .height(104.0 * scale)
+            .padding([20.0 * scale, 24.0 * scale])
+            .style(style::button_progress(style::PALETTE, progress, selected))
+            .on_press(message(Message::Choice(index))),
           )
-          .width(Fill)
-          .height(104.0 * scale)
-          .padding([20.0 * scale, 24.0 * scale])
-          .style(style::button_progress(style::PALETTE, progress, selected))
-          .on_press(message(Message::Choice(index))),
-        )
-        .id(format!("tv-settings-choice-{index}"))
-        .into()
-      }));
+          .id(format!("tv-settings-choice-{index}"))
+          .boxed()
+        }))
+        .boxed(),
+      );
     }
     if selector.kind == Setting::Decoder && matches!(surface.save, Save::Idle) {
       content = content.push(
-        text(state.t("tv-settings-decoder-impact"))
+        (text(state.t("tv-settings-decoder-impact"))
           .size(style::META * scale)
           .line_height(iced::Pixels(32.0 * scale))
-          .color(style::PALETTE.text.metadata),
+          .color(style::PALETTE.text.metadata))
+        .boxed(),
       );
     }
   }
   match &surface.save {
     Save::Pending(_) => {
       content = content.push(
-        text(state.t("tv-settings-saving"))
+        (text(state.t("tv-settings-saving"))
           .size(style::BODY * scale)
-          .line_height(iced::Pixels(32.0 * scale)),
+          .line_height(iced::Pixels(32.0 * scale)))
+        .boxed(),
       )
     }
     Save::Failed { error, .. } => {
@@ -1544,13 +1573,14 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .spacing(8.0 * scale);
       if error != &state.t("settings-save-error") {
         explanation = explanation.push(
-          text(error.clone())
+          (text(error.clone())
             .size(style::META * scale)
-            .line_height(iced::Pixels(32.0 * scale)),
+            .line_height(iced::Pixels(32.0 * scale)))
+          .boxed(),
         );
       }
-      content = content.push(explanation).push(
-        container(
+      content = content.push((explanation).boxed()).push(
+        (container(
           button(
             text(state.t("tv-settings-retry"))
               .size(style::BODY * scale)
@@ -1561,7 +1591,8 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
           .style(style::button(style::PALETTE, true, false))
           .on_press(message(Message::Retry)),
         )
-        .id("tv-settings-retry"),
+        .id("tv-settings-retry"))
+        .boxed(),
       );
     }
     Save::Idle => {}
@@ -1590,6 +1621,7 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
   ];
   let panel = column![
     scrollable(content)
+      .smooth_scroll(false)
       .id("tv-settings-selector")
       .height(iced::Length::Shrink.max(selector_viewport_height(state, scale))),
     hints,
@@ -1601,7 +1633,7 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
     .width(768.0 * scale)
     .height(iced::Length::Shrink)
     .style(style::panel)
-    .into()
+    .boxed()
 }
 
 #[cfg(test)]
@@ -1763,7 +1795,12 @@ mod tests {
         visit(self);
       }
 
-      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("tv-settings-selector-panel")) {
           self.panel = Some(bounds);
         } else if id == Some(&widget::Id::new("tv-settings-choice-1")) {
@@ -1777,10 +1814,11 @@ mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: Rectangle,
-        content: Rectangle,
+        content: iced::Size,
         translation: Vector,
         _state: &mut dyn widget::operation::Scrollable,
       ) {
+        let content = iced::Rectangle::new(bounds.position(), content);
         if id == Some(&widget::Id::new("tv-settings-selector")) {
           self.scroll = Some((bounds, content, translation));
         }
@@ -1832,6 +1870,8 @@ mod tests {
             }
           }
         }
+        // Measure the frame presented after the instantaneous scroll operation.
+        drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
         let mut bounds = Bounds::default();
         ui.operate(&renderer, &mut bounds);
         let panel = bounds.panel.expect("decoder panel");

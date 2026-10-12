@@ -355,12 +355,13 @@ pub(super) fn reveal(state: &State) -> Task<AppMessage> {
   } else {
     panel.focused as f32 * 88.0
   };
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     "tv-player-tools-body",
-    iced::widget::operation::AbsoluteOffset {
+    iced::widget::operation::scrollable::AbsoluteOffset {
       x: 0.0,
       y: offset * style::scale(state.shell.window_size.width),
     },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
@@ -540,10 +541,10 @@ fn control<'a>(
       )
     })
     .on_press_maybe(enabled.then(|| message(super::Message::Tools(event.clone()))))
-    .into()
+    .boxed()
   }))
   .id(iced::widget::Id::from(format!("tv-player-tool-{action:?}")))
-  .into()
+  .boxed()
 }
 
 pub(super) fn view(
@@ -559,18 +560,19 @@ pub(super) fn view(
     Panel::Loop => "ab-loop-title",
     _ => "tv-player-settings",
   };
-  let mut body = Column::new().spacing(24.0 * scale);
+  let mut body = Column::<Element<'_, AppMessage>>::new().spacing(24.0 * scale);
   for (index, choice) in state.tv.player.choices.iter().enumerate() {
     if let ChoiceAction::Tool(action) = choice.action {
-      body = body.push(control(state, index, choice, action, scale));
+      body = body.push((control(state, index, choice, action, scale)).boxed());
     }
   }
   for hint in status(state, panel) {
     body = body.push(
-      text(hint)
+      (text(hint)
         .size(style::META * scale)
         .line_height(iced::Pixels(28.0 * scale))
-        .color(style::PALETTE.text.body),
+        .color(style::PALETTE.text.body))
+      .boxed(),
     );
   }
   let body = crate::app::view::playback_tools::guard_scope(scope(state), body);
@@ -588,26 +590,22 @@ pub(super) fn settings_view(state: &State, bounds: Size, scale: f32) -> Element<
     .size(style::BODY * scale)
     .line_height(iced::Pixels(32.0 * scale))]
   .spacing(24.0 * scale);
-  let speeds = state
-    .tv
-    .player
-    .choices
-    .iter()
-    .take(5)
-    .enumerate()
-    .fold(row![], |row, (index, choice)| {
-      row.push(choice_button(state, index, choice, focused, scale))
-    });
-  body = body.push(speeds.spacing(12.0 * scale));
+  let speeds = state.tv.player.choices.iter().take(5).enumerate().fold(
+    iced::widget::Row::<Element<'_, AppMessage>>::new(),
+    |row, (index, choice)| row.push((choice_button(state, index, choice, focused, scale)).boxed()),
+  );
+  body = body.push((speeds.spacing(12.0 * scale)).boxed());
   for (index, choice) in state.tv.player.choices.iter().enumerate().skip(5) {
     match choice.action {
-      ChoiceAction::Tool(action) => body = body.push(control(state, index, choice, action, scale)),
+      ChoiceAction::Tool(action) => {
+        body = body.push((control(state, index, choice, action, scale)).boxed())
+      }
       ChoiceAction::Close => {}
-      _ => body = body.push(choice_button(state, index, choice, focused, scale)),
+      _ => body = body.push((choice_button(state, index, choice, focused, scale)).boxed()),
     }
   }
   body = body.push(
-    text(
+    (text(
       state.t(if choice_enabled(state, &ChoiceAction::SessionSkip) {
         "tv-player-session-skip-hint"
       } else {
@@ -616,12 +614,13 @@ pub(super) fn settings_view(state: &State, bounds: Size, scale: f32) -> Element<
     )
     .size(style::META * scale)
     .line_height(iced::Pixels(28.0 * scale))
-    .color(style::PALETTE.text.body),
+    .color(style::PALETTE.text.body))
+    .boxed(),
   );
   frame(
     state,
     state.t("tv-player-settings"),
-    body.into(),
+    body.boxed(),
     bounds,
     scale,
   )
@@ -665,6 +664,7 @@ fn frame<'a>(
     header,
     container(
       scrollable(body)
+        .smooth_scroll(false)
         .id("tv-player-tools-body")
         .height(Length::Fit.max(body_height))
     )
@@ -683,12 +683,13 @@ fn frame<'a>(
   .height(Fill)
   .align_x(Alignment::End)
   .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
   use jellypilot_mpv::playback::tools::{AbLoopView, SecondarySubtitleView};
 
   fn state() -> State {
@@ -901,7 +902,7 @@ mod tests {
 
   #[tokio::test]
   async fn tools_close_and_body_stay_reachable_in_short_viewports() {
-    use iced::advanced::{layout, renderer, renderer::Headless, widget, Layout};
+    use iced::advanced::{layout, renderer, renderer::Headless, widget};
     use jellypilot_core::locale::UiLanguage;
     let renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
       .await
@@ -929,16 +930,21 @@ mod tests {
           let scale = style::scale(size.width);
           let mut page = view(&state, panel, size, scale);
           let mut tree = widget::Tree::new(&page);
-          tree.diff(page.as_widget_mut());
-          let node = page.as_widget_mut().layout(
+          tree.diff(&mut page);
+          let node = crate::app::test_support::layout_widget(
+            &mut page,
             &mut tree,
             &renderer,
             &layout::Limits::new(Size::ZERO, size),
           );
           let mut bounds = crate::app::view::viewing_queue::tests::Bounds::default();
-          page
-            .as_widget_mut()
-            .operate(&mut tree, Layout::new(&node), &renderer, &mut bounds);
+          page.operate(
+            &mut tree,
+            node.layout(),
+            &iced::Rectangle::with_size(node.size()),
+            &renderer,
+            &mut bounds,
+          );
           let close = bounds.get("tv-player-panel-close");
           let body = bounds.get("tv-player-tools-viewport");
           assert!(close.height >= style::CONTROL * scale - 0.1);

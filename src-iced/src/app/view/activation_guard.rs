@@ -5,6 +5,7 @@
 //! do not disarm it. Keyboard/taskbar activation without intervening input is
 //! indistinguishable and therefore also protects one background click.
 
+use iced::widget::Widget as _;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
@@ -15,11 +16,11 @@ use iced::{mouse::Button, window, Element, Event, Length, Point, Rectangle, Size
 /// activation. Only messages emitted by the activating press are mapped;
 /// children still receive the press and retain their normal release behavior.
 pub fn activation_guard<'a, Message: 'static>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   on_activation: impl Fn(Message, Point) -> Message + 'a,
 ) -> Element<'a, Message> {
-  Element::new(ActivationGuard {
-    content: content.into(),
+  iced::advanced::Widget::_boxed(ActivationGuard {
+    content: content.boxed(),
     on_activation,
   })
 }
@@ -112,6 +113,8 @@ impl<Message> State<Message> {
   }
 }
 
+impl<Message, F> widget::Meta for ActivationGuard<'_, Message, F> {}
+
 impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, iced::Renderer>
   for ActivationGuard<'_, Message, F>
 {
@@ -128,7 +131,7 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
   }
 
   fn size(&self) -> Size<Length> {
-    self.content.as_widget().size()
+    self.content.size()
   }
 
   fn layout(
@@ -136,31 +139,30 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits)
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
 
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     self
       .content
-      .as_widget_mut()
-      .operate(&mut tree.children[0], layout, renderer, operation);
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
   }
 
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -177,7 +179,7 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
 
     let mut state = state.borrow_mut();
     let mut local = shell.local(&mut state.messages);
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -195,18 +197,14 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
 
   fn draw(
@@ -215,11 +213,11 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
@@ -233,18 +231,20 @@ impl<Message: 'static, F: Fn(Message, Point) -> Message> Widget<Message, Theme, 
   fn overlay<'b>(
     &'b mut self,
     tree: &'b mut widget::Tree,
-    layout: Layout<'b>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
     let state = tree.state.downcast_mut::<RefCell<State<Message>>>();
-    let children = self.content.as_widget_mut().overlay(
+    let children = self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     );
     vec![guarded_overlay(
       overlay::Element::new(Box::new(OverlayBatch::new(children))),
@@ -273,14 +273,9 @@ struct ActivationOverlay<'a, Message> {
 }
 
 impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for ActivationOverlay<'_, Message> {
-  fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-    self.content.as_overlay_mut().layout(renderer, bounds)
-  }
-
   fn update(
     &mut self,
     event: &Event,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -289,7 +284,7 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for ActivationOve
     self
       .content
       .as_overlay_mut()
-      .update(event, layout, cursor, renderer, shell);
+      .update(event, cursor, renderer, shell);
     if self.root && shell.event_status() == iced::event::Status::Ignored {
       self.state.borrow_mut().pending.push_back(activation);
     }
@@ -300,48 +295,37 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for ActivationOve
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
   ) {
     self
       .content
       .as_overlay()
-      .draw(renderer, theme, style, layout, cursor);
+      .draw(renderer, theme, style, cursor);
   }
 
-  fn operate(
-    &mut self,
-    layout: Layout<'_>,
-    renderer: &iced::Renderer,
-    operation: &mut dyn widget::Operation,
-  ) {
-    self
-      .content
-      .as_overlay_mut()
-      .operate(layout, renderer, operation);
+  fn operate(&mut self, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
+    self.content.as_overlay_mut().operate(renderer, operation);
   }
 
   fn mouse_interaction(
     &self,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
     self
       .content
       .as_overlay()
-      .mouse_interaction(layout, cursor, renderer)
+      .mouse_interaction(cursor, renderer)
   }
 
   fn overlay<'a>(
     &'a mut self,
-    layout: Layout<'a>,
     renderer: &iced::Renderer,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
     self
       .content
       .as_overlay_mut()
-      .overlay(layout, renderer)
+      .overlay(renderer)
       .into_iter()
       .map(|content| guarded_overlay(content, self.state, false))
       .collect()
@@ -374,65 +358,43 @@ impl<'a, Message> OverlayBatch<'a, Message> {
 }
 
 impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for OverlayBatch<'_, Message> {
-  fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-    let children = self
-      .children
-      .get_mut()
-      .iter_mut()
-      .map(|child| child.as_overlay_mut().layout(renderer, bounds))
-      .collect();
-    layout::Node::with_children(bounds, children)
-  }
-
   fn draw(
     &self,
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
   ) {
-    for (child, child_layout) in self.children.borrow_mut().iter_mut().zip(layout.children()) {
-      child
-        .as_overlay()
-        .draw(renderer, theme, style, child_layout, cursor);
+    for child in self.children.borrow_mut().iter_mut() {
+      child.as_overlay().draw(renderer, theme, style, cursor);
     }
   }
 
-  fn operate(
-    &mut self,
-    layout: Layout<'_>,
-    renderer: &iced::Renderer,
-    operation: &mut dyn widget::Operation,
-  ) {
-    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
-      child
-        .as_overlay_mut()
-        .operate(child_layout, renderer, operation);
+  fn operate(&mut self, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
+    for child in self.children.get_mut().iter_mut() {
+      child.as_overlay_mut().operate(renderer, operation);
     }
   }
 
   fn update(
     &mut self,
     event: &Event,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
   ) {
-    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
+    for child in self.children.get_mut().iter_mut() {
       if shell.event_status() != iced::event::Status::Ignored {
         return;
       }
       child
         .as_overlay_mut()
-        .update(event, child_layout, cursor, renderer, shell);
+        .update(event, cursor, renderer, shell);
     }
   }
 
   fn mouse_interaction(
     &self,
-    layout: Layout<'_>,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
@@ -440,24 +402,18 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for OverlayBatch<
       .children
       .borrow_mut()
       .iter_mut()
-      .zip(layout.children())
-      .map(|(child, child_layout)| {
-        child
-          .as_overlay()
-          .mouse_interaction(child_layout, cursor, renderer)
-      })
+      .map(|child| child.as_overlay().mouse_interaction(cursor, renderer))
       .max()
       .unwrap_or_default()
   }
 
   fn overlay<'a>(
     &'a mut self,
-    layout: Layout<'a>,
     renderer: &iced::Renderer,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
     let mut overlays = Vec::new();
-    for (child, child_layout) in self.children.get_mut().iter_mut().zip(layout.children()) {
-      overlays.extend(child.as_overlay_mut().overlay(child_layout, renderer));
+    for child in self.children.get_mut().iter_mut() {
+      overlays.extend(child.as_overlay_mut().overlay(renderer));
     }
     overlays
   }

@@ -1001,6 +1001,7 @@ fn observe_image(
 #[cfg(test)]
 pub(crate) mod tests {
   use crate::app::message::LoginMessage;
+  use iced::widget::Widget as _;
   use std::fs;
   use std::path::PathBuf;
   use std::sync::Arc;
@@ -1500,7 +1501,7 @@ pub(crate) mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: Rectangle,
-        _: Rectangle,
+        _: iced::Size,
         translation: Vector,
         _: &mut dyn widget::operation::Scrollable,
       ) {
@@ -1509,7 +1510,12 @@ pub(crate) mod tests {
           self.translation = translation;
         }
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("player-queue-current")) {
           self.current = Some(bounds);
         }
@@ -1520,7 +1526,7 @@ pub(crate) mod tests {
         .width(iced::Fill)
         .height(iced::Fill)
         .align_y(iced::Alignment::End)
-        .into()
+        .boxed()
     }
     let mut state = State::boot(false);
     state.playback.queue = crate::app::playback::QueueState::Ready(
@@ -1586,6 +1592,7 @@ pub(crate) mod tests {
           }
         }
       }
+      drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
       let mut position = QueuePosition::default();
       ui.operate(&renderer, &mut position);
       let viewport = position.viewport.expect("open queue viewport");
@@ -1605,9 +1612,11 @@ pub(crate) mod tests {
             x: None,
             y: Some(0.0),
           },
+          iced::advanced::widget::operation::Animation::Instant,
         ),
       );
       let mut ui = UserInterface::build(player(&state), bounds, ui.into_cache(), &mut renderer);
+      drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
       let mut manual = QueuePosition::default();
       ui.operate(&renderer, &mut manual);
       assert_eq!(
@@ -1772,7 +1781,12 @@ pub(crate) mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("home-backdrop")) {
           self.background = Some(bounds);
         }
@@ -1802,7 +1816,7 @@ pub(crate) mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: Rectangle,
-        _content: Rectangle,
+        _content: iced::Size,
         translation: iced::Vector,
         _state: &mut dyn widget::operation::Scrollable,
       ) {
@@ -1813,7 +1827,14 @@ pub(crate) mod tests {
           assert_eq!(translation.y, 0.0, "selection must not scroll the page");
         }
       }
-      fn text(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
+      fn text(
+        &mut self,
+        _id: Option<&widget::Id>,
+        bounds: Rectangle,
+        state: &mut dyn iced::advanced::widget::operation::Text,
+      ) {
+        let text = state.text();
+        let text = text.as_ref();
         if text.starts_with("A long series") || text == "S1:E1 - Episode A" {
           self.captions.push(bounds);
         }
@@ -2035,6 +2056,7 @@ pub(crate) mod tests {
         &mut renderer,
       );
       apply_widgets(selection_task, &mut ui, &renderer).await;
+      drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
       let mut selected_geometry = FindControl::new("home-hero-rail-card-b");
       ui.operate(&renderer, &mut selected_geometry);
       selected_geometry.assert_selected_visible();
@@ -2079,6 +2101,7 @@ pub(crate) mod tests {
         cache,
         &mut renderer,
       );
+      drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
       let mut settled_geometry = FindControl::new("home-hero-rail-card-b");
       ui.operate(&renderer, &mut settled_geometry);
       settled_geometry.assert_selected_visible();
@@ -2133,8 +2156,10 @@ pub(crate) mod tests {
             x: None,
             y: Some(scroll_y),
           },
+          iced::advanced::widget::operation::Animation::Instant,
         ),
       );
+      drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
       ui.operate(
         &renderer,
         &mut widget::operation::focusable::focus::<()>(query.id),
@@ -2490,7 +2515,14 @@ pub(crate) mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+      fn text(
+        &mut self,
+        _id: Option<&widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn iced::advanced::widget::operation::Text,
+      ) {
+        let text = state.text();
+        let text = text.as_ref();
         self.0.push(text.to_owned());
       }
     }
@@ -2568,7 +2600,14 @@ pub(crate) mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+      fn text(
+        &mut self,
+        _id: Option<&widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn iced::advanced::widget::operation::Text,
+      ) {
+        let text = state.text();
+        let text = text.as_ref();
         self.0.push(text.to_owned());
       }
     }
@@ -3456,7 +3495,15 @@ pub(crate) mod tests {
         );
         cache = ui.into_cache();
         let messages = bus.drain().map(|(message, _)| message).collect::<Vec<_>>();
-        let unstable = !messages.is_empty() || ui_state.has_layout_changed();
+        let unstable = !messages.is_empty()
+          || matches!(
+            ui_state,
+            iced_runtime::user_interface::State::Outdated
+              | iced_runtime::user_interface::State::Updated {
+                change: iced_runtime::user_interface::Change::Layout,
+                ..
+              }
+          );
         assert!(
           !unstable || pass < 2,
           "redraw retry limit at frame {frame}, pass {pass}: {messages:?}",
@@ -3811,17 +3858,22 @@ pub(crate) mod tests {
         &mut self,
         id: Option<&widget::Id>,
         _bounds: iced::Rectangle,
-        _content: iced::Rectangle,
+        _content: iced::Size,
         translation: iced::Vector,
         scroll: &mut dyn widget::operation::Scrollable,
       ) {
         if id == Some(&widget::Id::new("home-page-loading")) {
           self.observed = Some(translation.y);
           if let Some(y) = self.set {
-            scroll.scroll_to(widget::operation::scrollable::AbsoluteOffset {
-              x: None,
-              y: Some(y),
-            });
+            scroll.scroll_to(
+              widget::operation::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(y),
+              },
+              widget::operation::Animation::Instant,
+              _bounds,
+              _content,
+            );
           }
         }
       }
@@ -3857,6 +3909,7 @@ pub(crate) mod tests {
         observed: None,
       },
     );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
     let mut before = PageScroll::default();
     ui.operate(&renderer, &mut before);
     assert_eq!(before.observed, Some(120.0));
@@ -3885,6 +3938,7 @@ pub(crate) mod tests {
       cache,
       &mut renderer,
     );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
     let mut after = PageScroll::default();
     ui.operate(&renderer, &mut after);
     assert_eq!(after.observed, before.observed);

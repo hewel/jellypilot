@@ -1,5 +1,6 @@
 //! TV presentation for the shared saved-query workflow; persistence and Apply stay in the SDK route.
 
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, mouse_area, opaque, responsive, row, scrollable, space, text, Column,
 };
@@ -431,7 +432,11 @@ pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
       Task::none()
     }
     Message::Revealed(_, id, target, y) if y.is_finite() && target == reveal_target(state).0 => {
-      iced::widget::operation::scroll_to(id, iced::widget::operation::AbsoluteOffset { x: 0.0, y })
+      iced::widget::operation::scrollable::scroll_to(
+        id,
+        iced::widget::operation::scrollable::AbsoluteOffset { x: 0.0, y },
+        iced::advanced::widget::operation::Animation::Instant,
+      )
     }
     _ => Task::none(),
   }
@@ -600,11 +605,11 @@ fn control<'a>(
       )
     })
     .on_press_maybe(enabled.then(|| message(event.clone())))
-    .into()
+    .boxed()
   }))
   .width(Fill)
   .id(id)
-  .into()
+  .boxed()
 }
 fn focus_id(focus: Focus) -> iced::widget::Id {
   iced::widget::Id::from(format!("tv-saved-{focus:?}"))
@@ -619,7 +624,7 @@ fn hint<'a>(state: &State, value: &'a crate::i18n::UiText, scale: f32) -> Elemen
   text(state.kernel.locale.message(value))
     .size(style::META * scale)
     .color(style::PALETTE.colors.error)
-    .into()
+    .boxed()
 }
 fn library(state: &State, name: &str) -> String {
   state.format("saved-filters-library", &[("name", name.to_owned().into())])
@@ -657,13 +662,13 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   let mut body = column![text(state.t("saved-filters-description")).size(style::META * scale)]
     .spacing(24.0 * scale);
   if let Some(error) = &state.saved_browse.error {
-    body = body.push(hint(state, error, scale));
+    body = body.push((hint(state, error, scale)).boxed());
   }
   if pending {
-    body = body.push(text(state.t("common-loading")).size(style::META * scale));
+    body = body.push((text(state.t("common-loading")).size(style::META * scale)).boxed());
   }
   if state.saved_browse.loaded && state.saved_browse.records.is_empty() {
-    body = body.push(text(state.t("saved-filters-empty")).size(style::BODY * scale));
+    body = body.push((text(state.t("saved-filters-empty")).size(style::BODY * scale)).boxed());
   }
   for record in &state.saved_browse.records {
     let identity = Focus::Identity(record.id);
@@ -681,16 +686,19 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
       .enumerate()
     {
       let focus = Focus::Summary(record.id, index);
-      item = item.push(control(
-        label,
-        active && focused(state) == focus,
-        true,
-        Message::Focus(receipt.clone(), focus),
-        focus_id(focus),
-        scale,
-      ));
+      item = item.push(
+        (control(
+          label,
+          active && focused(state) == focus,
+          true,
+          Message::Focus(receipt.clone(), focus),
+          focus_id(focus),
+          scale,
+        ))
+        .boxed(),
+      );
     }
-    let mut actions = row![].spacing(16.0 * scale);
+    let mut actions = iced::widget::Row::<Element<'_, AppMessage>>::new().spacing(16.0 * scale);
     for action in [
       RecordAction::Apply,
       RecordAction::Rename,
@@ -714,7 +722,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         }
       };
       actions = actions.push(
-        mouse_area(control(
+        (mouse_area(control(
           state.t(key),
           active && focused(state) == focus,
           !pending,
@@ -722,16 +730,23 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
           focus_id(focus),
           scale,
         ))
-        .on_enter(message(Message::Focus(receipt.clone(), focus))),
+        .on_enter(message(Message::Focus(receipt.clone(), focus))))
+        .boxed(),
       );
     }
-    body = body.push(item.push(actions));
+    body = body.push(item.push(actions.boxed()).boxed());
   }
   let body = crate::app::view::playback_tools::guard_scope(receipt, body);
-  column![header, scrollable(body).id("tv-saved-manager").height(Fill)]
-    .spacing(24.0 * scale)
-    .height(Fill)
-    .into()
+  column![
+    header,
+    scrollable(body)
+      .smooth_scroll(false)
+      .id("tv-saved-manager")
+      .height(Fill)
+  ]
+  .spacing(24.0 * scale)
+  .height(Fill)
+  .boxed()
 }
 
 fn editor_preferences(
@@ -747,14 +762,17 @@ pub fn overlay(state: &State) -> Option<Element<'_, AppMessage>> {
   if !overlay_open(state) {
     return None;
   }
-  Some(opaque(responsive(move |bounds| {
-    let scale = style::scale(bounds.width);
-    if state.saved_browse.editor.is_some() {
-      editor_view(state, bounds, scale)
-    } else {
-      conditions_view(state, bounds, scale)
-    }
-  })))
+  Some(
+    opaque(responsive(move |bounds| {
+      let scale = style::scale(bounds.width);
+      if state.saved_browse.editor.is_some() {
+        editor_view(state, bounds, scale)
+      } else {
+        conditions_view(state, bounds, scale)
+      }
+    }))
+    .boxed(),
+  )
 }
 
 fn editor_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMessage> {
@@ -786,7 +804,7 @@ fn editor_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMessag
   ]
   .spacing(16.0 * scale)
   .align_y(Alignment::Center);
-  let mut body = Column::new().spacing(20.0 * scale);
+  let mut body = Column::<Element<'_, AppMessage>>::new().spacing(20.0 * scale);
   if let Some(keyboard) = keyboard {
     let capture = receipt.clone();
     let keyboard = text_entry::view(
@@ -798,50 +816,60 @@ fn editor_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMessag
       !pending,
       scale,
     )
-    .map(move |entry| message(Message::Entry(capture.clone(), entry)));
-    body = body.push(if pending {
-      jellypilot_ui::widgets::inert::inert(keyboard)
-    } else {
-      keyboard
-    });
+    .map(move |entry| message(Message::Entry(capture.clone(), entry)))
+    .boxed();
+    body = body.push(
+      (if pending {
+        jellypilot_ui::widgets::inert::inert(keyboard)
+      } else {
+        keyboard
+      })
+      .boxed(),
+    );
   } else {
-    body = body.push(control(
-      format!(
-        "{}: {}",
-        state.t("saved-filters-name"),
-        if editor.name.is_empty() {
-          state.t("saved-filters-name-placeholder")
-        } else {
-          editor.name.clone()
-        }
-      ),
-      focus == FormFocus::Name,
-      !pending,
-      Message::Form(receipt.clone(), FormAction::Name),
-      form_id(FormFocus::Name),
-      scale,
-    ));
+    body = body.push(
+      (control(
+        format!(
+          "{}: {}",
+          state.t("saved-filters-name"),
+          if editor.name.is_empty() {
+            state.t("saved-filters-name-placeholder")
+          } else {
+            editor.name.clone()
+          }
+        ),
+        focus == FormFocus::Name,
+        !pending,
+        Message::Form(receipt.clone(), FormAction::Name),
+        form_id(FormFocus::Name),
+        scale,
+      ))
+      .boxed(),
+    );
     let (name, preferences) = editor_preferences(editor);
-    body = body.push(text(library(state, name)).size(style::BODY * scale));
+    body = body.push((text(library(state, name)).size(style::BODY * scale)).boxed());
     for (index, (_, label, _)) in shared::conditions(state, preferences)
       .into_iter()
       .enumerate()
     {
-      body = body.push(control(
-        label,
-        focus == FormFocus::Summary(index),
-        true,
-        Message::Form(receipt.clone(), FormAction::Summary(index)),
-        form_id(FormFocus::Summary(index)),
-        scale,
-      ));
+      body = body.push(
+        (control(
+          label,
+          focus == FormFocus::Summary(index),
+          true,
+          Message::Form(receipt.clone(), FormAction::Summary(index)),
+          form_id(FormFocus::Summary(index)),
+          scale,
+        ))
+        .boxed(),
+      );
     }
   }
   if let Some(error) = &editor.error {
-    body = body.push(hint(state, error, scale));
+    body = body.push((hint(state, error, scale)).boxed());
   }
   if pending {
-    body = body.push(text(state.t("common-loading")).size(style::META * scale));
+    body = body.push((text(state.t("common-loading")).size(style::META * scale)).boxed());
   }
   let body = crate::app::view::playback_tools::guard_scope(receipt.clone(), body);
   let footer = row![
@@ -869,7 +897,7 @@ fn editor_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMessag
   .spacing(20.0 * scale);
   let footer = crate::app::view::playback_tools::guard_scope(receipt, footer);
   modal_frame(
-    header.into(),
+    header.boxed(),
     body,
     Some(footer),
     bounds,
@@ -884,13 +912,13 @@ fn conditions_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMe
   let preferences = shared::current_preferences(state).unwrap_or_default();
   let conditions = shared::conditions(state, &preferences);
   let focused = state.tv.saved_browse.condition_focus;
-  let mut body = Column::new().spacing(24.0 * scale);
+  let mut body = Column::<Element<'_, AppMessage>>::new().spacing(24.0 * scale);
   if state
     .full
     .as_ref()
     .is_some_and(|full| full.browse.saved.is_some())
   {
-    body = body.push(text(conditions_label(state)).size(style::BODY * scale));
+    body = body.push((text(conditions_label(state)).size(style::BODY * scale)).boxed());
   }
   for (index, (condition, label, removable)) in conditions.iter().enumerate() {
     let label = if *removable {
@@ -904,14 +932,17 @@ fn conditions_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMe
     } else {
       label.clone()
     };
-    body = body.push(control(
-      label,
-      focused == index,
-      *removable && state.saved_browse.pending.is_none(),
-      Message::Condition(receipt.clone(), index),
-      condition_id(index),
-      scale,
-    ));
+    body = body.push(
+      (control(
+        label,
+        focused == index,
+        *removable && state.saved_browse.pending.is_none(),
+        Message::Condition(receipt.clone(), index),
+        condition_id(index),
+        scale,
+      ))
+      .boxed(),
+    );
   }
   let body = crate::app::view::playback_tools::guard_scope(receipt.clone(), body);
   let header = row![
@@ -941,7 +972,7 @@ fn conditions_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMe
   );
   let footer = crate::app::view::playback_tools::guard_scope(receipt, footer);
   modal_frame(
-    header.into(),
+    header.boxed(),
     body,
     Some(footer),
     bounds,
@@ -981,12 +1012,17 @@ fn modal_frame<'a>(
   } * scale;
   let mut content = column![
     header,
-    container(scrollable(body).id("tv-saved-modal-body").height(Fill))
-      .id("tv-saved-modal-viewport")
-      .height(Fill)
+    container(
+      scrollable(body)
+        .smooth_scroll(false)
+        .id("tv-saved-modal-body")
+        .height(Fill)
+    )
+    .id("tv-saved-modal-viewport")
+    .height(Fill)
   ];
   if let Some(footer) = footer {
-    content = content.push(footer);
+    content = content.push((footer).boxed());
   }
   let content = content.spacing(gap).width(Fill).height(Fill);
   container(
@@ -1000,7 +1036,7 @@ fn modal_frame<'a>(
   .center_x(Fill)
   .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
   .style(style::canvas)
-  .into()
+  .boxed()
 }
 
 fn reveal_target(state: &State) -> (iced::widget::Id, &'static str) {
@@ -1037,7 +1073,12 @@ fn reveal(state: &State) -> Task<AppMessage> {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&self.target_id) {
         self.target = Some(bounds);
       }
@@ -1046,10 +1087,11 @@ fn reveal(state: &State) -> Task<AppMessage> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&self.scroll_id) {
         self.viewport = Some((bounds, content, translation));
       }
@@ -1080,6 +1122,7 @@ fn reveal(state: &State) -> Task<AppMessage> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
   use jellypilot_core::{
     browse_model::BrowsePreferences, config::BrowseFilterSettings, watchlist::ProfileScope,
     LoadState,
@@ -1340,7 +1383,7 @@ mod tests {
 
   #[tokio::test]
   async fn long_names_and_osk_keep_close_and_submit_inside_short_viewports() {
-    use iced::advanced::{layout, renderer, renderer::Headless, widget, Layout};
+    use iced::advanced::{layout, renderer, renderer::Headless, widget};
     use jellypilot_core::locale::UiLanguage;
     let renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
       .await
@@ -1364,16 +1407,21 @@ mod tests {
           let scale = style::scale(size.width);
           let mut page = editor_view(&state, size, scale);
           let mut tree = widget::Tree::new(&page);
-          tree.diff(page.as_widget_mut());
-          let node = page.as_widget_mut().layout(
+          tree.diff(&mut page);
+          let node = crate::app::test_support::layout_widget(
+            &mut page,
             &mut tree,
             &renderer,
             &layout::Limits::new(Size::ZERO, size),
           );
           let mut bounds = crate::app::view::viewing_queue::tests::Bounds::default();
-          page
-            .as_widget_mut()
-            .operate(&mut tree, Layout::new(&node), &renderer, &mut bounds);
+          page.operate(
+            &mut tree,
+            node.layout(),
+            &iced::Rectangle::with_size(node.size()),
+            &renderer,
+            &mut bounds,
+          );
           let close = bounds.get(form_id(FormFocus::Close));
           let save = bounds.get(form_id(FormFocus::Submit));
           let body = bounds.get("tv-saved-modal-viewport");

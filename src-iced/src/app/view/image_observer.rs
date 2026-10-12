@@ -23,7 +23,7 @@ pub(crate) fn observe_image<'a>(
   spec: ImageSpec,
   axis: ImageAxis,
 ) -> Element<'a, Message> {
-  Element::new(Observer {
+  iced::advanced::Widget::_boxed(Observer {
     content,
     image: Some(Identity {
       surface,
@@ -41,7 +41,7 @@ pub(crate) fn observe_image<'a>(
 /// An operation after dispatch instead visits every marker with the final offsets,
 /// without replaying input, requesting redraws, or relying on visible-child updates.
 pub(crate) fn observe_images(content: Element<'_, Message>) -> Element<'_, Message> {
-  Element::new(Observer {
+  iced::advanced::Widget::_boxed(Observer {
     content,
     image: None,
     grid_epoch: None,
@@ -53,7 +53,7 @@ pub(crate) fn observe_grid_viewport(
   content: Element<'_, Message>,
   epoch: u64,
 ) -> Element<'_, Message> {
-  Element::new(Observer {
+  iced::advanced::Widget::_boxed(Observer {
     content,
     image: None,
     grid_epoch: Some(epoch),
@@ -91,6 +91,12 @@ struct Observer<'a> {
   grid_epoch: Option<u64>,
 }
 
+impl widget::Meta for Observer<'_> {
+  fn is_void(&self) -> bool {
+    self.content.is_void()
+  }
+}
+
 impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
   fn tag(&self) -> widget::tree::Tag {
     widget::tree::Tag::of::<State>()
@@ -115,11 +121,7 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
   }
 
   fn size(&self) -> Size<Length> {
-    self.content.as_widget().size()
-  }
-
-  fn is_void(&self) -> bool {
-    self.content.as_widget().is_void()
+    self.content.size()
   }
 
   fn layout(
@@ -127,24 +129,23 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits)
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
 
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -160,9 +161,10 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
         .inventory
         .get_or_insert_default();
       inventory.begin();
-      self.content.as_widget_mut().operate(
+      self.content.operate(
         &mut tree.children[0],
         layout,
+        viewport,
         renderer,
         &mut Measure {
           clip: Clip::window(*viewport),
@@ -180,15 +182,15 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     operation.custom(None, layout.bounds(), tree.state.downcast_mut::<State>());
     self
       .content
-      .as_widget_mut()
-      .operate(&mut tree.children[0], layout, renderer, operation);
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
   }
 
   fn draw(
@@ -197,11 +199,11 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
@@ -215,34 +217,32 @@ impl Widget<Message, Theme, iced::Renderer> for Observer<'_> {
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
 
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }
@@ -281,7 +281,8 @@ impl Clip {
     }
   }
 
-  fn scroll(self, bounds: Rectangle, content: Rectangle, translation: Vector) -> Self {
+  fn scroll(self, bounds: Rectangle, content: Size, translation: Vector) -> Self {
+    let content = Rectangle::new(bounds.position(), content);
     let mut near = bounds;
     if content.width > bounds.width {
       near = expand(near, ImageAxis::Horizontal);
@@ -456,7 +457,7 @@ impl widget::Operation for Measure<'_> {
     &mut self,
     _id: Option<&widget::Id>,
     bounds: Rectangle,
-    content: Rectangle,
+    content: iced::Size,
     translation: Vector,
     _state: &mut dyn widget::operation::Scrollable,
   ) {
@@ -516,7 +517,7 @@ mod tests {
   fn vertical_window_has_exactly_one_viewport_ahead_and_behind() {
     let clip = window().scroll(
       rect(0.0, 0.0, 300.0, 100.0),
-      rect(0.0, 0.0, 300.0, 1000.0),
+      Size::new(300.0, 1000.0),
       Vector::new(0.0, 200.0),
     );
     let priorities = [90.0, 100.0, 200.0, 300.0, 400.0]
@@ -537,13 +538,13 @@ mod tests {
   fn nested_horizontal_rows_keep_outer_clip_and_both_offsets() {
     let outer = window().scroll(
       rect(0.0, 0.0, 300.0, 100.0),
-      rect(0.0, 0.0, 300.0, 1000.0),
+      Size::new(300.0, 1000.0),
       Vector::new(0.0, 200.0),
     );
     let priorities = [220.0, 320.0, 420.0].map(|y| {
       let row = outer.scroll(
         rect(0.0, y, 300.0, 50.0),
-        rect(0.0, y, 2000.0, 50.0),
+        Size::new(2000.0, 50.0),
         Vector::new(600.0, 0.0),
       );
       [600.0, 900.0, 1200.0].map(|x| row.priority(rect(x, y, 50.0, 50.0), ImageAxis::Horizontal))
@@ -747,7 +748,7 @@ mod tests {
     assert!(measure(&mut inventory, &mut markers, bounds, window()).is_empty());
     let scrolled = window().scroll(
       rect(0.0, 0.0, 300.0, 100.0),
-      rect(0.0, 0.0, 300.0, 1000.0),
+      Size::new(300.0, 1000.0),
       Vector::new(0.0, 200.0),
     );
     let changes = measure(&mut inventory, &mut markers, bounds, scrolled);

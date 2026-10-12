@@ -660,9 +660,10 @@ fn apply_work(surface: &mut Surface, work: BrowseWork) -> Task<Message> {
     // Loading placeholders have no ready-grid ID. A new query identity
     // also resets remembered offsets when its first real layout appears.
     surface.scroll_id = iced::widget::Id::unique();
-    reset = operation::scroll_to(
+    reset = operation::scrollable::scroll_to(
       surface.scroll_id.clone(),
-      operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+      operation::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+      iced::advanced::widget::operation::Animation::Instant,
     );
   }
   // The SDK owns request cancellation; the futures only deliver settlements.
@@ -723,6 +724,7 @@ pub(crate) fn reset(surface: &mut Surface) {
 
 #[cfg(test)]
 mod tests {
+  use iced::widget::Widget as _;
   use std::sync::Arc;
 
   use jellypilot_auth::login::ConnectionPhase;
@@ -1523,7 +1525,7 @@ mod tests {
       super::super::view::browse::GRID_COLUMN_GAP,
       |index| {
         built.borrow_mut().push(index);
-        iced::widget::Space::new().into()
+        iced::widget::Space::new().boxed()
       },
     );
     assert_eq!(*built.borrow(), vec![0, 1, 2]);

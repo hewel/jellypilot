@@ -1,4 +1,5 @@
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
+use iced::widget::Widget as _;
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
 use super::Message;
@@ -6,11 +7,11 @@ use super::Message;
 /// Wrap the complete dialog panel, including padding, before centering it in
 /// the scrim. Dismissal uses panel bounds, not whether a child consumed input.
 pub(super) fn dismissible<'a>(
-  panel: impl Into<Element<'a, Message>>,
+  panel: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   dismiss: Message,
 ) -> Element<'a, Message> {
-  Element::new(Dismissible {
-    panel: panel.into(),
+  iced::advanced::Widget::_boxed(Dismissible {
+    panel: panel.boxed(),
     dismiss,
   })
 }
@@ -20,44 +21,46 @@ struct Dismissible<'a> {
   dismiss: Message,
 }
 
+impl widget::Meta for Dismissible<'_> {}
+
 impl Widget<Message, Theme, iced::Renderer> for Dismissible<'_> {
   fn tag(&self) -> widget::tree::Tag {
-    self.panel.as_widget().tag()
+    self.panel.tag()
   }
   fn state(&self) -> widget::tree::State {
-    self.panel.as_widget().state()
+    self.panel.state()
   }
   fn diff(&mut self, tree: &mut widget::Tree) {
-    self.panel.as_widget_mut().diff(tree);
+    self.panel.diff(tree);
   }
   fn size(&self) -> Size<Length> {
-    self.panel.as_widget().size()
+    self.panel.size()
   }
   fn layout(
     &mut self,
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    self.panel.as_widget_mut().layout(tree, renderer, limits)
+  ) {
+    self.panel.layout(tree, renderer, limits)
   }
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     self
       .panel
-      .as_widget_mut()
-      .operate(tree, layout, renderer, operation);
+      .operate(tree, layout, viewport, renderer, operation);
   }
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -65,7 +68,6 @@ impl Widget<Message, Theme, iced::Renderer> for Dismissible<'_> {
   ) {
     self
       .panel
-      .as_widget_mut()
       .update(tree, event, layout, cursor, renderer, shell, viewport);
     if shell.is_event_captured() {
       return;
@@ -89,40 +91,38 @@ impl Widget<Message, Theme, iced::Renderer> for Dismissible<'_> {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
     self
       .panel
-      .as_widget()
       .draw(tree, renderer, theme, style, layout, cursor, viewport);
   }
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
     self
       .panel
-      .as_widget()
       .mouse_interaction(tree, layout, cursor, viewport, renderer)
   }
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
     self
       .panel
-      .as_widget_mut()
-      .overlay(tree, layout, renderer, viewport, translation)
+      .overlay(tree, layout, renderer, viewport, translation, window)
   }
 }
 

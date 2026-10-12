@@ -2,8 +2,9 @@
 
 use std::time::Duration;
 
+use iced::advanced::Widget;
 use iced::widget::{container, text, tooltip as iced_tooltip};
-use iced::{Element, Length};
+use iced::{Element, Length, Theme};
 
 use super::style;
 use super::Placement;
@@ -34,7 +35,7 @@ impl Default for TooltipOptions {
 
 /// Wraps a trigger with a tokenized text tooltip.
 pub fn tooltip<'a, Message: 'a>(
-    trigger: impl Into<Element<'a, Message>>,
+    trigger: impl Widget<Message, Theme, iced::Renderer> + 'a,
     content: impl Into<String>,
     options: TooltipOptions,
 ) -> Element<'a, Message> {
@@ -47,11 +48,11 @@ pub fn tooltip<'a, Message: 'a>(
 
 /// Wraps a trigger with a caller-composed, tokenized tooltip.
 pub fn tooltip_element<'a, Message: 'a>(
-    trigger: impl Into<Element<'a, Message>>,
-    content: impl Into<Element<'a, Message>>,
+    trigger: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     options: TooltipOptions,
 ) -> Element<'a, Message> {
-    let trigger = trigger.into();
+    let trigger = trigger._boxed();
 
     if !options.enabled {
         return trigger;
@@ -59,15 +60,16 @@ pub fn tooltip_element<'a, Message: 'a>(
 
     iced_tooltip(
         trigger,
-        container(content).width(Length::Fit.max(options.max_width)),
+        container(content)
+            .width(Length::Fit.max(options.max_width))
+            .padding(TOKENS.spacing.s2),
         iced_position(options.placement),
     )
     .delay(options.delay)
     .gap(TOKENS.spacing.s1_5)
-    .padding(TOKENS.spacing.s2)
     .snap_within_viewport(true)
     .style(style::tooltip_surface)
-    .into()
+    ._boxed()
 }
 
 const fn iced_position(placement: Placement) -> iced_tooltip::Position {

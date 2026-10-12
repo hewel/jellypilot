@@ -1,5 +1,6 @@
 //! Saved query management and the current library's complete condition summary.
 
+use iced::widget::Widget as _;
 use iced::widget::{
   column, container, modal, row, scrollable, space, text, text_input, Column, Id,
 };
@@ -42,7 +43,7 @@ fn copy<'a>(state: &State, value: String) -> Element<'a, Message> {
     .color(state.palette().text.secondary)
     .wrapping(text::Wrapping::WordOrGlyph)
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 fn summary<'a>(state: &State, preferences: &BrowsePreferences) -> Element<'a, Message> {
@@ -53,7 +54,7 @@ fn summary<'a>(state: &State, preferences: &BrowsePreferences) -> Element<'a, Me
   )
   .spacing(TOKENS.spacing.s1)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 pub(super) fn page(state: &State) -> Element<'_, Message> {
@@ -81,11 +82,12 @@ pub(super) fn page(state: &State) -> Element<'_, Message> {
   .width(Fill);
   if let Some(error) = &surface.error {
     body = body.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(TOKENS.font_sizes.s13)
         .color(state.palette().colors.error)
         .wrapping(text::Wrapping::WordOrGlyph)
-        .width(Fill),
+        .width(Fill))
+      .boxed(),
     );
     if !surface.loaded
       || matches!(
@@ -94,26 +96,32 @@ pub(super) fn page(state: &State) -> Element<'_, Message> {
       )
     {
       body = body.push(
-        control_button(None, Some(state.t("common-retry")), ButtonVariant::Tonal)
+        (control_button(None, Some(state.t("common-retry")), ButtonVariant::Tonal)
           .id("saved-filters-retry")
           .min_height(40.0)
-          .on_press_maybe(interactive(state).then(|| saved_browse::message(state, Action::Reload))),
+          .on_press_maybe(
+            interactive(state).then(|| saved_browse::message(state, Action::Reload)),
+          ))
+        .boxed(),
       );
     }
   }
   if surface.pending.is_some() {
-    body = body.push(copy(
-      state,
-      state.t(
-        if matches!(surface.pending, Some(PendingAction::Apply(_))) {
-          "saved-filters-applying"
-        } else {
-          "common-loading"
-        },
-      ),
-    ));
+    body = body.push(
+      (copy(
+        state,
+        state.t(
+          if matches!(surface.pending, Some(PendingAction::Apply(_))) {
+            "saved-filters-applying"
+          } else {
+            "common-loading"
+          },
+        ),
+      ))
+      .boxed(),
+    );
   } else if surface.loaded && surface.records.is_empty() {
-    body = body.push(copy(state, state.t("saved-filters-empty")));
+    body = body.push((copy(state, state.t("saved-filters-empty"))).boxed());
   }
   let records = guarded_rows(
     saved_browse::target(state),
@@ -124,7 +132,7 @@ pub(super) fn page(state: &State) -> Element<'_, Message> {
       .collect(),
     TOKENS.spacing.s7,
   );
-  body = body.push(records);
+  body = body.push((records).boxed());
   let inset = super::browse::page_padding(SizeClass::from_width(state.shell.window_size.width));
   guard_scope(
     (
@@ -136,6 +144,7 @@ pub(super) fn page(state: &State) -> Element<'_, Message> {
         .collect::<Vec<_>>(),
     ),
     scrollable(body.padding([TOKENS.spacing.s10, inset]))
+      .smooth_scroll(false)
       .id("saved-filters-list")
       .height(Fill)
       .width(Fill)
@@ -198,7 +207,7 @@ fn record_row<'a>(state: &'a State, record: &'a SavedBrowseFilter) -> Element<'a
   ]
   .spacing(TOKENS.spacing.s2)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 pub(super) fn save_button(state: &State) -> Element<'_, Message> {
@@ -224,10 +233,10 @@ pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
     .as_ref()
     .and_then(|full| full.browse.saved.as_ref())
   else {
-    return space().into();
+    return space().boxed();
   };
   let Some(preferences) = saved_browse::current_preferences(state) else {
-    return space().into();
+    return space().boxed();
   };
   let mut heading = column![copy(
     state,
@@ -243,10 +252,12 @@ pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
   if saved_browse::modified(state) {
-    heading = heading.push(copy(state, state.t("saved-filters-modified")));
+    heading = heading.push((copy(state, state.t("saved-filters-modified"))).boxed());
   }
   let mut any_removable = false;
-  let mut conditions = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+  let mut conditions = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill);
   for (condition, label, removable) in saved_browse::conditions(state, &preferences) {
     any_removable |= removable;
     if removable {
@@ -271,7 +282,7 @@ pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
           ]
           .spacing(TOKENS.spacing.s2)
           .align_y(Alignment::Center)
-          .into()
+          .boxed()
         },
         ButtonVariant::Text,
       )
@@ -283,12 +294,16 @@ pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
         interactive(state)
           .then(|| saved_browse::message(state, Action::RemoveCondition(condition))),
       );
-      conditions = conditions.push(guard_scope(
-        saved_browse::target(state),
-        focus_tooltip(control, tooltip, TooltipOptions::default()),
-      ));
+      conditions = conditions.push(
+        (guard_scope(
+          saved_browse::target(state),
+          focus_tooltip(control, tooltip, TooltipOptions::default()),
+        ))
+        .boxed(),
+      );
     } else {
-      conditions = conditions.push(container(copy(state, label)).padding(TOKENS.spacing.s2));
+      conditions =
+        conditions.push((container(copy(state, label)).padding(TOKENS.spacing.s2)).boxed());
     }
   }
   let clear = control_button(
@@ -306,7 +321,8 @@ pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
     saved_browse::target(state),
     column![
       heading,
-      scrollable(conditions.push(clear))
+      scrollable(conditions.push((clear).boxed()))
+        .smooth_scroll(false)
         .id("saved-filters-active-conditions")
         .height(Fill)
         .style(jellypilot_ui::theme::scrollable),
@@ -324,7 +340,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
     .as_ref()
     .filter(|_| !state.tv_mode())
   else {
-    return space().into();
+    return space().boxed();
   };
   let (title, library, preferences) = match &editor.kind {
     EditorKind::Save(draft) => (
@@ -390,15 +406,16 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
   .width(Fill);
   if let Some(error) = &editor.error {
     body = body.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(TOKENS.font_sizes.s13)
         .color(state.palette().colors.error)
         .wrapping(text::Wrapping::WordOrGlyph)
-        .width(Fill),
+        .width(Fill))
+      .boxed(),
     );
   }
   if state.saved_browse.pending.is_some() {
-    body = body.push(copy(state, state.t("common-loading")));
+    body = body.push((copy(state, state.t("common-loading"))).boxed());
   }
   let footer = row![
     control_button(None, Some(state.t("common-cancel")), ButtonVariant::Text)
@@ -419,6 +436,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
       column![
         heading,
         scrollable(body)
+          .smooth_scroll(false)
           .id("saved-filters-editor-body")
           .height(Fill)
           .style(jellypilot_ui::theme::scrollable),
@@ -444,6 +462,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
         ..container::Style::default()
       }),
   )
+  .boxed()
 }
 
 #[cfg(test)]
@@ -463,7 +482,7 @@ mod tests {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&Id>, bounds: iced::Rectangle) {
+    fn container(&mut self, id: Option<&Id>, bounds: iced::Rectangle, _viewport: &iced::Rectangle) {
       if let Some(id) = id {
         self.0.push((id.clone(), bounds));
       }
@@ -472,11 +491,11 @@ mod tests {
       &mut self,
       id: Option<&Id>,
       bounds: iced::Rectangle,
-      _: iced::Rectangle,
+      _: iced::Size,
       translation: iced::Vector,
       _: &mut dyn widget::operation::Scrollable,
     ) {
-      self.container(id, bounds);
+      self.container(id, bounds, &bounds);
       if let Some(id) = id {
         self.1.push((id.clone(), translation));
       }
@@ -878,8 +897,10 @@ mod tests {
           x: None,
           y: Some(10_000.0),
         },
+        iced::advanced::widget::operation::Animation::Instant,
       ),
     );
+    drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
     let mut bounds = Bounds::default();
     ui.operate(&renderer, &mut bounds);
     let translation = bounds

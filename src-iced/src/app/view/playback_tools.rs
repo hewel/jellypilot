@@ -1,5 +1,6 @@
 //! File-scoped subtitle roles and A/B repeat controls above the player surface.
 
+use iced::widget::Widget as _;
 use std::collections::HashMap;
 
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
@@ -52,14 +53,14 @@ pub(super) fn loop_entry(state: &State) -> Element<'_, Message> {
     .on_press(Message::Playback(PlaybackMessage::Tools(
       ToolsMessage::OpenLoop,
     )))
-    .into()
+    .boxed()
 }
 
 pub(super) fn layer(state: &State) -> Element<'_, Message> {
   let looping = state.playback.tools.open;
   let options = state.playback.tools.options_open;
   if state.tv_mode() || (!looping && !options && !state.playback.subtitle_menu_open) {
-    return space().into();
+    return space().boxed();
   }
   let width = (state.shell.window_size.width - 32.0).clamp(
     0.0,
@@ -90,7 +91,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
         .on_press(Message::Settings(SettingsMessage::Open)),
       ]
       .spacing(TOKENS.spacing.s1)
-      .into(),
+      .boxed(),
       true,
     )
   } else {
@@ -122,7 +123,7 @@ pub(super) fn layer(state: &State) -> Element<'_, Message> {
     Alignment::End
   })
   .padding(TOKENS.spacing.s4)
-  .into()
+  .boxed()
 }
 
 fn panel<'a>(
@@ -148,6 +149,7 @@ fn panel<'a>(
   let height =
     ((state.shell.window_size.height - 64.0).clamp(0.0, 640.0) - 2.0 * TOKENS.spacing.s3).max(0.0);
   let body = scrollable(body)
+    .smooth_scroll(false)
     .id("playback-tools-scroll")
     .style(jellypilot_ui::theme::scrollable)
     .height(if subtitles {
@@ -175,7 +177,7 @@ fn hint<'a>(state: &State, key: &str) -> Element<'a, Message> {
   text(state.t(key))
     .size(TOKENS.font_sizes.s13)
     .color(state.palette().text.metadata)
-    .into()
+    .boxed()
 }
 
 fn action<'a>(
@@ -194,32 +196,42 @@ fn action<'a>(
   )
 }
 
-fn feedback<'a>(state: &State, mut body: Column<'a, Message>, failed: bool) -> Column<'a, Message> {
+fn feedback<'a>(
+  state: &State,
+  mut body: Column<Element<'a, Message>>,
+  failed: bool,
+) -> Column<Element<'a, Message>> {
   if state.playback.view.tools.busy {
-    body = body.push(hint(state, "common-loading"));
+    body = body.push((hint(state, "common-loading")).boxed());
   }
   if failed || state.playback.view.tools.error.is_some() {
     body = body.push(
-      text(state.t("playback-tools-failed"))
+      (text(state.t("playback-tools-failed"))
         .size(TOKENS.font_sizes.s13)
-        .color(state.palette().colors.error),
+        .color(state.palette().colors.error))
+      .boxed(),
     );
   }
-  body.push(action(
-    state,
-    "playback-tools-refresh",
-    PlaybackToolAction::Refresh,
-    available(state),
-  ))
+  body.push(
+    (action(
+      state,
+      "playback-tools-refresh",
+      PlaybackToolAction::Refresh,
+      available(state),
+    ))
+    .boxed(),
+  )
 }
 
 fn loop_content(state: &State) -> Element<'_, Message> {
   let tools = &state.playback.view.tools;
-  let mut body = Column::new().width(Fill).spacing(TOKENS.spacing.s3);
+  let mut body = Column::<Element<'_, Message>>::new()
+    .width(Fill)
+    .spacing(TOKENS.spacing.s3);
   let failed = matches!(tools.ab_loop, ToolState::Failed);
   match &tools.ab_loop {
-    ToolState::Loading => body = body.push(hint(state, "common-loading")),
-    ToolState::Unavailable => body = body.push(hint(state, "ab-loop-unavailable")),
+    ToolState::Loading => body = body.push((hint(state, "common-loading")).boxed()),
+    ToolState::Unavailable => body = body.push((hint(state, "ab-loop-unavailable")).boxed()),
     ToolState::Failed => {}
     ToolState::Ready(looping) => {
       let duration = state
@@ -254,11 +266,12 @@ fn loop_content(state: &State) -> Element<'_, Message> {
         .width(Fill)
       };
       body = body.push(
-        row![
+        (row![
           point("ab-loop-a", looping.a_seconds),
           point("ab-loop-b", looping.b_seconds)
         ]
-        .spacing(TOKENS.spacing.s3),
+        .spacing(TOKENS.spacing.s3))
+        .boxed(),
       );
       let mark_a = position.map(PlaybackToolAction::MarkA);
       let mark_b = position
@@ -283,12 +296,13 @@ fn loop_content(state: &State) -> Element<'_, Message> {
         )
       };
       body = body.push(
-        row![
+        (row![
           mark("ab-loop-mark-a", mark_a),
           mark("ab-loop-mark-b", mark_b)
         ]
         .spacing(TOKENS.spacing.s2)
-        .wrap(),
+        .wrap())
+        .boxed(),
       );
       let interval = looping
         .a_seconds
@@ -300,16 +314,19 @@ fn loop_content(state: &State) -> Element<'_, Message> {
             && a < b
             && duration.is_some_and(|duration| b <= duration)
         });
-      body = body.push(hint(
-        state,
-        if looping.enabled {
-          "ab-loop-configured"
-        } else {
-          "ab-loop-disabled"
-        },
-      ));
       body = body.push(
-        row![
+        (hint(
+          state,
+          if looping.enabled {
+            "ab-loop-configured"
+          } else {
+            "ab-loop-disabled"
+          },
+        ))
+        .boxed(),
+      );
+      body = body.push(
+        (row![
           action(
             state,
             if looping.enabled {
@@ -341,20 +358,21 @@ fn loop_content(state: &State) -> Element<'_, Message> {
           ),
         ]
         .spacing(TOKENS.spacing.s2)
-        .wrap(),
+        .wrap())
+        .boxed(),
       );
       if !looping.editable || duration.is_none() {
-        body = body.push(hint(state, "ab-loop-unavailable"));
+        body = body.push((hint(state, "ab-loop-unavailable")).boxed());
       } else if !interval {
-        body = body.push(hint(state, "ab-loop-mark-b-help"));
+        body = body.push((hint(state, "ab-loop-mark-b-help")).boxed());
       }
-      body = body.push(hint(state, "ab-loop-help"));
+      body = body.push((hint(state, "ab-loop-help")).boxed());
     }
   }
   panel(
     state,
     "ab-loop-title",
-    feedback(state, body, failed).into(),
+    feedback(state, body, failed).boxed(),
     false,
   )
 }
@@ -362,11 +380,15 @@ fn loop_content(state: &State) -> Element<'_, Message> {
 pub(super) fn subtitle_content(state: &State, embedded: bool) -> Element<'_, Message> {
   let tools = &state.playback.view.tools;
   let enabled = available(state) && tools.error.is_none();
-  let mut body = Column::new().width(Fill).spacing(TOKENS.spacing.s3);
-  body = body.push(text(state.t("subtitle-primary")).size(TOKENS.font_sizes.s14));
+  let mut body = Column::<Element<'_, Message>>::new()
+    .width(Fill)
+    .spacing(TOKENS.spacing.s3);
+  body = body.push((text(state.t("subtitle-primary")).size(TOKENS.font_sizes.s14)).boxed());
   match &state.playback.view.tracks {
-    TracksView::Loading => body = body.push(hint(state, "player-loading-subtitles")),
-    TracksView::Unavailable => body = body.push(hint(state, "player-unavailable-subtitles")),
+    TracksView::Loading => body = body.push((hint(state, "player-loading-subtitles")).boxed()),
+    TracksView::Unavailable => {
+      body = body.push((hint(state, "player-unavailable-subtitles")).boxed())
+    }
     TracksView::Ready {
       tracks, subtitle, ..
     } => {
@@ -397,15 +419,15 @@ pub(super) fn subtitle_content(state: &State, embedded: bool) -> Element<'_, Mes
           ),
         ));
       }
-      body = body.push(stable_rows(state, rows));
+      body = body.push((stable_rows(state, rows)).boxed());
     }
   }
   body = body
-    .push(text(state.t("subtitle-secondary")).size(TOKENS.font_sizes.s14))
-    .push(hint(state, "subtitle-secondary-help"));
+    .push((text(state.t("subtitle-secondary")).size(TOKENS.font_sizes.s14)).boxed())
+    .push((hint(state, "subtitle-secondary-help")).boxed());
   match &tools.secondary {
-    ToolState::Loading => body = body.push(hint(state, "common-loading")),
-    ToolState::Unavailable => body = body.push(hint(state, "playback-tools-unavailable")),
+    ToolState::Loading => body = body.push((hint(state, "common-loading")).boxed()),
+    ToolState::Unavailable => body = body.push((hint(state, "playback-tools-unavailable")).boxed()),
     ToolState::Failed => {}
     ToolState::Ready(secondary) => {
       if let TracksView::Ready {
@@ -448,27 +470,27 @@ pub(super) fn subtitle_content(state: &State, embedded: bool) -> Element<'_, Mes
             ));
           }
         }
-        body = body.push(stable_rows(state, rows));
+        body = body.push((stable_rows(state, rows)).boxed());
         if !primary_is_text || !secondary.eligible {
-          body = body.push(hint(state, "subtitle-secondary-requires-primary"));
+          body = body.push((hint(state, "subtitle-secondary-requires-primary")).boxed());
         } else if eligible.is_empty() {
-          body = body.push(hint(state, "subtitle-secondary-empty"));
+          body = body.push((hint(state, "subtitle-secondary-empty")).boxed());
         }
         if secondary
           .selected
           .is_some_and(|selected| !eligible.iter().any(|track| track.id == selected))
         {
-          body = body.push(hint(state, "playback-tools-unavailable"));
+          body = body.push((hint(state, "playback-tools-unavailable")).boxed());
         }
       } else {
-        body = body.push(hint(state, "player-unavailable-subtitles"));
+        body = body.push((hint(state, "player-unavailable-subtitles")).boxed());
       }
     }
   }
   panel(
     state,
     "player-subtitles",
-    feedback(state, body, matches!(tools.secondary, ToolState::Failed)).into(),
+    feedback(state, body, matches!(tools.secondary, ToolState::Failed)).boxed(),
     true,
   )
 }
@@ -498,9 +520,9 @@ fn choice<'a>(
   control_button_content(
     move |_| {
       let marker: Element<'_, Message> = if selected {
-        icon_with_color(Icon::Check, IconSize::Xs, accent).into()
+        icon_with_color(Icon::Check, IconSize::Xs, accent).boxed()
       } else {
-        space().width(14).into()
+        space().width(14).boxed()
       };
       row![
         text(label.clone()).size(TOKENS.font_sizes.s13).width(Fill),
@@ -508,7 +530,7 @@ fn choice<'a>(
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     if embedded && selected {
       ButtonVariant::PillActive
@@ -521,7 +543,7 @@ fn choice<'a>(
   .min_height(40.0)
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s2_5])
   .on_press_maybe(enabled.then(|| execute(state, command)).flatten())
-  .into()
+  .boxed()
 }
 
 type Scope = (SessionToken, Option<PlaybackFileToken>, u64);
@@ -536,19 +558,19 @@ fn scope(state: &State) -> Scope {
 
 pub(super) fn guard<'a>(
   state: &State,
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
 ) -> Element<'a, Message> {
   guard_scope(scope(state), content)
 }
 
 pub(crate) fn guard_scope<'a, S: Clone + Eq + 'static>(
   scope: S,
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
 ) -> Element<'a, Message> {
-  Element::new(Guard {
+  iced::advanced::Widget::_boxed(Guard {
     scope,
     keys: Vec::new(),
-    content: content.into(),
+    content: content.boxed(),
   })
 }
 
@@ -565,13 +587,13 @@ pub(crate) fn guarded_rows<'a, S: Clone + Eq + 'static>(
   spacing: f32,
 ) -> Element<'a, Message> {
   let (keys, children): (Vec<String>, Vec<Element<'a, Message>>) = entries.into_iter().unzip();
-  Element::new(Guard {
+  iced::advanced::Widget::_boxed(Guard {
     scope,
     keys,
     content: Column::with_children(children)
       .width(Fill)
       .spacing(spacing)
-      .into(),
+      .boxed(),
   })
 }
 
@@ -584,6 +606,8 @@ struct GuardState<S> {
   keys: Vec<String>,
   pressed: Option<(S, Vec<String>)>,
 }
+
+impl<S> widget::Meta for Guard<'_, S> {}
 
 impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'_, S> {
   fn tag(&self) -> widget::tree::Tag {
@@ -615,39 +639,38 @@ impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'
         .collect();
       state.keys.clone_from(&self.keys);
     }
-    self.content.as_widget_mut().diff(&mut tree.children[0]);
+    self.content.diff(&mut tree.children[0]);
   }
   fn size(&self) -> Size<Length> {
-    self.content.as_widget().size()
+    self.content.size()
   }
   fn layout(
     &mut self,
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits)
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     self
       .content
-      .as_widget_mut()
-      .operate(&mut tree.children[0], layout, renderer, operation);
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
   }
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -670,7 +693,7 @@ impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'
       .take()
       .is_some_and(|(scope, keys)| scope != self.scope || keys != self.keys);
     // A release with no hit clears the child's pressed state while retaining keyboard focus.
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -690,11 +713,11 @@ impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
@@ -707,33 +730,31 @@ impl<S: Clone + Eq + 'static> Widget<Message, Theme, iced::Renderer> for Guard<'
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }
@@ -1118,6 +1139,7 @@ mod tests {
             x: None,
             y: Some(1000.0),
           },
+          iced::advanced::widget::operation::Animation::Instant,
         ),
       );
       ui.operate(

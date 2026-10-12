@@ -28,6 +28,7 @@ pub(crate) mod undo;
 mod update;
 mod view;
 
+use iced::widget::Widget as _;
 use iced::{Subscription, Task, Theme};
 use jellypilot_core::config::{AppMode, UiMode};
 
@@ -180,7 +181,7 @@ pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Me
     return iced::widget::container(crate::embedded::view())
       .width(size.width)
       .height(size.height)
-      .into();
+      .boxed();
   }
   let enabled = motion_enabled(state);
   let content = jellypilot_ui::widgets::motion::transition(

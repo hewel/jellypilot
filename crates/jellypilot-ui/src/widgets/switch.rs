@@ -152,6 +152,8 @@ const TRACK: Size = Size::new(40.0, 22.0);
 const KNOB: f32 = 18.0;
 const KNOB_INSET: f32 = 2.0;
 
+impl iced::advanced::widget::Meta for SwitchVisual {}
+
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for SwitchVisual
 where
     Renderer: iced::advanced::Renderer,
@@ -177,19 +179,15 @@ where
         Size::new(Length::Fixed(TRACK.width), Length::Fixed(TRACK.height))
     }
 
-    fn layout(
-        &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::atomic(limits, TRACK.width, TRACK.height)
+    fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) {
+        tree.size = layout::atomic(limits, TRACK.width, TRACK.height);
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        _viewport: &Rectangle,
         _renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
@@ -204,7 +202,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        _layout: Layout<'_>,
+        _layout: Layout,
         _cursor: mouse::Cursor,
         _renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -258,7 +256,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         _style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
@@ -303,6 +301,6 @@ where
     Renderer: 'a + iced::advanced::Renderer,
 {
     fn from(visual: SwitchVisual) -> Self {
-        Element::new(visual)
+        (visual)._boxed()
     }
 }

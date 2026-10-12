@@ -344,9 +344,10 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
         remember_horizontal(state, id.clone(), *offset);
       }
       let horizontal = horizontal.map_or_else(Task::none, |(id, x)| {
-        iced::widget::operation::scroll_to(
+        iced::widget::operation::scrollable::scroll_to(
           id,
-          iced::widget::operation::AbsoluteOffset { x, y: 0.0 },
+          iced::widget::operation::scrollable::AbsoluteOffset { x, y: 0.0 },
+          iced::advanced::widget::operation::Animation::Instant,
         )
       });
       Task::batch([navigation::restore_scroll(state), horizontal])

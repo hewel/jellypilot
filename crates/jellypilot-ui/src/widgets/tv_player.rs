@@ -107,7 +107,7 @@ pub fn session_switch<'a, Message: 'a>(selected: bool, scale: f32) -> Element<'a
             border: Border::default().rounded(99),
             ..container::Style::default()
         })
-        .into()
+        ._boxed()
 }
 
 /// Localized seek emphasis; the fixed 30px slot does not move neighboring controls.
@@ -118,13 +118,14 @@ pub fn timeline<'a, Message: 'a>(
     focus: f32,
     scale: f32,
 ) -> Element<'a, Message> {
-    Element::new(Timeline {
+    (Timeline {
         position,
         duration,
         buffered,
         focus,
         scale,
     })
+    ._boxed()
 }
 
 struct Timeline<'a> {
@@ -135,17 +136,14 @@ struct Timeline<'a> {
     scale: f32,
 }
 
+impl iced::advanced::widget::Meta for Timeline<'_> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for Timeline<'_> {
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fixed(30.0 * self.scale))
     }
-    fn layout(
-        &mut self,
-        _: &mut widget::Tree,
-        _: &iced::Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::atomic(limits, Length::Fill, 30.0 * self.scale)
+    fn layout(&mut self, tree: &mut widget::Tree, _: &iced::Renderer, limits: &layout::Limits) {
+        tree.size = layout::atomic(limits, Length::Fill, 30.0 * self.scale);
     }
     fn draw(
         &self,
@@ -153,7 +151,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Timeline<'_> {
         renderer: &mut iced::Renderer,
         _: &Theme,
         _: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         _: iced::mouse::Cursor,
         viewport: &Rectangle,
     ) {

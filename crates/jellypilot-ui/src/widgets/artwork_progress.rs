@@ -44,6 +44,8 @@ impl ArtworkProgress {
     }
 }
 
+impl iced::advanced::widget::Meta for ArtworkProgress {}
+
 impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ArtworkProgress {
     fn size(&self) -> iced::Size<Length> {
         iced::Size::new(Length::Fill, Length::Fixed(self.strip_height))
@@ -51,11 +53,11 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ArtworkProgress {
 
     fn layout(
         &mut self,
-        _tree: &mut widget::Tree,
+        tree: &mut widget::Tree,
         _renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::atomic(limits, Length::Fill, Length::Fixed(self.strip_height))
+    ) {
+        tree.size = layout::atomic(limits, Length::Fill, Length::Fixed(self.strip_height));
     }
 
     fn draw(
@@ -64,7 +66,7 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ArtworkProgress {
         renderer: &mut iced::Renderer,
         theme: &iced::Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: iced::mouse::Cursor,
         viewport: &iced::Rectangle,
     ) {
@@ -140,6 +142,6 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ArtworkProgress {
 
 impl<'a, Message: 'a> From<ArtworkProgress> for Element<'a, Message> {
     fn from(value: ArtworkProgress) -> Self {
-        Self::new(value)
+        value._boxed()
     }
 }

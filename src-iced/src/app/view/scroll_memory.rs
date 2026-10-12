@@ -26,7 +26,7 @@ pub(crate) fn remember<'a>(
   content: Element<'a, Message>,
   memory: &ScrollMemory,
 ) -> Element<'a, Message> {
-  Element::new(Remember {
+  iced::advanced::Widget::_boxed(Remember {
     content,
     memory: memory.clone(),
   })
@@ -36,6 +36,8 @@ struct Remember<'a> {
   content: Element<'a, Message>,
   memory: ScrollMemory,
 }
+
+impl widget::Meta for Remember<'_> {}
 
 impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
   fn tag(&self) -> widget::tree::Tag {
@@ -57,7 +59,7 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
   }
 
   fn size(&self) -> Size<Length> {
-    self.content.as_widget().size()
+    self.content.size()
   }
 
   fn layout(
@@ -65,43 +67,44 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    let node = self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits);
-    self.content.as_widget_mut().operate(
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    let child_size = tree.children[0].size;
+    self.content.operate(
       &mut tree.children[0],
-      Layout::new(&node),
+      Layout::new(child_size),
+      &Rectangle::with_size(child_size),
       renderer,
       &mut Positions {
         positions: &mut self.memory.0.borrow_mut(),
         mode: Mode::Restore,
       },
     );
-    node
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
 
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget_mut().operate(
+    self.content.operate(
       &mut tree.children[0],
       layout,
+      viewport,
       renderer,
       &mut Positions {
         positions: &mut self.memory.0.borrow_mut(),
         mode: Mode::Observe,
       },
     );
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -110,9 +113,10 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
       shell,
       viewport,
     );
-    self.content.as_widget_mut().operate(
+    self.content.operate(
       &mut tree.children[0],
       layout,
+      viewport,
       renderer,
       &mut Positions {
         positions: &mut self.memory.0.borrow_mut(),
@@ -124,13 +128,15 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
-    self.content.as_widget_mut().operate(
+    self.content.operate(
       &mut tree.children[0],
       layout,
+      viewport,
       renderer,
       &mut RememberOperation {
         operation,
@@ -145,11 +151,11 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
@@ -163,34 +169,32 @@ impl Widget<Message, Theme, iced::Renderer> for Remember<'_> {
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
 
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }
@@ -214,15 +218,20 @@ impl widget::Operation for Positions<'_> {
   fn scrollable(
     &mut self,
     id: Option<&widget::Id>,
-    _bounds: Rectangle,
-    _content: Rectangle,
+    bounds: Rectangle,
+    content: iced::Size,
     translation: Vector,
     state: &mut dyn widget::operation::Scrollable,
   ) {
     let Some(id) = id else { return };
     let position = self.positions.entry(id.clone()).or_default();
     match self.mode {
-      Mode::Restore => state.scroll_to(position.offset.into()),
+      Mode::Restore => state.scroll_to(
+        position.offset.into(),
+        widget::operation::Animation::Instant,
+        bounds,
+        content,
+      ),
       Mode::Observe => position.observed = translation,
       Mode::Capture => {
         // Iced reports clamped translations, not the underlying absolute offsets.
@@ -261,7 +270,7 @@ impl widget::Operation for RememberOperation<'_> {
     &mut self,
     id: Option<&widget::Id>,
     bounds: Rectangle,
-    content: Rectangle,
+    content: iced::Size,
     translation: Vector,
     state: &mut dyn widget::operation::Scrollable,
   ) {
@@ -287,8 +296,8 @@ impl widget::Operation for RememberOperation<'_> {
     }
   }
 
-  fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
-    self.operation.container(id, bounds);
+  fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle, _viewport: &iced::Rectangle) {
+    self.operation.container(id, bounds, _viewport);
   }
   fn focusable(
     &mut self,
@@ -306,8 +315,13 @@ impl widget::Operation for RememberOperation<'_> {
   ) {
     self.operation.text_input(id, bounds, state);
   }
-  fn text(&mut self, id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
-    self.operation.text(id, bounds, text);
+  fn text(
+    &mut self,
+    id: Option<&widget::Id>,
+    bounds: Rectangle,
+    state: &mut dyn iced::advanced::widget::operation::Text,
+  ) {
+    self.operation.text(id, bounds, state);
   }
   fn custom(&mut self, id: Option<&widget::Id>, bounds: Rectangle, state: &mut dyn Any) {
     self.operation.custom(id, bounds, state);
@@ -318,7 +332,7 @@ struct RememberScrollable<'a> {
   state: &'a mut dyn widget::operation::Scrollable,
   position: &'a mut Position,
   bounds: Rectangle,
-  content: Rectangle,
+  content: Size,
   translation: Vector,
 }
 
@@ -346,8 +360,14 @@ impl RememberScrollable<'_> {
 }
 
 impl widget::operation::Scrollable for RememberScrollable<'_> {
-  fn snap_to(&mut self, offset: RelativeOffset<Option<f32>>) {
-    self.state.snap_to(offset);
+  fn snap_to(
+    &mut self,
+    offset: RelativeOffset<Option<f32>>,
+    animation: widget::operation::Animation,
+    bounds: Rectangle,
+    content: Size,
+  ) {
+    self.state.snap_to(offset, animation, bounds, content);
     self.save(AbsoluteOffset {
       x: offset
         .x
@@ -358,13 +378,25 @@ impl widget::operation::Scrollable for RememberScrollable<'_> {
     });
   }
 
-  fn scroll_to(&mut self, offset: AbsoluteOffset<Option<f32>>) {
-    self.state.scroll_to(offset);
+  fn scroll_to(
+    &mut self,
+    offset: AbsoluteOffset<Option<f32>>,
+    animation: widget::operation::Animation,
+    bounds: Rectangle,
+    content: Size,
+  ) {
+    self.state.scroll_to(offset, animation, bounds, content);
     self.save(offset);
   }
 
-  fn scroll_by(&mut self, offset: AbsoluteOffset, bounds: Rectangle, content: Rectangle) {
-    self.state.scroll_by(offset, bounds, content);
+  fn scroll_by(
+    &mut self,
+    offset: AbsoluteOffset,
+    animation: widget::operation::Animation,
+    bounds: Rectangle,
+    content: Size,
+  ) {
+    self.state.scroll_by(offset, animation, bounds, content);
     self.save(AbsoluteOffset {
       x: (content.width > bounds.width)
         .then(|| (self.translation.x + offset.x).clamp(0.0, content.width - bounds.width)),
@@ -378,6 +410,7 @@ impl widget::operation::Scrollable for RememberScrollable<'_> {
 mod tests {
   use super::*;
   use iced::advanced::renderer::Headless;
+  use iced::widget::Widget as _;
   use iced::widget::{column, responsive, scrollable, space};
   use iced::{Fill, Point};
 
@@ -385,26 +418,30 @@ mod tests {
     renderer: iced::Renderer,
     tree: widget::Tree,
     content: Element<'static, Message>,
-    node: layout::Node,
+    node: crate::app::test_support::LayoutGeometry,
+  }
+
+  fn headless_renderer() -> iced::Renderer {
+    iced::futures::executor::block_on(iced::Renderer::new(
+      renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    ))
+    .expect("headless renderer")
   }
 
   impl Page {
     fn new(memory: &ScrollMemory) -> Self {
-      let renderer = iced::futures::executor::block_on(iced::Renderer::new(
-        renderer::Settings {
-          font: iced::Font::DEFAULT,
-          text_size: 16.0.into(),
-          line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
-          metrics_hinting: false,
-        },
-        Some("tiny-skia"),
-      ))
-      .expect("headless renderer");
+      let renderer = headless_renderer();
       let mut page = Self {
         renderer,
         tree: widget::Tree::empty(),
-        content: space().into(),
-        node: layout::Node::new(Size::ZERO),
+        content: space().boxed(),
+        node: crate::app::test_support::LayoutGeometry::from_tree(&widget::Tree::empty()),
       };
       page.rebuild(memory, 1800.0, true);
       page
@@ -414,6 +451,7 @@ mod tests {
       self.content = remember(
         responsive(move |_| {
           let horizontal = scrollable(space().width(1000).height(80))
+            .smooth_scroll(false)
             .id(widget::Id::new("row"))
             .direction(scrollable::Direction::Horizontal(
               scrollable::Scrollbar::new(),
@@ -421,15 +459,17 @@ mod tests {
             .width(Fill)
             .height(100);
           scrollable(column![horizontal, space().height(height)])
+            .smooth_scroll(false)
             .id(widget::Id::new(if ready { "page" } else { "loading" }))
             .width(Fill)
             .height(Fill)
         })
-        .into(),
+        .boxed(),
         memory,
       );
-      self.tree.diff(self.content.as_widget_mut());
-      self.node = self.content.as_widget_mut().layout(
+      self.tree.diff(&mut self.content);
+      self.node = crate::app::test_support::layout_widget(
+        &mut self.content,
         &mut self.tree,
         &self.renderer,
         &layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0)),
@@ -437,9 +477,10 @@ mod tests {
     }
 
     fn operate(&mut self, operation: &mut dyn widget::Operation) {
-      self.content.as_widget_mut().operate(
+      self.content.operate(
         &mut self.tree,
-        Layout::new(&self.node),
+        self.node.layout(),
+        &Rectangle::with_size(self.node.size()),
         &self.renderer,
         operation,
       );
@@ -452,10 +493,14 @@ mod tests {
           x: Some(x),
           y: Some(y),
         },
+        iced::advanced::widget::operation::Animation::Instant,
       ));
     }
 
     fn offsets(&mut self) -> HashMap<widget::Id, Vector> {
+      self.input(Event::Window(iced::window::Event::RedrawRequested(
+        iced::time::Instant::now(),
+      )));
       #[derive(Default)]
       struct Probe(HashMap<widget::Id, Vector>);
       impl widget::Operation for Probe {
@@ -465,8 +510,8 @@ mod tests {
         fn scrollable(
           &mut self,
           id: Option<&widget::Id>,
-          _: Rectangle,
-          _: Rectangle,
+          _: iced::Rectangle,
+          _: iced::Size,
           translation: Vector,
           _: &mut dyn widget::operation::Scrollable,
         ) {
@@ -482,10 +527,10 @@ mod tests {
 
     fn input(&mut self, event: Event) {
       let mut messages = iced::advanced::shell::Bus::new();
-      self.content.as_widget_mut().update(
+      self.content.update(
         &mut self.tree,
         &event,
-        Layout::new(&self.node),
+        self.node.layout(),
         mouse::Cursor::Available(Point::new(80.0, 150.0)),
         &self.renderer,
         &mut Shell::new(

@@ -11,16 +11,17 @@ use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 /// Wraps a text input so focused Escape publishes `on_escape` before iced can
 /// consume the key and discard the child's focus state.
 pub fn clear_on_escape<'a, Message>(
-    input: impl Into<Element<'a, Message>>,
+    input: impl Widget<Message, Theme, iced::Renderer> + 'a,
     on_escape: Message,
 ) -> Element<'a, Message>
 where
     Message: Clone + 'a,
 {
-    Element::new(EscapeInput {
-        input: input.into(),
+    (EscapeInput {
+        input: input._boxed(),
         on_escape,
     })
+    ._boxed()
 }
 
 struct EscapeInput<'a, Message, Renderer = iced::Renderer> {
@@ -28,16 +29,18 @@ struct EscapeInput<'a, Message, Renderer = iced::Renderer> {
     on_escape: Message,
 }
 
+impl<Message> iced::advanced::widget::Meta for EscapeInput<'_, Message> where Message: Clone {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for EscapeInput<'_, Message>
 where
     Message: Clone,
 {
     fn diff(&mut self, tree: &mut widget::Tree) {
-        tree.diff_children(&mut [self.input.as_widget_mut()]);
+        tree.diff_children(&mut [&mut self.input]);
     }
 
     fn size(&self) -> Size<Length> {
-        self.input.as_widget().size()
+        self.input.size()
     }
 
     fn layout(
@@ -45,29 +48,29 @@ where
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.input
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    ) {
+        self.input.layout(&mut tree.children[0], renderer, limits);
+        tree.size = tree.children[0].size;
+        tree.children[0].translation = iced::Vector::ZERO;
     }
 
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
         self.input
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -75,9 +78,10 @@ where
     ) {
         if is_escape(event)
             && child_is_focused(
-                self.input.as_widget_mut(),
+                &mut self.input,
                 &mut tree.children[0],
                 layout,
+                viewport,
                 renderer,
             )
         {
@@ -85,7 +89,7 @@ where
             shell.capture_event();
             return;
         }
-        self.input.as_widget_mut().update(
+        self.input.update(
             &mut tree.children[0],
             event,
             layout,
@@ -102,11 +106,11 @@ where
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.input.as_widget().draw(
+        self.input.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -120,34 +124,31 @@ where
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        self.input.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.input
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut widget::Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        self.input.as_widget_mut().overlay(
+        self.input.overlay(
             &mut tree.children[0],
             layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -155,7 +156,8 @@ where
 pub(crate) fn child_is_focused<Message, Renderer: iced::advanced::Renderer>(
     input: &mut dyn Widget<Message, Theme, Renderer>,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &Renderer,
 ) -> bool {
     struct FocusProbe {
@@ -178,7 +180,7 @@ pub(crate) fn child_is_focused<Message, Renderer: iced::advanced::Renderer>(
     }
 
     let mut probe = FocusProbe { focused: false };
-    input.operate(tree, layout, renderer, &mut probe);
+    input.operate(tree, layout, viewport, renderer, &mut probe);
     probe.focused
 }
 

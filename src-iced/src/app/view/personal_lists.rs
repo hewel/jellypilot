@@ -1,4 +1,5 @@
 use crate::i18n::{Localizer, UiText};
+use iced::widget::Widget as _;
 use iced::widget::{
   column, container, hover, responsive, row, scrollable, space, text, Column, Row, Stack,
 };
@@ -41,7 +42,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
       _ => overview(state, width),
     }
   })
-  .into()
+  .boxed()
 }
 
 fn overview(state: &State, width: f32) -> Element<'_, Message> {
@@ -58,11 +59,12 @@ fn overview(state: &State, width: f32) -> Element<'_, Message> {
   .padding([TOKENS.spacing.s10, TOKENS.spacing.s9])
   .width(Fill);
   scrollable(content)
+    .smooth_scroll(false)
     .id(iced::widget::Id::new("personal-lists-overview"))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
-    .into()
+    .boxed()
 }
 
 fn count_label(kind: Kind, page: &ListPage) -> String {
@@ -119,7 +121,7 @@ fn overview_section<'a>(
   ]
   .spacing(14)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn list_page(state: &State, kind: Kind, width: f32) -> Element<'_, Message> {
@@ -158,6 +160,7 @@ fn list_page(state: &State, kind: Kind, width: f32) -> Element<'_, Message> {
   .padding([TOKENS.spacing.s10, TOKENS.spacing.s9])
   .width(Fill);
   scrollable(content)
+    .smooth_scroll(false)
     .id(iced::widget::Id::from(format!(
       "personal-list-{kind:?}-{}",
       page.offset
@@ -165,7 +168,7 @@ fn list_page(state: &State, kind: Kind, width: f32) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
-    .into()
+    .boxed()
 }
 
 fn page_heading(
@@ -173,21 +176,23 @@ fn page_heading(
   title: impl Into<String>,
   subtitle: impl Into<String>,
 ) -> Element<'static, Message> {
-  let mut heading = column![text(title.into())
+  let title: String = title.into();
+  let mut heading = column![text(title)
     .font(DISPLAY_FONT)
     .size(36)
     .line_height(Pixels(40.0))
     .color(palette.text.heading)];
-  let subtitle = subtitle.into();
+  let subtitle: String = subtitle.into();
   if !subtitle.is_empty() {
     heading = heading.push(
-      text(subtitle)
+      (text(subtitle)
         .size(12)
         .line_height(Pixels(16.0))
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
-  heading.spacing(TOKENS.spacing.s2).into()
+  heading.spacing(TOKENS.spacing.s2).boxed()
 }
 
 fn frame_size(kind: Kind, width: f32, shelf: bool) -> (usize, f32, f32) {
@@ -221,49 +226,50 @@ fn list_body<'a>(
   shelf: bool,
 ) -> Element<'a, Message> {
   let (columns, card_width, art_height) = frame_size(kind, width, shelf);
-  let mut body = Column::new().spacing(TOKENS.spacing.s4).width(Fill);
+  let mut body = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s4)
+    .width(Fill);
   if page.loading && !page.entries.is_empty() {
     body = body.push(
-      text(state.t("common-loading"))
+      (text(state.t("common-loading"))
         .size(12)
-        .color(state.palette().text.metadata),
+        .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
   if let Some(error) = &page.error {
-    body = body.push(failure_surface(
-      state.palette(),
-      state.kernel.locale,
-      kind,
-      error,
-    ));
+    body = body.push((failure_surface(state.palette(), state.kernel.locale, kind, error)).boxed());
   }
   if page.entries.is_empty() && !page.loading {
     if page.error.is_none() {
-      body = body.push(empty_surface(state.palette(), state.kernel.locale, kind));
+      body = body.push((empty_surface(state.palette(), state.kernel.locale, kind)).boxed());
     }
-    return body.into();
+    return body.boxed();
   }
-  let mut grid = Column::new().spacing(TOKENS.spacing.s8).width(Fill);
+  let mut grid = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s8)
+    .width(Fill);
   let rows = if shelf {
     1
   } else {
     page.entries.len().max(columns).div_ceil(columns)
   };
   for row_index in 0..rows {
-    let mut cards = Row::new().spacing(TOKENS.spacing.s5);
+    let mut cards = Row::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s5);
     if page.entries.is_empty() {
       for _ in 0..columns {
-        cards = cards.push(skeleton_card(state, card_width, art_height));
+        cards = cards.push((skeleton_card(state, card_width, art_height)).boxed());
       }
     } else {
       for entry in page.entries.iter().skip(row_index * columns).take(columns) {
-        cards = cards.push(list_card(state, kind, entry, card_width, art_height, shelf));
+        cards = cards.push((list_card(state, kind, entry, card_width, art_height, shelf)).boxed());
       }
     }
     if shelf {
       return body
         .push(
-          scrollable(cards)
+          (scrollable(cards)
+            .smooth_scroll(false)
             .id(iced::widget::Id::from(format!("personal-shelf-{kind:?}")))
             .direction(scrollable::Direction::Horizontal(
               scrollable::Scrollbar::new(),
@@ -271,13 +277,14 @@ fn list_body<'a>(
             .width(Fill)
             // The floating scrollbar needs its own gutter below both text lines.
             .height(art_height + COPY_HEIGHT + TOKENS.spacing.s4)
-            .style(jellypilot_ui::theme::scrollable),
+            .style(jellypilot_ui::theme::scrollable))
+          .boxed(),
         )
-        .into();
+        .boxed();
     }
-    grid = grid.push(cards);
+    grid = grid.push((cards).boxed());
   }
-  body.push(grid).into()
+  body.push((grid).boxed()).boxed()
 }
 
 fn list_card<'a>(
@@ -304,7 +311,8 @@ fn list_card<'a>(
     });
   let artwork = control_button_content(
     move |_| {
-      let mut art = Stack::new().push(list_artwork(state, kind, entry, art_height));
+      let mut art = Stack::<Element<'_, Message>>::new()
+        .push((list_artwork(state, kind, entry, art_height)).boxed());
       if let Some((progress, style)) = progress {
         let handle = state
           .full
@@ -316,7 +324,7 @@ fn list_card<'a>(
           .and_then(|cell| cell.handle())
           .cloned();
         art = art.push(
-          container(ArtworkProgress::new(
+          (container(ArtworkProgress::new(
             progress,
             art_height,
             4.0,
@@ -326,17 +334,19 @@ fn list_card<'a>(
           ))
           .width(Fill)
           .height(Fill)
-          .align_y(Alignment::End),
+          .align_y(Alignment::End))
+          .boxed(),
         );
       }
       art
         .push(
-          container(space().width(Fill).height(Fill))
+          (container(space().width(Fill).height(Fill))
             .width(Fill)
             .height(Fill)
-            .style(|theme| jellypilot_ui::widgets::library::artwork_outline(theme, false)),
+            .style(|theme| jellypilot_ui::widgets::library::artwork_outline(theme, false)))
+          .boxed(),
         )
-        .into()
+        .boxed()
     },
     ButtonVariant::Text,
   )
@@ -355,7 +365,10 @@ fn list_card<'a>(
       .as_ref()
       .map(|item| Message::OpenDetail(Box::new(item.clone()))),
   );
-  let mut layers = Stack::new().width(width).height(art_height).push(artwork);
+  let mut layers = Stack::<Element<'_, Message>>::new()
+    .width(width)
+    .height(art_height)
+    .push((artwork).boxed());
   if kind == Kind::Favorites {
     if let Some(rating) = entry
       .item
@@ -364,7 +377,7 @@ fn list_card<'a>(
       .filter(|rating| rating.is_finite() && (0.0..=10.0).contains(rating))
     {
       layers = layers.push(
-        container(
+        (container(
           container(
             row![
               text("★").size(12).line_height(Pixels(14.0)).color(
@@ -386,34 +399,39 @@ fn list_card<'a>(
         .width(Fill)
         .height(Fill)
         .align_x(Alignment::Start)
-        .align_y(Alignment::End),
+        .align_y(Alignment::End))
+        .boxed(),
       );
     }
   }
-  let mut actions = Stack::new().width(width).height(art_height);
+  let mut actions = Stack::<Element<'_, Message>>::new()
+    .width(width)
+    .height(art_height);
   if let Some(item) = entry.item.as_ref() {
     actions = actions.push(
-      container(super::browse::play_button(
+      (container(super::browse::play_button(
         state,
         item,
         true,
         format!("personal-play-{}", artwork_key(kind, &entry.id)),
       ))
       .center_x(Fill)
-      .center_y(Fill),
+      .center_y(Fill))
+      .boxed(),
     );
   }
   if let Some(action) = card_action(state, kind, entry) {
     actions = actions.push(
-      container(action)
+      (container(action)
         .padding(TOKENS.spacing.s2)
         .width(Fill)
         .height(Fill)
         .align_x(Alignment::End)
-        .align_y(Alignment::Start),
+        .align_y(Alignment::Start))
+      .boxed(),
     );
   }
-  let mut artwork: Element<'a, Message> = hover(layers, actions);
+  let mut artwork: Element<'a, Message> = hover(layers, actions).boxed();
   if let Some(spec) = artwork_spec(kind, entry) {
     artwork = observe_image(
       artwork,
@@ -453,7 +471,7 @@ fn list_card<'a>(
     focus_tooltip(copy, entry.name.clone(), TooltipOptions::default())
   ]
   .width(width)
-  .into()
+  .boxed()
 }
 
 fn card_copy<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<'a, Message> {
@@ -489,10 +507,10 @@ fn card_copy<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
     ]
     .spacing(TOKENS.spacing.s2)
     .width(Fill);
-    copy = copy.push(identity);
+    copy = copy.push((identity).boxed());
   } else {
     copy = copy.push(
-      ellipsis_text(
+      (ellipsis_text(
         item
           .and_then(|item| {
             if item.item_type.eq_ignore_ascii_case("Series") {
@@ -506,7 +524,8 @@ fn card_copy<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
       )
       .size(12)
       .line_height(Pixels(16.0))
-      .color(state.palette().text.metadata),
+      .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
   let activity = if kind == Kind::History {
@@ -528,10 +547,11 @@ fn card_copy<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
   };
   if let Some(activity) = activity {
     copy = copy.push(
-      text(activity)
+      (text(activity)
         .size(12)
         .line_height(Pixels(16.0))
-        .color(state.palette().text.metadata),
+        .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
   container(copy)
@@ -541,7 +561,7 @@ fn card_copy<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
     })
     .width(Fill)
     .height(COPY_HEIGHT)
-    .into()
+    .boxed()
 }
 
 fn card_action<'a>(
@@ -616,7 +636,7 @@ fn list_artwork<'a>(
           .content_fit(ContentFit::Cover)
           .width(Fill)
           .height(height)
-          .into();
+          .boxed();
       }
     }
     if cell.state == ImageStatus::Loading {
@@ -628,7 +648,7 @@ fn list_artwork<'a>(
         state.shell.skeleton_phase,
         state.kernel.settings.snapshot().reduced_motion(),
       )
-      .into();
+      .boxed();
     }
   }
   let unavailable = entry.availability == ItemAvailability::Unavailable;
@@ -650,7 +670,7 @@ fn list_artwork<'a>(
   .center_x(Fill)
   .center_y(Fill)
   .style(jellypilot_ui::widgets::library::poster_placeholder)
-  .into()
+  .boxed()
 }
 
 fn skeleton_card(state: &State, width: f32, height: f32) -> Element<'_, Message> {
@@ -692,7 +712,7 @@ fn skeleton_card(state: &State, width: f32, height: f32) -> Element<'_, Message>
     .height(COPY_HEIGHT),
   ]
   .width(width)
-  .into()
+  .boxed()
 }
 
 fn empty_surface<'a>(
@@ -718,7 +738,7 @@ fn empty_surface<'a>(
   .padding(TOKENS.spacing.s6)
   .width(Fill)
   .center_x(Fill)
-  .into()
+  .boxed()
 }
 
 fn failure_surface<'a>(
@@ -749,7 +769,7 @@ fn failure_surface<'a>(
   ]
   .spacing(TOKENS.spacing.s2)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn pagination(locale: Localizer, kind: Kind, page: &ListPage) -> Element<'_, Message> {
@@ -793,7 +813,7 @@ fn pagination(locale: Localizer, kind: Kind, page: &ListPage) -> Element<'_, Mes
   row![previous, space::horizontal(), next]
     .align_y(Alignment::Center)
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 fn route_for(kind: Kind) -> Route {
@@ -879,9 +899,10 @@ mod tests {
     ] {
       let (_, width, height) = frame_size(kind, 1148.0, true);
       let mut card = list_card(&state, kind, &entry, width, height, true);
-      let mut tree = widget::Tree::new(card.as_widget());
-      tree.diff(card.as_widget_mut());
-      let node = card.as_widget_mut().layout(
+      let mut tree = widget::Tree::new(&card);
+      tree.diff(&mut card);
+      let node = crate::app::test_support::layout_widget(
+        &mut card,
         &mut tree,
         &renderer,
         &iced::advanced::layout::Limits::new(iced::Size::ZERO, iced::Size::new(1148.0, 500.0)),

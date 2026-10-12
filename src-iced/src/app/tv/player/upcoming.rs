@@ -1,5 +1,6 @@
 //! TV queue presentation; all mutations use the shared session-owned queue route.
 
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, mouse_area, opaque, row, scrollable, space, stack, text, Column,
 };
@@ -239,12 +240,13 @@ fn reveal(state: &State) -> Task<AppMessage> {
     }
     Focus::Close => return Task::none(),
   };
-  iced::widget::operation::scroll_to(
+  iced::widget::operation::scrollable::scroll_to(
     "tv-upcoming-entries",
-    iced::widget::operation::AbsoluteOffset {
+    iced::widget::operation::scrollable::AbsoluteOffset {
       x: 0.0,
       y: offset * scale,
     },
+    iced::advanced::widget::operation::Animation::Instant,
   )
 }
 
@@ -372,9 +374,10 @@ fn control(
       .align_y(Alignment::Center);
       if let Some(label) = &label {
         content = content.push(
-          text(label.clone())
+          (text(label.clone())
             .size(style::BODY * scale)
-            .font(HEADING_FONT),
+            .font(HEADING_FONT))
+          .boxed(),
         );
       }
       button(
@@ -396,19 +399,19 @@ fn control(
         style::button_progress(style::PALETTE, progress, false)(theme, status)
       })
       .on_press_maybe(enabled.then_some(event.clone()))
-      .into()
+      .boxed()
     },
   ))
   .on_enter(message(Message::Focus(target)))
-  .into();
+  .boxed();
   if target == Focus::Close {
-    container(control).id("tv-upcoming-close").into()
+    container(control).id("tv-upcoming-close").boxed()
   } else if target == Focus::Clear {
-    container(control).id("tv-upcoming-clear").into()
+    container(control).id("tv-upcoming-clear").boxed()
   } else if let Focus::Entry(id, _) = target {
     container(control)
       .id(entry_control_id(id, action_key(target)))
-      .into()
+      .boxed()
   } else {
     control
   }
@@ -430,10 +433,10 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
   ]
   .align_y(Alignment::Center)]
   .spacing(if compact { 12.0 } else { 24.0 } * scale);
-  let mut body = Column::new().spacing(24.0 * scale);
+  let mut body = Column::<Element<'_, AppMessage>>::new().spacing(24.0 * scale);
   if let Some(playing) = &state.playback.view.now_playing {
     body = body.push(
-      column![
+      (column![
         text(state.t("viewing-queue-current"))
           .size(style::META * scale)
           .color(style::PALETTE.text.metadata),
@@ -442,7 +445,8 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
           .font(HEADING_FONT)
       ]
       .spacing(8.0 * scale)
-      .height(72.0 * scale),
+      .height(72.0 * scale))
+      .boxed(),
     );
   }
   let mut entries = Vec::new();
@@ -461,20 +465,15 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
     ]
     .spacing(8.0 * scale)
     .width(Fill);
-    let mut actions = row![].spacing(8.0 * scale);
+    let mut actions = iced::widget::Row::<Element<'_, AppMessage>>::new().spacing(8.0 * scale);
     for (action, icon) in [
       (EntryAction::Play, Icon::Play),
       (EntryAction::Up, Icon::ArrowUp),
       (EntryAction::Down, Icon::ArrowDown),
       (EntryAction::Remove, Icon::Trash),
     ] {
-      actions = actions.push(control(
-        state,
-        Focus::Entry(entry.id, action),
-        icon,
-        false,
-        scale,
-      ));
+      actions =
+        actions.push((control(state, Focus::Entry(entry.id, action), icon, false, scale)).boxed());
     }
     entries.push((
       entry.id,
@@ -485,24 +484,24 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
       )
       .height(ROW_HEIGHT * scale)
       .align_y(Alignment::Center)
-      .into(),
+      .boxed(),
     ));
   }
   if state.playback.view.upcoming.entries.is_empty() {
-    body = body.push(text(state.t("viewing-queue-empty")).size(style::BODY * scale));
+    body = body.push((text(state.t("viewing-queue-empty")).size(style::BODY * scale)).boxed());
   } else {
-    body = body.push(crate::app::view::viewing_queue::queue_rows(
-      state,
-      entries,
-      ROW_GAP * scale,
-    ));
-    body = body.push(crate::app::view::viewing_queue::queue_guard(
-      state,
-      control(state, Focus::Clear, Icon::Trash, true, scale),
-    ));
+    body = body
+      .push((crate::app::view::viewing_queue::queue_rows(state, entries, ROW_GAP * scale)).boxed());
+    body = body.push(
+      (crate::app::view::viewing_queue::queue_guard(
+        state,
+        control(state, Focus::Clear, Icon::Trash, true, scale),
+      ))
+      .boxed(),
+    );
   }
   if state.playback.view.upcoming.pending.is_some() {
-    body = body.push(text(state.t("viewing-queue-starting")).size(style::META * scale));
+    body = body.push((text(state.t("viewing-queue-starting")).size(style::META * scale)).boxed());
   }
   if let Some(error) = state
     .playback
@@ -512,21 +511,29 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
     .or(state.playback.notice.as_ref())
   {
     body = body.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(style::META * scale)
-        .color(style::PALETTE.colors.error),
+        .color(style::PALETTE.colors.error))
+      .boxed(),
     );
   }
   content = content.push(
-    container(scrollable(body).id("tv-upcoming-entries").height(Fill))
-      .id("tv-upcoming-body")
-      .height(Fill),
+    (container(
+      scrollable(body)
+        .smooth_scroll(false)
+        .id("tv-upcoming-entries")
+        .height(Fill),
+    )
+    .id("tv-upcoming-body")
+    .height(Fill))
+    .boxed(),
   );
   if !compact {
     content = content.push(
-      text(state.t(action_key(state.tv.player.upcoming.focus)))
+      (text(state.t(action_key(state.tv.player.upcoming.focus)))
         .size(style::META * scale)
-        .color(style::PALETTE.text.body),
+        .color(style::PALETTE.text.body))
+      .boxed(),
     );
   }
   let panel = container(content)
@@ -550,12 +557,13 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
       .align_x(Alignment::End)
       .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
   ]
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
   use iced::Size;
   use jellypilot_core::config::UiMode;
   use jellypilot_mpv::playback_session::UpcomingQueueEntry;
@@ -685,7 +693,7 @@ mod tests {
 
   #[tokio::test]
   async fn queue_close_stays_reachable_with_long_error_in_short_viewports() {
-    use iced::advanced::{layout, renderer, renderer::Headless, widget, Layout};
+    use iced::advanced::{layout, renderer, renderer::Headless, widget};
     use jellypilot_core::locale::UiLanguage;
 
     #[derive(Default)]
@@ -698,7 +706,12 @@ mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: iced::Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("tv-upcoming-panel")) {
           self.panel = Some(bounds);
         }
@@ -725,16 +738,21 @@ mod tests {
         state.playback.viewing_queue.error = Some(crate::i18n::UiText::new("viewing-queue-full"));
         let mut page = view(&state);
         let mut tree = widget::Tree::new(&page);
-        tree.diff(page.as_widget_mut());
-        let node = page.as_widget_mut().layout(
+        tree.diff(&mut page);
+        let node = crate::app::test_support::layout_widget(
+          &mut page,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::ZERO, viewport),
         );
         let mut bounds = Bounds::default();
-        page
-          .as_widget_mut()
-          .operate(&mut tree, Layout::new(&node), &renderer, &mut bounds);
+        page.operate(
+          &mut tree,
+          node.layout(),
+          &iced::Rectangle::with_size(node.size()),
+          &renderer,
+          &mut bounds,
+        );
         let panel = bounds.panel.expect("queue panel");
         let close = bounds.close.expect("header close");
         let scale = style::scale(viewport.width);

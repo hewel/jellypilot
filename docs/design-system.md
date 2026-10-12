@@ -518,3 +518,34 @@ Human acceptance: compare a movie, series and episode against the references in 
 The desktop implementation and shared media-info/FFI contracts are delivered; Paper references remain unchanged. Headless regressions cover provider metadata boundaries, default-first summaries, long-text layout, keyboard popover behavior, and originating-season navigation through retry and history restoration. Workspace checks/tests and the isolated native first-frame smoke gate pass; these checks do not establish visual acceptance. No new ADR is needed for these presentation and information-ownership rules.
 
 Human acceptance: compare all three detail types in both themes and at narrow widths; check truthful resolution/range summaries and complete codec/frame-rate information, default-first track summaries and `+N` counts, same-language tracks, missing/default-less metadata, confirmed no-subtitle versus unavailable data, multi-source disclosure, long read-only popovers and keyboard dismissal, complete bottom-information alignment, and absent series-wide specifications. From a non-first-season episode opened through home, search or Personal Lists, check the series-name link, top-of-series arrival with the originating season selected, missing-parent/season fallbacks, and unchanged Back, Next Up and playback behavior.
+
+
+### 2026-10-08 Sticky navigation backdrop
+
+Desktop Library/Search titles, filters and presentation controls now pin to the top of their
+own Scrollable. Detail Back navigation uses the same surface above the hero and subsequent
+sections; its previous hero-image-only sampling is replaced by the live page backdrop.
+Sidebar, TV navigation and player controls retain their existing surfaces and behavior.
+
+`TOKENS.navigation_blur` owns sigma 20 logical px, an 88 px falloff within the bottom of
+the measured navigation height, and a 92% canvas tint underneath controls. For shorter
+navigation, the falloff spans its height. Blur and tint fade vertically to zero at the
+navigation's bottom edge; content below that edge stays sharp, including the first poster
+row before scrolling. The wgpu renderer
+samples the page already drawn in scene order; navigation text, controls and independent
+popover/tooltip overlays draw afterwards. The wrapper stays inside Scrollable so native
+scrollbars draw after the blur and remain clear. Software rendering uses an opaque canvas
+surface without blur. No transition or timer is introduced, including with reduced motion.
+
+Browse retains sparse artwork-grid viewport measurement, page-specific scroll IDs, filters,
+retry banners and focus behavior. Loading placeholders do not carry result scroll IDs or
+update result viewport state. The page scroll memory restores real results and the independent
+Grid/List offsets after layout. Result identity changes reset Scrollable's drag/touch state
+before restoration, including Loading settlement, while preserving toolbar focus. Detail keeps its original hero/section heights
+and Back action. Retry banners remain outside the scrolling scene. Navigation owns pointer hits in
+its measured bounds so obscured cards cannot activate through its surface.
+
+Human acceptance: check Library and Search scrolling in light/dark themes and a narrow
+window with wrapped filters; open sort/Save Filters menus and verify focus and popup anchors
+while scrolled; on Detail scroll past the hero, use Back, and check the scrollbar remains
+sharp. Native smoke and headless tests establish startup/behavior, not visual acceptance.

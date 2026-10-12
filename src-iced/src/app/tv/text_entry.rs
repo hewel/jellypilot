@@ -1,6 +1,7 @@
 //! A remote keyboard and native IME editor; the caller owns the text draft.
 
-use iced::widget::{button, column, container, row, text, text_input, Column};
+use iced::widget::Widget as _;
+use iced::widget::{button, column, container, text, text_input, Column};
 use iced::{Element, Fill, Task};
 use jellypilot_core::tv_navigation::Input;
 use jellypilot_ui::tv as style;
@@ -192,7 +193,7 @@ pub fn view<'a>(
       .style(|theme, status| {
         jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
       })
-      .into()
+      .boxed()
   } else {
     let shown = if value.is_empty() {
       label
@@ -207,12 +208,16 @@ pub fn view<'a>(
       .padding([18.0 * scale, 20.0 * scale])
       .style(style::button(style::PALETTE, false, false))
       .on_press(Message::Native)
-      .into()
+      .boxed()
   };
   let field = container(field).id("tv-text-entry-field");
-  let mut keyboard = Column::new().spacing(12.0 * scale).width(Fill);
+  let mut keyboard = Column::<Element<'_, Message>>::new()
+    .spacing(12.0 * scale)
+    .width(Fill);
   for (row_index, keys) in rows(surface).into_iter().enumerate() {
-    let mut row = row![].spacing(12.0 * scale).width(Fill);
+    let mut row = iced::widget::Row::<Element<'_, Message>>::new()
+      .spacing(12.0 * scale)
+      .width(Fill);
     for (column_index, key) in keys.into_iter().enumerate() {
       let label = match key {
         Key::Character(character) => character.to_string(),
@@ -226,7 +231,7 @@ pub fn view<'a>(
       let focused =
         active && !surface.native && surface.row == row_index && surface.column == column_index;
       row = row.push(
-        container(focus(focused, move |progress| {
+        (container(focus(focused, move |progress| {
           button(
             text(label.clone())
               .size(style::META * scale)
@@ -236,13 +241,14 @@ pub fn view<'a>(
           .height(style::CONTROL * scale)
           .style(style::button_progress(style::PALETTE, progress, false))
           .on_press(Message::Key(row_index, column_index))
-          .into()
+          .boxed()
         }))
         .width(Fill)
-        .id(key_id(row_index, column_index)),
+        .id(key_id(row_index, column_index)))
+        .boxed(),
       );
     }
-    keyboard = keyboard.push(row);
+    keyboard = keyboard.push((row).boxed());
   }
   column![
     field,
@@ -252,7 +258,7 @@ pub fn view<'a>(
     keyboard,
   ]
   .spacing(20.0 * scale)
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]

@@ -34,12 +34,19 @@ where
     Message: 'a,
     Renderer: 'a + iced::advanced::Renderer + iced::advanced::text::Renderer,
 {
-    fn refresh_focus(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer) {
-        if let Some(input_layout) = layout.children().nth(1) {
+    fn refresh_focus(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) {
+        if let Some(input_layout) = super::child_layout(layout, tree, 1) {
             self.input_focused = super::escape_input::child_is_focused(
-                self.children[1].as_widget_mut(),
+                &mut self.children[1],
                 &mut tree.children[1],
                 input_layout,
+                viewport,
                 renderer,
             );
         }
@@ -51,12 +58,12 @@ where
     /// subtree; its focus state is located recursively and used to drive the
     /// frame style.
     pub fn new(
-        leading: impl Into<Element<'a, Message, Theme, Renderer>>,
-        input: impl Into<Element<'a, Message, Theme, Renderer>>,
-        trailing: impl Into<Element<'a, Message, Theme, Renderer>>,
+        leading: impl Widget<Message, Theme, Renderer> + 'a,
+        input: impl Widget<Message, Theme, Renderer> + 'a,
+        trailing: impl Widget<Message, Theme, Renderer> + 'a,
     ) -> Self {
         Self {
-            children: [leading.into(), input.into(), trailing.into()],
+            children: [leading._boxed(), input._boxed(), trailing._boxed()],
             input_focused: false,
         }
     }
@@ -64,9 +71,9 @@ where
 
 /// Creates a [`SearchField`] pill with the default renderer.
 pub fn search_field<'a, Message>(
-    leading: impl Into<Element<'a, Message, Theme, iced::Renderer>>,
-    input: impl Into<Element<'a, Message, Theme, iced::Renderer>>,
-    trailing: impl Into<Element<'a, Message, Theme, iced::Renderer>>,
+    leading: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    input: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    trailing: impl Widget<Message, Theme, iced::Renderer> + 'a,
 ) -> SearchField<'a, Message>
 where
     Message: 'a,
@@ -100,6 +107,16 @@ pub fn frame_style(palette: &ThemePalette, focused: bool) -> container::Style {
     }
 }
 
+impl<'a, Message, Renderer> iced::advanced::widget::Meta for SearchField<'a, Message, Renderer>
+where
+    Message: 'a,
+    Renderer: 'a
+        + iced::advanced::Renderer
+        + iced::advanced::text::Renderer
+        + iced::advanced::svg::Renderer,
+{
+}
+
 impl<'a, Message, Renderer> Widget<Message, Theme, Renderer> for SearchField<'a, Message, Renderer>
 where
     Message: 'a,
@@ -108,6 +125,12 @@ where
         + iced::advanced::text::Renderer
         + iced::advanced::svg::Renderer,
 {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<layout::flex::Cache>()
+    }
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(layout::flex::Cache::default())
+    }
     fn size(&self) -> Size<Length> {
         Size {
             width: Length::Fill,
@@ -119,13 +142,8 @@ where
         tree.diff_children(&mut self.children);
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let node = layout::flex::resolve(
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
+        tree.size = layout::flex::resolve(
             layout::flex::Axis::Horizontal,
             renderer,
             limits,
@@ -134,54 +152,50 @@ where
             Padding::new(3.0),
             0.0,
             Alignment::Center,
-            &mut self.children,
             &mut tree.children,
+            &mut self.children,
+            tree.state.downcast_mut::<layout::flex::Cache>(),
         );
-        self.refresh_focus(tree, Layout::new(&node), renderer);
-        node
+        let geometry = Layout::new(tree.size);
+        self.refresh_focus(tree, geometry, &Rectangle::with_size(tree.size), renderer);
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        for ((child, tree), layout) in self
+        for (child, (layout, tree)) in self
             .children
             .iter_mut()
-            .zip(&mut tree.children)
-            .zip(layout.children())
+            .zip(layout.iter_mut(&mut tree.children))
         {
-            child
-                .as_widget_mut()
-                .operate(tree, layout, renderer, operation);
+            child.operate(tree, layout, viewport, renderer, operation);
         }
-        self.refresh_focus(tree, layout, renderer);
+        self.refresh_focus(tree, layout, viewport, renderer);
     }
 
     fn update(
         &mut self,
         tree: &mut Tree,
         event: &iced::Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: iced::advanced::mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        for ((child, tree), layout) in self
+        for (child, (layout, tree)) in self
             .children
             .iter_mut()
-            .zip(&mut tree.children)
-            .zip(layout.children())
+            .zip(layout.iter_mut(&mut tree.children))
         {
-            child
-                .as_widget_mut()
-                .update(tree, event, layout, cursor, renderer, shell, viewport);
+            child.update(tree, event, layout, cursor, renderer, shell, viewport);
         }
-        self.refresh_focus(tree, layout, renderer);
+        self.refresh_focus(tree, layout, viewport, renderer);
     }
 
     fn draw(
@@ -190,7 +204,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: iced::advanced::mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -212,36 +226,22 @@ where
                 .expect("search field frame always has a background"),
         );
 
-        for ((child, tree), layout) in self
-            .children
-            .iter()
-            .zip(&tree.children)
-            .zip(layout.children())
-        {
-            child
-                .as_widget()
-                .draw(tree, renderer, theme, style, layout, cursor, &bounds);
+        for (child, (layout, tree)) in self.children.iter().zip(layout.iter(&tree.children)) {
+            child.draw(tree, renderer, theme, style, layout, cursor, &bounds);
         }
     }
 
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: iced::advanced::mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> iced::advanced::mouse::Interaction {
-        for ((child, tree), layout) in self
-            .children
-            .iter()
-            .zip(&tree.children)
-            .zip(layout.children())
-        {
+        for (child, (layout, tree)) in self.children.iter().zip(layout.iter(&tree.children)) {
             if cursor.is_over(layout.bounds()) {
-                return child
-                    .as_widget()
-                    .mouse_interaction(tree, layout, cursor, viewport, renderer);
+                return child.mouse_interaction(tree, layout, cursor, viewport, renderer);
             }
         }
         iced::advanced::mouse::Interaction::default()
@@ -250,10 +250,11 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'b>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
         overlay::from_children(
             &mut self.children,
@@ -262,6 +263,7 @@ where
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -276,7 +278,7 @@ where
         + iced::advanced::svg::Renderer,
 {
     fn from(field: SearchField<'a, Message, Renderer>) -> Self {
-        Element::new(field)
+        field._boxed()
     }
 }
 

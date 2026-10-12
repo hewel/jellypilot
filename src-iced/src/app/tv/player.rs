@@ -1,5 +1,6 @@
 //! TV presentation for the existing playback session. Engine ownership stays in playback.
 
+use iced::widget::Widget as _;
 mod tools;
 pub(crate) mod upcoming;
 
@@ -754,7 +755,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         .center_x(Fill)
         .center_y(Fill)
         .style(style::canvas)
-        .into()
+        .boxed()
     };
     let picture = mouse_area(video)
       .on_move(|point| message(Message::PointerMoved(point)))
@@ -769,13 +770,14 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     let mut layers = stack![picture].width(Fill).height(Fill);
     if state.tv.player.remote.full() {
       layers = layers.push(
-        container(space())
+        (container(space())
           .width(Fill)
           .height(220.0 * scale)
-          .style(|_| cinema::scrim(true)),
+          .style(|_| cinema::scrim(true)))
+        .boxed(),
       );
       layers = layers.push(
-        container(
+        (container(
           container(space())
             .width(Fill)
             .height(420.0 * scale)
@@ -783,13 +785,14 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         )
         .width(Fill)
         .height(Fill)
-        .align_y(Alignment::End),
+        .align_y(Alignment::End))
+        .boxed(),
       );
-      layers = layers.push(full_chrome(state, scale));
+      layers = layers.push((full_chrome(state, scale)).boxed());
     }
     if state.playback.view.intro_prompt.is_some() && state.tv.player.remote.panel().is_none() {
       layers = layers.push(
-        container(action_button(
+        (container(action_button(
           state,
           Control::Skip,
           Icon::IntroSkip,
@@ -809,7 +812,8 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
             style::SAFE_Y * scale
           },
           left: 0.0,
-        }),
+        }))
+        .boxed(),
       );
     }
     if let Some(panel) = state.tv.player.remote.panel() {
@@ -817,11 +821,11 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         inert(layers),
         opaque(panel_view(state, panel.kind, bounds, scale))
       ]
-      .into();
+      .boxed();
     }
-    layers.into()
+    layers.boxed()
   })
-  .into()
+  .boxed()
 }
 
 fn full_chrome(state: &State, scale: f32) -> Element<'_, AppMessage> {
@@ -858,9 +862,10 @@ fn full_chrome(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let mut bottom = column![timeline(state, scale)].spacing(20.0 * scale);
   if let Some(notice) = state.playback.notice.as_ref() {
     bottom = bottom.push(
-      text(state.kernel.locale.message(notice))
+      (text(state.kernel.locale.message(notice))
         .size(style::META * scale)
-        .color(style::PALETTE.colors.error),
+        .color(style::PALETTE.colors.error))
+      .boxed(),
     );
   }
   let left = row![
@@ -939,17 +944,18 @@ fn full_chrome(state: &State, scale: f32) -> Element<'_, AppMessage> {
   .spacing(16.0 * scale);
   let side_width = 552.0 * scale;
   bottom = bottom.push(
-    row![
+    (row![
       container(left).width(side_width),
       space().width(Fill),
       center,
       space().width(Fill),
       container(right).width(side_width).align_x(Alignment::End)
     ]
-    .align_y(Alignment::Center),
+    .align_y(Alignment::Center))
+    .boxed(),
   );
   bottom = bottom.push(
-    container(
+    (container(
       ellipsis_text(controls_hint(state).unwrap_or_default())
         .size(style::META * scale)
         .line_height(iced::Pixels(28.0 * scale))
@@ -957,13 +963,14 @@ fn full_chrome(state: &State, scale: f32) -> Element<'_, AppMessage> {
     )
     .width(Fill)
     .height(28.0 * scale)
-    .center_x(Fill),
+    .center_x(Fill))
+    .boxed(),
   );
   container(column![top, space().height(Fill), bottom])
     .width(Fill)
     .height(Fill)
     .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
-    .into()
+    .boxed()
 }
 
 fn controls_hint(state: &State) -> Option<String> {
@@ -1078,7 +1085,7 @@ fn action_button(
           text("10").font(BODY_FONT).size(18.0 * scale)
         ]
         .align_x(Alignment::Center)
-        .into()
+        .boxed()
       } else if let Some(label) = label.as_ref() {
         row![
           icon_with_color(icon, IconSize::Custom(28.0 * scale), color),
@@ -1088,9 +1095,9 @@ fn action_button(
         ]
         .spacing(12.0 * scale)
         .align_y(Alignment::Center)
-        .into()
+        .boxed()
       } else {
-        icon_with_color(icon, IconSize::Custom(32.0 * scale), color).into()
+        icon_with_color(icon, IconSize::Custom(32.0 * scale), color).boxed()
       };
     button(
       container(content)
@@ -1108,7 +1115,7 @@ fn action_button(
     })
     .style(chrome::control(progress, primary, round))
     .on_press_maybe(enabled.then(|| message(Message::Activate(control))))
-    .into()
+    .boxed()
   });
   if primary {
     view
@@ -1117,9 +1124,9 @@ fn action_button(
         Alignment::Center,
         Alignment::Center,
       )
-      .into()
+      .boxed()
   } else {
-    view.into()
+    view.boxed()
   }
 }
 
@@ -1152,10 +1159,10 @@ fn timeline(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let bar: Element<'_, AppMessage> = focus(candidate.is_some(), move |progress| {
     chrome::timeline(position, duration.unwrap_or(0.0), buffered, progress, scale)
   })
-  .into();
+  .boxed();
   let preview = responsive(move |bounds| -> Element<'_, AppMessage> {
     if candidate.is_none() {
-      return space().width(Fill).height(48.0 * scale).into();
+      return space().width(Fill).height(48.0 * scale).boxed();
     }
     let width = 152.0 * scale;
     let fraction = duration.map_or(0.0, |duration| (position / duration).clamp(0.0, 1.0)) as f32;
@@ -1172,25 +1179,24 @@ fn timeline(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .center_x(width)
     ]
     .height(48.0 * scale)
-    .into()
+    .boxed()
   });
-  let mut actions = row![];
+  let mut actions = iced::widget::Row::<Element<'_, AppMessage>>::new();
   if candidate.is_some() {
     actions = actions
-      .push(simple_button(
-        state.t("tv-player-seek-confirm"),
-        Message::ConfirmSeek,
-        false,
-        scale,
-      ))
-      .push(simple_button(
-        state.t("common-cancel"),
-        Message::CancelSeek,
-        false,
-        scale,
-      ));
+      .push(
+        (simple_button(
+          state.t("tv-player-seek-confirm"),
+          Message::ConfirmSeek,
+          false,
+          scale,
+        ))
+        .boxed(),
+      )
+      .push((simple_button(state.t("common-cancel"), Message::CancelSeek, false, scale)).boxed());
   } else if seek_range(state).is_none() {
-    actions = actions.push(text(state.t("tv-player-seek-unavailable")).size(style::META * scale));
+    actions =
+      actions.push((text(state.t("tv-player-seek-unavailable")).size(style::META * scale)).boxed());
   }
   let content = column![
     container(preview).height(48.0 * scale),
@@ -1203,9 +1209,9 @@ fn timeline(state: &State, scale: f32) -> Element<'_, AppMessage> {
     .height(style::CONTROL * scale)
     .align_y(Alignment::Center)
   ];
-  let track: Element<'_, AppMessage> = content.into();
+  let track: Element<'_, AppMessage> = content.boxed();
   if candidate.is_none() && seek_range(state).is_some() {
-    mouse_area(track).on_press(message(Message::Seek)).into()
+    mouse_area(track).on_press(message(Message::Seek)).boxed()
   } else {
     track
   }
@@ -1223,9 +1229,9 @@ fn simple_button(
       .height(style::CONTROL * scale)
       .style(style::button_progress(style::PALETTE, progress, false))
       .on_press(message(event.clone()))
-      .into()
+      .boxed()
   })
-  .into()
+  .boxed()
 }
 
 fn panel_view(
@@ -1269,7 +1275,7 @@ fn panel_view(
     .find(|(_, choice)| matches!(choice.action, ChoiceAction::Close));
   let mut content = column![title].spacing(24.0 * scale);
   if panel == Panel::Information {
-    content = content.push(information(state, scale));
+    content = content.push((information(state, scale)).boxed());
   }
   {
     let room = ((bounds.height - (2.0 * style::SAFE_Y + 360.0) * scale) / (104.0 * scale))
@@ -1294,7 +1300,7 @@ fn panel_view(
       .skip(start)
       .take(room)
     {
-      content = content.push(choice_button(state, index, choice, focused, scale));
+      content = content.push((choice_button(state, index, choice, focused, scale)).boxed());
     }
     let status = match panel {
       Panel::Queue => match &state.playback.queue {
@@ -1315,18 +1321,19 @@ fn panel_view(
       _ => None,
     };
     if let Some(status) = status {
-      content = content.push(text(state.t(status)).size(style::META * scale));
+      content = content.push((text(state.t(status)).size(style::META * scale)).boxed());
     }
   }
-  content = content.push(space().height(Fill));
+  content = content.push((space().height(Fill)).boxed());
   if let Some((index, choice)) = close {
-    content = content.push(choice_button(state, index, choice, focused, scale));
+    content = content.push((choice_button(state, index, choice, focused, scale)).boxed());
   }
   content = content.push(
-    ellipsis_text(panel_hint(state))
+    (ellipsis_text(panel_hint(state))
       .size(style::META * scale)
       .line_height(iced::Pixels(28.0 * scale))
-      .color(style::PALETTE.text.body),
+      .color(style::PALETTE.text.body))
+    .boxed(),
   );
   let max_height = (bounds.height - 2.0 * style::SAFE_Y * scale).max(1.0);
   let panel = container(content)
@@ -1340,7 +1347,7 @@ fn panel_view(
     .height(Fill)
     .align_x(Alignment::End)
     .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
-    .into()
+    .boxed()
 }
 
 fn panel_close_button(index: usize, focused: usize, scale: f32) -> Element<'static, AppMessage> {
@@ -1359,10 +1366,10 @@ fn panel_close_button(index: usize, focused: usize, scale: f32) -> Element<'stat
     .height(style::CONTROL * scale)
     .style(chrome::choice(progress, false, false))
     .on_press(message(Message::ClosePanel))
-    .into()
+    .boxed()
   }))
   .id("tv-player-panel-close")
-  .into()
+  .boxed()
 }
 
 fn choice_button<'a>(
@@ -1408,14 +1415,14 @@ fn choice_button<'a>(
       ]
       .spacing(16.0 * scale)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     } else if compact || close {
       container(label)
         .width(Fill)
         .height(Fill)
         .center_x(Fill)
         .center_y(Fill)
-        .into()
+        .boxed()
     } else {
       row![
         icon_with_color(
@@ -1431,7 +1438,7 @@ fn choice_button<'a>(
       ]
       .align_y(Alignment::Center)
       .spacing(20.0 * scale)
-      .into()
+      .boxed()
     };
     button(content)
       .padding([12.0 * scale, 20.0 * scale])
@@ -1451,9 +1458,9 @@ fn choice_button<'a>(
       })
       .style(chrome::choice(progress, selected, compact))
       .on_press_maybe(enabled.then(|| message(Message::Choice(index))))
-      .into()
+      .boxed()
   })
-  .into()
+  .boxed()
 }
 
 fn information(state: &State, scale: f32) -> Element<'_, AppMessage> {
@@ -1464,17 +1471,18 @@ fn information(state: &State, scale: f32) -> Element<'_, AppMessage> {
       "player-information-loading"
     }))
     .size(style::META * scale)
-    .into();
+    .boxed();
   };
-  let mut rows = Column::new().spacing(0);
+  let mut rows = Column::<Element<'_, AppMessage>>::new().spacing(0);
   if let Some(filename) = info.filename.as_ref() {
     rows = rows.push(
-      container(ellipsis_text(filename.clone()).size(style::BODY * scale))
+      (container(ellipsis_text(filename.clone()).size(style::BODY * scale))
         .width(Fill)
         .padding(iced::Padding {
           bottom: 24.0 * scale,
           ..iced::Padding::ZERO
-        }),
+        }))
+      .boxed(),
     );
   }
   let video = info.video.as_ref();
@@ -1523,13 +1531,16 @@ fn information(state: &State, scale: f32) -> Element<'_, AppMessage> {
     ("player-audio", audio),
     ("player-subtitles", subtitles),
   ] {
-    rows = rows.push(info_row(
-      state.t(label),
-      value.unwrap_or_else(|| state.t("common-unavailable")),
-      scale,
-    ));
+    rows = rows.push(
+      (info_row(
+        state.t(label),
+        value.unwrap_or_else(|| state.t("common-unavailable")),
+        scale,
+      ))
+      .boxed(),
+    );
   }
-  rows.into()
+  rows.boxed()
 }
 
 fn info_row(label: String, value: String, scale: f32) -> Element<'static, AppMessage> {
@@ -1548,12 +1559,13 @@ fn info_row(label: String, value: String, scale: f32) -> Element<'static, AppMes
   .height(64.0 * scale)
   .spacing(24.0 * scale)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
   use iced::futures::StreamExt;
   use jellypilot_core::config::UiMode;
   use jellypilot_mpv::playback::NowPlayingItem;
@@ -1599,7 +1611,7 @@ mod tests {
 
   #[tokio::test]
   async fn settings_panel_fits_content_and_header_close_remains_reachable() {
-    use iced::advanced::{layout, renderer, renderer::Headless, shell, widget, Layout, Shell};
+    use iced::advanced::{layout, renderer, renderer::Headless, shell, widget, Shell};
     use jellypilot_core::locale::UiLanguage;
 
     #[derive(Default)]
@@ -1612,7 +1624,12 @@ mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: iced::Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("tv-player-panel")) {
           self.panel = Some(bounds);
         }
@@ -1638,16 +1655,21 @@ mod tests {
         let scale = style::scale(viewport.width);
         let mut page = panel_view(&state, Panel::Settings, viewport, scale);
         let mut tree = widget::Tree::new(&page);
-        tree.diff(page.as_widget_mut());
-        let node = page.as_widget_mut().layout(
+        tree.diff(&mut page);
+        let node = crate::app::test_support::layout_widget(
+          &mut page,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::ZERO, viewport),
         );
         let mut bounds = Bounds::default();
-        page
-          .as_widget_mut()
-          .operate(&mut tree, Layout::new(&node), &renderer, &mut bounds);
+        page.operate(
+          &mut tree,
+          node.layout(),
+          &iced::Rectangle::with_size(node.size()),
+          &renderer,
+          &mut bounds,
+        );
         let panel = bounds.panel.expect("settings panel bounds");
         let close = bounds.close.expect("header close bounds");
         let available = viewport.height - 2.0 * style::SAFE_Y * scale;
@@ -1676,10 +1698,10 @@ mod tests {
           iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left),
           iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left),
         ] {
-          page.as_widget_mut().update(
+          page.update(
             &mut tree,
             &iced::Event::Mouse(event),
-            Layout::new(&node),
+            node.layout(),
             iced::mouse::Cursor::Available(close.center()),
             &renderer,
             &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),

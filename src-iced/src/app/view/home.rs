@@ -10,6 +10,7 @@ use iced::advanced::{layout, renderer, widget, Layout, Renderer as _, Widget};
 use iced::gradient;
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, mouse_area, responsive, row, scrollable, space, stack, text, Column,
   Row, Stack,
@@ -66,16 +67,21 @@ pub(crate) fn reveal_hero_selection(index: usize) -> iced::Task<Message> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      _content: iced::Rectangle,
+      content: iced::Size,
       _translation: iced::Vector,
       state: &mut dyn widget::operation::Scrollable,
     ) {
       if id == Some(&self.id) {
         let step = RAIL_CARD_WIDTH + TOKENS.spacing.s2_5;
-        state.scroll_to(widget::operation::scrollable::AbsoluteOffset {
-          x: Some((self.index as f32 * step - (bounds.width - RAIL_CARD_WIDTH) / 2.0).max(0.0)),
-          y: None,
-        });
+        state.scroll_to(
+          widget::operation::scrollable::AbsoluteOffset {
+            x: Some((self.index as f32 * step - (bounds.width - RAIL_CARD_WIDTH) / 2.0).max(0.0)),
+            y: None,
+          },
+          widget::operation::Animation::Instant,
+          bounds,
+          content,
+        );
       }
     }
   }
@@ -102,14 +108,14 @@ const fn section_scroll_height(section: HomeSection) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  responsive(move |bounds| home_content(state, bounds)).into()
+  responsive(move |bounds| home_content(state, bounds)).boxed()
 }
 
 fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
 
-  let mut content = Column::new().width(Fill);
+  let mut content = Column::<Element<'_, Message>>::new().width(Fill);
 
   let featured = state
     .full
@@ -132,25 +138,28 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
     });
   let mut scrim_start = HERO_HEIGHT;
   if featured.is_some() || home_is_loading(state) {
-    content = content.push(if let Some((item, section)) = featured {
-      let (hero, metadata_top) = featured_hero(
-        state,
-        item,
-        section.unwrap_or(HomeSection::ContinueWatching),
-        viewport.width,
-        skeleton_phase,
-        reduced_motion,
-      );
-      scrim_start = metadata_top;
-      // User hero changes animate; the revision key ignores data refreshes
-      // and first-content arrival.
-      super::motion::transition(hero, super::motion::hero_key(state))
-    } else {
-      featured_skeleton(skeleton_phase, reduced_motion)
-    });
+    content = content.push(
+      (if let Some((item, section)) = featured {
+        let (hero, metadata_top) = featured_hero(
+          state,
+          item,
+          section.unwrap_or(HomeSection::ContinueWatching),
+          viewport.width,
+          skeleton_phase,
+          reduced_motion,
+        );
+        scrim_start = metadata_top;
+        // User hero changes animate; the revision key ignores data refreshes
+        // and first-content arrival.
+        super::motion::transition(hero, super::motion::hero_key(state))
+      } else {
+        featured_skeleton(skeleton_phase, reduced_motion)
+      })
+      .boxed(),
+    );
   }
 
-  let mut rows = Column::new()
+  let mut rows = Column::<Element<'_, Message>>::new()
     .padding(iced::Padding {
       top: 0.0,
       right: TOKENS.spacing.s9,
@@ -168,14 +177,17 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
     .rows()
   {
     if let Some(section) = section_view(state, row, skeleton_phase, reduced_motion) {
-      rows = rows.push(container(section).padding(iced::Padding {
-        top: if row.section.is_latest() {
-          TOKENS.spacing.s9
-        } else {
-          TOKENS.spacing.s7
-        },
-        ..iced::Padding::ZERO
-      }));
+      rows = rows.push(
+        (container(section).padding(iced::Padding {
+          top: if row.section.is_latest() {
+            TOKENS.spacing.s9
+          } else {
+            TOKENS.spacing.s7
+          },
+          ..iced::Padding::ZERO
+        }))
+        .boxed(),
+      );
     }
   }
 
@@ -188,17 +200,19 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
   // Only the foreground determines row positions. The image can extend
   // below it, but must not shrink to fit a short page or push resume down.
   // Keep the spacer's Shrink width: Row drops Fixed(0)-width children.
-  let page = Stack::new()
+  let page = Stack::<Element<'_, Message>>::new()
     .push_under(background)
     .push(
-      row![
-        content.push(rows),
+      (row![
+        content.push((rows).boxed()),
         space::vertical().height(backdrop_height),
       ]
-      .width(Fill),
+      .width(Fill))
+      .boxed(),
     )
     .width(Fill);
   scrollable(page)
+    .smooth_scroll(false)
     .id(widget::Id::new(if home_is_loading(state) {
       "home-page-loading"
     } else {
@@ -207,7 +221,7 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
-    .into()
+    .boxed()
 }
 
 fn home_is_loading(state: &State) -> bool {
@@ -259,15 +273,16 @@ fn featured_hero<'a>(
     ArtworkPlacement::Hero.spec(item),
     ImageAxis::Vertical,
   );
-  let mut info = Column::new()
+  let mut info = Column::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s2_5)
     .align_x(Alignment::Start)
-    .push(headline);
+    .push((headline).boxed());
   if !secondary.is_empty() {
     info = info.push(
-      ellipsis_text(secondary)
+      (ellipsis_text(secondary)
         .size(metadata_size)
-        .color(palette.text.secondary),
+        .color(palette.text.secondary))
+      .boxed(),
     );
   }
 
@@ -315,13 +330,14 @@ fn featured_hero<'a>(
               .font(HEADING_FONT)
               .style(move |theme| text::Style {
                 color: Some(style(theme, variant, status).text_color),
+                ..text::Style::default()
               }),
           )
           .width(Length::Shrink),
         ]
         .spacing(TOKENS.spacing.s2)
         .align_y(Alignment::Center)
-        .into()
+        .boxed()
       },
       variant,
     )
@@ -381,7 +397,7 @@ fn featured_hero<'a>(
   .id(iced::widget::Id::new("home-hero-watchlist"))
   .on_press_maybe(controls.watchlist_action);
   info = info.push(
-    row![
+    (row![
       focus_tooltip(play, play_label, TooltipOptions::default()),
       focus_tooltip(details, details_label, TooltipOptions::default()),
       focus_tooltip(favorite, controls.favorite_label, TooltipOptions::default()),
@@ -392,7 +408,8 @@ fn featured_hero<'a>(
       ),
     ]
     .spacing(TOKENS.spacing.s2_5)
-    .align_y(Alignment::Center),
+    .align_y(Alignment::Center))
+    .boxed(),
   );
 
   let candidates: Vec<(HomeSection, &VideoLibraryItem)> = home.data.hero_candidates().collect();
@@ -400,26 +417,30 @@ fn featured_hero<'a>(
     .iter()
     .position(|(_, candidate)| candidate.id == item.id)
     .unwrap_or(0);
-  let mut selection = Row::new()
+  let mut selection = Row::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s2_5)
     .align_y(Alignment::Center)
     .width(Fill);
   // One candidate is a static hero: no rail, no navigation controls.
   if candidates.len() > 1 {
-    let mut cards = Row::new()
+    let mut cards = Row::<Element<'_, Message>>::new()
       .spacing(TOKENS.spacing.s2_5)
       .align_y(Alignment::Start);
     for (index, (candidate_section, candidate)) in candidates.iter().enumerate() {
-      cards = cards.push(hero_rail_card(
-        state,
-        *candidate_section,
-        candidate,
-        index == selected_index,
-        skeleton_phase,
-        reduced_motion,
-      ));
+      cards = cards.push(
+        (hero_rail_card(
+          state,
+          *candidate_section,
+          candidate,
+          index == selected_index,
+          skeleton_phase,
+          reduced_motion,
+        ))
+        .boxed(),
+      );
     }
     let rail = scrollable(cards)
+      .smooth_scroll(false)
       .id(hero_rail_scroll_id())
       .direction(Direction::Horizontal(Scrollbar::new()))
       .width(Fill)
@@ -452,10 +473,11 @@ fn featured_hero<'a>(
       .style(hero_style(ButtonVariant::Text))
       .id(iced::widget::Id::new("home-hero-rail-next"))
       .on_press_maybe(next_id.map(|id| Message::Home(HomeMessage::HeroSelected(id))));
-    selection = selection.push(rail).push(
+    selection = selection.push((rail).boxed()).push(
       row![previous, next]
         .spacing(TOKENS.spacing.s1)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .boxed(),
     );
   }
 
@@ -484,8 +506,8 @@ fn featured_hero<'a>(
     .height(HERO_HEIGHT)
     .clip(true);
   (
-    Element::new(HeroGlass {
-      content: hero.into(),
+    iced::advanced::Widget::_boxed(HeroGlass {
+      content: hero.boxed(),
       backdrop,
       buttons: HeroButtonBounds::default(),
     }),
@@ -522,7 +544,7 @@ fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
   stack![backdrop, foreground]
     .width(Fill)
     .height(HERO_HEIGHT)
-    .into()
+    .boxed()
 }
 
 fn section_view<'a>(
@@ -564,19 +586,23 @@ fn section_row<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let mut cards = Row::new()
+  let mut cards = Row::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s5)
     .align_y(Alignment::Start);
   for item in items {
-    cards = cards.push(video_card(
-      state,
-      home_row.section,
-      item,
-      skeleton_phase,
-      reduced_motion,
-    ));
+    cards = cards.push(
+      (video_card(
+        state,
+        home_row.section,
+        item,
+        skeleton_phase,
+        reduced_motion,
+      ))
+      .boxed(),
+    );
   }
   let cards = scrollable(cards)
+    .smooth_scroll(false)
     .id(widget::Id::from(format!(
       "home-row-{}",
       home_row.section.index()
@@ -593,7 +619,7 @@ fn section_row<'a>(
     cards,
   ]
   .spacing(TOKENS.spacing.s3_5)
-  .into()
+  .boxed()
 }
 
 fn video_card<'a>(
@@ -635,19 +661,22 @@ fn video_card<'a>(
     // keeps the artwork chrome-free so only the keyboard focus ring draws.
     let playable_artwork = control_button_content(
       move |_| -> Element<'a, Message> {
-        let mut artwork = Stack::new().push(card_artwork(
-          state,
-          spec.clone(),
-          card_title(item),
-          (frame_width, frame_height),
-          radius,
-          skeleton_phase,
-          reduced_motion,
-        ));
+        let mut artwork = Stack::<Element<'_, Message>>::new().push(
+          (card_artwork(
+            state,
+            spec.clone(),
+            card_title(item),
+            (frame_width, frame_height),
+            radius,
+            skeleton_phase,
+            reduced_motion,
+          ))
+          .boxed(),
+        );
         if let Some(progress) = card_progress(section, item) {
           let handle = cell.and_then(ImageCell::handle);
           artwork = artwork.push(
-            container(progress_bar(
+            (container(progress_bar(
               palette,
               progress,
               radius,
@@ -656,10 +685,11 @@ fn video_card<'a>(
             ))
             .width(Fill)
             .height(Fill)
-            .align_y(Alignment::End),
+            .align_y(Alignment::End))
+            .boxed(),
           );
         }
-        artwork.into()
+        artwork.boxed()
       },
       ButtonVariant::Text,
     )
@@ -674,10 +704,10 @@ fn video_card<'a>(
     )))
     .on_press_maybe(play_enabled.then(|| play_message(state, item)))
     .style(jellypilot_ui::widgets::button::media_artwork);
-    let mut artwork_layers = Stack::new()
+    let mut artwork_layers = Stack::<Element<'_, Message>>::new()
       .width(frame_width)
       .height(frame_height)
-      .push(playable_artwork);
+      .push((playable_artwork).boxed());
     if state
       .full
       .as_ref()
@@ -693,12 +723,13 @@ fn video_card<'a>(
         .padding(7)
         .on_press(Message::OpenDetail(Box::new(item.clone())));
       artwork_layers = artwork_layers.push(
-        container(details)
+        (container(details)
           .padding(TOKENS.spacing.s2)
           .width(Fill)
           .height(Fill)
           .align_x(Alignment::End)
-          .align_y(Alignment::Start),
+          .align_y(Alignment::Start))
+        .boxed(),
       );
     }
     let artwork = container(
@@ -722,7 +753,7 @@ fn video_card<'a>(
       .width(frame_width)
       .clip(true)
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-      .into();
+      .boxed();
   }
 
   let poster = card_artwork(
@@ -752,25 +783,26 @@ fn video_card<'a>(
     left: 0.0,
   })
   .width(frame_width);
-  let mut artwork_layers = Stack::new()
+  let mut artwork_layers = Stack::<Element<'_, Message>>::new()
     .width(frame_width)
     .height(frame_height)
-    .push(poster);
+    .push((poster).boxed());
   if let Some(badge) = count_badge(palette, section, item) {
     artwork_layers = artwork_layers.push(
-      container(badge)
+      (container(badge)
         .padding(TOKENS.spacing.s2)
         .width(Fill)
         .height(Fill)
         .align_x(Alignment::End)
-        .align_y(Alignment::Start),
+        .align_y(Alignment::Start))
+      .boxed(),
     );
   }
 
   poster_card(artwork_layers, copy)
     .width(frame_width)
     .on_press(Message::OpenDetail(Box::new(item.clone())))
-    .into()
+    .boxed()
 }
 
 fn unplayed_badge_text(section: HomeSection, item: &VideoLibraryItem) -> Option<String> {
@@ -803,7 +835,7 @@ fn count_badge<'a>(
         .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
         ..container::Style::default()
       })
-      .into(),
+      .boxed(),
   )
 }
 
@@ -843,7 +875,7 @@ fn hero_imagery<'a>(
     let placeholder = space::horizontal()
       .width(width)
       .height(width * 9.0 / 16.0)
-      .into();
+      .boxed();
     return (
       observe_home(placeholder, state, spec, ImageAxis::Vertical),
       0.0,
@@ -876,7 +908,7 @@ fn hero_imagery<'a>(
       ]
       .width(Fill)
       .height(height)
-      .into(),
+      .boxed(),
       state,
       spec,
       ImageAxis::Vertical,
@@ -966,13 +998,15 @@ struct HeroGlass<'a> {
   buttons: HeroButtonBounds,
 }
 
+impl widget::Meta for HeroGlass<'_> {}
+
 impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
   fn diff(&mut self, tree: &mut widget::Tree) {
-    tree.diff_children(&mut [self.content.as_widget_mut()]);
+    tree.diff_children(std::slice::from_mut(&mut self.content));
   }
 
   fn size(&self) -> iced::Size<Length> {
-    self.content.as_widget().size()
+    self.content.size()
   }
 
   fn layout(
@@ -980,45 +1014,45 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
-    let node = self
-      .content
-      .as_widget_mut()
-      .layout(&mut tree.children[0], renderer, limits);
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
     self.buttons = HeroButtonBounds::default();
-    self.content.as_widget_mut().operate(
+    let child_size = tree.children[0].size;
+    self.content.operate(
       &mut tree.children[0],
-      Layout::new(&node),
+      Layout::new(child_size),
+      &iced::Rectangle::with_size(child_size),
       renderer,
       &mut self.buttons,
     );
-    node
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
   }
 
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &iced::Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
     self
       .content
-      .as_widget_mut()
-      .operate(&mut tree.children[0], layout, renderer, operation);
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
   }
 
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &iced::Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: iced::mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut iced::advanced::Shell<'_, Message>,
     viewport: &iced::Rectangle,
   ) {
-    self.content.as_widget_mut().update(
+    self.content.update(
       &mut tree.children[0],
       event,
       layout,
@@ -1035,7 +1069,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
     renderer: &mut iced::Renderer,
     theme: &iced::Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: iced::mouse::Cursor,
     viewport: &iced::Rectangle,
   ) {
@@ -1045,7 +1079,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
     let origin = iced::Vector::new(layout.bounds().x, layout.bounds().y);
     if let Some(backdrop) = &self.backdrop {
       for mask in self.buttons.0.iter().flatten() {
-        let node = layout::Node::new(mask.bounds.size()).move_to(mask.bounds.position() + origin);
+        let image_layout = Layout::new(mask.bounds.size()).move_to(mask.bounds.position() + origin);
         let image = Image::new(backdrop.handle.clone())
           .content_fit(ContentFit::Contain)
           .display_frame(iced::Rectangle::new(
@@ -1067,7 +1101,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
           renderer,
           theme,
           style,
-          Layout::new(&node),
+          image_layout,
           cursor,
           &visible,
         );
@@ -1075,7 +1109,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
     }
     // Keep Catalog fills, labels and focus borders above native image batches.
     renderer.with_layer(visible, |renderer| {
-      self.content.as_widget().draw(
+      self.content.draw(
         &tree.children[0],
         renderer,
         theme,
@@ -1090,34 +1124,32 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: iced::mouse::Cursor,
     viewport: &iced::Rectangle,
     renderer: &iced::Renderer,
   ) -> iced::mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout,
-      cursor,
-      viewport,
-      renderer,
-    )
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
   }
 
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &iced::Rectangle,
     translation: iced::Vector,
+    window: iced::Size,
   ) -> Vec<iced::advanced::overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    self.content.overlay(
       &mut tree.children[0],
       layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }
@@ -1161,7 +1193,7 @@ fn hero_artwork<'a>(
           ..iced::Padding::ZERO
         });
         let Some(shadow) = cell.logo_shadow() else {
-          return logo.into();
+          return logo.boxed();
         };
         let shadow_height = logo_height * 3.0 / 2.0;
         let shadow_width =
@@ -1175,7 +1207,7 @@ fn hero_artwork<'a>(
           } else {
             Length::Fit
           });
-        return stack![container(shadow_image), logo].into();
+        return stack![container(shadow_image), logo].boxed();
       }
     }
   }
@@ -1184,7 +1216,7 @@ fn hero_artwork<'a>(
     .font(DISPLAY_FONT)
     .size(text_size)
     .color(state.palette().text.heading)
-    .into()
+    .boxed()
 }
 
 /// Secondary hero line: episode identity ("S3:E5 - Title") plus runtime for
@@ -1265,10 +1297,10 @@ fn hero_rail_card<'a>(
       skeleton_phase,
       reduced_motion,
     );
-    Stack::new()
-      .push(artwork)
+    Stack::<Element<'_, Message>>::new()
+      .push((artwork).boxed())
       .push(
-        container(space())
+        (container(space())
           .width(RAIL_IMAGE_WIDTH)
           .height(RAIL_IMAGE_HEIGHT)
           .style(move |_| container::Style {
@@ -1284,9 +1316,10 @@ fn hero_rail_card<'a>(
             },
             snap: false,
             ..container::Style::default()
-          }),
+          }))
+        .boxed(),
       )
-      .into()
+      .boxed()
   };
   let card = control_button_content(content, ButtonVariant::Text)
     .overlay_border()
@@ -1319,7 +1352,7 @@ fn hero_fade(gradient: gradient::Linear) -> Element<'static, Message> {
       background: Some(Background::Gradient(gradient.into())),
       ..iced::widget::container::Style::default()
     })
-    .into()
+    .boxed()
 }
 
 fn observe_home<'a>(
@@ -1373,7 +1406,7 @@ fn card_artwork<'a>(
       phase,
       reduced_motion,
     )
-    .into()
+    .boxed()
   } else {
     render_card_artwork(state, cell, name, size, radius, phase, reduced_motion)
   };
@@ -1397,7 +1430,7 @@ fn render_card_artwork<'a>(
           .content_fit(ContentFit::Cover)
           .width(width)
           .height(height)
-          .into();
+          .boxed();
       }
     }
   }
@@ -1448,7 +1481,7 @@ fn render_card_artwork<'a>(
       },
       ..container::Style::default()
     })
-    .into();
+    .boxed();
   }
 
   skeleton_panel(
@@ -1459,7 +1492,7 @@ fn render_card_artwork<'a>(
     phase,
     reduced_motion,
   )
-  .into()
+  .boxed()
 }
 fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   if section != HomeSection::ContinueWatching
@@ -1508,7 +1541,7 @@ fn progress_bar<'a>(
     artwork,
     style,
   )
-  .into()
+  .boxed()
 }
 
 fn section_skeleton<'a>(
@@ -1519,10 +1552,10 @@ fn section_skeleton<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let (width, height) = section_frame_size(row.section);
-  let mut cards = Row::new().spacing(TOKENS.spacing.s5);
+  let mut cards = Row::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s5);
   for _ in 0..5 {
     cards = cards.push(
-      column![
+      (column![
         skeleton_block_with_radius(
           width,
           height,
@@ -1533,7 +1566,8 @@ fn section_skeleton<'a>(
         skeleton_block(width, 18.0, phase, reduced_motion),
         skeleton_block(width * 0.6, 14.0, phase, reduced_motion),
       ]
-      .spacing(TOKENS.spacing.s2),
+      .spacing(TOKENS.spacing.s2))
+      .boxed(),
     );
   }
   column![
@@ -1542,12 +1576,13 @@ fn section_skeleton<'a>(
       .size(SECTION_TITLE_SIZE)
       .color(palette.text.heading),
     scrollable(cards)
+      .smooth_scroll(false)
       .direction(Direction::Horizontal(Scrollbar::new()))
       .height(section_scroll_height(row.section))
       .style(jellypilot_ui::theme::scrollable),
   ]
   .spacing(TOKENS.spacing.s3_5)
-  .into()
+  .boxed()
 }
 
 fn section_error<'a>(
@@ -1575,7 +1610,7 @@ fn section_error<'a>(
   .padding(TOKENS.spacing.s4)
   .width(Fill)
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]

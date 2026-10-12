@@ -1,5 +1,6 @@
 //! TV search draft, using the shared browse route and remote text editor.
 
+use iced::widget::Widget as _;
 use iced::widget::{button, column, container, opaque, responsive, row, text};
 use iced::{Element, Fill, Task};
 use jellypilot_core::tv_navigation::Input;
@@ -178,8 +179,9 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
       .center_y(Fill)
       .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
       .style(style::canvas)
-      .into()
+      .boxed()
   }))
+  .boxed()
 }
 
 fn action<'a>(
@@ -199,10 +201,10 @@ fn action<'a>(
     .height(style::CONTROL * scale)
     .style(style::button_progress(style::PALETTE, progress, false))
     .on_press_maybe(enabled.then(|| message(event.clone())))
-    .into()
+    .boxed()
   }))
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]

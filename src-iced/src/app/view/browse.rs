@@ -9,10 +9,14 @@ use crate::app::state::{Destination, State};
 use crate::app::{accounts, collections, list_playback};
 use crate::i18n::media::{item_caption, media_type};
 use crate::i18n::Localizer;
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
+use iced::widget::Widget as _;
 use iced::widget::{
   column, container, hover, progress_bar, row, scrollable, space, stack, text, Column, Row,
 };
-use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
+use iced::{
+  Alignment, Color, ContentFit, Element, Event, Fill, Length, Rectangle, Size, Theme, Vector,
+};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::cards::{episode_card_code, is_episode_item};
 use jellypilot_core::diagnostics::sanitize_message;
@@ -133,39 +137,225 @@ pub fn view(state: &State) -> Element<'_, Message> {
     | Destination::Detail(_)
     | Destination::NowPlaying => title.to_owned(),
   };
-  let mut header = Column::new().spacing(TOKENS.spacing.s4).push(
-    text(heading)
-      .font(DISPLAY_FONT)
-      .size(36)
-      .line_height(iced::widget::text::LineHeight::Absolute(40.0.into()))
-      .color(state.palette().text.heading),
-  );
+  let mut header = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s4)
+    .push(
+      (text(heading)
+        .font(DISPLAY_FONT)
+        .size(36)
+        .line_height(iced::widget::text::LineHeight::Absolute(40.0.into()))
+        .color(state.palette().text.heading))
+      .boxed(),
+    );
   if matches!(state.shell.destination, Destination::Library { .. }) {
-    header = header.push(toolbar(state));
+    header = header.push((toolbar(state)).boxed());
     if state
       .full
       .as_ref()
       .is_some_and(|full| full.browse.saved.is_some())
     {
-      header = header.push(super::saved_browse::active_summary(state));
+      header = header.push((super::saved_browse::active_summary(state)).boxed());
     }
   }
-  header = header.push(presentation_bar(state));
+  header = header.push((presentation_bar(state)).boxed());
 
-  column![
-    container(header)
-      .padding(iced::Padding {
-        top: TOKENS.spacing.s7,
-        right: page_padding(class),
-        bottom: TOKENS.spacing.s2,
-        left: page_padding(class),
-      })
-      .width(Fill),
+  let navigation = container(header)
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s7,
+      right: page_padding(class),
+      bottom: TOKENS.spacing.s2,
+      left: page_padding(class),
+    })
+    .width(Fill);
+  let browse = &state.full.as_ref().expect("FullUi required").browse;
+  let body = browse_scroll(
     browse_body(state, class),
-  ]
-  .height(Fill)
+    navigation.boxed(),
+    matches!(browse.view, LibraryBrowseView::Ready { .. }).then(|| browse.scroll_id.clone()),
+  );
+  let mut surface = stack![body].width(Fill).height(Fill);
+  let (failure, busy) = match &browse.view {
+    LibraryBrowseView::Ready {
+      load_more_failure,
+      retry_busy,
+      ..
+    } => (
+      browse
+        .browser
+        .model()
+        .refresh_failure()
+        .or(load_more_failure.as_ref()),
+      *retry_busy || browse.browser.model().is_refreshing(),
+    ),
+    LibraryBrowseView::Empty => (
+      browse.browser.model().refresh_failure(),
+      browse.browser.model().is_refreshing(),
+    ),
+    _ => (None, false),
+  };
+  // Keep retry banners outside the scrolling scene and its navigation capture.
+  if let Some(banner) = failure_overlay(state.palette(), state.kernel.locale, failure, busy) {
+    surface = surface.push(banner);
+  }
+  surface.boxed()
+}
+
+fn browse_scroll<'a>(
+  content: Element<'a, Message>,
+  navigation: Element<'a, Message>,
+  ready_id: Option<iced::widget::Id>,
+) -> Element<'a, Message> {
+  let mut body = scrollable(jellypilot_ui::widgets::sticky_navigation::header(
+    content, navigation, true,
+  ))
+  .smooth_scroll(false)
   .width(Fill)
-  .into()
+  .height(Fill)
+  .style(jellypilot_ui::theme::scrollable);
+  if let Some(id) = &ready_id {
+    body = body
+      .id(id.clone())
+      .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport.viewport)));
+  }
+  iced::advanced::Widget::_boxed(BrowseScroll {
+    content: body.boxed(),
+    ready_id,
+  })
+}
+
+struct BrowseScroll<'a> {
+  content: Element<'a, Message>,
+  ready_id: Option<iced::widget::Id>,
+}
+
+struct ScrollIdentity(Option<iced::widget::Id>);
+
+impl widget::Meta for BrowseScroll<'_> {}
+
+impl Widget<Message, Theme, iced::Renderer> for BrowseScroll<'_> {
+  fn tag(&self) -> widget::tree::Tag {
+    widget::tree::Tag::of::<ScrollIdentity>()
+  }
+
+  fn state(&self) -> widget::tree::State {
+    widget::tree::State::new(ScrollIdentity(self.ready_id.clone()))
+  }
+
+  fn diff(&mut self, tree: &mut widget::Tree) {
+    let previous = tree.state.downcast_mut::<ScrollIdentity>();
+    if previous.0 != self.ready_id {
+      previous.0 = self.ready_id.clone();
+      // Offset restoration cannot cancel a Scrollable drag or touch gesture.
+      // Replace only its own state: persistent toolbar focus belongs to its
+      // children and must survive result settlement or presentation changes.
+      if let Some(scrollable) = tree.children.first_mut() {
+        scrollable.state = self.content.state();
+      }
+    }
+    tree.diff_children(std::slice::from_mut(&mut self.content));
+  }
+
+  fn size(&self) -> Size<Length> {
+    self.content.size()
+  }
+
+  fn layout(
+    &mut self,
+    tree: &mut widget::Tree,
+    renderer: &iced::Renderer,
+    limits: &layout::Limits,
+  ) {
+    self.content.layout(&mut tree.children[0], renderer, limits);
+    tree.size = tree.children[0].size;
+    tree.children[0].translation = iced::Vector::ZERO;
+  }
+
+  fn operate(
+    &mut self,
+    tree: &mut widget::Tree,
+    layout: Layout,
+    viewport: &Rectangle,
+    renderer: &iced::Renderer,
+    operation: &mut dyn widget::Operation,
+  ) {
+    self
+      .content
+      .operate(&mut tree.children[0], layout, viewport, renderer, operation);
+  }
+
+  fn update(
+    &mut self,
+    tree: &mut widget::Tree,
+    event: &Event,
+    layout: Layout,
+    cursor: mouse::Cursor,
+    renderer: &iced::Renderer,
+    shell: &mut Shell<'_, Message>,
+    viewport: &Rectangle,
+  ) {
+    self.content.update(
+      &mut tree.children[0],
+      event,
+      layout,
+      cursor,
+      renderer,
+      shell,
+      viewport,
+    );
+  }
+
+  fn draw(
+    &self,
+    tree: &widget::Tree,
+    renderer: &mut iced::Renderer,
+    theme: &Theme,
+    style: &renderer::Style,
+    layout: Layout,
+    cursor: mouse::Cursor,
+    viewport: &Rectangle,
+  ) {
+    self.content.draw(
+      &tree.children[0],
+      renderer,
+      theme,
+      style,
+      layout,
+      cursor,
+      viewport,
+    );
+  }
+
+  fn mouse_interaction(
+    &self,
+    tree: &widget::Tree,
+    layout: Layout,
+    cursor: mouse::Cursor,
+    viewport: &Rectangle,
+    renderer: &iced::Renderer,
+  ) -> mouse::Interaction {
+    self
+      .content
+      .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+  }
+
+  fn overlay<'a>(
+    &'a mut self,
+    tree: &'a mut widget::Tree,
+    layout: Layout,
+    renderer: &iced::Renderer,
+    viewport: &Rectangle,
+    translation: Vector,
+    window: iced::Size,
+  ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+    self.content.overlay(
+      &mut tree.children[0],
+      layout,
+      renderer,
+      viewport,
+      translation,
+      window,
+    )
+  }
 }
 
 fn toolbar(state: &State) -> Element<'_, Message> {
@@ -217,7 +407,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s2_5)
   .align_y(Alignment::Center)
   .wrap()
-  .into()
+  .boxed()
 }
 
 fn sort_control(state: &State) -> Element<'_, Message> {
@@ -299,18 +489,19 @@ fn presentation_bar(state: &State) -> Element<'_, Message> {
     space::horizontal()
   ];
   if matches!(state.shell.destination, Destination::Library { .. }) {
-    controls = controls.push(sort_control(state));
+    controls = controls.push((sort_control(state)).boxed());
   }
   controls
     .push(
-      container(segments)
+      (container(segments)
         .padding(TOKENS.spacing.s0_5)
-        .style(library::segments),
+        .style(library::segments))
+      .boxed(),
     )
     .spacing(TOKENS.spacing.s3)
     .align_y(Alignment::Center)
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 fn mode_button<'a>(
@@ -331,7 +522,7 @@ fn mode_button<'a>(
   )
   .icon_size(IconSize::Xs)
   .padding([5, 6])
-  .width(40.into())
+  .width(Length::Fixed(40.0))
   .min_height(40.0)
   .style(|theme, variant, status| {
     library::segment(theme, status, variant == ButtonVariant::Secondary)
@@ -346,7 +537,7 @@ fn sort_option(label: String, sort: VideoLibrarySort) -> Element<'static, Messag
     .width(Fill)
     .label_fill(true)
     .on_press(Message::Browse(BrowseMessage::SortChanged(sort)))
-    .into()
+    .boxed()
 }
 
 fn played_option(
@@ -367,7 +558,7 @@ fn played_option(
     .min_height(40.0)
     .label_size(12.0)
     .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
-    .into()
+    .boxed()
 }
 
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
@@ -394,16 +585,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
           empty_surface(state.palette(), state.t("browse-empty-library"), padding)
         }
       };
-      let mut surface = stack![body].width(Fill).height(Fill);
-      if let Some(banner) = failure_overlay(
-        state.palette(),
-        state.kernel.locale,
-        browse.browser.model().refresh_failure(),
-        browse.browser.model().is_refreshing(),
-      ) {
-        surface = surface.push(banner);
-      }
-      surface.into()
+      body
     }
     LibraryBrowseView::Failed {
       message,
@@ -422,20 +604,12 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
       visible_items,
       visible_start,
       total_record_count,
-      load_more_failure,
-      retry_busy,
       ..
     } => ready_surface(
       state,
       visible_items,
       *visible_start,
       *total_record_count,
-      browse
-        .browser
-        .model()
-        .refresh_failure()
-        .or(load_more_failure.as_ref()),
-      *retry_busy || browse.browser.model().is_refreshing(),
       class,
     ),
   }
@@ -446,8 +620,6 @@ fn ready_surface<'a>(
   items: &'a [LibraryItemSlot],
   visible_start: u32,
   total_record_count: u32,
-  load_more_failure: Option<&'a LibraryBrowseFailure>,
-  retry_busy: bool,
   class: SizeClass,
 ) -> Element<'a, Message> {
   let skeleton_phase = state.shell.skeleton_phase;
@@ -483,11 +655,11 @@ fn ready_surface<'a>(
     },
   );
   let grid = observe_grid_viewport(grid, surface.artwork.epoch());
-  let mut content = Column::new().width(Fill);
+  let mut content = Column::<Element<'_, Message>>::new().width(Fill);
   if surface.mode == ViewMode::List && available_width >= LIST_COLUMNS_MIN_WIDTH {
-    content = content.push(list_heading(state));
+    content = content.push((list_heading(state)).boxed());
   }
-  let content = container(content.push(grid))
+  let content = container(content.push((grid).boxed()))
     .padding(iced::Padding {
       top: 0.0,
       right: padding,
@@ -496,35 +668,8 @@ fn ready_surface<'a>(
     })
     .width(Fill);
 
-  let body = scrollable(content)
-    .id(
-      state
-        .full
-        .as_ref()
-        .expect("FullUi required")
-        .browse
-        .scroll_id
-        .clone(),
-    )
-    .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
-    .width(Fill)
-    .height(Fill)
-    .style(jellypilot_ui::theme::scrollable);
-
-  // The failure banner stacks above the scrollable (the shell-toast pattern)
-  // so it stays pinned to the viewport's bottom edge at any scroll position.
-  let mut surface = stack![body].width(Fill).height(Fill);
-  if let Some(banner) = failure_overlay(
-    state.palette(),
-    state.kernel.locale,
-    load_more_failure,
-    retry_busy,
-  ) {
-    surface = surface.push(banner);
-  }
-  // Grid/list is a user structural change: key on the mode so data refreshes
-  // and scroll never re-animate.
-  super::motion::transition(surface, surface_mode_key(surface_mode(state)))
+  // Grid/list is a user structural change: data refreshes and scrolling do not re-animate.
+  super::motion::transition(content, surface_mode_key(surface_mode(state)))
 }
 
 fn surface_mode(state: &State) -> ViewMode {
@@ -575,17 +720,13 @@ fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a
     Column::with_children(
       (0..12).map(|_| list_skeleton(metrics.cell_width, skeleton_phase, reduced_motion)),
     )
-    .into()
+    .boxed()
   };
-  let content = Column::new()
+  let content = Column::<Element<'_, Message>>::new()
     .width(Fill)
-    .push(container(grid).padding([0.0, padding]).width(Fill));
+    .push((container(grid).padding([0.0, padding]).width(Fill)).boxed());
 
-  scrollable(content)
-    .width(Fill)
-    .height(Fill)
-    .style(jellypilot_ui::theme::scrollable)
-    .into()
+  content.boxed()
 }
 
 fn browse_skeleton_grid<'a>(
@@ -595,27 +736,30 @@ fn browse_skeleton_grid<'a>(
 ) -> Element<'a, Message> {
   let total_cells = LIBRARY_BROWSE_PAGE_SIZE as usize;
   let row_count = total_cells.div_ceil(metrics.columns);
-  let mut grid = Column::new().spacing(TOKENS.spacing.s6).width(Fill);
+  let mut grid = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s6)
+    .width(Fill);
 
   for row_index in 0..row_count {
     let start = row_index * metrics.columns;
     let end = (start + metrics.columns).min(total_cells);
-    let mut row = Row::new().spacing(GRID_COLUMN_GAP);
+    let mut row = Row::<Element<'_, Message>>::new().spacing(GRID_COLUMN_GAP);
     for _ in start..end {
       row = row.push(
-        container(skeleton_cell(
+        (container(skeleton_cell(
           metrics.cell_width,
           skeleton_phase,
           reduced_motion,
         ))
         .width(metrics.cell_width)
-        .height(metrics.cell_height),
+        .height(metrics.cell_height))
+        .boxed(),
       );
     }
-    grid = grid.push(row);
+    grid = grid.push((row).boxed());
   }
 
-  grid.into()
+  grid.boxed()
 }
 
 pub(crate) fn card_artwork_height(cell_width: f32) -> f32 {
@@ -649,7 +793,7 @@ fn skeleton_cell<'a>(
   .width(Fill)
   .height(CARD_COPY_HEIGHT);
 
-  column![poster, copy].width(Fill).into()
+  column![poster, copy].width(Fill).boxed()
 }
 
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -729,7 +873,7 @@ pub(crate) fn play_button<'a>(
   .on_press_maybe(action);
   if circular {
     control = control
-      .width(48.into())
+      .width(Length::Fixed(48.0))
       .icon_size(IconSize::Custom(18.0))
       .content_centered(true)
       .style(library::card_play);
@@ -800,7 +944,7 @@ fn card_copy<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Me
   .width(Fill);
   if episode {
     copy = copy.push(
-      row![
+      (row![
         text(
           episode_card_code(item)
             .unwrap_or_else(|| media_type(state.kernel.locale, &item.item_type))
@@ -814,7 +958,8 @@ fn card_copy<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Me
           .color(state.palette().text.metadata),
       ]
       .spacing(TOKENS.spacing.s2)
-      .width(Fill),
+      .width(Fill))
+      .boxed(),
     );
     let activity = remaining_caption(state, item).unwrap_or_else(|| {
       item.last_played_date.as_deref().map_or_else(
@@ -823,17 +968,19 @@ fn card_copy<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Me
       )
     });
     copy = copy.push(
-      text(activity)
+      (text(activity)
         .size(12)
         .line_height(iced::Pixels(16.0))
-        .color(state.palette().text.metadata),
+        .color(state.palette().text.metadata))
+      .boxed(),
     );
   } else {
     copy = copy.push(
-      ellipsis_text(item_caption(state.kernel.locale, item))
+      (ellipsis_text(item_caption(state.kernel.locale, item))
         .size(12)
         .line_height(iced::Pixels(16.0))
-        .color(state.palette().text.metadata),
+        .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
   container(copy)
@@ -843,7 +990,7 @@ fn card_copy<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Me
     })
     .height(CARD_COPY_HEIGHT)
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 fn video_card<'a>(
@@ -868,7 +1015,7 @@ fn video_card<'a>(
         card_copy(state, item),
       )
       .width(Fill)
-      .into()
+      .boxed()
     },
     ButtonVariant::Text,
   )
@@ -876,10 +1023,10 @@ fn video_card<'a>(
   .width(Fill)
   .style(jellypilot_ui::widgets::button::media_artwork)
   .on_press(Message::OpenDetail(Box::new(item.clone())));
-  let mut overlay = Column::new().push(space::vertical());
+  let mut overlay = Column::<Element<'_, Message>>::new().push((space::vertical()).boxed());
   if let Some(rating) = item.community_rating.filter(|rating| rating.is_finite()) {
     overlay = overlay.push(
-      container(
+      (container(
         row![
           text("★").size(12).line_height(iced::Pixels(14.0)).color(
             jellypilot_ui::tokens::DARK_PALETTE
@@ -894,7 +1041,8 @@ fn video_card<'a>(
         .spacing(TOKENS.spacing.s1),
       )
       .padding([4, 8])
-      .style(library::rating),
+      .style(library::rating))
+      .boxed(),
     );
   }
   let mut card = stack![
@@ -908,7 +1056,7 @@ fn video_card<'a>(
     resolved_progress(state, item).filter(|progress| *progress > 0.0 && *progress < 100.0)
   {
     card = card.push(
-      container(ArtworkProgress::new(
+      (container(ArtworkProgress::new(
         f64::from(progress),
         artwork_height,
         4.0,
@@ -926,7 +1074,8 @@ fn video_card<'a>(
       ))
       .width(Fill)
       .height(artwork_height)
-      .align_y(Alignment::End),
+      .align_y(Alignment::End))
+      .boxed(),
     );
   }
   let actions = stack![
@@ -947,7 +1096,7 @@ fn video_card<'a>(
   ]
   .width(Fill)
   .height(artwork_height);
-  hover(card, actions)
+  hover(card, actions).boxed()
 }
 
 fn item_artwork<'a>(
@@ -1013,12 +1162,12 @@ fn favorite_button<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<
           state.palette().text.metadata
         },
       )
-      .into()
+      .boxed()
     },
     ButtonVariant::Icon,
   )
   .padding(12)
-  .width(40.into())
+  .width(Length::Fixed(40.0))
   .min_height(40.0)
   .style(|theme, _, status| library::row(theme, status))
   .id(iced::widget::Id::from(format!(
@@ -1068,20 +1217,21 @@ fn row_progress<'a>(
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center)
       .width(Fill)
-      .into();
+      .boxed();
   }
   let mut content = column![metadata].spacing(0).width(220);
   if let Some(progress) =
     resolved_progress(state, item).filter(|value| *value > 0.0 && *value < 100.0)
   {
     content = content.push(
-      progress_bar(0.0..=100.0, progress)
+      (progress_bar(0.0..=100.0, progress)
         .girth(4)
         .length(Fill)
-        .style(library::progress),
+        .style(library::progress))
+      .boxed(),
     );
   }
-  content.push(play).into()
+  content.push((play).boxed()).boxed()
 }
 
 fn list_heading(state: &State) -> Element<'_, Message> {
@@ -1098,12 +1248,12 @@ fn list_heading(state: &State) -> Element<'_, Message> {
       .line_height(iced::Pixels(14.0))
       .color(state.palette().text.metadata)
       .width(36),
-    space::horizontal().width(40),
+    space::horizontal().width(Length::Fixed(40.0)),
     label("browse-column-title", Fill),
     label("browse-column-year", 90.into()),
     label("browse-column-rating", 90.into()),
     label("browse-column-progress", 220.into()),
-    space::horizontal().width(40),
+    space::horizontal().width(Length::Fixed(40.0)),
   ]
   .spacing(TOKENS.spacing.s4)
   .align_y(Alignment::Center);
@@ -1111,7 +1261,7 @@ fn list_heading(state: &State) -> Element<'_, Message> {
     container(headings).padding([10, 12]).height(34).width(Fill),
     iced::widget::rule::horizontal(1).style(library::divider),
   ]
-  .into()
+  .boxed()
 }
 
 fn row_contents<'a>(
@@ -1145,20 +1295,21 @@ fn row_contents<'a>(
   .width(Fill);
   let rating = item.community_rating.filter(|rating| rating.is_finite());
   if narrow {
-    let mut metadata = Row::new()
+    let mut metadata = Row::<Element<'_, Message>>::new()
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center);
     if let Some(year) = item.production_year {
-      metadata = metadata.push(text(year).size(12).color(palette.text.metadata));
+      metadata = metadata.push((text(year).size(12).color(palette.text.metadata)).boxed());
     }
     if let Some(rating) = rating {
       metadata = metadata.push(
-        text(format!("★ {rating:.1}"))
+        (text(format!("★ {rating:.1}"))
           .size(12)
-          .color(palette.colors.warning),
+          .color(palette.colors.warning))
+        .boxed(),
       );
     }
-    copy = copy.push(metadata);
+    copy = copy.push((metadata).boxed());
   }
   let poster = container(item_artwork(
     state,
@@ -1168,7 +1319,7 @@ fn row_contents<'a>(
     state.shell.skeleton_phase,
     state.kernel.settings.snapshot().reduced_motion(),
   ))
-  .width(40)
+  .width(Length::Fixed(40.0))
   .height(60);
   let mut main = row![
     text(index + 1)
@@ -1184,23 +1335,25 @@ fn row_contents<'a>(
   if !narrow {
     main = main
       .push(
-        text(
+        (text(
           item
             .production_year
             .map_or_else(String::new, |year| year.to_string()),
         )
         .size(12)
         .color(palette.text.body)
-        .width(90),
+        .width(90))
+        .boxed(),
       )
       .push(
-        text(rating.map_or_else(String::new, |rating| format!("★ {rating:.1}")))
+        (text(rating.map_or_else(String::new, |rating| format!("★ {rating:.1}")))
           .size(12)
           .color(palette.colors.warning)
-          .width(90),
+          .width(90))
+        .boxed(),
       );
   }
-  main.into()
+  main.boxed()
 }
 
 fn video_row<'a>(
@@ -1229,18 +1382,18 @@ fn video_row<'a>(
     .spacing(TOKENS.spacing.s4)
     .align_y(Alignment::Center);
   if !narrow {
-    main = main.push(row_progress(state, item, false));
+    main = main.push((row_progress(state, item, false)).boxed());
   }
-  main = main.push(favorite_button(state, item));
-  let mut content = Column::new().push(main);
+  main = main.push((favorite_button(state, item)).boxed());
+  let mut content = Column::<Element<'_, Message>>::new().push((main).boxed());
   if narrow {
-    content = content.push(row_progress(state, item, true));
+    content = content.push((row_progress(state, item, true)).boxed());
   }
   column![
     container(content).padding([0, 12]).width(Fill),
     iced::widget::rule::horizontal(1).style(library::divider)
   ]
-  .into()
+  .boxed()
 }
 
 fn list_skeleton<'a>(width: f32, phase: f32, reduced_motion: bool) -> Element<'a, Message> {
@@ -1261,7 +1414,7 @@ fn list_skeleton<'a>(width: f32, phase: f32, reduced_motion: bool) -> Element<'a
   .padding([10, 12])
   .width(Fill)
   .height(height)
-  .into()
+  .boxed()
 }
 
 fn artwork<'a>(
@@ -1292,7 +1445,7 @@ fn artwork<'a>(
             .height(height)
             .style(move |theme| library::artwork_outline(theme, compact)),
         ]
-        .into();
+        .boxed();
       }
     }
   }
@@ -1335,7 +1488,7 @@ fn artwork<'a>(
       style.border.radius = radius;
       style
     })
-    .into();
+    .boxed();
   }
 
   skeleton_panel(
@@ -1346,7 +1499,7 @@ fn artwork<'a>(
     phase,
     reduced_motion,
   )
-  .into()
+  .boxed()
 }
 fn failure_surface<'a>(
   palette: &'static ThemePalette,
@@ -1390,7 +1543,7 @@ fn failure_surface<'a>(
   .padding(padding)
   .width(Fill)
   .height(Fill)
-  .into()
+  .boxed()
 }
 
 /// Incremental load-more failure pinned to the bottom edge of the grid
@@ -1454,7 +1607,7 @@ fn failure_banner<'a>(
     })
     .align_x(Alignment::Center)
     .align_y(Alignment::End)
-    .into()
+    .boxed()
 }
 
 fn retry_action(retryable: bool, retry_busy: bool) -> Option<Message> {
@@ -1470,7 +1623,7 @@ fn empty_surface(
     .padding(padding)
     .width(Fill)
     .height(Fill)
-    .into()
+    .boxed()
 }
 
 fn sort_label(locale: Localizer, sort: VideoLibrarySort) -> String {
@@ -1486,6 +1639,487 @@ mod tests {
   use super::*;
   use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
   use iced::{Font, Size};
+
+  fn scroll_fixture(
+    memory: &super::super::scroll_memory::ScrollMemory,
+    id: Option<&'static str>,
+  ) -> Element<'static, Message> {
+    super::super::scroll_memory::remember(
+      browse_scroll(
+        space::vertical().height(1800).boxed(),
+        container(space::horizontal())
+          .width(Fill)
+          .height(56)
+          .boxed(),
+        id.map(iced::widget::Id::new),
+      ),
+      memory,
+    )
+  }
+
+  fn page_offset(
+    ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+    renderer: &mut iced::Renderer,
+    id: &'static str,
+  ) -> f32 {
+    struct Probe {
+      id: iced::widget::Id,
+      offset: Option<f32>,
+    }
+    impl iced::advanced::widget::Operation for Probe {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn iced::advanced::widget::Operation)) {
+        visit(self);
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&iced::widget::Id>,
+        _: iced::Rectangle,
+        _: iced::Size,
+        translation: iced::Vector,
+        _: &mut dyn iced::advanced::widget::operation::Scrollable,
+      ) {
+        if id == Some(&self.id) {
+          self.offset = Some(translation.y);
+        }
+      }
+    }
+    drop(crate::app::test_support::redraw_ui(ui, renderer));
+    let mut probe = Probe {
+      id: iced::widget::Id::new(id),
+      offset: None,
+    };
+    ui.operate(renderer, &mut probe);
+    probe.offset.expect("identified ready page")
+  }
+
+  fn set_page_offset(
+    ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+    renderer: &iced::Renderer,
+    id: &'static str,
+    y: f32,
+  ) {
+    ui.operate(
+      renderer,
+      &mut iced::advanced::widget::operation::scrollable::scroll_to::<()>(
+        iced::widget::Id::new(id),
+        iced::advanced::widget::operation::scrollable::AbsoluteOffset {
+          x: None,
+          y: Some(y),
+        },
+        iced::advanced::widget::operation::Animation::Instant,
+      ),
+    );
+  }
+
+  #[tokio::test]
+  async fn scrolling_sticky_loading_does_not_move_first_results_or_consume_restoration() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let memory = super::super::scroll_memory::ScrollMemory::default();
+    let size = Size::new(320.0, 180.0);
+    let mut ready = UserInterface::build(
+      scroll_fixture(&memory, Some("results")),
+      size,
+      Cache::new(),
+      &mut renderer,
+    );
+    set_page_offset(&mut ready, &renderer, "results", 450.0);
+    let mut loading = UserInterface::build(
+      scroll_fixture(&memory, None),
+      size,
+      ready.into_cache(),
+      &mut renderer,
+    );
+    let mut messages = iced::advanced::shell::Bus::new();
+    loading.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      &[iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+        delta: iced::mouse::ScrollDelta::Pixels { x: 0.0, y: -90.0 },
+      })],
+      iced::mouse::Cursor::Available(iced::Point::new(200.0, 120.0)),
+      &mut renderer,
+      &mut messages,
+    );
+    assert!(
+      messages.is_empty(),
+      "skeletons must not update result viewport state"
+    );
+    let mut first_results = UserInterface::build(
+      scroll_fixture(&memory, Some("new-query")),
+      size,
+      loading.into_cache(),
+      &mut renderer,
+    );
+    assert_eq!(
+      page_offset(&mut first_results, &mut renderer, "new-query"),
+      0.0
+    );
+    let mut restored = UserInterface::build(
+      scroll_fixture(&memory, Some("results")),
+      size,
+      first_results.into_cache(),
+      &mut renderer,
+    );
+    assert_eq!(page_offset(&mut restored, &mut renderer, "results"), 450.0);
+  }
+
+  #[tokio::test]
+  async fn result_identity_changes_preserve_toolbar_keyboard_activation() {
+    use iced::advanced::widget::operation::focusable;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let memory = super::super::scroll_memory::ScrollMemory::default();
+    let page = |id: Option<&'static str>| {
+      super::super::scroll_memory::remember(
+        browse_scroll(
+          space::vertical().height(1800).boxed(),
+          container(
+            control_button(None, Some("List".to_owned()), ButtonVariant::Text)
+              .id("presentation-list")
+              .on_press(Message::Browse(BrowseMessage::ViewModeSelected(
+                ViewMode::List,
+              ))),
+          )
+          .width(Fill)
+          .height(56)
+          .boxed(),
+          id.map(iced::widget::Id::new),
+        ),
+        &memory,
+      )
+    };
+    let size = Size::new(320.0, 180.0);
+    let mut ui = UserInterface::build(page(Some("grid")), size, Cache::new(), &mut renderer);
+    ui.operate(
+      &renderer,
+      &mut focusable::focus::<()>(iced::widget::Id::new("presentation-list")),
+    );
+    for id in [None, Some("list"), Some("grid")] {
+      ui = UserInterface::build(page(id), size, ui.into_cache(), &mut renderer);
+      let mut messages = iced::advanced::shell::Bus::new();
+      ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[Event::Keyboard(iced::keyboard::Event::KeyPressed {
+          key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+          modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+          physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Enter),
+          location: iced::keyboard::Location::Standard,
+          modifiers: iced::keyboard::Modifiers::NONE,
+          text: None,
+          repeat: false,
+        })],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut messages,
+      );
+      let produced = messages
+        .drain()
+        .map(|(message, _)| message)
+        .collect::<Vec<_>>();
+      assert!(
+        matches!(
+          produced.as_slice(),
+          [Message::Browse(BrowseMessage::ViewModeSelected(
+            ViewMode::List
+          ))]
+        ),
+        "the persistent toolbar focus must remain keyboard operable"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn loading_touch_gesture_cannot_scroll_the_settled_result_surface() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let memory = super::super::scroll_memory::ScrollMemory::default();
+    let size = Size::new(320.0, 180.0);
+    let mut loading = UserInterface::build(
+      scroll_fixture(&memory, None),
+      size,
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut messages = iced::advanced::shell::Bus::new();
+    let mut send = |ui: &mut UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+                    renderer: &mut iced::Renderer,
+                    phase,
+                    position| {
+      let id = iced::touch::Finger(7);
+      let event = match phase {
+        0 => iced::touch::Event::FingerPressed { id, position },
+        1 => iced::touch::Event::FingerMoved { id, position },
+        _ => iced::touch::Event::FingerLost { id, position },
+      };
+      ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[iced::Event::Touch(event)],
+        iced::mouse::Cursor::Available(position),
+        renderer,
+        &mut messages,
+      );
+    };
+    send(
+      &mut loading,
+      &mut renderer,
+      0,
+      iced::Point::new(200.0, 140.0),
+    );
+    send(
+      &mut loading,
+      &mut renderer,
+      1,
+      iced::Point::new(200.0, 100.0),
+    );
+    let mut ready = UserInterface::build(
+      scroll_fixture(&memory, Some("results")),
+      size,
+      loading.into_cache(),
+      &mut renderer,
+    );
+    send(&mut ready, &mut renderer, 1, iced::Point::new(200.0, 60.0));
+    send(&mut ready, &mut renderer, 2, iced::Point::new(200.0, 60.0));
+    assert_eq!(page_offset(&mut ready, &mut renderer, "results"), 0.0);
+    assert!(
+      messages.is_empty(),
+      "departed loading gestures must not publish result scrolls"
+    );
+  }
+
+  #[tokio::test]
+  async fn sticky_sparse_grid_measures_its_reserved_origin_and_full_scroll_viewport() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let metrics = ArtworkGridMetrics {
+      columns: 2,
+      cell_width: 150.0,
+      cell_height: 150.0,
+      row_height: 170.0,
+    };
+    let grid = artwork_grid(
+      100,
+      metrics,
+      jellypilot_ui::widgets::artwork_grid::ArtworkGridViewport {
+        offset_y: 0.0,
+        height: 180.0,
+      },
+      20.0,
+      move |_| space::horizontal().width(150).height(150).boxed(),
+    );
+    let mut ui = UserInterface::build(
+      super::super::image_observer::observe_images(browse_scroll(
+        iced::widget::column![space::vertical().height(40), observe_grid_viewport(grid, 7)].boxed(),
+        container(space::horizontal())
+          .width(Fill)
+          .height(56)
+          .boxed(),
+        Some(iced::widget::Id::new("grid")),
+      )),
+      Size::new(320.0, 180.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    for (scroll, expected) in [(0.0, -96.0), (600.0, 504.0)] {
+      set_page_offset(&mut ui, &renderer, "grid", scroll);
+      let mut messages = iced::advanced::shell::Bus::new();
+      ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[iced::Event::Window(iced::window::Event::RedrawRequested(
+          iced::time::Instant::now(),
+        ))],
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut messages,
+      );
+      let geometry = messages.drain().find_map(|(message, _)| match message {
+        Message::Browse(BrowseMessage::GridViewportMeasured {
+          epoch: 7,
+          offset_y,
+          height,
+        }) => Some((offset_y, height)),
+        _ => None,
+      });
+      assert_eq!(geometry, Some((expected, 180.0)));
+    }
+  }
+
+  #[tokio::test]
+  async fn scrolling_sparse_artwork_settles_after_measurement_and_image_admission() {
+    use iced_runtime::user_interface::{Cache, Change, UserInterface};
+    use jellypilot_ui::widgets::artwork_grid::ArtworkGridViewport;
+
+    fn page(viewport: ArtworkGridViewport) -> Element<'static, Message> {
+      let grid = artwork_grid(
+        100,
+        ArtworkGridMetrics {
+          columns: 2,
+          cell_width: 150.0,
+          cell_height: 150.0,
+          row_height: 170.0,
+        },
+        viewport,
+        20.0,
+        |index| {
+          observe_image(
+            space::horizontal().width(150).height(150).boxed(),
+            ArtworkSurface::Browse,
+            7,
+            ImageSpec {
+              key: format!("poster-{index}"),
+              image_id: index.to_string(),
+              size_class: ArtworkSizeClass::Card,
+              derived: DerivedArtwork::default(),
+            },
+            ImageAxis::Vertical,
+          )
+        },
+      );
+      super::super::image_observer::observe_images(browse_scroll(
+        iced::widget::column![space::vertical().height(40), observe_grid_viewport(grid, 7)].boxed(),
+        container(space::horizontal())
+          .width(Fill)
+          .height(56)
+          .boxed(),
+        Some(iced::widget::Id::new("grid")),
+      ))
+    }
+
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let size = Size::new(320.0, 180.0);
+    let mut viewport = ArtworkGridViewport {
+      offset_y: 0.0,
+      height: size.height,
+    };
+    let mut ui = UserInterface::build(page(viewport), size, Cache::new(), &mut renderer);
+    let redraw = Event::Window(iced::window::Event::RedrawRequested(
+      iced::time::Instant::now(),
+    ));
+    let mut rounds = Vec::new();
+    for phase in ["initial", "wheel"] {
+      if phase == "wheel" {
+        let mut bus = iced::advanced::shell::Bus::new();
+        ui.update(
+          &iced::window::Headless,
+          &iced::advanced::shell::Waker::noop(),
+          &[Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -600.0 },
+          })],
+          mouse::Cursor::Available(iced::Point::new(200.0, 120.0)),
+          &mut renderer,
+          &mut bus,
+        );
+        assert!(bus.drain().any(|(message, _)| matches!(message,
+          Message::Browse(BrowseMessage::Scrolled(viewport))
+            if viewport.absolute_offset().y == 600.0
+        )));
+      }
+      rounds.clear();
+      for _ in 0..3 {
+        let mut bus = iced::advanced::shell::Bus::new();
+        let (state, _) = ui.update(
+          &iced::window::Headless,
+          &iced::advanced::shell::Waker::noop(),
+          std::slice::from_ref(&redraw),
+          mouse::Cursor::Unavailable,
+          &mut renderer,
+          &mut bus,
+        );
+        let mut images = 0;
+        let mut measured = false;
+        let mut scrolls = 0;
+        for (message, _) in bus.drain() {
+          match message {
+            Message::ImageObserved { .. } => images += 1,
+            Message::Browse(BrowseMessage::GridViewportMeasured {
+              epoch: 7,
+              offset_y,
+              height,
+            }) => {
+              viewport = ArtworkGridViewport { offset_y, height };
+              measured = true;
+            }
+            Message::Browse(BrowseMessage::Scrolled(_)) => scrolls += 1,
+            other => panic!("unexpected redraw message: {other:?}"),
+          }
+        }
+        let stable = matches!(
+          state,
+          iced_runtime::user_interface::State::Updated {
+            change: Change::None,
+            ..
+          }
+        );
+        rounds.push((images, measured, scrolls, stable));
+        if images == 0 && !measured && scrolls == 0 && stable {
+          break;
+        }
+        // Same sequence as winit: process geometry/identity reports and rebuild
+        // with the real cache before retrying the same presentation timestamp.
+        ui = UserInterface::build(page(viewport), size, ui.into_cache(), &mut renderer);
+      }
+      assert_eq!(
+        rounds.last(),
+        Some(&(0, false, 0, true)),
+        "{phase}: {rounds:?}"
+      );
+    }
+    assert!(rounds[0].1, "wheel changes measured grid geometry");
+    assert!(rounds[1].0 > 0, "new materialized images publish demand");
+    assert_eq!(viewport.offset_y, 504.0);
+  }
+
+  #[tokio::test]
+  async fn sticky_grid_and_list_restore_their_own_scroll_positions() {
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software layout renderer");
+    let memory = super::super::scroll_memory::ScrollMemory::default();
+    let size = Size::new(320.0, 180.0);
+    let mut grid = UserInterface::build(
+      scroll_fixture(&memory, Some("grid")),
+      size,
+      Cache::new(),
+      &mut renderer,
+    );
+    set_page_offset(&mut grid, &renderer, "grid", 600.0);
+    let mut list = UserInterface::build(
+      scroll_fixture(&memory, Some("list")),
+      size,
+      grid.into_cache(),
+      &mut renderer,
+    );
+    assert_eq!(page_offset(&mut list, &mut renderer, "list"), 0.0);
+    set_page_offset(&mut list, &renderer, "list", 810.0);
+    let mut grid = UserInterface::build(
+      scroll_fixture(&memory, Some("grid")),
+      size,
+      list.into_cache(),
+      &mut renderer,
+    );
+    assert_eq!(page_offset(&mut grid, &mut renderer, "grid"), 600.0);
+    let mut list = UserInterface::build(
+      scroll_fixture(&memory, Some("list")),
+      size,
+      grid.into_cache(),
+      &mut renderer,
+    );
+    assert_eq!(page_offset(&mut list, &mut renderer, "list"), 810.0);
+  }
 
   #[test]
   fn failure_banner_overlays_only_when_a_load_more_failure_is_present() {
@@ -1552,12 +2186,14 @@ mod tests {
 
   #[tokio::test]
   async fn artwork_play_and_replay_glyphs_are_centered_in_their_targets() {
-    fn glyph_bounds(layout: iced::advanced::Layout<'_>) -> Option<iced::Rectangle> {
-      if layout.children().next().is_none() {
+    fn glyph_bounds(layout: iced::advanced::Layout, tree: &Tree) -> Option<iced::Rectangle> {
+      if tree.children.is_empty() {
         let bounds = layout.bounds();
         return (bounds.width > 0.0 && bounds.height > 0.0).then_some(bounds);
       }
-      layout.children().find_map(glyph_bounds)
+      layout
+        .iter(&tree.children)
+        .find_map(|(layout, tree)| glyph_bounds(layout, tree))
     }
 
     let renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
@@ -1571,13 +2207,14 @@ mod tests {
         item.played = played;
         let mut control = play_button(&state, &item, true, "artwork-play".to_owned());
         let mut tree = Tree::new(&control);
-        tree.diff(control.as_widget_mut());
-        let node = control.as_widget_mut().layout(
+        tree.diff(&mut control);
+        let node = crate::app::test_support::layout_widget(
+          &mut control,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::ZERO, Size::new(175.0, 262.0)),
         );
-        let glyph = glyph_bounds(iced::advanced::Layout::new(&node)).expect("play/replay glyph");
+        let glyph = glyph_bounds(node.layout(), &tree).expect("play/replay glyph");
         assert_eq!(
           glyph.center(),
           node.bounds().center(),
@@ -1619,8 +2256,9 @@ mod tests {
           ViewMode::List => video_row(&state, &item, 0, metrics.cell_width),
         };
         let mut tree = Tree::new(&cell);
-        tree.diff(cell.as_widget_mut());
-        let node = cell.as_widget_mut().layout(
+        tree.diff(&mut cell);
+        let node = crate::app::test_support::layout_widget(
+          &mut cell,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::ZERO, Size::new(metrics.cell_width, 1000.0)),
@@ -1636,8 +2274,9 @@ mod tests {
           ViewMode::List => list_skeleton(metrics.cell_width, 0.0, true),
         };
         let mut tree = Tree::new(&placeholder);
-        tree.diff(placeholder.as_widget_mut());
-        let loading = placeholder.as_widget_mut().layout(
+        tree.diff(&mut placeholder);
+        let loading = crate::app::test_support::layout_widget(
+          &mut placeholder,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::ZERO, Size::new(metrics.cell_width, 1000.0)),
@@ -1650,7 +2289,7 @@ mod tests {
     }
   }
 
-  fn assert_fits_width(node: &layout::Node) {
+  fn assert_fits_width(node: &crate::app::test_support::LayoutGeometry) {
     for child in node.children() {
       assert!(
         child.bounds().x >= -0.1

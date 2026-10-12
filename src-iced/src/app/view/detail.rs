@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 mod chrome;
 mod overview;
 
@@ -73,7 +74,7 @@ fn detail_section<'a>(content: Element<'a, Message>, inset: f32) -> Element<'a, 
       left: inset,
     })
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -101,62 +102,85 @@ fn detail_ready<'a>(
 ) -> Element<'a, Message> {
   responsive(move |bounds| -> Element<'_, Message> {
     let inset = section_inset(bounds.width);
-    let mut page = Column::new().width(Fill);
-    page = page.push(match content {
-      DetailContent::Item(item) => item_hero(state, item, skeleton_phase, reduced_motion),
-      DetailContent::Show(show) => show_hero(state, show, skeleton_phase, reduced_motion),
-    });
+    let mut page = Column::<Element<'_, Message>>::new().width(Fill);
+    page = page.push(
+      (match content {
+        DetailContent::Item(item) => item_hero(state, item, skeleton_phase, reduced_motion),
+        DetailContent::Show(show) => show_hero(state, show, skeleton_phase, reduced_motion),
+      })
+      .boxed(),
+    );
     let metadata = match content {
       DetailContent::Item(item) => &item.metadata,
       DetailContent::Show(show) => &show.metadata,
     };
     match content {
       DetailContent::Item(item) if item.item_type.eq_ignore_ascii_case("episode") => {
-        page = page.push(detail_section(
-          neighbor_section(state, skeleton_phase, reduced_motion),
-          inset,
-        ));
+        page = page.push(
+          (detail_section(
+            neighbor_section(state, skeleton_phase, reduced_motion),
+            inset,
+          ))
+          .boxed(),
+        );
       }
       DetailContent::Show(show) => {
-        page = page.push(detail_section(
-          seasons_section(state, show, skeleton_phase, reduced_motion),
-          inset,
-        ));
+        page = page.push(
+          (detail_section(
+            seasons_section(state, show, skeleton_phase, reduced_motion),
+            inset,
+          ))
+          .boxed(),
+        );
       }
       DetailContent::Item(_) => {}
     }
     page = page
-      .push(detail_section(
-        cast_section(
-          state,
-          &metadata.cast,
-          &metadata.creators,
-          skeleton_phase,
-          reduced_motion,
-        ),
-        inset,
-      ))
-      .push(detail_section(
-        similar_section(state, skeleton_phase, reduced_motion),
-        inset,
-      ));
+      .push(
+        (detail_section(
+          cast_section(
+            state,
+            &metadata.cast,
+            &metadata.creators,
+            skeleton_phase,
+            reduced_motion,
+          ),
+          inset,
+        ))
+        .boxed(),
+      )
+      .push(
+        (detail_section(
+          similar_section(state, skeleton_phase, reduced_motion),
+          inset,
+        ))
+        .boxed(),
+      );
     if let DetailContent::Item(item) = content {
       if item.media_info.is_some() {
-        page = page.push(detail_section(
-          media_info_section(state.palette(), state.kernel.locale, item),
-          inset,
-        ));
+        page = page.push(
+          (detail_section(
+            media_info_section(state.palette(), state.kernel.locale, item),
+            inset,
+          ))
+          .boxed(),
+        );
       }
     }
-    scrollable(page.padding(padding::bottom(40)))
-      .id(iced::widget::Id::new("detail-page"))
-      .width(Fill)
-      .height(Fill)
-      .style(jellypilot_ui::theme::scrollable)
-      .into()
+    scrollable(jellypilot_ui::widgets::sticky_navigation::header(
+      page.padding(padding::bottom(40)),
+      chrome::detail_back(state),
+      false,
+    ))
+    .smooth_scroll(false)
+    .id(iced::widget::Id::new("detail-page"))
+    .width(Fill)
+    .height(Fill)
+    .style(jellypilot_ui::theme::scrollable)
+    .boxed()
   })
   .height(Length::Fit)
-  .into()
+  .boxed()
 }
 
 fn item_hero<'a>(
@@ -304,47 +328,54 @@ fn hero<'a>(
       .width(Fill);
     if let Some(info) = content.media_info {
       if let Some(specs) = media_specs_row(state, info) {
-        copy = copy.push(specs);
+        copy = copy.push((specs).boxed());
       }
     }
     if let Some(overview) = nonempty(content.overview) {
-      copy = copy.push(overview_copy(
-        state,
-        overview,
-        OVERVIEW_TEXT_SIZE,
-        OVERVIEW_LINE_HEIGHT,
-        state
-          .full
-          .as_ref()
-          .expect("FullUi required")
-          .detail
-          .data
-          .overview_expanded,
-        Message::Detail(DetailMessage::OverviewToggled),
-      ));
-    }
-    copy = copy.push(detail_actions(
-      state,
-      content.playback_label.clone(),
-      content.playback.clone(),
-      content.id,
-      content.played,
-      content.favorite,
-    ));
-    if let Some(progress) = &content.resume_progress {
       copy = copy.push(
-        text(progress.clone())
-          .size(12)
-          .line_height(Pixels(16.0))
-          .color(state.palette().text.metadata),
+        (overview_copy(
+          state,
+          overview,
+          OVERVIEW_TEXT_SIZE,
+          OVERVIEW_LINE_HEIGHT,
+          state
+            .full
+            .as_ref()
+            .expect("FullUi required")
+            .detail
+            .data
+            .overview_expanded,
+          Message::Detail(DetailMessage::OverviewToggled),
+        ))
+        .boxed(),
       );
     }
-    column![banner, detail_section(copy.into(), inset)]
+    copy = copy.push(
+      (detail_actions(
+        state,
+        content.playback_label.clone(),
+        content.playback.clone(),
+        content.id,
+        content.played,
+        content.favorite,
+      ))
+      .boxed(),
+    );
+    if let Some(progress) = &content.resume_progress {
+      copy = copy.push(
+        (text(progress.clone())
+          .size(12)
+          .line_height(Pixels(16.0))
+          .color(state.palette().text.metadata))
+        .boxed(),
+      );
+    }
+    column![banner, detail_section(copy.boxed(), inset)]
       .width(Fill)
-      .into()
+      .boxed()
   })
   .height(Length::Fit)
-  .into()
+  .boxed()
 }
 
 fn hero_banner<'a>(
@@ -394,16 +425,10 @@ fn hero_banner<'a>(
   .width(Fill)
   .height(Fill)
   .align_y(Alignment::End);
-  stack![
-    backdrop,
-    scrim(left),
-    scrim(bottom),
-    identity,
-    chrome::detail_back(state, width, HERO_HEIGHT),
-  ]
-  .width(Fill)
-  .height(HERO_HEIGHT)
-  .into()
+  stack![backdrop, scrim(left), scrim(bottom), identity,]
+    .width(Fill)
+    .height(HERO_HEIGHT)
+    .boxed()
 }
 
 fn overview_copy<'a>(
@@ -435,9 +460,9 @@ fn overview_copy<'a>(
           .height(line_height * 2.0)
           .width(Fill)
           .clip(true)
-          .into()
+          .boxed()
       } else {
-        copy.into()
+        copy.boxed()
       };
       let fade_overlay: Element<'_, Message> = if clipped {
         let canvas = state.palette().colors.background;
@@ -456,19 +481,19 @@ fn overview_copy<'a>(
         .height(Fill)
         .align_x(Alignment::End)
         .align_y(Alignment::End)
-        .into()
+        .boxed()
       } else {
-        space().into()
+        space().boxed()
       };
       let visible: Element<'_, Message> = stack![
         super::motion::resize(copy_block, expanded as u64, super::motion::Axis::Vertical),
         fade_overlay,
       ]
-      .into();
+      .boxed();
       let mut body = column![visible].spacing(4).width(Fill);
       if expandable {
         body = body.push(
-          control_button(
+          (control_button(
             None,
             Some(state.t(if expanded {
               "detail-less"
@@ -480,10 +505,11 @@ fn overview_copy<'a>(
           .label_size(12.0)
           .padding([2, 0])
           .min_height(20.0)
-          .on_press(toggle.clone()),
+          .on_press(toggle.clone()))
+          .boxed(),
         );
       }
-      body.into()
+      body.boxed()
     },
   )
 }
@@ -533,13 +559,13 @@ fn hero_title<'a>(
         )
         .width(Fill)
         .align_x(Alignment::Start)
-        .into(),
+        .boxed(),
       )
     });
   let identity: Element<'a, Message> = match logo {
-    Some(logo) if is_episode => column![logo, title()].spacing(8).into(),
+    Some(logo) if is_episode => column![logo, title()].spacing(8).boxed(),
     Some(logo) => logo,
-    None => title().into(),
+    None => title().boxed(),
   };
   observe_detail(
     identity,
@@ -604,7 +630,7 @@ fn detail_actions<'a>(
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .into()
+        .boxed()
       },
       ButtonVariant::TonalActive,
     )
@@ -615,7 +641,7 @@ fn detail_actions<'a>(
         UserDataActionKind::Favorite,
       ))),
     )
-    .into()
+    .boxed()
   } else {
     control_button(
       Some(Icon::Heart),
@@ -632,7 +658,7 @@ fn detail_actions<'a>(
         UserDataActionKind::Favorite,
       ))),
     )
-    .into()
+    .boxed()
   };
   let watchlist = &state.full.as_ref().expect("FullUi required").personal_lists;
   let watchlisted = watchlist.watchlist_ids.contains(item_id);
@@ -683,13 +709,13 @@ fn detail_actions<'a>(
         UserDataActionKind::Played,
       ))),
     );
-  let mut actions = Row::new()
+  let mut actions = Row::<Element<'_, Message>>::new()
     .spacing(10)
     .align_y(Alignment::Center)
-    .push(playback)
-    .push(favorite_button)
-    .push(watchlist_button)
-    .push(played_button);
+    .push((playback).boxed())
+    .push((favorite_button).boxed())
+    .push((watchlist_button).boxed())
+    .push((played_button).boxed());
   if let Some((item, position)) = queue_target {
     for (placement, label) in [
       (
@@ -701,39 +727,43 @@ fn detail_actions<'a>(
         "viewing-queue-add",
       ),
     ] {
-      actions = actions.push(super::viewing_queue::queue_guard(
-        state,
-        control_button(
-          Some(Icon::Playlist),
-          Some(state.t(label)),
-          ButtonVariant::Tonal,
-        )
-        .id(label)
-        .min_height(40.0)
-        .padding([8, 16])
-        .label_size(14.0)
-        .on_press_maybe(
-          (state.playback.view.upcoming.pending.is_none()
-            && !state.playback.view.lifecycle.replacing)
-            .then(|| super::viewing_queue::add(state, item.clone(), position, placement)),
-        ),
-      ));
+      actions = actions.push(
+        (super::viewing_queue::queue_guard(
+          state,
+          control_button(
+            Some(Icon::Playlist),
+            Some(state.t(label)),
+            ButtonVariant::Tonal,
+          )
+          .id(label)
+          .min_height(40.0)
+          .padding([8, 16])
+          .label_size(14.0)
+          .on_press_maybe(
+            (state.playback.view.upcoming.pending.is_none()
+              && !state.playback.view.lifecycle.replacing)
+              .then(|| super::viewing_queue::add(state, item.clone(), position, placement)),
+          ),
+        ))
+        .boxed(),
+      );
     }
   }
   if let Some(action) = state.kernel.item_actions.pending(item_id) {
     actions = actions.push(
-      text(match action {
+      (text(match action {
         Action::Favorite(_) => state.t("detail-updating-favorite"),
         Action::Played(_) => state.t("detail-updating-played"),
         Action::Watchlist(_) => state.t("collection-updating"),
       })
       .size(13)
-      .color(state.palette().text.metadata),
+      .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
-  let mut content = Column::new()
+  let mut content = Column::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s2)
-    .push(actions.wrap());
+    .push((actions.wrap()).boxed());
   if let Some(error) = &state
     .full
     .as_ref()
@@ -743,19 +773,21 @@ fn detail_actions<'a>(
     .user_data_error
   {
     content = content.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(13)
-        .color(state.palette().colors.error),
+        .color(state.palette().colors.error))
+      .boxed(),
     );
   }
   if let Some(error) = &watchlist.mutation_error {
     content = content.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(13)
-        .color(state.palette().colors.error),
+        .color(state.palette().colors.error))
+      .boxed(),
     );
   }
-  content.into()
+  content.boxed()
 }
 
 fn cast_section<'a>(
@@ -773,7 +805,7 @@ fn cast_section<'a>(
   .width(Fill);
   if !creators.is_empty() {
     content = content.push(
-      column![
+      (column![
         text(state.t("detail-creators"))
           .size(12)
           .line_height(Pixels(16.0))
@@ -785,15 +817,16 @@ fn cast_section<'a>(
           .color(state.palette().text.secondary),
       ]
       .spacing(TOKENS.spacing.s2)
-      .width(Fill),
+      .width(Fill))
+      .boxed(),
     );
   }
   if cast.is_empty() {
     return content
-      .push(status_surface(state.palette(), state.t("detail-no-cast")))
-      .into();
+      .push((status_surface(state.palette(), state.t("detail-no-cast"))).boxed())
+      .boxed();
   }
-  let mut people = Row::new().spacing(24);
+  let mut people = Row::<Element<'_, Message>>::new().spacing(24);
   for (index, member) in cast.iter().enumerate() {
     let portrait = artwork(
       state,
@@ -820,27 +853,30 @@ fn cast_section<'a>(
     .align_x(Alignment::Center);
     if let Some(role) = nonempty(member.role.as_deref()) {
       person = person.push(
-        text(role)
+        (text(role)
           .size(12)
           .line_height(Pixels(15.0))
           .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
           .align_x(Alignment::Center)
           .color(state.palette().text.metadata)
-          .width(Fill),
+          .width(Fill))
+        .boxed(),
       );
     }
-    people = people.push(person);
+    people = people.push((person).boxed());
   }
   content
     .push(
-      scrollable(people.padding(padding::bottom(12)))
+      (scrollable(people.padding(padding::bottom(12)))
+        .smooth_scroll(false)
         .id(iced::widget::Id::new("detail-cast"))
         .direction(Direction::Horizontal(Scrollbar::new()))
         .width(Fill)
         .height(Length::Fit)
-        .style(jellypilot_ui::theme::scrollable),
+        .style(jellypilot_ui::theme::scrollable))
+      .boxed(),
     )
-    .into()
+    .boxed()
 }
 
 /// The metadata line: leading facts, the episode's parent series as a
@@ -854,18 +890,18 @@ fn metadata_row<'a>(state: &'a State, metadata: &DetailMetadata) -> Element<'a, 
       .line_height(Pixels(18.0))
       .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
       .color(palette.text.body)
-      .into()
+      .boxed()
   };
-  let mut line = Row::new().align_y(Alignment::Center);
+  let mut line = Row::<Element<'_, Message>>::new().align_y(Alignment::Center);
   if !metadata.head.is_empty() {
-    line = line.push(segment(&metadata.head));
+    line = line.push((segment(&metadata.head)).boxed());
   }
   if let Some(series) = &metadata.series {
-    line = line.push(segment(" · "));
+    line = line.push((segment(" · ")).boxed());
     if series.link {
       let name = series.name.clone();
       line = line.push(
-        control_button_content(
+        (control_button_content(
           move |status| {
             let color = match status {
               IconControlState::Rest => palette.text.body,
@@ -882,21 +918,22 @@ fn metadata_row<'a>(state: &'a State, metadata: &DetailMetadata) -> Element<'a, 
             ]
             .spacing(4)
             .align_y(Alignment::Center)
-            .into()
+            .boxed()
           },
           ButtonVariant::Text,
         )
         .padding([0, 0])
-        .on_press(Message::Detail(DetailMessage::OpenSeries)),
+        .on_press(Message::Detail(DetailMessage::OpenSeries)))
+        .boxed(),
       );
     } else {
-      line = line.push(segment(&series.name));
+      line = line.push((segment(&series.name)).boxed());
     }
   }
   for fact in &metadata.tail {
-    line = line.push(segment(" · ")).push(segment(fact));
+    line = line.push((segment(" · ")).boxed()).push(segment(fact));
   }
-  line.wrap().vertical_spacing(0.0).into()
+  line.wrap().vertical_spacing(0.0).boxed()
 }
 
 /// First-source quality facts are plain labels; audio and subtitle summaries
@@ -904,48 +941,55 @@ fn metadata_row<'a>(state: &'a State, metadata: &DetailMetadata) -> Element<'a, 
 fn media_specs_row<'a>(state: &'a State, info: &'a VideoMediaInfo) -> Option<Element<'a, Message>> {
   let palette = state.palette();
   let locale = state.kernel.locale;
-  let mut chips = Row::new()
+  let mut chips = Row::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center);
   let mut any = false;
   if let Some(height) = info.video_height.filter(|height| *height > 0) {
-    chips = chips.push(spec_label(palette, format!("{height}p")));
+    chips = chips.push((spec_label(palette, format!("{height}p"))).boxed());
     any = true;
   }
   if let Some(range) = nonempty(info.video_range.as_deref()) {
-    chips = chips.push(spec_label(palette, range.to_owned()));
+    chips = chips.push((spec_label(palette, range.to_owned())).boxed());
     any = true;
   }
   // Track facts exist only when the chosen source's stream metadata was
   // supplied; an unknown stream list is never presented as a confirmed zero.
   if info.streams_known {
-    chips = chips.push(track_chip(
-      state,
-      TrackMenu::Audio,
-      &info.audio_streams,
-      locale.text("detail-no-audio"),
-    ));
-    chips = chips.push(track_chip(
-      state,
-      TrackMenu::Subtitles,
-      &info.subtitle_streams,
-      locale.text("detail-no-subtitles"),
-    ));
+    chips = chips.push(
+      (track_chip(
+        state,
+        TrackMenu::Audio,
+        &info.audio_streams,
+        locale.text("detail-no-audio"),
+      ))
+      .boxed(),
+    );
+    chips = chips.push(
+      (track_chip(
+        state,
+        TrackMenu::Subtitles,
+        &info.subtitle_streams,
+        locale.text("detail-no-subtitles"),
+      ))
+      .boxed(),
+    );
     any = true;
   }
   if info.media_source_count > 1 {
     chips = chips.push(
-      text(locale.format(
+      (text(locale.format(
         "detail-media-version",
         &[("count", info.media_source_count.into())],
       ))
       .size(12)
       .line_height(Pixels(16.0))
-      .color(palette.text.metadata),
+      .color(palette.text.metadata))
+      .boxed(),
     );
     any = true;
   }
-  any.then(|| chips.wrap().vertical_spacing(TOKENS.spacing.s2).into())
+  any.then(|| chips.wrap().vertical_spacing(TOKENS.spacing.s2).boxed())
 }
 
 /// Media-information frame rate: up to three decimals, trailing zeros trimmed so
@@ -968,7 +1012,7 @@ fn spec_label<'a>(palette: &'static ThemePalette, label: String) -> Element<'a, 
   )
   .padding([3, 0])
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 /// The audio or subtitle chip: a read-only track-list trigger summarizing the
@@ -1005,7 +1049,7 @@ fn track_chip<'a>(
       ]
       .spacing(6)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     ButtonVariant::Pill,
   )
@@ -1022,6 +1066,7 @@ fn track_chip<'a>(
     == Some(menu);
   // The popover still draws this content while its exit animation settles.
   let content = scrollable(track_list(palette, state.kernel.locale, streams))
+    .smooth_scroll(false)
     .height(Length::Fit.max(280.0))
     .style(jellypilot_ui::theme::scrollable);
   jellypilot_ui::overlay::popover(
@@ -1044,30 +1089,34 @@ fn track_list<'a>(
   locale: Localizer,
   streams: &'a [VideoStreamInfo],
 ) -> Element<'a, Message> {
-  let mut rows = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+  let mut rows = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill);
   for stream in streams {
-    let mut row = Row::new()
+    let mut row = Row::<Element<'_, Message>>::new()
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center)
       .width(Fill);
     row = row.push(
-      text(track_label(locale, stream))
+      (text(track_label(locale, stream))
         .size(12)
         .line_height(Pixels(16.0))
         .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
         .color(palette.text.body)
-        .width(Fill),
+        .width(Fill))
+      .boxed(),
     );
     if stream.is_default {
       row = row.push(
-        text(locale.text("detail-default-track"))
+        (text(locale.text("detail-default-track"))
           .size(11)
-          .color(palette.text.metadata),
+          .color(palette.text.metadata))
+        .boxed(),
       );
     }
-    rows = rows.push(row);
+    rows = rows.push((row).boxed());
   }
-  rows.into()
+  rows.boxed()
 }
 
 /// One track's label: the server-formatted title when present, otherwise the
@@ -1119,7 +1168,7 @@ fn media_info_section<'a>(
   item: &'a VideoItemDetail,
 ) -> Element<'a, Message> {
   let Some(info) = &item.media_info else {
-    return space::vertical().height(0).into();
+    return space::vertical().height(0).boxed();
   };
   let mut rows: Vec<(String, String)> = Vec::new();
   if let Some(video) = video_info_label(info) {
@@ -1158,7 +1207,9 @@ fn media_info_section<'a>(
     title,
     responsive(move |bounds| -> Element<'_, Message> {
       let narrow = bounds.width < 600.0;
-      let mut aligned = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+      let mut aligned = Column::<Element<'_, Message>>::new()
+        .spacing(TOKENS.spacing.s3)
+        .width(Fill);
       for row in rows.iter() {
         aligned = aligned.push(media_info_row(
           palette,
@@ -1167,12 +1218,12 @@ fn media_info_section<'a>(
           narrow,
         ));
       }
-      aligned.into()
+      aligned.boxed()
     })
     .height(Length::Fit),
   ]
   .spacing(TOKENS.spacing.s3)
-  .into()
+  .boxed()
 }
 
 fn media_info_row(
@@ -1195,12 +1246,12 @@ fn media_info_row(
     column![label, value]
       .spacing(TOKENS.spacing.s1)
       .width(Fill)
-      .into()
+      .boxed()
   } else {
     row![label.width(160), value]
       .spacing(TOKENS.spacing.s4)
       .width(Fill)
-      .into()
+      .boxed()
   }
 }
 
@@ -1281,7 +1332,7 @@ fn seasons_section<'a>(
       status_surface(state.palette(), state.t("detail-no-seasons"))
     ]
     .spacing(TOKENS.spacing.s3)
-    .into();
+    .boxed();
   }
   let loading = matches!(
     state
@@ -1324,6 +1375,7 @@ fn seasons_section<'a>(
   let selector = jellypilot_ui::overlay::popover(
     container(trigger).width(Length::Fit.max(320.0)),
     scrollable(options)
+      .smooth_scroll(false)
       .height(Length::Fit.max(280.0))
       .style(jellypilot_ui::theme::scrollable),
     full.detail.season_menu_open,
@@ -1363,9 +1415,9 @@ fn seasons_section<'a>(
       )
     ]
     .spacing(TOKENS.spacing.s3)
-    .into(),
+    .boxed(),
   };
-  column![title, selector, episodes].spacing(14).into()
+  column![title, selector, episodes].spacing(14).boxed()
 }
 
 fn season_button<'a>(
@@ -1397,7 +1449,7 @@ fn season_button<'a>(
         season.id.clone(),
       ))),
     )
-    .into()
+    .boxed()
 }
 
 fn neighbor_section(
@@ -1415,7 +1467,7 @@ fn neighbor_section(
     .data
     .season_neighbors
   {
-    LoadState::Idle => return space::vertical().height(0).into(),
+    LoadState::Idle => return space::vertical().height(0).boxed(),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => retryable_surface(
       state.palette(),
@@ -1437,9 +1489,9 @@ fn neighbor_section(
       )
     ]
     .spacing(TOKENS.spacing.s3)
-    .into(),
+    .boxed(),
   };
-  column![title, body].spacing(TOKENS.spacing.s3).into()
+  column![title, body].spacing(TOKENS.spacing.s3).boxed()
 }
 
 fn episode_paging<'a>(
@@ -1457,7 +1509,7 @@ fn episode_paging<'a>(
     );
   }
   if !has_more {
-    return space::vertical().height(0).into();
+    return space::vertical().height(0).boxed();
   }
   let loading = matches!(append, LoadState::Loading);
   control_button(
@@ -1471,7 +1523,7 @@ fn episode_paging<'a>(
   )
   .min_height(40.0)
   .on_press_maybe((!loading).then_some(Message::Detail(message)))
-  .into()
+  .boxed()
 }
 
 fn similar_section(
@@ -1493,7 +1545,7 @@ fn similar_section(
         similar_skeletons(skeleton_phase, reduced_motion),
       ]
       .spacing(TOKENS.spacing.s3)
-      .into();
+      .boxed();
     }
     LoadState::Ready(items) if !items.is_empty() => items,
     LoadState::Failed(error) => {
@@ -1507,7 +1559,7 @@ fn similar_section(
         ),
       ]
       .spacing(14)
-      .into();
+      .boxed();
     }
     LoadState::Idle | LoadState::Ready(_) => {
       return column![
@@ -1515,14 +1567,15 @@ fn similar_section(
         status_surface(state.palette(), state.t("detail-no-similar")),
       ]
       .spacing(14)
-      .into();
+      .boxed();
     }
   };
-  let mut cards = Row::new().spacing(18);
+  let mut cards = Row::<Element<'_, Message>>::new().spacing(18);
   for item in items {
-    cards = cards.push(similar_card(state, item, skeleton_phase, reduced_motion));
+    cards = cards.push((similar_card(state, item, skeleton_phase, reduced_motion)).boxed());
   }
   let cards = scrollable(cards)
+    .smooth_scroll(false)
     .id(iced::widget::Id::new("detail-similar"))
     .direction(Direction::Horizontal(Scrollbar::new()))
     .height(SIMILAR_SCROLL_HEIGHT)
@@ -1532,7 +1585,7 @@ fn similar_section(
     cards
   ]
   .spacing(14)
-  .into()
+  .boxed()
 }
 
 fn similar_card<'a>(
@@ -1560,7 +1613,7 @@ fn similar_card<'a>(
         .size(12)
         .font(HEADING_FONT)
         .color(state.palette().text.heading)
-        .into(),
+        .boxed(),
       ButtonVariant::Text,
     )
     .padding(0)
@@ -1583,14 +1636,14 @@ fn similar_card<'a>(
   poster_card(poster, copy)
     .width(SIMILAR_CARD_WIDTH)
     .on_press(Message::OpenDetail(Box::new(item.clone())))
-    .into()
+    .boxed()
 }
 
 fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
-  let mut cards = Row::new().spacing(18);
+  let mut cards = Row::<Element<'_, Message>>::new().spacing(18);
   for _ in 0..4 {
     cards = cards.push(
-      column![
+      (column![
         skeleton_block_with_radius(
           SIMILAR_CARD_WIDTH,
           SIMILAR_CARD_HEIGHT,
@@ -1601,14 +1654,16 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
         skeleton_block(SIMILAR_CARD_WIDTH - 20.0, 18.0, phase, reduced_motion),
         skeleton_block(54.0, 14.0, phase, reduced_motion),
       ]
-      .spacing(TOKENS.spacing.s1),
+      .spacing(TOKENS.spacing.s1))
+      .boxed(),
     );
   }
   scrollable(cards)
+    .smooth_scroll(false)
     .direction(Direction::Horizontal(Scrollbar::new()))
     .height(SIMILAR_SCROLL_HEIGHT)
     .style(jellypilot_ui::theme::scrollable)
-    .into()
+    .boxed()
 }
 
 fn section_title(palette: &'static ThemePalette, label: String) -> Element<'static, Message> {
@@ -1617,7 +1672,7 @@ fn section_title(palette: &'static ThemePalette, label: String) -> Element<'stat
     .size(20)
     .line_height(Pixels(24.0))
     .color(palette.text.heading)
-    .into()
+    .boxed()
 }
 
 fn episode_list<'a>(
@@ -1626,11 +1681,13 @@ fn episode_list<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let mut cards = Column::new().spacing(20).width(Fill);
+  let mut cards = Column::<Element<'_, Message>>::new()
+    .spacing(20)
+    .width(Fill);
   for episode in episodes {
-    cards = cards.push(episode_card(state, episode, skeleton_phase, reduced_motion));
+    cards = cards.push((episode_card(state, episode, skeleton_phase, reduced_motion)).boxed());
   }
-  cards.into()
+  cards.boxed()
 }
 
 fn episode_card<'a>(
@@ -1660,7 +1717,7 @@ fn episode_card<'a>(
     let mut art = stack![art].width(art_width).height(art_height);
     if let Some(progress) = playback_progress(episode) {
       art = art.push(
-        container(progress_bar(palette, progress))
+        (container(progress_bar(palette, progress))
           .padding(iced::Padding {
             top: 0.0,
             right: 1.0,
@@ -1669,12 +1726,13 @@ fn episode_card<'a>(
           })
           .width(Fill)
           .height(Fill)
-          .align_y(Alignment::End),
+          .align_y(Alignment::End))
+        .boxed(),
       );
     }
     if episode.played {
       art = art.push(
-        container(icon_with_color(
+        (container(icon_with_color(
           Icon::CircleCheck,
           IconSize::Custom(24.0),
           palette.colors.tertiary,
@@ -1682,7 +1740,8 @@ fn episode_card<'a>(
         .padding(8)
         .width(Fill)
         .height(Fill)
-        .align_x(Alignment::End),
+        .align_x(Alignment::End))
+        .boxed(),
       );
     }
     let art = poster_card(art, space::vertical().height(0))
@@ -1700,7 +1759,7 @@ fn episode_card<'a>(
       .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
       .color(palette.text.heading)
       .width(Fill)
-      .into(),
+      .boxed(),
       ButtonVariant::Text,
     )
     .padding(0)
@@ -1712,10 +1771,11 @@ fn episode_card<'a>(
     let metadata = episode_metadata(state.kernel.locale, episode);
     if !metadata.is_empty() {
       copy = copy.push(
-        text(metadata)
+        (text(metadata)
           .size(12)
           .line_height(Pixels(16.0))
-          .color(palette.text.metadata),
+          .color(palette.text.metadata))
+        .boxed(),
       );
     }
     if let Some(overview) = nonempty(episode.overview.as_deref()) {
@@ -1727,14 +1787,17 @@ fn episode_card<'a>(
         .data
         .expanded_episode_ids
         .contains(&episode.id);
-      copy = copy.push(overview_copy(
-        state,
-        overview,
-        EPISODE_OVERVIEW_TEXT_SIZE,
-        EPISODE_OVERVIEW_LINE_HEIGHT,
-        expanded,
-        Message::Detail(DetailMessage::EpisodeOverviewToggled(episode.id.clone())),
-      ));
+      copy = copy.push(
+        (overview_copy(
+          state,
+          overview,
+          EPISODE_OVERVIEW_TEXT_SIZE,
+          EPISODE_OVERVIEW_LINE_HEIGHT,
+          expanded,
+          Message::Detail(DetailMessage::EpisodeOverviewToggled(episode.id.clone())),
+        ))
+        .boxed(),
+      );
     }
     let play = control_button(
       Some(if episode.played {
@@ -1773,7 +1836,7 @@ fn episode_card<'a>(
       )
     }));
     if narrow {
-      column![art, copy, play].spacing(14).width(Fill).into()
+      column![art, copy, play].spacing(14).width(Fill).boxed()
     } else {
       row![
         art,
@@ -1785,11 +1848,11 @@ fn episode_card<'a>(
       .spacing(20)
       .align_y(Alignment::Center)
       .width(Fill)
-      .into()
+      .boxed()
     }
   })
   .height(Length::Fit)
-  .into()
+  .boxed()
 }
 
 fn episode_metadata(locale: Localizer, episode: &VideoLibraryItem) -> String {
@@ -1958,7 +2021,7 @@ fn artwork<'a>(
     ]
     .width(size.0)
     .height(size.1)
-    .into()
+    .boxed()
   };
   let axis = if matches!(kind, ArtworkKind::Similar | ArtworkKind::Cast) {
     ImageAxis::Horizontal
@@ -2005,9 +2068,9 @@ fn render_artwork<'a>(
         ]
         .width(width)
         .height(height)
-        .into()
+        .boxed()
       } else {
-        image.into()
+        image.boxed()
       };
     }
   }
@@ -2028,7 +2091,7 @@ fn render_artwork<'a>(
       phase,
       reduced_motion,
     )
-    .into(),
+    .boxed(),
   }
 }
 
@@ -2044,7 +2107,7 @@ fn artwork_placeholder<'a>(
   let radius = kind.radius();
   let icon_dim = (initial_size as f32).max(28.0);
   let content: Element<'a, Message> = if matches!(kind, ArtworkKind::Cast) {
-    icon_with_color(Icon::User2, icon_dim, color).into()
+    icon_with_color(Icon::User2, icon_dim, color).boxed()
   } else {
     let initial = name
       .trim()
@@ -2061,7 +2124,7 @@ fn artwork_placeholder<'a>(
     ]
     .spacing(TOKENS.spacing.s1)
     .align_x(Alignment::Center)
-    .into()
+    .boxed()
   };
   container(content)
     .center_x(width)
@@ -2078,7 +2141,7 @@ fn artwork_placeholder<'a>(
       },
       ..container::Style::default()
     })
-    .into()
+    .boxed()
 }
 
 fn detail_skeleton(
@@ -2112,7 +2175,6 @@ fn detail_skeleton(
       .width(Fill)
       .height(Fill)
       .align_y(Alignment::End),
-      chrome::detail_back(state, bounds.width, HERO_HEIGHT),
     ]
     .width(Fill)
     .height(HERO_HEIGHT);
@@ -2131,10 +2193,10 @@ fn detail_skeleton(
     ]
     .spacing(14)
     .width(Fill);
-    let mut cast = Row::new().spacing(24);
+    let mut cast = Row::<Element<'_, Message>>::new().spacing(24);
     for _ in 0..6 {
       cast = cast.push(
-        column![
+        (column![
           skeleton_block_with_radius(
             72,
             72,
@@ -2147,12 +2209,14 @@ fn detail_skeleton(
         ]
         .width(96)
         .spacing(8)
-        .align_x(Alignment::Center),
+        .align_x(Alignment::Center))
+        .boxed(),
       );
     }
     let cast = column![
       skeleton_block(160, 24, skeleton_phase, reduced_motion),
       scrollable(cast.padding(padding::bottom(12)))
+        .smooth_scroll(false)
         .direction(Direction::Horizontal(Scrollbar::new()))
         .style(jellypilot_ui::theme::scrollable),
     ]
@@ -2162,24 +2226,27 @@ fn detail_skeleton(
       similar_skeletons(skeleton_phase, reduced_motion),
     ]
     .spacing(14);
-    scrollable(
+    scrollable(jellypilot_ui::widgets::sticky_navigation::header(
       column![
         banner,
-        detail_section(intro.into(), inset),
-        detail_section(cast.into(), inset),
-        detail_section(similar.into(), inset),
+        detail_section(intro.boxed(), inset),
+        detail_section(cast.boxed(), inset),
+        detail_section(similar.boxed(), inset),
       ]
       .padding(padding::bottom(40))
       .width(Fill),
-    )
+      chrome::detail_back(state),
+      false,
+    ))
+    .smooth_scroll(false)
     .id(iced::widget::Id::new("detail-page"))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
-    .into()
+    .boxed()
   })
   .height(Length::Fit)
-  .into()
+  .boxed()
 }
 
 fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> {
@@ -2221,7 +2288,7 @@ fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> 
   .padding(TOKENS.spacing.s6)
   .width(Fill)
   .height(Fill)
-  .into()
+  .boxed()
 }
 
 fn retryable_surface<'a>(
@@ -2253,7 +2320,7 @@ fn retryable_surface<'a>(
   .padding(TOKENS.spacing.s3)
   .width(Fill)
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-  .into()
+  .boxed()
 }
 
 fn status_surface<'a>(palette: &'static ThemePalette, message: String) -> Element<'a, Message> {
@@ -2261,12 +2328,14 @@ fn status_surface<'a>(palette: &'static ThemePalette, message: String) -> Elemen
     .padding(TOKENS.spacing.s4)
     .width(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+    .boxed()
 }
 
 fn episode_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
   responsive(move |bounds| -> Element<'_, Message> {
-    let mut rows = Column::new().spacing(20).width(Fill);
+    let mut rows = Column::<Element<'_, Message>>::new()
+      .spacing(20)
+      .width(Fill);
     for _ in 0..3 {
       let art_width = EPISODE_ART_WIDTH.min(bounds.width);
       let art = skeleton_block(
@@ -2284,29 +2353,29 @@ fn episode_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
       .width(Fill);
       let play = skeleton_block(78, 32, phase, reduced_motion);
       let item: Element<'_, Message> = if bounds.width < 720.0 {
-        column![art, copy, play].spacing(14).width(Fill).into()
+        column![art, copy, play].spacing(14).width(Fill).boxed()
       } else {
         row![art, copy, play]
           .spacing(20)
           .width(Fill)
           .align_y(Alignment::Center)
-          .into()
+          .boxed()
       };
-      rows = rows.push(item);
+      rows = rows.push((item).boxed());
     }
-    rows.into()
+    rows.boxed()
   })
   .height(Length::Fit)
-  .into()
+  .boxed()
 }
 
 fn progress_bar<'a>(palette: &'static ThemePalette, progress: f64) -> Element<'a, Message> {
   let filled = (progress.round() as u16).min(100);
   let remaining = 100_u16.saturating_sub(filled);
-  let mut bar = Row::new().width(Fill).height(4);
+  let mut bar = Row::<Element<'_, Message>>::new().width(Fill).height(4);
   if filled > 0 {
     bar = bar.push(
-      container(space::horizontal())
+      (container(space::horizontal())
         .width(Length::FillPortion(filled))
         .height(4)
         .style(|_| container::Style {
@@ -2321,21 +2390,23 @@ fn progress_bar<'a>(palette: &'static ThemePalette, progress: f64) -> Element<'a
             ..iced::Border::default()
           },
           ..container::Style::default()
-        }),
+        }))
+      .boxed(),
     );
   }
   if remaining > 0 {
     bar = bar.push(
-      container(space::horizontal())
+      (container(space::horizontal())
         .width(Length::FillPortion(remaining))
         .height(4)
         .style(|_| {
           iced::widget::container::Style::default()
             .background(palette.text.heading.scale_alpha(0.18))
-        }),
+        }))
+      .boxed(),
     );
   }
-  bar.into()
+  bar.boxed()
 }
 
 fn playback_progress(item: &VideoLibraryItem) -> Option<f64> {
@@ -2487,6 +2558,7 @@ fn season_label(season: &VideoSeason) -> &str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::Widget as _;
 
   fn hero_state() -> State {
     use crate::app::state::{FullUi, LoginState, SettingsState};
@@ -2570,11 +2642,12 @@ mod tests {
     mut element: Element<'_, Message>,
     renderer: &iced::Renderer,
     width: f32,
-  ) -> iced::advanced::layout::Node {
+  ) -> crate::app::test_support::LayoutGeometry {
     use iced::advanced::{layout, widget};
     let mut tree = widget::Tree::new(&element);
-    tree.diff(element.as_widget_mut());
-    element.as_widget_mut().layout(
+    tree.diff(&mut element);
+    crate::app::test_support::layout_widget(
+      &mut element,
       &mut tree,
       renderer,
       &layout::Limits::new(iced::Size::ZERO, iced::Size::new(width, f32::INFINITY)),
@@ -2646,7 +2719,7 @@ mod tests {
           .size(size)
           .line_height(Pixels(line_height))
           .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
-          .into(),
+          .boxed(),
         &renderer,
         width,
       )
@@ -2768,8 +2841,29 @@ mod tests {
 
   #[test]
   fn closing_track_popover_keeps_its_size_until_exit_finishes() {
-    use iced::advanced::{layout, shell, widget, Layout, Shell};
+    use iced::advanced::{layout, shell, widget, Shell};
     use iced::{Event, Point, Rectangle, Size, Vector};
+
+    #[derive(Default)]
+    struct PanelSize(Option<Size>);
+    impl widget::Operation for PanelSize {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn container(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, _viewport: &Rectangle) {
+        if self.0.is_none() {
+          self.0 = Some(bounds.size());
+        }
+      }
+    }
+    fn panel_size(
+      mut panel: iced::advanced::overlay::Element<'_, Message, iced::Theme, iced::Renderer>,
+      renderer: &iced::Renderer,
+    ) -> Size {
+      let mut size = PanelSize::default();
+      panel.as_overlay_mut().operate(renderer, &mut size);
+      size.0.expect("track panel container")
+    }
 
     let renderer = headless_renderer();
     let mut state = hero_state();
@@ -2782,63 +2876,59 @@ mod tests {
     let limits = layout::Limits::new(Size::ZERO, bounds);
     state.full.as_mut().unwrap().detail.track_menu_open = Some(TrackMenu::Audio);
     let mut open = track_chip(&state, TrackMenu::Audio, &tracks, String::new());
-    let mut tree = widget::Tree::new(open.as_widget());
-    open.as_widget_mut().diff(&mut tree);
-    let node = open
-      .as_widget_mut()
-      .layout(&mut tree, &renderer, &limits)
+    let mut tree = widget::Tree::new(&open);
+    open.diff(&mut tree);
+    let node = crate::app::test_support::layout_widget(&mut open, &mut tree, &renderer, &limits)
       .move_to(Point::new(525.0, 650.0));
-    let open_size = open
-      .as_widget_mut()
-      .overlay(
-        &mut tree,
-        Layout::new(&node),
-        &renderer,
-        &viewport,
-        Vector::ZERO,
-      )
-      .into_iter()
-      .next()
-      .expect("open track panel")
-      .as_overlay_mut()
-      .layout(&renderer, bounds)
-      .size();
+    let open_size = panel_size(
+      open
+        .overlay(
+          &mut tree,
+          node.layout(),
+          &renderer,
+          &viewport,
+          Vector::ZERO,
+          bounds,
+        )
+        .into_iter()
+        .next()
+        .expect("open track panel"),
+      &renderer,
+    );
     drop(open);
 
     state.full.as_mut().unwrap().detail.track_menu_open = None;
     let mut closing = track_chip(&state, TrackMenu::Audio, &tracks, String::new());
-    closing.as_widget_mut().diff(&mut tree);
-    let node = closing
-      .as_widget_mut()
-      .layout(&mut tree, &renderer, &limits)
+    closing.diff(&mut tree);
+    let node = crate::app::test_support::layout_widget(&mut closing, &mut tree, &renderer, &limits)
       .move_to(Point::new(525.0, 650.0));
-    let closing_size = closing
-      .as_widget_mut()
-      .overlay(
-        &mut tree,
-        Layout::new(&node),
-        &renderer,
-        &viewport,
-        Vector::ZERO,
-      )
-      .into_iter()
-      .next()
-      .expect("panel remains during exit")
-      .as_overlay_mut()
-      .layout(&renderer, bounds)
-      .size();
+    let closing_size = panel_size(
+      closing
+        .overlay(
+          &mut tree,
+          node.layout(),
+          &renderer,
+          &viewport,
+          Vector::ZERO,
+          bounds,
+        )
+        .into_iter()
+        .next()
+        .expect("panel remains during exit"),
+      &renderer,
+    );
     assert_eq!(
       closing_size, open_size,
       "dismissal must not replace the panel with a viewport-height spacer"
     );
 
     let mut bus = shell::Bus::new();
-    closing.as_widget_mut().update(
+    closing.update(
       &mut tree,
       &Event::Window(iced::window::Event::RedrawRequested(
         iced::time::Instant::now() + TOKENS.durations.ms200,
       )),
-      Layout::new(&node),
+      node.layout(),
       iced::mouse::Cursor::Unavailable,
       &renderer,
       &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
@@ -2846,13 +2936,13 @@ mod tests {
     );
     assert!(
       closing
-        .as_widget_mut()
         .overlay(
           &mut tree,
-          Layout::new(&node),
+          node.layout(),
           &renderer,
           &viewport,
-          Vector::ZERO
+          Vector::ZERO,
+          bounds,
         )
         .is_empty(),
       "the panel must disappear once its exit finishes"
@@ -3109,7 +3199,7 @@ mod tests {
 
   #[test]
   fn episode_actions_reflow_and_keep_their_real_playback_start_position() {
-    use iced::advanced::{layout, mouse, widget, Layout, Shell};
+    use iced::advanced::{layout, mouse, widget, Shell};
     use iced::{Event, Rectangle, Size};
     let renderer = headless_renderer();
     let mut state = hero_state();
@@ -3124,19 +3214,21 @@ mod tests {
           state.playback.view.engine_available = available;
           let mut element = episode_card(&state, &episode, 0.0, true);
           let mut tree = widget::Tree::new(&element);
-          tree.diff(element.as_widget_mut());
-          let node = element.as_widget_mut().layout(
+          tree.diff(&mut element);
+          let node = crate::app::test_support::layout_widget(
+            &mut element,
             &mut tree,
             &renderer,
             &layout::Limits::new(Size::ZERO, Size::new(width, f32::INFINITY)),
           );
           assert!(node.size().height.is_finite());
-          let root = Layout::new(&node).children().next().unwrap();
-          let mut action = root.children().last().unwrap();
+          let (root_layout, root_tree) = node.layout().iter(&tree.children).next().unwrap();
+          let (mut action_layout, action_tree) =
+            root_layout.iter(&root_tree.children).last().unwrap();
           if width >= 720.0 {
-            action = action.children().next().unwrap();
+            action_layout = action_layout.iter(&action_tree.children).next().unwrap().0;
           }
-          let bounds = action.bounds();
+          let bounds = action_layout.bounds();
           assert!(bounds.width > 0.0 && bounds.x + bounds.width <= width);
           assert!(bounds.height >= 40.0);
           let cursor = mouse::Cursor::Available(bounds.center());
@@ -3145,10 +3237,10 @@ mod tests {
             mouse::Event::ButtonPressed(mouse::Button::Left),
             mouse::Event::ButtonReleased(mouse::Button::Left),
           ] {
-            element.as_widget_mut().update(
+            element.update(
               &mut tree,
               &Event::Mouse(event),
-              Layout::new(&node),
+              node.layout(),
               cursor,
               &renderer,
               &mut Shell::new(
@@ -3195,8 +3287,9 @@ mod tests {
       .insert(episode.id.clone());
     for width in [1148.0, 324.0, 1148.0] {
       let mut element = episode_card(&state, &episode, 0.0, true);
-      tree.diff(element.as_widget_mut());
-      let expanded = element.as_widget_mut().layout(
+      tree.diff(&mut element);
+      let expanded = crate::app::test_support::layout_widget(
+        &mut element,
         &mut tree,
         &renderer,
         &layout::Limits::new(iced::Size::ZERO, iced::Size::new(width, f32::INFINITY)),

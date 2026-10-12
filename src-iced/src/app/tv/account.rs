@@ -1,5 +1,6 @@
 //! TV account presentation. Authentication, persistence and handoff remain in their reducers.
 
+use iced::widget::Widget as _;
 use iced::widget::{button, column, container, opaque, responsive, row, scrollable, space, text};
 use iced::{Element, Fill, Task};
 use jellypilot_auth::login::ConnectionPhase;
@@ -353,9 +354,10 @@ pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
         return Task::none();
       }
       state.tv.account.offset = offset;
-      iced::widget::operation::scroll_to(
+      iced::widget::operation::scrollable::scroll_to(
         "tv-account-scroll",
-        iced::widget::operation::AbsoluteOffset { x: 0.0, y: offset },
+        iced::widget::operation::scrollable::AbsoluteOffset { x: 0.0, y: offset },
+        iced::advanced::widget::operation::Animation::Instant,
       )
     }
   }
@@ -481,11 +483,11 @@ fn action<'a>(
     .padding([12.0 * scale, 20.0 * scale])
     .style(style::button_progress(style::PALETTE, progress, selected))
     .on_press_maybe(enabled.then_some(message(Message::Activate(control))))
-    .into()
+    .boxed()
   }))
   .id(control_id(control))
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn heading<'a>(label: String, scale: f32) -> Element<'a, AppMessage> {
@@ -493,7 +495,7 @@ fn heading<'a>(label: String, scale: f32) -> Element<'a, AppMessage> {
     .size(style::TITLE * scale)
     .font(DISPLAY_FONT)
     .color(style::PALETTE.text.heading)
-    .into()
+    .boxed()
 }
 
 fn field_label(state: &State, field: Field) -> String {
@@ -521,7 +523,7 @@ fn field<'a>(state: &State, field: Field, control: Control, scale: f32) -> Eleme
   ]
   .spacing(8.0 * scale)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
@@ -542,7 +544,7 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
       .map(|entry| message(Message::Entry(entry)))
     ]
     .spacing(style::GAP * scale)
-    .into();
+    .boxed();
   }
   let mut form = column![
     heading(
@@ -579,7 +581,7 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
   .width(Fill);
   if login.provider == MediaServerProvider::Jellyfin {
     form = form.push(
-      row![
+      (row![
         action(
           state,
           Control::QuickConnect,
@@ -595,19 +597,21 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
           scale
         )
       ]
-      .spacing(16.0 * scale),
+      .spacing(16.0 * scale))
+      .boxed(),
     );
   }
   if login.method == LoginMethod::Password {
     form = form.push(
-      row![
+      (row![
         field(state, Field::Username, Control::Username, scale),
         field(state, Field::Password, Control::Password, scale)
       ]
-      .spacing(20.0 * scale),
+      .spacing(20.0 * scale))
+      .boxed(),
     );
     form = form.push(
-      row![
+      (row![
         action(
           state,
           Control::Remember,
@@ -631,39 +635,44 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
           scale
         )
       ]
-      .spacing(16.0 * scale),
+      .spacing(16.0 * scale))
+      .boxed(),
     );
   } else {
     form = form.push(
-      text(state.t("login-quick-connect-description"))
+      (text(state.t("login-quick-connect-description"))
         .size(style::META * scale)
-        .color(style::PALETTE.text.metadata),
+        .color(style::PALETTE.text.metadata))
+      .boxed(),
     );
     match &login.quick_connect {
       QuickConnectState::Waiting(code) => {
         form = form
           .push(
-            text(code)
+            (text(code)
               .font(HEADING_FONT)
               .size(56.0 * scale)
-              .color(style::PALETTE.text.heading),
+              .color(style::PALETTE.text.heading))
+            .boxed(),
           )
           .push(
-            text(state.t("login-code-instructions"))
+            (text(state.t("login-code-instructions"))
               .size(style::BODY * scale)
-              .color(style::PALETTE.text.body),
+              .color(style::PALETTE.text.body))
+            .boxed(),
           );
       }
       QuickConnectState::Requesting | QuickConnectState::Approving => {
         form = form.push(
-          text(
+          (text(
             state.t(if login.quick_connect == QuickConnectState::Requesting {
               "login-requesting-code"
             } else {
               "login-approving"
             }),
           )
-          .size(style::BODY * scale),
+          .size(style::BODY * scale))
+          .boxed(),
         );
       }
       _ => {}
@@ -671,19 +680,23 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
   }
   if let Some(error) = login.error.as_ref().or(state.accounts.error.as_ref()) {
     form = form.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(style::META * scale)
-        .color(style::PALETTE.colors.error),
+        .color(style::PALETTE.colors.error))
+      .boxed(),
     );
   }
   if quick_connect_live(state) {
-    form = form.push(action(
-      state,
-      Control::CancelQuickConnect,
-      state.t("common-cancel"),
-      false,
-      scale,
-    ));
+    form = form.push(
+      (action(
+        state,
+        Control::CancelQuickConnect,
+        state.t("common-cancel"),
+        false,
+        scale,
+      ))
+      .boxed(),
+    );
   } else {
     let label = if busy(state) {
       "login-signing-in"
@@ -694,32 +707,36 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
     } else {
       "login-sign-in"
     };
-    form = form.push(action(state, Control::Submit, state.t(label), true, scale));
+    form = form.push((action(state, Control::Submit, state.t(label), true, scale)).boxed());
   }
-  form = form.push(action(
-    state,
-    if add { Control::Close } else { Control::ExitTv },
-    state.t(if add {
-      "common-cancel"
-    } else {
-      "tv-account-desktop"
-    }),
-    false,
-    scale,
-  ));
+  form = form.push(
+    (action(
+      state,
+      if add { Control::Close } else { Control::ExitTv },
+      state.t(if add {
+        "common-cancel"
+      } else {
+        "tv-account-desktop"
+      }),
+      false,
+      scale,
+    ))
+    .boxed(),
+  );
   if !add {
     if login.profiles_loading {
-      form = form.push(text(state.t("login-loading-saved")).size(style::META * scale));
+      form = form.push((text(state.t("login-loading-saved")).size(style::META * scale)).boxed());
     }
     if !login.profiles.is_empty() {
       form = form.push(
-        text(state.t("login-saved"))
+        (text(state.t("login-saved"))
           .size(style::SECTION * scale)
-          .font(HEADING_FONT),
+          .font(HEADING_FONT))
+        .boxed(),
       );
       for (index, profile) in login.profiles.iter().enumerate() {
         form = form.push(
-          column![
+          (column![
             row![
               action(
                 state,
@@ -746,17 +763,18 @@ fn form(state: &State, scale: f32) -> Element<'_, AppMessage> {
               .size(style::META * scale)
               .color(style::PALETTE.text.metadata)
           ]
-          .spacing(8.0 * scale),
+          .spacing(8.0 * scale))
+          .boxed(),
         );
       }
     }
   }
-  form.into()
+  form.boxed()
 }
 
 fn confirmation(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let Some(confirmation) = accounts::view(state).confirmation else {
-    return column![].into();
+    return iced::widget::Column::<Element<'_, AppMessage>>::new().boxed();
   };
   let account = confirmation
     .account
@@ -794,26 +812,30 @@ fn confirmation(state: &State, scale: f32) -> Element<'_, AppMessage> {
   ]
   .spacing(style::GAP * scale);
   if confirmation.kind == ConfirmationKind::SignOut {
-    body = body.push(action(
-      state,
-      Control::DeleteWatchlist,
-      state.t("account-delete-watchlist"),
-      confirmation.delete_watchlist,
-      scale,
-    ));
     body = body.push(
-      text(state.t(if confirmation.delete_watchlist {
+      (action(
+        state,
+        Control::DeleteWatchlist,
+        state.t("account-delete-watchlist"),
+        confirmation.delete_watchlist,
+        scale,
+      ))
+      .boxed(),
+    );
+    body = body.push(
+      (text(state.t(if confirmation.delete_watchlist {
         "tv-account-watchlist-delete"
       } else {
         "tv-account-watchlist-keep"
       }))
       .size(style::META * scale)
-      .color(style::PALETTE.text.metadata),
+      .color(style::PALETTE.text.metadata))
+      .boxed(),
     );
   }
   body
     .push(
-      row![
+      (row![
         action(
           state,
           Control::Cancel,
@@ -829,9 +851,10 @@ fn confirmation(state: &State, scale: f32) -> Element<'_, AppMessage> {
           scale
         )
       ]
-      .spacing(20.0 * scale),
+      .spacing(20.0 * scale))
+      .boxed(),
     )
-    .into()
+    .boxed()
 }
 
 pub fn login_view(state: &State) -> Element<'_, AppMessage> {
@@ -839,8 +862,9 @@ pub fn login_view(state: &State) -> Element<'_, AppMessage> {
     let scale = style::scale(bounds.width);
     container(
       scrollable(container(form(state, scale)).width(iced::Length::Fill.max(1120.0 * scale)))
+        .smooth_scroll(false)
         .id("tv-account-scroll")
-        .on_scroll(|viewport| message(Message::Scrolled(viewport.absolute_offset().y)))
+        .on_scroll(|viewport| message(Message::Scrolled(viewport.viewport.absolute_offset().y)))
         .width(Fill)
         .height(Fill)
         .style(jellypilot_ui::theme::scrollable),
@@ -850,14 +874,14 @@ pub fn login_view(state: &State) -> Element<'_, AppMessage> {
     .height(Fill)
     .center_x(Fill)
     .style(style::canvas)
-    .into()
+    .boxed()
   })
-  .into()
+  .boxed()
 }
 
 pub fn modal_layer(state: &State) -> Element<'_, AppMessage> {
   if !modal_open(state) {
-    return space().into();
+    return space().boxed();
   }
   opaque(responsive(move |bounds| -> Element<'_, AppMessage> {
     let scale = style::scale(bounds.width);
@@ -873,8 +897,9 @@ pub fn modal_layer(state: &State) -> Element<'_, AppMessage> {
           .padding(36.0 * scale)
           .style(style::panel),
       )
+      .smooth_scroll(false)
       .id("tv-account-scroll")
-      .on_scroll(|viewport| message(Message::Scrolled(viewport.absolute_offset().y)))
+      .on_scroll(|viewport| message(Message::Scrolled(viewport.viewport.absolute_offset().y)))
       .style(jellypilot_ui::theme::scrollable),
     )
     .padding([style::SAFE_Y * scale, style::SAFE_X * scale])
@@ -883,8 +908,9 @@ pub fn modal_layer(state: &State) -> Element<'_, AppMessage> {
     .center_x(Fill)
     .center_y(Fill)
     .style(style::canvas)
-    .into()
+    .boxed()
   }))
+  .boxed()
 }
 
 fn reveal(state: &State) -> Task<AppMessage> {
@@ -900,7 +926,12 @@ fn reveal(state: &State) -> Task<AppMessage> {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&control_id(self.control)) {
         self.target = Some(bounds);
       }
@@ -909,10 +940,11 @@ fn reveal(state: &State) -> Task<AppMessage> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       _: iced::Vector,
       _: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&widget::Id::new("tv-account-scroll")) {
         self.viewport = Some((bounds, content));
       }

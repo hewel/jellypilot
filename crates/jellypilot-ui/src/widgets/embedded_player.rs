@@ -78,7 +78,7 @@ pub fn play_method_badge<'a, Message: 'a>(label: String, font: iced::Font) -> El
             },
             ..container::Style::default()
         })
-        .into()
+        ._boxed()
 }
 
 /// Reuses the app's Charcoal theme for cinema chrome in either browser theme.
@@ -347,7 +347,7 @@ pub fn full_backdrop<'a, Message: 'a>() -> Element<'a, Message> {
         .width(Length::Fill)
         .height(TOKENS.player_chrome.backdrop_height)
         .style(|_| scrim(false))
-        .into()
+        ._boxed()
 }
 
 /// The minimal presentation's shallow bottom gradient: 80px, black/30% to
@@ -421,13 +421,15 @@ pub fn mini_switch<'a, Message: 'a>(
     on: bool,
     state: crate::icons::IconControlState,
 ) -> Element<'a, Message> {
-    Element::new(MiniSwitch { on, state })
+    (MiniSwitch { on, state })._boxed()
 }
 
 struct MiniSwitch {
     on: bool,
     state: crate::icons::IconControlState,
 }
+
+impl iced::advanced::widget::Meta for MiniSwitch {}
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for MiniSwitch {
     fn size(&self) -> Size<Length> {
@@ -439,11 +441,11 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for MiniSwitch {
 
     fn layout(
         &mut self,
-        _tree: &mut widget::Tree,
+        tree: &mut widget::Tree,
         _renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::atomic(limits, MINI_TRACK.width, MINI_TRACK.height)
+    ) {
+        tree.size = layout::atomic(limits, MINI_TRACK.width, MINI_TRACK.height);
     }
 
     fn draw(
@@ -452,7 +454,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for MiniSwitch {
         renderer: &mut iced::Renderer,
         _theme: &Theme,
         _style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         _cursor: iced::mouse::Cursor,
         _viewport: &Rectangle,
     ) {
@@ -523,7 +525,7 @@ pub fn timeline_track<'a, Message: 'a>(
     hover: Option<f64>,
     available: bool,
 ) -> Element<'a, Message> {
-    Element::new(TimelineTrack {
+    (TimelineTrack {
         position,
         duration,
         buffered,
@@ -533,6 +535,7 @@ pub fn timeline_track<'a, Message: 'a>(
         available,
         minimal: false,
     })
+    ._boxed()
 }
 
 /// The read-only edge line of the minimal presentation: rail, real chapter
@@ -544,7 +547,7 @@ pub fn minimal_track<'a, Message: 'a>(
     chapters: &'a [f64],
     segments: &'a [(f64, f64)],
 ) -> Element<'a, Message> {
-    Element::new(TimelineTrack {
+    (TimelineTrack {
         position,
         duration,
         buffered: &[],
@@ -554,6 +557,7 @@ pub fn minimal_track<'a, Message: 'a>(
         available: true,
         minimal: true,
     })
+    ._boxed()
 }
 
 struct TimelineTrack<'a> {
@@ -567,6 +571,8 @@ struct TimelineTrack<'a> {
     minimal: bool,
 }
 
+impl iced::advanced::widget::Meta for TimelineTrack<'_> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
@@ -574,11 +580,11 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
 
     fn layout(
         &mut self,
-        _tree: &mut widget::Tree,
+        tree: &mut widget::Tree,
         _renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::atomic(limits, Length::Fill, Length::Fill)
+    ) {
+        tree.size = layout::atomic(limits, Length::Fill, Length::Fill);
     }
 
     fn draw(
@@ -587,7 +593,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
         renderer: &mut iced::Renderer,
         _theme: &Theme,
         _style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         _cursor: iced::mouse::Cursor,
         viewport: &Rectangle,
     ) {

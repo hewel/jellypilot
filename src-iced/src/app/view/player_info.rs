@@ -1,5 +1,6 @@
 //! Native, demand-owned playback information; independent of MPV's stats OSD.
 
+use iced::widget::Widget as _;
 use std::sync::LazyLock;
 
 use iced::advanced::graphics::text::{cosmic_text::fontdb, font_system};
@@ -46,7 +47,11 @@ pub(super) fn button(state: &State) -> Element<'_, Message> {
       TooltipOptions::default(),
     );
   // Closed popovers retain their widget tree, but do not format unseen statistics.
-  let content = if open { panel(state) } else { column![].into() };
+  let content = if open {
+    panel(state)
+  } else {
+    iced::widget::Column::<Element<'_, Message>>::new().boxed()
+  };
   popover(
     trigger,
     content,
@@ -129,7 +134,9 @@ fn panel(state: &State) -> Element<'_, Message> {
     state.t("common-close"),
     TooltipOptions::default(),
   );
-  let mut actions = row![].spacing(4).align_y(Alignment::Center);
+  let mut actions = iced::widget::Row::<Element<'_, Message>>::new()
+    .spacing(4)
+    .align_y(Alignment::Center);
   if let Some(method) =
     state
       .playback
@@ -142,12 +149,10 @@ fn panel(state: &State) -> Element<'_, Message> {
         _ => None,
       })
   {
-    actions = actions.push(cinema::play_method_badge(
-      state.t(method),
-      information_font(),
-    ));
+    actions =
+      actions.push((cinema::play_method_badge(state.t(method), information_font())).boxed());
   }
-  actions = actions.push(close);
+  actions = actions.push((close).boxed());
   let header = container(
     row![identity, actions]
       .spacing(10)
@@ -180,14 +185,18 @@ fn panel(state: &State) -> Element<'_, Message> {
         .style(cinema::separator),
       body
     ])
+    .smooth_scroll(false)
     .height(Length::Shrink),
   )
   .height(Length::Fit.max((state.shell.window_size.height - 104.0).max(40.0)))
   .width(Fill)
-  .into()
+  .boxed()
 }
 
-fn statistics<'a>(state: &'a State, sample: &'a PlaybackStatistics) -> Column<'a, Message> {
+fn statistics<'a>(
+  state: &'a State,
+  sample: &'a PlaybackStatistics,
+) -> Column<Element<'a, Message>> {
   let output = &sample.output;
   let mut content = column![
     section(state, "player-information-file", Icon::Folder),
@@ -264,114 +273,135 @@ fn statistics<'a>(state: &'a State, sample: &'a PlaybackStatistics) -> Column<'a
     .iter()
     .find(|timing| timing.frame_type == "fresh")
     .or_else(|| output.pass_timings.first());
-  content = content.push(focus_tooltip(
-    stat_row(
-      state,
-      "player-information-timing",
-      timing.map(|timing| {
-        format!(
-          "{:.0} / {:.0} / {:.0} µs",
-          timing.last_ns as f64 / 1000.0,
-          timing.avg_ns as f64 / 1000.0,
-          timing.peak_ns as f64 / 1000.0
-        )
-      }),
-    ),
-    state.t("player-information-timing-hint"),
-    TooltipOptions::default(),
-  ));
-  content = content.push(section(state, "player-information-video", Icon::Movie));
+  content = content.push(
+    (focus_tooltip(
+      stat_row(
+        state,
+        "player-information-timing",
+        timing.map(|timing| {
+          format!(
+            "{:.0} / {:.0} / {:.0} µs",
+            timing.last_ns as f64 / 1000.0,
+            timing.avg_ns as f64 / 1000.0,
+            timing.peak_ns as f64 / 1000.0
+          )
+        }),
+      ),
+      state.t("player-information-timing-hint"),
+      TooltipOptions::default(),
+    ))
+    .boxed(),
+  );
+  content = content.push((section(state, "player-information-video", Icon::Movie)).boxed());
   let video = sample.video.as_ref();
   content = content
-    .push(stat_row(
-      state,
-      "player-information-codec",
-      video.and_then(|video| {
-        join([
-          video.codec.clone(),
-          video.codec_profile.clone(),
-          video.hwdec.as_ref().map(|decoder| {
-            if decoder == "no" {
-              state.t("player-information-software")
-            } else {
-              decoder.clone()
-            }
-          }),
-        ])
-      }),
-    ))
-    .push(stat_row(
-      state,
-      "player-information-format",
-      video.and_then(|video| {
-        join([
-          video
-            .width
-            .zip(video.height)
-            .map(|(width, height)| format!("{width} × {height}")),
-          video.container_fps.map(|fps| format!("{fps:.3} fps")),
-        ])
-      }),
-    ))
-    .push(stat_row(
-      state,
-      "player-information-color",
-      video.and_then(|video| {
-        join([
-          video.primaries.clone(),
-          video.gamma.clone(),
-          video
-            .hw_pixel_format
-            .clone()
-            .or_else(|| video.pixel_format.clone()),
-          video
-            .dolby_vision_profile
-            .map(|profile| format!("Dolby Vision P{profile}")),
-        ])
-      }),
-    ))
-    .push(stat_row(
-      state,
-      "player-information-bitrate",
-      video.and_then(|video| video.bitrate).map(bitrate),
-    ))
-    .push(section(state, "player-information-audio", Icon::AudioTrack));
+    .push(
+      (stat_row(
+        state,
+        "player-information-codec",
+        video.and_then(|video| {
+          join([
+            video.codec.clone(),
+            video.codec_profile.clone(),
+            video.hwdec.as_ref().map(|decoder| {
+              if decoder == "no" {
+                state.t("player-information-software")
+              } else {
+                decoder.clone()
+              }
+            }),
+          ])
+        }),
+      ))
+      .boxed(),
+    )
+    .push(
+      (stat_row(
+        state,
+        "player-information-format",
+        video.and_then(|video| {
+          join([
+            video
+              .width
+              .zip(video.height)
+              .map(|(width, height)| format!("{width} × {height}")),
+            video.container_fps.map(|fps| format!("{fps:.3} fps")),
+          ])
+        }),
+      ))
+      .boxed(),
+    )
+    .push(
+      (stat_row(
+        state,
+        "player-information-color",
+        video.and_then(|video| {
+          join([
+            video.primaries.clone(),
+            video.gamma.clone(),
+            video
+              .hw_pixel_format
+              .clone()
+              .or_else(|| video.pixel_format.clone()),
+            video
+              .dolby_vision_profile
+              .map(|profile| format!("Dolby Vision P{profile}")),
+          ])
+        }),
+      ))
+      .boxed(),
+    )
+    .push(
+      (stat_row(
+        state,
+        "player-information-bitrate",
+        video.and_then(|video| video.bitrate).map(bitrate),
+      ))
+      .boxed(),
+    )
+    .push((section(state, "player-information-audio", Icon::AudioTrack)).boxed());
   let audio = sample.audio.as_ref();
   content
-    .push(stat_row(
-      state,
-      "player-information-track",
-      audio.and_then(|audio| {
-        join([
-          audio.language.clone(),
-          audio.codec.clone(),
-          audio.channels.clone(),
-          audio.bitrate.map(bitrate),
-        ])
-      }),
-    ))
-    .push(stat_row(
-      state,
-      "player-information-output",
-      audio.and_then(|audio| {
-        join([
-          audio.ao.clone(),
-          audio
-            .output_sample_rate
-            .map(|rate| format!("{:.1} kHz", f64::from(rate) / 1000.0)),
-          audio.volume.map(|volume| {
-            state.format(
-              "player-information-volume",
-              &[("volume", format!("{volume:.0}").into())],
-            )
-          }),
-          audio
-            .muted
-            .filter(|muted| *muted)
-            .map(|_| state.t("player-information-muted")),
-        ])
-      }),
-    ))
+    .push(
+      (stat_row(
+        state,
+        "player-information-track",
+        audio.and_then(|audio| {
+          join([
+            audio.language.clone(),
+            audio.codec.clone(),
+            audio.channels.clone(),
+            audio.bitrate.map(bitrate),
+          ])
+        }),
+      ))
+      .boxed(),
+    )
+    .push(
+      (stat_row(
+        state,
+        "player-information-output",
+        audio.and_then(|audio| {
+          join([
+            audio.ao.clone(),
+            audio
+              .output_sample_rate
+              .map(|rate| format!("{:.1} kHz", f64::from(rate) / 1000.0)),
+            audio.volume.map(|volume| {
+              state.format(
+                "player-information-volume",
+                &[("volume", format!("{volume:.0}").into())],
+              )
+            }),
+            audio
+              .muted
+              .filter(|muted| *muted)
+              .map(|_| state.t("player-information-muted")),
+          ])
+        }),
+      ))
+      .boxed(),
+    )
 }
 
 fn section<'a>(state: &'a State, label: &'static str, icon: Icon) -> Element<'a, Message> {
@@ -395,7 +425,7 @@ fn section<'a>(state: &'a State, label: &'static str, icon: Icon) -> Element<'a,
     bottom: 3.0,
     left: 10.0,
   })
-  .into()
+  .boxed()
 }
 
 fn stat_row<'a>(
@@ -424,7 +454,7 @@ fn stat_row<'a>(
   )
   .padding([4, 10])
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn join(parts: impl IntoIterator<Item = Option<String>>) -> Option<String> {

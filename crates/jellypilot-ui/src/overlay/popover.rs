@@ -1,5 +1,6 @@
 //! Parent-controlled floating popover widget.
 
+use iced::advanced::Renderer as _;
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::keyboard::{key, Key};
 use iced::widget::{container, opaque};
@@ -66,8 +67,8 @@ impl Default for PopoverOptions {
 /// trigger and floating panel publish `on_dismiss`.
 /// While open, trigger hints are suppressed; overlays inside the panel remain available.
 pub fn popover<'a, Message>(
-    trigger: impl Into<Element<'a, Message>>,
-    content: impl Into<Element<'a, Message>>,
+    trigger: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     is_open: bool,
     options: PopoverOptions,
     on_dismiss: Message,
@@ -102,19 +103,21 @@ where
                     }
                     PopoverAppearance::TrackList => style::track_list_surface,
                 }),
-        ),
+        )
+        ._boxed(),
         is_open,
         true,
         TOKENS.durations.ms200,
     );
 
-    Element::new(Popover {
-        trigger: trigger.into(),
+    Popover {
+        trigger: trigger._boxed(),
         content,
         is_open,
         options,
         on_dismiss,
-    })
+    }
+    ._boxed()
 }
 
 struct Popover<'a, Message> {
@@ -125,16 +128,18 @@ struct Popover<'a, Message> {
     on_dismiss: Message,
 }
 
+impl<Message> widget::Meta for Popover<'_, Message> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for Popover<'_, Message>
 where
     Message: Clone,
 {
     fn diff(&mut self, tree: &mut widget::Tree) {
-        tree.diff_children(&mut [self.trigger.as_widget_mut(), self.content.as_widget_mut()]);
+        tree.diff_children(&mut [&mut self.trigger, &mut self.content]);
     }
 
     fn size(&self) -> Size<Length> {
-        self.trigger.as_widget().size()
+        self.trigger.size()
     }
 
     fn layout(
@@ -142,23 +147,23 @@ where
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.trigger
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    ) {
+        self.trigger.layout(&mut tree.children[0], renderer, limits);
+        tree.children[0].translation = Vector::ZERO;
+        tree.size = tree.children[0].size;
     }
 
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        self.trigger.as_widget_mut().update(
+        self.trigger.update(
             &mut tree.children[0],
             event,
             layout,
@@ -175,9 +180,8 @@ where
                 Event::Window(iced::window::Event::RedrawRequested(_))
             )
         {
-            let content_node = layout::Node::default();
-            let content_layout = Layout::new(&content_node);
-            self.content.as_widget_mut().update(
+            let content_layout = Layout::new(tree.children[1].size);
+            self.content.update(
                 &mut tree.children[1],
                 event,
                 content_layout,
@@ -195,11 +199,11 @@ where
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.trigger.as_widget().draw(
+        self.trigger.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -213,60 +217,108 @@ where
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        self.trigger.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.trigger
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut widget::Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let mut children = tree.children.iter_mut();
         let trigger_tree = children.next().expect("popover trigger tree");
         let content_tree = children.next().expect("popover content tree");
         let exiting = !self.is_open && {
             let mut activity = motion::Activity::default();
-            let content_node = layout::Node::default();
-            let content_layout = Layout::new(&content_node);
-            self.content.as_widget_mut().operate(
+            let content_layout = Layout::new(content_tree.size);
+            self.content.operate(
                 content_tree,
                 content_layout,
+                viewport,
                 renderer,
                 &mut activity,
             );
             activity.is_active()
         };
         if self.is_open || exiting {
+            // Scrollable supplies its viewport in content coordinates; the anchor
+            // and floating panel are positioned in window coordinates.
+            let viewport = viewport_for_layout(*viewport + translation, window);
+            let anchor_bounds = layout.bounds() + translation;
+            let mut limits = layout::Limits::new(
+                Size::ZERO,
+                if self.options.clamp_to_viewport {
+                    viewport.size()
+                } else {
+                    Size::INFINITE
+                },
+            );
+            limits = limits.width(if let Some(width) = self.options.width {
+                Length::Fixed(width)
+            } else if self.options.match_trigger_width {
+                Length::Fixed(anchor_bounds.width)
+            } else {
+                Length::Fit
+            });
+            self.content.layout(content_tree, renderer, &limits);
+            let position = position_layer(
+                anchor_bounds,
+                content_tree.size,
+                viewport,
+                PositioningOptions {
+                    preferred: self.options.placement,
+                    alignment: self.options.alignment,
+                    gap: self.options.gap,
+                    clamp_to_viewport: self.options.clamp_to_viewport,
+                    flip_when_overflow: self.options.flip_when_overflow,
+                },
+            );
+            let content_layout = Layout::new(content_tree.size).move_to(position.point);
+            // Include the reveal's presented translation in the clipping region.
+            let panel = content_layout
+                .iter(&content_tree.children)
+                .next()
+                .map_or(content_layout.bounds(), |(layout, _)| layout.bounds());
+            let clip_size = Size::new(
+                content_tree
+                    .size
+                    .width
+                    .max(panel.x + panel.width - position.point.x),
+                content_tree
+                    .size
+                    .height
+                    .max(panel.y + panel.height - position.point.y),
+            );
             vec![overlay::Element::new(Box::new(PopoverOverlay {
                 content: &mut self.content,
                 tree: content_tree,
-                anchor_bounds: layout.bounds() + translation,
-                viewport_bounds: *viewport,
+                layout: content_layout,
+                clip_bounds: Rectangle::new(position.point, clip_size),
+                window,
+                anchor_bounds,
+                viewport_bounds: viewport,
                 options: self.options,
                 on_dismiss: self.on_dismiss.clone(),
                 is_open: self.is_open,
             }))]
         } else {
-            self.trigger.as_widget_mut().overlay(
+            self.trigger.overlay(
                 trigger_tree,
                 layout,
                 renderer,
                 viewport,
                 translation,
+                window,
             )
         }
     }
@@ -274,19 +326,22 @@ where
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
         self.trigger
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 }
 
 struct PopoverOverlay<'a, 'b, Message> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut widget::Tree,
+    layout: Layout,
+    clip_bounds: Rectangle,
+    window: Size,
     anchor_bounds: Rectangle,
     viewport_bounds: Rectangle,
     options: PopoverOptions,
@@ -299,60 +354,9 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PopoverOverla
 where
     Message: Clone,
 {
-    fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-        let viewport = viewport_for_layout(self.viewport_bounds, bounds);
-        self.viewport_bounds = viewport;
-        let mut limits = layout::Limits::new(
-            Size::ZERO,
-            if self.options.clamp_to_viewport {
-                viewport.size()
-            } else {
-                Size::INFINITE
-            },
-        );
-
-        if let Some(width) = self.options.width {
-            limits = limits.width(Length::Fixed(width));
-        } else if self.options.match_trigger_width {
-            limits = limits.width(Length::Fixed(self.anchor_bounds.width));
-        } else {
-            limits = limits.width(Length::Fit);
-        }
-
-        let node = self
-            .content
-            .as_widget_mut()
-            .layout(self.tree, renderer, &limits);
-        let position = position_layer(
-            self.anchor_bounds,
-            node.size(),
-            viewport,
-            PositioningOptions {
-                preferred: self.options.placement,
-                alignment: self.options.alignment,
-                gap: self.options.gap,
-                clamp_to_viewport: self.options.clamp_to_viewport,
-                flip_when_overflow: self.options.flip_when_overflow,
-            },
-        );
-
-        // Native overlays clip to their root bounds. Placement uses the natural
-        // panel size, while this wrapper also contains its presented translation.
-        let panel = node
-            .children()
-            .first()
-            .map_or(node.bounds(), layout::Node::bounds);
-        let clip_size = Size::new(
-            node.size().width.max(panel.x + panel.width),
-            node.size().height.max(panel.y + panel.height),
-        );
-        layout::Node::with_children(clip_size, vec![node]).move_to(position.point)
-    }
-
     fn update(
         &mut self,
         event: &Event,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -363,8 +367,11 @@ where
             return;
         }
 
-        let content_layout = layout.child(0);
-        let overlay_bounds = content_layout.child(0).bounds();
+        let content_layout = self.layout;
+        let overlay_bounds = content_layout
+            .iter(&self.tree.children)
+            .next()
+            .map_or(content_layout.bounds(), |(layout, _)| layout.bounds());
         if self.is_open
             && outside_press_action(
                 self.options.close_on_outside_press,
@@ -391,7 +398,7 @@ where
             return;
         }
 
-        self.content.as_widget_mut().update(
+        self.content.update(
             self.tree,
             event,
             content_layout,
@@ -407,61 +414,57 @@ where
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
     ) {
-        let bounds = layout.bounds();
-        self.content.as_widget().draw(
-            self.tree,
-            renderer,
-            theme,
-            style,
-            layout.child(0),
-            cursor,
-            &bounds,
-        );
+        renderer.with_layer(self.clip_bounds, |renderer| {
+            self.content.draw(
+                self.tree,
+                renderer,
+                theme,
+                style,
+                self.layout,
+                cursor,
+                &self.clip_bounds,
+            );
+        });
     }
 
-    fn operate(
-        &mut self,
-        layout: Layout<'_>,
-        renderer: &iced::Renderer,
-        operation: &mut dyn widget::Operation,
-    ) {
-        self.content
-            .as_widget_mut()
-            .operate(self.tree, layout.child(0), renderer, operation);
+    fn operate(&mut self, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
+        operation.container(None, self.clip_bounds, &self.viewport_bounds);
+        operation.traverse(&mut |operation| {
+            self.content.operate(
+                self.tree,
+                self.layout,
+                &self.viewport_bounds,
+                renderer,
+                operation,
+            );
+        });
     }
 
     fn mouse_interaction(
         &self,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         if !self.is_open {
             return mouse::Interaction::None;
         }
-        self.content.as_widget().mouse_interaction(
-            self.tree,
-            layout.child(0),
-            cursor,
-            &layout.bounds(),
-            renderer,
-        )
+        self.content
+            .mouse_interaction(self.tree, self.layout, cursor, &self.clip_bounds, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
-        layout: Layout<'a>,
         renderer: &iced::Renderer,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             self.tree,
-            layout.child(0),
+            self.layout,
             renderer,
             &self.viewport_bounds,
             Vector::ZERO,
+            self.window,
         )
     }
 }
@@ -521,6 +524,7 @@ fn primary_press_position(event: &Event, cursor: mouse::Cursor) -> Option<Point>
 #[cfg(test)]
 mod tests {
     use iced::advanced::mouse;
+    use iced::advanced::Widget as _;
     use iced::{Event, Point, Rectangle, Size};
 
     use super::{outside_press_action, primary_press_position, OutsidePressAction, PopoverOptions};
@@ -577,6 +581,128 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_popover_clamps_and_receives_input_in_window_coordinates() {
+        use iced::advanced::{renderer, renderer::Headless, shell, widget};
+        use iced::widget::{column, container, scrollable, space, text};
+        use iced_runtime::user_interface::{Cache, UserInterface};
+
+        let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            renderer::Settings::default(),
+            Some("tiny-skia"),
+        ))
+        .expect("software renderer");
+        let action = crate::control_button(
+            None,
+            Some("Menu action".to_owned()),
+            crate::variants::ButtonVariant::Text,
+        )
+        .id("scrolled-panel-action")
+        .min_height(32.0)
+        .on_press("activate");
+        let view = scrollable(column![
+            space().height(200),
+            super::popover(
+                container(text("Menu")).width(100).height(40),
+                container(action).id("scrolled-panel").width(120).height(64),
+                true,
+                PopoverOptions {
+                    consume_outside_press: true,
+                    ..PopoverOptions::default()
+                },
+                "dismiss",
+            ),
+            space().height(500),
+        ])
+        .smooth_scroll(false)
+        .id("scrolled-page")
+        .width(200)
+        .height(180);
+        let window = Size::new(200.0, 180.0);
+        let mut ui = UserInterface::build(view, window, Cache::new(), &mut renderer);
+        ui.operate(
+            &renderer,
+            &mut widget::operation::scrollable::scroll_to::<()>(
+                widget::Id::new("scrolled-page"),
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: Some(0.0),
+                    y: Some(180.0),
+                },
+                widget::operation::Animation::Instant,
+            ),
+        );
+        // Instant scroll operations become the input/overlay frame on redraw.
+        let mut frame_messages = shell::Bus::new();
+        ui.update(
+            &iced::window::Headless,
+            &shell::Waker::noop(),
+            &[Event::Window(iced::window::Event::RedrawRequested(
+                iced::time::Instant::now(),
+            ))],
+            mouse::Cursor::Unavailable,
+            &mut renderer,
+            &mut frame_messages,
+        );
+        #[derive(Default)]
+        struct Bounds {
+            panel: Option<Rectangle>,
+            action: Option<Rectangle>,
+        }
+        impl widget::Operation for Bounds {
+            fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+                visit(self);
+            }
+            fn container(
+                &mut self,
+                id: Option<&widget::Id>,
+                bounds: Rectangle,
+                _viewport: &Rectangle,
+            ) {
+                if id == Some(&widget::Id::new("scrolled-panel")) {
+                    self.panel = Some(bounds);
+                }
+            }
+            fn focusable(
+                &mut self,
+                id: Option<&widget::Id>,
+                bounds: Rectangle,
+                _state: &mut dyn widget::operation::Focusable,
+            ) {
+                if id == Some(&widget::Id::new("scrolled-panel-action")) {
+                    self.action = Some(bounds);
+                }
+            }
+        }
+        let mut bounds = Bounds::default();
+        ui.operate(&renderer, &mut bounds);
+        let panel = bounds.panel.expect("open panel exposes its bounds");
+        assert!(
+            (panel.y - 80.0).abs() < 0.5 && panel.y + panel.height <= window.height,
+            "the menu follows the trigger at window y=20, including its gap and surface padding: {panel:?}"
+        );
+        let cursor = mouse::Cursor::Available(bounds.action.expect("panel action").center());
+        let mut messages = shell::Bus::new();
+        ui.update(
+            &iced::window::Headless,
+            &shell::Waker::noop(),
+            &[
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ],
+            cursor,
+            &mut renderer,
+            &mut messages,
+        );
+        assert_eq!(
+            messages
+                .drain()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>(),
+            ["activate"],
+            "window-space input must activate the drawn menu rather than dismiss it"
+        );
+    }
+
+    #[test]
     fn open_popover_hides_trigger_hint_but_preserves_content_hint() {
         use std::cell::Cell;
         use std::time::Duration;
@@ -600,7 +726,7 @@ mod tests {
                     painted.set(true);
                     text::Style::default()
                 })
-                .into()
+                ._boxed()
         }
         #[derive(Default)]
         struct ContentTarget(Option<Rectangle>);
@@ -609,8 +735,13 @@ mod tests {
                 operate(self);
             }
 
-            fn text(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
-                if text == "Content target" {
+            fn text(
+                &mut self,
+                _id: Option<&widget::Id>,
+                bounds: Rectangle,
+                text: &mut dyn widget::operation::Text,
+            ) {
+                if text.text().as_ref() == "Content target" {
                     self.0 = Some(bounds);
                 }
             }
@@ -793,11 +924,8 @@ mod tests {
     #[test]
     fn entering_panel_fits_overlay_clip_and_dismissal_tracks_its_position() {
         use crate::{tokens::TOKENS, widgets::motion};
-        use iced::advanced::{
-            overlay::Overlay, renderer, renderer::Headless, shell, widget, Layout, Shell,
-        };
+        use iced::advanced::{renderer, renderer::Headless, shell, widget, Layout, Shell};
         use iced::widget::{container, opaque, Space};
-        use iced::Element;
 
         let renderer = iced::futures::executor::block_on(iced::Renderer::new(
             renderer::Settings {
@@ -811,42 +939,77 @@ mod tests {
         .expect("software renderer");
         let panel = |visible| {
             motion::reveal(
-                opaque(container(Space::new().width(100).height(40))),
+                opaque(container(Space::new().width(100).height(40)))._boxed(),
                 visible,
                 true,
                 TOKENS.durations.ms200,
             )
         };
-        let mut content: Element<'_, u8> = panel(false);
-        let mut tree = widget::Tree::new(content.as_widget());
-        content.as_widget_mut().diff(&mut tree);
-        let mut content = panel(true);
-        content.as_widget_mut().diff(&mut tree);
+        let view = |visible| {
+            super::Popover {
+                trigger: container(Space::new().width(100).height(40))._boxed(),
+                content: panel(visible),
+                is_open: visible,
+                options: PopoverOptions::default(),
+                on_dismiss: 1u8,
+            }
+            ._boxed()
+        };
+        let mut closed = view(false);
+        let mut tree = widget::Tree::new(&closed);
+        tree.diff(&mut closed);
+        let mut content = view(true);
+        tree.diff(&mut content);
         let anchor = Rectangle::new(Point::new(20.0, 20.0), Size::new(100.0, 40.0));
         let options = PopoverOptions::default();
         let natural_top = anchor.y + anchor.height + options.gap;
-        let mut overlay = super::PopoverOverlay {
-            content: &mut content,
-            tree: &mut tree,
-            anchor_bounds: anchor,
-            viewport_bounds: Rectangle::with_size(Size::new(400.0, 300.0)),
-            options,
-            on_dismiss: 1,
-            is_open: true,
-        };
-        let node = overlay.layout(&renderer, Size::new(400.0, 300.0));
-        let layout = Layout::new(&node);
+        let window = Size::new(400.0, 300.0);
+        let viewport = Rectangle::with_size(window);
+        content.layout(
+            &mut tree,
+            &renderer,
+            &iced::advanced::layout::Limits::new(Size::ZERO, window),
+        );
+        let mut overlay = content
+            .overlay(
+                &mut tree,
+                Layout::new(anchor.size()).move_to(anchor.position()),
+                &renderer,
+                &viewport,
+                iced::Vector::ZERO,
+                window,
+            )
+            .pop()
+            .expect("open panel overlay");
+        #[derive(Default)]
+        struct Clip(Option<Rectangle>);
+        impl widget::Operation for Clip {
+            fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+                visit(self);
+            }
+            fn container(
+                &mut self,
+                _id: Option<&widget::Id>,
+                bounds: Rectangle,
+                _viewport: &Rectangle,
+            ) {
+                self.0.get_or_insert(bounds);
+            }
+        }
+        let mut clip = Clip::default();
+        overlay.as_overlay_mut().operate(&renderer, &mut clip);
         let displayed_bottom = Point::new(30.0, natural_top + 45.0);
         assert!(
-            layout.bounds().contains(displayed_bottom),
+            clip.0
+                .expect("overlay clip bounds")
+                .contains(displayed_bottom),
             "native overlay clipping must contain the translated panel"
         );
 
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
         let mut messages = shell::Bus::new();
-        overlay.update(
+        overlay.as_overlay_mut().update(
             &press,
-            layout,
             mouse::Cursor::Available(displayed_bottom),
             &renderer,
             &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut messages),
@@ -855,15 +1018,17 @@ mod tests {
             messages.is_empty(),
             "the translated bottom strip belongs to the panel"
         );
-        overlay.update(
+        overlay.as_overlay_mut().update(
             &press,
-            layout,
             mouse::Cursor::Available(Point::new(30.0, natural_top + 2.0)),
             &renderer,
             &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut messages),
         );
         assert_eq!(
-            messages.into_iter().collect::<Vec<_>>(),
+            messages
+                .drain()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>(),
             vec![1],
             "the vacated top strip is outside the panel"
         );

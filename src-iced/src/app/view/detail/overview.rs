@@ -9,6 +9,7 @@ use iced::advanced::text::{self, paragraph::Plain, Renderer as _};
 use iced::advanced::{
   layout, mouse, overlay, renderer, widget, Layout, Renderer as _, Shell, Widget,
 };
+use iced::widget::Widget as _;
 use iced::{alignment, Element, Event, Length, Pixels, Rectangle, Size, Theme, Vector};
 
 use crate::app::message::Message;
@@ -24,13 +25,13 @@ pub(super) fn overview_layout<'a>(
   line_height: f32,
   view: impl Fn(f32, f32) -> Element<'a, Message> + 'a,
 ) -> Element<'a, Message> {
-  Element::new(OverviewLayout {
+  iced::advanced::Widget::_boxed(OverviewLayout {
     overview: overview.filter(|value| !value.trim().is_empty()),
     copy_inset,
     text_size: Pixels(text_size),
     line_height: text::LineHeight::Absolute(Pixels(line_height)),
     view: Box::new(view),
-    content: iced::widget::space().into(),
+    content: iced::widget::space().boxed(),
   })
 }
 
@@ -42,6 +43,8 @@ struct OverviewLayout<'a> {
   view: Box<View<'a>>,
   content: Element<'a, Message>,
 }
+
+impl widget::Meta for OverviewLayout<'_> {}
 
 impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
   fn tag(&self) -> widget::tree::Tag {
@@ -65,9 +68,9 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
+  ) {
     let limits = limits.width(Length::Fill).height(Length::Fit);
-    let width = limits.max().width;
+    let width = limits.max.width;
     let paragraph = tree.state.downcast_mut::<Plain<Paragraph>>();
     let height = if let Some(overview) = self.overview {
       paragraph.update(text::Text {
@@ -92,29 +95,32 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     };
     self.content = (self.view)(width, height);
     tree.diff_children(std::slice::from_mut(&mut self.content));
-    let node =
-      self
-        .content
-        .as_widget_mut()
-        .layout(&mut tree.children[0], renderer, &limits.loose());
-    let size = limits.resolve(Length::Fill, Length::Fit, node.size());
-    layout::Node::with_children(size, vec![node])
+    self
+      .content
+      .layout(&mut tree.children[0], renderer, &limits.loose());
+    tree.size = limits.resolve(Length::Fill, Length::Fit, tree.children[0].size);
+    tree.children[0].translation = Vector::ZERO;
   }
 
   fn update(
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget_mut().update(
+    let child_layout = layout
+      .iter(&tree.children)
+      .next()
+      .expect("overview child")
+      .0;
+    self.content.update(
       &mut tree.children[0],
       event,
-      layout.children().next().expect("overview child"),
+      child_layout,
       cursor,
       renderer,
       shell,
@@ -128,16 +134,21 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {
-    self.content.as_widget().draw(
+    let child_layout = layout
+      .iter(&tree.children)
+      .next()
+      .expect("overview child")
+      .0;
+    self.content.draw(
       &tree.children[0],
       renderer,
       theme,
       style,
-      layout.children().next().expect("overview child"),
+      child_layout,
       cursor,
       viewport,
     );
@@ -146,30 +157,38 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
   fn mouse_interaction(
     &self,
     tree: &widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
     renderer: &iced::Renderer,
   ) -> mouse::Interaction {
-    self.content.as_widget().mouse_interaction(
-      &tree.children[0],
-      layout.children().next().expect("overview child"),
-      cursor,
-      viewport,
-      renderer,
-    )
+    let child_layout = layout
+      .iter(&tree.children)
+      .next()
+      .expect("overview child")
+      .0;
+    self
+      .content
+      .mouse_interaction(&tree.children[0], child_layout, cursor, viewport, renderer)
   }
 
   fn operate(
     &mut self,
     tree: &mut widget::Tree,
-    layout: Layout<'_>,
+    layout: Layout,
+    viewport: &Rectangle,
     renderer: &iced::Renderer,
     operation: &mut dyn widget::Operation,
   ) {
-    self.content.as_widget_mut().operate(
+    let child_layout = layout
+      .iter(&tree.children)
+      .next()
+      .expect("overview child")
+      .0;
+    self.content.operate(
       &mut tree.children[0],
-      layout.children().next().expect("overview child"),
+      child_layout,
+      viewport,
       renderer,
       operation,
     );
@@ -178,17 +197,24 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
   fn overlay<'a>(
     &'a mut self,
     tree: &'a mut widget::Tree,
-    layout: Layout<'a>,
+    layout: Layout,
     renderer: &iced::Renderer,
     viewport: &Rectangle,
     translation: Vector,
+    window: iced::Size,
   ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-    self.content.as_widget_mut().overlay(
+    let child_layout = layout
+      .iter(&tree.children)
+      .next()
+      .expect("overview child")
+      .0;
+    self.content.overlay(
       &mut tree.children[0],
-      layout.children().next().expect("overview child"),
+      child_layout,
       renderer,
       viewport,
       translation,
+      window,
     )
   }
 }
@@ -232,15 +258,14 @@ mod tests {
       ))
       .expect("headless renderer");
       let mut element = overview_layout(content, inset, size, 24.0, |_, height| {
-        iced::widget::space().height(height).into()
+        iced::widget::space().height(height).boxed()
       });
-      tree.diff(element.as_widget_mut());
+      tree.diff(&mut element);
       let limits = layout::Limits::new(Size::ZERO, Size::new(width, f32::INFINITY));
-      let height = element
-        .as_widget_mut()
-        .layout(&mut tree, &renderer, &limits)
-        .size()
-        .height;
+      let height =
+        crate::app::test_support::layout_widget(&mut element, &mut tree, &renderer, &limits)
+          .size()
+          .height;
       let expected = content
         .filter(|text| !text.trim().is_empty())
         .map_or(0.0, |content| {
@@ -248,21 +273,20 @@ mod tests {
             .size(size)
             .line_height(text::LineHeight::Absolute(Pixels(24.0)))
             .wrapping(text::Wrapping::WordOrGlyph)
-            .into();
+            .boxed();
           let mut text_tree = widget::Tree::new(&text);
-          text_tree.diff(text.as_widget_mut());
-          text
-            .as_widget_mut()
-            .layout(
-              &mut text_tree,
-              &renderer,
-              &layout::Limits::new(
-                Size::ZERO,
-                Size::new((width - inset).max(1.0), f32::INFINITY),
-              ),
-            )
-            .size()
-            .height
+          text_tree.diff(&mut text);
+          crate::app::test_support::layout_widget(
+            &mut text,
+            &mut text_tree,
+            &renderer,
+            &layout::Limits::new(
+              Size::ZERO,
+              Size::new((width - inset).max(1.0), f32::INFINITY),
+            ),
+          )
+          .size()
+          .height
         });
       assert_eq!(height, expected, "measurement must match rendered copy");
       heights.push(height);

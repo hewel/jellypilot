@@ -48,7 +48,7 @@ impl ArtworkGridViewport {
     pub fn from_scrollable(viewport: scrollable::Viewport, grid_scroll_margin: f32) -> Self {
         Self::from_scroll_geometry(
             viewport.absolute_offset().y,
-            viewport.bounds().height,
+            viewport.bounds.height,
             grid_scroll_margin,
         )
     }
@@ -163,7 +163,7 @@ where
     Builder: Fn(usize) -> Element<'a, Message>,
 {
     if metrics.columns == 0 {
-        return Space::new().into();
+        return Space::new()._boxed();
     }
     let row_count = item_count.div_ceil(metrics.columns);
     let window = row_window(
@@ -174,7 +174,7 @@ where
     );
     let first_item = window.start * metrics.columns;
     let last_item = (window.end * metrics.columns).min(item_count);
-    Element::new(ArtworkGrid {
+    (ArtworkGrid {
         cells: (first_item..last_item).map(&cell_builder).collect(),
         first_item,
         item_count,
@@ -182,6 +182,7 @@ where
         column_gap,
         visual_overflow,
     })
+    ._boxed()
 }
 
 /// The materialized window of grid cells. `cells[i]` renders item
@@ -214,34 +215,46 @@ impl ArtworkGridState {
 impl<Message, Renderer> ArtworkGrid<'_, Message, Renderer> {
     fn topmost(
         &self,
-        layout: Layout<'_>,
+        layout: Layout,
+        children: &[Tree],
         point: Option<Point>,
         viewport: &Rectangle,
     ) -> Option<usize> {
         let point = point.filter(|point| viewport.contains(*point))?;
         layout
-            .children()
+            .iter(children)
+            .map(|(layout, _)| layout)
             .enumerate()
             .rev()
             .find(|(_, child)| child.bounds().contains(point))
             .or_else(|| {
-                layout.children().enumerate().rev().find(|(_, child)| {
-                    let bounds = child.bounds();
-                    Rectangle {
-                        x: bounds.x - self.visual_overflow.left,
-                        y: bounds.y - self.visual_overflow.top,
-                        width: bounds.width
-                            + self.visual_overflow.left
-                            + self.visual_overflow.right,
-                        height: bounds.height
-                            + self.visual_overflow.top
-                            + self.visual_overflow.bottom,
-                    }
-                    .contains(point)
-                })
+                layout
+                    .iter(children)
+                    .map(|(layout, _)| layout)
+                    .enumerate()
+                    .rev()
+                    .find(|(_, child)| {
+                        let bounds = child.bounds();
+                        Rectangle {
+                            x: bounds.x - self.visual_overflow.left,
+                            y: bounds.y - self.visual_overflow.top,
+                            width: bounds.width
+                                + self.visual_overflow.left
+                                + self.visual_overflow.right,
+                            height: bounds.height
+                                + self.visual_overflow.top
+                                + self.visual_overflow.bottom,
+                        }
+                        .contains(point)
+                    })
             })
             .map(|(slot, _)| self.first_item + slot)
     }
+}
+
+impl<Message, Renderer> iced::advanced::widget::Meta for ArtworkGrid<'_, Message, Renderer> where
+    Renderer: iced::advanced::Renderer
+{
 }
 
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for ArtworkGrid<'_, Message, Renderer>
@@ -307,18 +320,12 @@ where
         Size::new(Length::Fill, Length::Fit)
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let state = tree.state.downcast_mut::<ArtworkGridState>();
         let cell_size = Size::new(self.metrics.cell_width, self.metrics.cell_height);
         let cell_limits = layout::Limits::new(Size::ZERO, cell_size);
-        let mut children = Vec::with_capacity(self.cells.len());
         state.motion.current.clear();
-        for (slot, cell) in self.cells.iter_mut().enumerate() {
+        for (slot, (cell, child)) in self.cells.iter_mut().zip(&mut tree.children).enumerate() {
             let item = self.first_item + slot;
             let position = motion::cell_position(
                 item,
@@ -328,11 +335,8 @@ where
                 self.column_gap,
             );
             state.motion.current.insert(item, position);
-            children.push(
-                cell.as_widget_mut()
-                    .layout(&mut tree.children[slot], renderer, &cell_limits)
-                    .move_to(position + state.motion.delta(item)),
-            );
+            cell.layout(child, renderer, &cell_limits);
+            child.translation = position + state.motion.delta(item) - iced::Point::ORIGIN;
         }
         let row_count = self.item_count.div_ceil(self.metrics.columns.max(1));
         let height = if row_count == 0 {
@@ -340,20 +344,18 @@ where
         } else {
             row_count as f32 * self.metrics.row_height - ROW_GAP
         };
-        layout::Node::with_children(
-            limits.resolve(
-                Length::Fill,
-                Length::Fit,
-                Size::new(limits.max().width, height),
-            ),
-            children,
-        )
+        tree.size = limits.resolve(
+            Length::Fill,
+            Length::Fit,
+            Size::new(limits.max.width, height),
+        );
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
@@ -364,15 +366,12 @@ where
         );
         // Image demand and keyboard focus use the same presented bounds as input.
         operation.traverse(&mut |operation| {
-            for (slot, (cell, child_layout)) in
-                self.cells.iter_mut().zip(layout.children()).enumerate()
+            for (cell, (child_layout, child)) in self
+                .cells
+                .iter_mut()
+                .zip(layout.iter_mut(&mut tree.children))
             {
-                cell.as_widget_mut().operate(
-                    &mut tree.children[slot],
-                    child_layout,
-                    renderer,
-                    operation,
-                );
+                cell.operate(child, child_layout, viewport, renderer, operation);
             }
         });
     }
@@ -381,7 +380,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -409,7 +408,7 @@ where
         };
         // Scrollable has already translated the cursor into content coordinates;
         // raw touch positions remain in window coordinates.
-        let hit = self.topmost(layout, cursor.position(), viewport);
+        let hit = self.topmost(layout, &tree.children, cursor.position(), viewport);
         let target = if let Some(id) = touch {
             state
                 .touch_owner
@@ -419,10 +418,10 @@ where
         } else {
             state.pointer_owner.or(hit)
         };
-        for (slot, (cell, child_layout)) in self
+        for (slot, (cell, (child_layout, child))) in self
             .cells
             .iter_mut()
-            .zip(layout.children())
+            .zip(layout.iter_mut(&mut tree.children))
             .enumerate()
             .rev()
         {
@@ -437,8 +436,8 @@ where
                 mouse::Cursor::Unavailable
             };
             let was_captured = shell.is_event_captured();
-            cell.as_widget_mut().update(
-                &mut tree.children[slot],
+            cell.update(
+                child,
                 event,
                 child_layout,
                 child_cursor,
@@ -477,22 +476,27 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<ArtworkGridState>();
         let target = state
             .pointer_owner
-            .or_else(|| self.topmost(layout, cursor.position(), viewport));
-        for (slot, (cell, child_layout)) in self.cells.iter().zip(layout.children()).enumerate() {
+            .or_else(|| self.topmost(layout, &tree.children, cursor.position(), viewport));
+        for (slot, (cell, (child_layout, child))) in self
+            .cells
+            .iter()
+            .zip(layout.iter(&tree.children))
+            .enumerate()
+        {
             let cursor = if target == Some(self.first_item + slot) {
                 cursor
             } else {
                 mouse::Cursor::Unavailable
             };
-            cell.as_widget().draw(
-                &tree.children[slot],
+            cell.draw(
+                child,
                 renderer,
                 theme,
                 style,
@@ -506,7 +510,7 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
@@ -514,16 +518,16 @@ where
         let state = tree.state.downcast_ref::<ArtworkGridState>();
         let target = state
             .pointer_owner
-            .or_else(|| self.topmost(layout, cursor.position(), viewport));
+            .or_else(|| self.topmost(layout, &tree.children, cursor.position(), viewport));
         let Some(slot) = target
             .and_then(|item| item.checked_sub(self.first_item))
             .filter(|slot| *slot < self.cells.len())
         else {
             return mouse::Interaction::None;
         };
-        self.cells[slot].as_widget().mouse_interaction(
+        self.cells[slot].mouse_interaction(
             &tree.children[slot],
-            layout.child(slot),
+            super::child_layout(layout, tree, slot).expect("laid out child"),
             cursor,
             viewport,
             renderer,
@@ -533,10 +537,11 @@ where
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
         overlay::from_children(
             &mut self.cells,
@@ -545,6 +550,7 @@ where
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -621,6 +627,7 @@ fn finite_non_negative(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use iced::advanced::{Layout, Widget as _};
     use std::cell::RefCell;
 
     use iced::Element;
@@ -861,7 +868,7 @@ mod tests {
         let _element: Element<'_, ()> =
             artwork_grid(1_000_000, metrics, viewport, COLUMN_GAP, |index| {
                 built_indexes.borrow_mut().push(index);
-                iced::widget::Space::new().into()
+                iced::widget::Space::new()._boxed()
             });
 
         let indexes = built_indexes.into_inner();
@@ -888,7 +895,7 @@ mod tests {
         };
         let _element: Element<'_, ()> = artwork_grid(0, metrics, viewport, COLUMN_GAP, |index| {
             built_indexes.borrow_mut().push(index);
-            iced::widget::Space::new().into()
+            iced::widget::Space::new()._boxed()
         });
 
         assert!(built_indexes.into_inner().is_empty());
@@ -902,7 +909,7 @@ mod tests {
                         .width(iced::Length::Fill)
                         .height(iced::Length::Fill)
                         .on_press(item)
-                        .into()
+                        ._boxed()
                 })
                 .collect(),
             first_item,
@@ -916,16 +923,16 @@ mod tests {
     fn pointer(
         grid: &mut super::ArtworkGrid<'_, usize, ()>,
         tree: &mut iced::advanced::widget::Tree,
-        node: &iced::advanced::layout::Node,
+        node: &iced::advanced::Layout,
         event: iced::mouse::Event,
         point: iced::Point,
     ) -> Vec<usize> {
-        use iced::advanced::{shell, widget::Widget, Layout, Shell};
+        use iced::advanced::{shell, widget::Widget, Shell};
         let mut bus = shell::Bus::new();
         grid.update(
             tree,
             &iced::Event::Mouse(event),
-            Layout::new(node),
+            *node,
             iced::mouse::Cursor::Available(point),
             &(),
             &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
@@ -943,16 +950,23 @@ mod tests {
         use iced::mouse::{Button, Event};
         let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(800.0, 800.0));
         let mut grid = clickable_grid(560.0, 0);
-        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        let mut tree = Tree::new(&grid);
         grid.diff(&mut tree);
         grid.layout(&mut tree, &(), &limits);
 
         let mut grid = clickable_grid(559.0, 0);
         grid.diff(&mut tree);
-        let node = grid.layout(&mut tree, &(), &limits);
+        grid.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         let point = iced::Point::new(170.0, 30.0);
-        assert!(node.children()[0].bounds().contains(point));
-        assert!(node.children()[1].bounds().contains(point));
+        assert!(super::super::child_layout(node, &tree, 0)
+            .expect("laid out child")
+            .bounds()
+            .contains(point));
+        assert!(super::super::child_layout(node, &tree, 1)
+            .expect("laid out child")
+            .bounds()
+            .contains(point));
         assert!(pointer(
             &mut grid,
             &mut tree,
@@ -1014,22 +1028,20 @@ mod tests {
                         .width(100.0 * (1.0 + progress * 0.03))
                         .height(150.0 * (1.0 + progress * 0.03))
                         .on_press(index)
-                        .into()
+                        ._boxed()
                 })
                 .frame(Size::new(100.0, 150.0), Alignment::Center, Alignment::End)
-                .into()
+                ._boxed()
             },
         );
         let mut tree = Tree::new(&grid);
-        tree.diff(grid.as_widget_mut());
-        let node = grid
-            .as_widget_mut()
-            .layout(
-                &mut tree,
-                &renderer,
-                &layout::Limits::new(Size::ZERO, Size::new(224.0, 400.0)),
-            )
-            .move_to(Point::new(20.0, 20.0));
+        tree.diff(&mut grid);
+        grid.layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(224.0, 400.0)),
+        );
+        let node = Layout::new(tree.size).move_to(Point::new(20.0, 20.0));
         for (point, viewport, expected) in [
             (
                 Point::new(19.0, 18.0),
@@ -1052,10 +1064,10 @@ mod tests {
                 mouse::Event::ButtonPressed(mouse::Button::Left),
                 mouse::Event::ButtonReleased(mouse::Button::Left),
             ] {
-                grid.as_widget_mut().update(
+                grid.update(
                     &mut tree,
                     &Event::Mouse(event),
-                    Layout::new(&node),
+                    node,
                     mouse::Cursor::Available(point),
                     &renderer,
                     &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus),
@@ -1075,9 +1087,10 @@ mod tests {
         use iced::mouse::{Button, Event};
         let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(800.0, 800.0));
         let mut grid = clickable_grid(560.0, 0);
-        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        let mut tree = Tree::new(&grid);
         grid.diff(&mut tree);
-        let node = grid.layout(&mut tree, &(), &limits);
+        grid.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         pointer(
             &mut grid,
             &mut tree,
@@ -1088,7 +1101,8 @@ mod tests {
 
         let mut grid = clickable_grid(560.0, 4);
         grid.diff(&mut tree);
-        let node = grid.layout(&mut tree, &(), &limits);
+        grid.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         let point = iced::Point::new(20.0, grid.metrics.row_height + 20.0);
         assert!(pointer(
             &mut grid,
@@ -1127,9 +1141,10 @@ mod tests {
         use iced::{mouse, touch, Event, Point, Rectangle, Size};
         let limits = layout::Limits::new(Size::ZERO, Size::new(800.0, 800.0));
         let mut grid = clickable_grid(560.0, 4);
-        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        let mut tree = Tree::new(&grid);
         grid.diff(&mut tree);
-        let node = grid.layout(&mut tree, &(), &limits);
+        grid.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         let viewport = Rectangle::new(
             Point::new(0.0, grid.metrics.row_height),
             Size::new(560.0, 200.0),
@@ -1151,7 +1166,7 @@ mod tests {
             grid.update(
                 &mut tree,
                 &Event::Touch(event),
-                Layout::new(&node),
+                node,
                 cursor,
                 &(),
                 &mut Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut messages),
@@ -1170,17 +1185,25 @@ mod tests {
         use iced::Size;
         let limits = layout::Limits::new(Size::ZERO, Size::new(800.0, 800.0));
         let mut grid = clickable_grid(560.0, 0);
-        let mut tree = Tree::new(&grid as &dyn Widget<usize, iced::Theme, ()>);
+        let mut tree = Tree::new(&grid);
         grid.diff(&mut tree);
         grid.layout(&mut tree, &(), &limits);
         let mut grid = clickable_grid(559.0, 0);
         grid.diff(&mut tree);
-        let before = grid.layout(&mut tree, &(), &limits).children()[1].bounds();
+        let before = {
+            grid.layout(&mut tree, &(), &limits);
+            super::super::child_layout(Layout::new(tree.size), &tree, 1).expect("laid out child")
+        }
+        .bounds();
         let previous_width = grid.metrics.cell_width;
 
         let mut grid = clickable_grid(558.0, 0);
         grid.diff(&mut tree);
-        let after = grid.layout(&mut tree, &(), &limits).children()[1].bounds();
+        let after = {
+            grid.layout(&mut tree, &(), &limits);
+            super::super::child_layout(Layout::new(tree.size), &tree, 1).expect("laid out child")
+        }
+        .bounds();
         let width_delta = grid.metrics.cell_width - previous_width;
         assert!((after.x - before.x - width_delta).abs() < 0.001);
         assert!((after.width - before.width - width_delta).abs() < 0.001);

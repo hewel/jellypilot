@@ -13,13 +13,14 @@ pub struct NoticeInteraction {
 /// Observes the content and its focusable descendants without changing focus.
 /// Keep each notice keyed by its operation ID when presenting a changing list.
 pub fn notice_interaction<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     on_change: impl Fn(NoticeInteraction) -> Message + 'a,
 ) -> Element<'a, Message> {
-    Element::new(NoticeObserver {
-        content: content.into(),
+    (NoticeObserver {
+        content: content._boxed(),
         on_change,
     })
+    ._boxed()
 }
 
 struct NoticeObserver<'a, Message, F> {
@@ -50,6 +51,11 @@ impl widget::Operation for FocusProbe {
     }
 }
 
+impl<Message, F: Fn(NoticeInteraction) -> Message> iced::advanced::widget::Meta
+    for NoticeObserver<'_, Message, F>
+{
+}
+
 impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::Renderer>
     for NoticeObserver<'_, Message, F>
 {
@@ -66,7 +72,7 @@ impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
     fn layout(
@@ -74,35 +80,35 @@ impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    ) {
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        tree.size = tree.children[0].size;
+        tree.children[0].translation = iced::Vector::ZERO;
     }
 
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
         self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             layout,
@@ -112,9 +118,13 @@ impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::
             viewport,
         );
         let mut focus = FocusProbe::default();
-        self.content
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, &mut focus);
+        self.content.operate(
+            &mut tree.children[0],
+            layout,
+            viewport,
+            renderer,
+            &mut focus,
+        );
         let interaction = NoticeInteraction {
             hovered: cursor.is_over(layout.bounds()) && cursor.is_over(*viewport),
             focused: focus.0,
@@ -132,11 +142,11 @@ impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content.as_widget().draw(
+        self.content.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -150,34 +160,31 @@ impl<Message, F: Fn(NoticeInteraction) -> Message> Widget<Message, Theme, iced::
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut widget::Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }

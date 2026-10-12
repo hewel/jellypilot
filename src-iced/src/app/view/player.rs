@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 use std::borrow::Cow;
 use std::fmt;
 
@@ -44,7 +45,7 @@ pub(super) fn video_surface<'a>() -> Element<'a, Message> {
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::TogglePaused,
     ))))
-    .into()
+    .boxed()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,7 +67,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
         .padding([10, 16])
         .width(Fill)
         .align_x(Alignment::End)
-        .into()
+        .boxed()
     });
   };
   Some(
@@ -88,7 +89,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
       )
     })
     .height(Length::Shrink)
-    .into(),
+    .boxed(),
   )
 }
 
@@ -111,7 +112,7 @@ pub(crate) fn retained_bar(state: &State) -> Option<Element<'_, Message>> {
       )
     })
     .height(Length::Shrink)
-    .into(),
+    .boxed(),
   )
 }
 /// Snapshots the docked bar's visible content for its exit reveal. Call only
@@ -224,50 +225,56 @@ fn bar_content<'a>(state: &'a State, view: BarView<'a>, width: f32) -> Element<'
     None => text(format_duration(position))
       .size(11)
       .color(state.palette().text.metadata)
-      .into(),
+      .boxed(),
   };
   let center = row![transport(state, now_playing), timeline]
     .spacing(TOKENS.spacing.s3)
     .align_y(Alignment::Center)
     .width(Fill);
-  let mut content = Column::new().spacing(TOKENS.spacing.s2);
+  let mut content = Column::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s2);
   if width >= 1150.0 {
     content = content.push(
-      row![identity.width(280), center, tools]
+      (row![identity.width(280), center, tools]
         .spacing(TOKENS.spacing.s4)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center))
+      .boxed(),
     );
   } else if width >= 640.0 {
     content = content
       .push(
-        row![identity.width(Fill), tools]
+        (row![identity.width(Fill), tools]
           .spacing(TOKENS.spacing.s4)
-          .align_y(Alignment::Center),
+          .align_y(Alignment::Center))
+        .boxed(),
       )
-      .push(center);
+      .push((center).boxed());
   } else {
-    content = content.push(identity.width(Fill)).push(center).push(tools);
+    content = content
+      .push((identity.width(Fill)).boxed())
+      .push((center).boxed())
+      .push(tools.boxed());
   }
   if crate::embedded::enabled() {
     content = content.push(
-      control_button(
+      (control_button(
         Some(Icon::Movie),
         Some(state.t("player-show-video")),
         ButtonVariant::Tonal,
       )
       .on_press(Message::Home(crate::app::message::HomeMessage::Navigate(
         crate::app::state::Destination::NowPlaying,
-      ))),
+      ))))
+      .boxed(),
     );
   }
   if let Some(prompt) = view.intro_prompt {
-    content = content.push(intro_prompt_element(state, prompt, view.interactive));
+    content = content.push((intro_prompt_element(state, prompt, view.interactive)).boxed());
   }
   container(content)
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s6])
     .width(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
-    .into()
+    .boxed()
 }
 
 /// Title and series/episode caption shared by the bar and the full-window
@@ -277,7 +284,7 @@ fn now_playing_metadata<'a>(
   now_playing: &'a NowPlayingView,
   title_size: f32,
   caption_size: f32,
-) -> Column<'a, Message> {
+) -> Column<Element<'a, Message>> {
   column![
     text(&now_playing.item.title)
       .font(HEADING_FONT)
@@ -339,7 +346,7 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 /// Episode queue and audio/subtitle popover triggers shared by the bar and the
@@ -353,7 +360,7 @@ fn track_selection(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 /// Mute toggle and volume slider shared by the bar and the compact player.
@@ -396,7 +403,7 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
   row![mute, volume_slider]
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center)
-    .into()
+    .boxed()
 }
 
 /// Position/slider/duration seek row shared by the bar and the compact
@@ -421,7 +428,7 @@ fn seek_row(position: f64, duration: f64, docked: bool) -> Element<'static, Mess
   ]
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 /// Full-window Now Playing view for Control-Only mode: a large poster,
@@ -473,7 +480,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
   .align_y(Alignment::Center);
 
   let header = if state.playback.view.now_playing.is_none() {
-    header.push(super::viewing_queue::trigger(state, false))
+    header.push((super::viewing_queue::trigger(state, false)).boxed())
   } else {
     header
   };
@@ -489,30 +496,32 @@ pub fn full(state: &State) -> Element<'_, Message> {
         .view()
         .seek_preview
         .unwrap_or(now_playing.position_seconds);
-      let mut content = Column::new()
+      let mut content = Column::<Element<'_, Message>>::new()
         .spacing(TOKENS.spacing.s3)
         .align_x(Alignment::Center)
         .width(Fill)
-        .push(playback_artwork(state, 200.0, 300.0))
+        .push((playback_artwork(state, 200.0, 300.0)).boxed())
         .push(
-          now_playing_metadata(state, now_playing, 22.0, 13.0)
+          (now_playing_metadata(state, now_playing, 22.0, 13.0)
             .align_x(Alignment::Center)
-            .width(Fill),
+            .width(Fill))
+          .boxed(),
         );
       if let Some(duration) = duration {
-        content = content.push(seek_row(position, duration, false));
+        content = content.push((seek_row(position, duration, false)).boxed());
       }
       if let Some(prompt) = intro_prompt(state) {
-        content = content.push(prompt);
+        content = content.push((prompt).boxed());
       }
       content
-        .push(transport(state, now_playing))
+        .push((transport(state, now_playing)).boxed())
         .push(
-          row![track_selection(state), volume_controls(state, now_playing)]
+          (row![track_selection(state), volume_controls(state, now_playing)]
             .spacing(TOKENS.spacing.s3)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center))
+          .boxed(),
         )
-        .into()
+        .boxed()
     }
     None => column![
       icon_with_color(
@@ -530,7 +539,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
     ]
     .spacing(TOKENS.spacing.s2)
     .align_x(Alignment::Center)
-    .into(),
+    .boxed(),
   };
 
   container(
@@ -548,11 +557,11 @@ pub fn full(state: &State) -> Element<'_, Message> {
   .padding(TOKENS.spacing.s3)
   .width(Fill)
   .height(Fill)
-  .into()
+  .boxed()
 }
 
 pub(super) fn guard_activation<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   state: &'a State,
 ) -> Element<'a, Message> {
   // The picture toggles on press; explicit buttons commit on release.
@@ -590,92 +599,110 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill);
     // Keep the scrim below every control when their regions overlap in short windows.
-    layers = layers.push(reveal_player_chrome(
-      container(cinema::full_backdrop())
-        .width(Fill)
-        .height(Fill)
-        .align_y(Alignment::End),
-      visible,
-    ));
+    layers = layers.push(
+      (reveal_player_chrome(
+        container(cinema::full_backdrop())
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+        visible,
+      ))
+      .boxed(),
+    );
     // Keep widget state mounted, but switch drawing and hit targets together
     // so no outgoing control remains visible after it becomes inert.
-    layers = layers.push(reveal_player_chrome(
-      container(space::horizontal())
-        .width(Fill)
-        .height(160)
-        .style(|_| cinema::scrim(true)),
-      back_visible,
-    ));
+    layers = layers.push(
+      (reveal_player_chrome(
+        container(space::horizontal())
+          .width(Fill)
+          .height(160)
+          .style(|_| cinema::scrim(true)),
+        back_visible,
+      ))
+      .boxed(),
+    );
     let back = embedded_action(
       Icon::ChevronLeft,
       state.t("player-back"),
       ButtonVariant::Tonal,
       back_visible.then_some(Message::EmbeddedPlayer(embedded_player::Message::Back)),
     );
-    layers = layers.push(reveal_player_chrome(
-      container(observe_chrome_focus(
-        back,
-        embedded_player::FocusRegion::Back,
+    layers = layers.push(
+      (reveal_player_chrome(
+        container(observe_chrome_focus(
+          back,
+          embedded_player::FocusRegion::Back,
+        ))
+        .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
+        .width(Fill),
+        back_visible,
       ))
-      .padding([TOKENS.spacing.s6, embedded_inset(bounds.width)])
-      .width(Fill),
-      back_visible,
-    ));
+      .boxed(),
+    );
     // The Information popover outlives the top chrome: while its panel is
     // open the trigger stays mounted (and clickable) even when the rest of
     // the top bar has auto-hidden.
     let info_visible = back_visible || embedded_player::information_open(state);
-    layers = layers.push(reveal_player_chrome(
-      container(observe_chrome_focus(
-        embedded_top_tools(state, bounds.width),
-        embedded_player::FocusRegion::Tools,
-      ))
-      .padding(iced::Padding {
-        top: TOKENS.spacing.s6,
-        right: embedded_inset(bounds.width),
-        bottom: 0.0,
-        left: 0.0,
-      })
-      .width(Fill)
-      .align_x(Alignment::End),
-      info_visible,
-    ));
-    if let Some(now_playing) = state.playback.view.now_playing.as_ref() {
-      layers = layers.push(reveal_player_chrome(
+    layers = layers.push(
+      (reveal_player_chrome(
         container(observe_chrome_focus(
-          embedded_bar(
-            state,
-            now_playing,
-            bounds.width - 2.0 * embedded_inset(bounds.width),
-          ),
-          embedded_player::FocusRegion::Transport,
+          embedded_top_tools(state, bounds.width),
+          embedded_player::FocusRegion::Tools,
         ))
         .padding(iced::Padding {
-          top: 0.0,
+          top: TOKENS.spacing.s6,
           right: embedded_inset(bounds.width),
-          bottom: TOKENS.spacing.s4,
-          left: embedded_inset(bounds.width),
+          bottom: 0.0,
+          left: 0.0,
         })
         .width(Fill)
-        .height(Fill)
-        .align_y(Alignment::End),
-        visible,
-      ));
+        .align_x(Alignment::End),
+        info_visible,
+      ))
+      .boxed(),
+    );
+    if let Some(now_playing) = state.playback.view.now_playing.as_ref() {
+      layers = layers.push(
+        (reveal_player_chrome(
+          container(observe_chrome_focus(
+            embedded_bar(
+              state,
+              now_playing,
+              bounds.width - 2.0 * embedded_inset(bounds.width),
+            ),
+            embedded_player::FocusRegion::Transport,
+          ))
+          .padding(iced::Padding {
+            top: 0.0,
+            right: embedded_inset(bounds.width),
+            bottom: TOKENS.spacing.s4,
+            left: embedded_inset(bounds.width),
+          })
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+          visible,
+        ))
+        .boxed(),
+      );
       // Minimal presentation: the shallow scrim, the read-only edge line,
       // and — while paused — the center indicator. None of them hold the
       // complete controls open.
-      layers = layers.push(reveal_player_chrome(
-        container(
-          container(space::horizontal())
-            .width(Fill)
-            .height(80)
-            .style(cinema::minimal_scrim),
-        )
-        .width(Fill)
-        .height(Fill)
-        .align_y(Alignment::End),
-        minimal,
-      ));
+      layers = layers.push(
+        (reveal_player_chrome(
+          container(
+            container(space::horizontal())
+              .width(Fill)
+              .height(80)
+              .style(cinema::minimal_scrim),
+          )
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+          minimal,
+        ))
+        .boxed(),
+      );
       if let Some(duration) = now_playing
         .duration_seconds
         .filter(|duration| duration.is_finite() && *duration > 0.0)
@@ -686,22 +713,25 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
           .view()
           .seek_preview
           .unwrap_or(now_playing.position_seconds);
-        layers = layers.push(reveal_player_chrome(
-          container(
-            container(cinema::minimal_track(
-              position.clamp(0.0, duration),
-              duration,
-              embedded_player::chapter_times(state),
-              embedded_player::intro_ranges(state),
-            ))
+        layers = layers.push(
+          (reveal_player_chrome(
+            container(
+              container(cinema::minimal_track(
+                position.clamp(0.0, duration),
+                duration,
+                embedded_player::chapter_times(state),
+                embedded_player::intro_ranges(state),
+              ))
+              .width(Fill)
+              .height(4),
+            )
             .width(Fill)
-            .height(4),
-          )
-          .width(Fill)
-          .height(Fill)
-          .align_y(Alignment::End),
-          minimal,
-        ));
+            .height(Fill)
+            .align_y(Alignment::End),
+            minimal,
+          ))
+          .boxed(),
+        );
       }
       let pause_indicator: Element<'_, Message> = if !visible && now_playing.paused {
         container(icon_with_color(
@@ -714,38 +744,42 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .align_y(Alignment::Center)
         .style(cinema::pause_chip)
-        .into()
+        .boxed()
       } else {
-        space::horizontal().into()
+        space::horizontal().boxed()
       };
-      layers = layers.push(container(pause_indicator).center(Fill));
+      layers = layers.push((container(pause_indicator).center(Fill)).boxed());
     }
     // The skip prompt floats independently of the transport: it stays
     // available in the minimal presentation without holding controls open.
     if let Some(prompt) = embedded_intro_prompt(state) {
-      layers = layers.push(reveal_player_chrome(
-        container(prompt)
-          .padding(iced::Padding {
-            top: 0.0,
-            right: embedded_inset(bounds.width),
-            bottom: 20.0,
-            left: 0.0,
-          })
-          .width(Fill)
-          .height(Fill)
-          .align_x(Alignment::End)
-          .align_y(Alignment::End),
-        !visible,
-      ));
+      layers = layers.push(
+        (reveal_player_chrome(
+          container(prompt)
+            .padding(iced::Padding {
+              top: 0.0,
+              right: embedded_inset(bounds.width),
+              bottom: 20.0,
+              left: 0.0,
+            })
+            .width(Fill)
+            .height(Fill)
+            .align_x(Alignment::End)
+            .align_y(Alignment::End),
+          !visible,
+        ))
+        .boxed(),
+      );
     }
     if let Some(feedback) = embedded_player::feedback(state) {
       layers = layers.push(
-        container(
+        (container(
           container(text(feedback).size(TOKENS.font_sizes.s16))
             .padding([TOKENS.spacing.s3, TOKENS.spacing.s5])
             .style(cinema::popover),
         )
-        .center(Fill),
+        .center(Fill))
+        .boxed(),
       );
     }
     themer(
@@ -770,20 +804,20 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
           iced::mouse::Interaction::Hidden
         }),
     )
-    .into()
+    .boxed()
   })
-  .into()
+  .boxed()
 }
 
 fn reveal_player_chrome<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   visible: bool,
 ) -> Element<'a, Message> {
   jellypilot_ui::widgets::motion::reveal(content, visible, false, TOKENS.durations.none)
 }
 
 fn observe_chrome_focus<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   region: embedded_player::FocusRegion,
 ) -> Element<'a, Message> {
   notice_interaction(content, move |interaction| {
@@ -811,7 +845,9 @@ pub(crate) fn embedded_options_available(state: &State, _window_width: f32) -> b
 }
 
 fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> {
-  let mut tools = row![].spacing(TOKENS.spacing.s2).align_y(Alignment::Center);
+  let mut tools = iced::widget::Row::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center);
   if embedded_options_available(state, window_width) {
     let open = embedded_player::options_open(state);
     let trigger = focus_tooltip(
@@ -831,26 +867,32 @@ fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> 
       state.t("player-options"),
       TooltipOptions::default(),
     );
-    let mut content = column![].spacing(TOKENS.spacing.s2);
+    let mut content =
+      iced::widget::Column::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s2);
     if let Some(mode) = crate::app::playback::series_intro_mode(&state.playback, &state.kernel) {
-      content = content.push(embedded_skip_toggle(state, mode));
+      content = content.push((embedded_skip_toggle(state, mode)).boxed());
     }
-    content = content.push(super::playback_tools::loop_entry(state));
-    tools = tools.push(popover(
-      trigger,
-      content,
-      open,
-      PopoverOptions {
-        width: Some(260.0_f32.min((window_width - 24.0).max(1.0))),
-        alignment: jellypilot_ui::overlay::Alignment::End,
-        appearance: PopoverAppearance::PlaybackInformation,
-        consume_outside_press: true,
-        ..PopoverOptions::default()
-      },
-      Message::EmbeddedPlayer(embedded_player::Message::OptionsDismissed),
-    ));
+    content = content.push((super::playback_tools::loop_entry(state)).boxed());
+    tools = tools.push(
+      (popover(
+        trigger,
+        content,
+        open,
+        PopoverOptions {
+          width: Some(260.0_f32.min((window_width - 24.0).max(1.0))),
+          alignment: jellypilot_ui::overlay::Alignment::End,
+          appearance: PopoverAppearance::PlaybackInformation,
+          consume_outside_press: true,
+          ..PopoverOptions::default()
+        },
+        Message::EmbeddedPlayer(embedded_player::Message::OptionsDismissed),
+      ))
+      .boxed(),
+    );
   }
-  tools.push(super::player_info::button(state)).into()
+  tools
+    .push((super::player_info::button(state)).boxed())
+    .boxed()
 }
 
 fn embedded_action<'a>(
@@ -1013,10 +1055,10 @@ fn embedded_bar<'a>(
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center);
   if let Some(skip_toggle) = skip_toggle {
-    track_output = track_output.push(skip_toggle);
+    track_output = track_output.push((skip_toggle).boxed());
   }
   let tools = row![
-    track_output.push(output),
+    track_output.push((output).boxed()),
     container(space::horizontal())
       .width(1)
       .height(18)
@@ -1034,20 +1076,21 @@ fn embedded_bar<'a>(
   ]
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
-  .into();
-  let controls = embedded_controls(identity, transport.into(), tools, width, tools_width);
+  .boxed();
+  let controls = embedded_controls(identity, transport.boxed(), tools, width, tools_width);
   // The controls float on the scrim without a card; `opaque` keeps the strip
   // from leaking presses into the pause-toggle surface behind it.
   let panel = opaque(
     container(column![embedded_timeline(state, now_playing), controls].spacing(TOKENS.spacing.s4))
       .padding([TOKENS.spacing.s3, TOKENS.spacing.s0])
       .width(Fill),
-  );
-  let mut content = Column::new().spacing(TOKENS.spacing.s4);
+  )
+  .boxed();
+  let mut content = Column::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s4);
   if let Some(prompt) = embedded_intro_prompt(state) {
-    content = content.push(container(prompt).width(Fill).align_x(Alignment::End));
+    content = content.push((container(prompt).width(Fill).align_x(Alignment::End)).boxed());
   }
-  content.push(panel).into()
+  content.push((panel).boxed()).boxed()
 }
 
 const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
@@ -1117,7 +1160,7 @@ fn embedded_controls<'a>(
     ]
     .align_y(Alignment::Center)
     .width(Fill)
-    .into()
+    .boxed()
   } else if width >= EMBEDDED_TRANSPORT_WIDTH + tools_width + TOKENS.spacing.s4 {
     column![
       identity,
@@ -1125,13 +1168,13 @@ fn embedded_controls<'a>(
     ]
     .spacing(TOKENS.spacing.s3)
     .width(Fill)
-    .into()
+    .boxed()
   } else {
     column![identity, transport, tools]
       .spacing(TOKENS.spacing.s3)
       .align_x(Alignment::Center)
       .width(Fill)
-      .into()
+      .boxed()
   }
 }
 
@@ -1160,16 +1203,19 @@ fn embedded_identity<'a>(
         .line_height(iced::Pixels(20.0))
         .color(palette.text.heading),];
       if has_queue {
-        content = content.push(icon_with_color(
-          Icon::ChevronUp,
-          IconSize::Custom(14.0),
-          palette.text.metadata,
-        ));
+        content = content.push(
+          (icon_with_color(
+            Icon::ChevronUp,
+            IconSize::Custom(14.0),
+            palette.text.metadata,
+          ))
+          .boxed(),
+        );
       }
       content
         .spacing(TOKENS.spacing.s1_5)
         .align_y(Alignment::Center)
-        .into()
+        .boxed()
     },
     if state.playback.queue_menu_open {
       ButtonVariant::TonalActive
@@ -1208,7 +1254,7 @@ fn embedded_identity<'a>(
     if state.playback.queue_menu_open {
       queue_content(state)
     } else {
-      column![].into()
+      iced::widget::Column::<Element<'_, Message>>::new().boxed()
     },
     state.playback.queue_menu_open,
     PopoverOptions {
@@ -1267,7 +1313,7 @@ fn embedded_thumbnail(state: &State) -> Element<'_, Message> {
       .content_fit(ContentFit::Cover)
       .width(85)
       .height(48)
-      .into();
+      .boxed();
   }
   container(icon_with_color(
     Icon::Movie,
@@ -1278,7 +1324,7 @@ fn embedded_thumbnail(state: &State) -> Element<'_, Message> {
   .height(48)
   .align_x(Alignment::Center)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   let prompt = state.playback.view.intro_prompt?;
@@ -1316,15 +1362,18 @@ fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     state.t("common-dismiss"),
     TooltipOptions::default(),
   );
-  Some(opaque(
-    container(
-      row![skip, dismiss]
-        .spacing(TOKENS.spacing.s1)
-        .align_y(Alignment::Center),
+  Some(
+    opaque(
+      container(
+        row![skip, dismiss]
+          .spacing(TOKENS.spacing.s1)
+          .align_y(Alignment::Center),
+      )
+      .padding([TOKENS.spacing.s1, TOKENS.spacing.s2])
+      .style(cinema::prompt),
     )
-    .padding([TOKENS.spacing.s1, TOKENS.spacing.s2])
-    .style(cinema::prompt),
-  ))
+    .boxed(),
+  )
 }
 
 /// The per-series Automatic/Manual pill (ADR 0045). `true` on the switch is
@@ -1357,7 +1406,7 @@ fn embedded_skip_toggle<'a>(
         )
         .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s3])
         .style(move |_| cinema::skip_toggle_pill(control_state))
-        .into()
+        .boxed()
       },
       ButtonVariant::Text,
     )
@@ -1391,7 +1440,7 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
       .size(12)
       .line_height(iced::Pixels(12.0))
       .color(DARK_PALETTE.text.heading)
-      .into();
+      .boxed();
   };
   let timeline = responsive(move |bounds| {
     let target = state
@@ -1486,20 +1535,22 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
         ]
         .spacing(TOKENS.spacing.s2)
         .width(width)
-        .into()
+        .boxed()
       } else {
         container(label)
           .width(Length::Fit.max(bounds.width.clamp(1.0, 280.0)))
-          .into()
+          .boxed()
       };
-    let rail: Element<'_, Message> =
-      iced::widget::tooltip(rail, preview, iced::widget::tooltip::Position::FollowCursor)
-        .delay(std::time::Duration::ZERO)
-        .gap(TOKENS.spacing.s3)
-        .padding(TOKENS.spacing.s2)
-        .snap_within_viewport(true)
-        .style(cinema::popover)
-        .into();
+    let rail: Element<'_, Message> = iced::widget::tooltip(
+      rail,
+      container(preview).padding(TOKENS.spacing.s2),
+      iced::widget::tooltip::Position::FollowCursor,
+    )
+    .delay(std::time::Duration::ZERO)
+    .gap(TOKENS.spacing.s3)
+    .snap_within_viewport(true)
+    .style(cinema::popover)
+    .boxed();
     if state.playback.view.busy && !embedded_player::is_seek_dragging(state) {
       inert(rail)
     } else {
@@ -1532,7 +1583,7 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
   ]
   .spacing(TOKENS.spacing.s3)
   .align_y(Alignment::Center)
-  .into()
+  .boxed()
 }
 
 fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
@@ -1598,7 +1649,7 @@ fn intro_prompt_element<'a>(
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
   .width(Fill)
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating))
-  .into()
+  .boxed()
 }
 
 fn adjacent_button<'a>(
@@ -1669,7 +1720,7 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
   } else {
     trigger
   };
-  let trigger = menu_hint(trigger.into(), state.t("player-audio"), icon_only);
+  let trigger = menu_hint(trigger.boxed(), state.t("player-audio"), icon_only);
   let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(state.kernel.locale, tracks, "audio", false);
@@ -1686,7 +1737,9 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
         .spacing(TOKENS.spacing.s1)
         .width(Fill)
       } else {
-        let mut col = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+        let mut col = Column::<Element<'_, Message>>::new()
+          .spacing(TOKENS.spacing.s1)
+          .width(Fill);
         for choice in choices {
           let active = choice.id == *audio;
           let id = choice.id.unwrap_or_default();
@@ -1698,22 +1751,28 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
               .is_some_and(|language| jellypilot_media_server::languages_match(language, original))
           });
           col = col.push(
-            control_button_content(
+            (control_button_content(
               move |_| {
                 let active_marker: Element<'_, Message> = if active {
-                  icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
+                  icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).boxed()
                 } else {
-                  space::horizontal().width(14).into()
+                  space::horizontal().width(14).boxed()
                 };
                 let mut row = row![text(choice.label.clone()).width(Fill).size(13)];
                 if is_original {
-                  row = row.push(space::horizontal().width(TOKENS.spacing.s2)).push(
-                    text(state.t("player-original-track"))
-                      .size(11)
-                      .color(palette.text.metadata),
-                  );
+                  row = row
+                    .push((space::horizontal().width(TOKENS.spacing.s2)).boxed())
+                    .push(
+                      (text(state.t("player-original-track"))
+                        .size(11)
+                        .color(palette.text.metadata))
+                      .boxed(),
+                    );
                 }
-                row.push(active_marker).align_y(Alignment::Center).into()
+                row
+                  .push((active_marker).boxed())
+                  .align_y(Alignment::Center)
+                  .boxed()
               },
               if embedded && active {
                 ButtonVariant::PillActive
@@ -1731,7 +1790,8 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
             .on_press_maybe(
               (!embedded || !state.playback.view.busy)
                 .then_some(Message::Playback(PlaybackMessage::AudioTrackSelected(id))),
-            ),
+            ))
+            .boxed(),
           );
         }
         col
@@ -1749,11 +1809,15 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
     .width(Fill),
   };
   let menu: Element<'_, Message> = if embedded {
-    container(scrollable(menu).style(jellypilot_ui::theme::scrollable))
-      .height(Length::Fit.max(QUEUE_MENU_MAX_HEIGHT))
-      .into()
+    container(
+      scrollable(menu)
+        .smooth_scroll(false)
+        .style(jellypilot_ui::theme::scrollable),
+    )
+    .height(Length::Fit.max(QUEUE_MENU_MAX_HEIGHT))
+    .boxed()
   } else {
-    menu.into()
+    menu.boxed()
   };
 
   popover(
@@ -1807,7 +1871,7 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
     trigger
   };
   menu_hint(
-    trigger.id("playback-subtitles-trigger").into(),
+    trigger.id("playback-subtitles-trigger").boxed(),
     state.t("player-subtitles"),
     icon_only,
   )
@@ -1838,16 +1902,22 @@ pub(crate) fn reveal_current_queue_item() -> iced::Task<Message> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       _translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&self.queue_id) {
         self.viewport = Some((bounds, content));
       }
     }
 
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&self.current_id) {
         self.current = Some(bounds);
       }
@@ -1864,6 +1934,7 @@ pub(crate) fn reveal_current_queue_item() -> iced::Task<Message> {
           x: None,
           y: Some((current.y - content.y - inset).max(0.0)),
         },
+        iced::advanced::widget::operation::Animation::Instant,
       )))
     }
   }
@@ -1900,7 +1971,7 @@ fn queue_popover(state: &State, icon_only: bool) -> Element<'_, Message> {
   } else {
     trigger
   };
-  let trigger = menu_hint(trigger.into(), state.t("player-queue"), icon_only);
+  let trigger = menu_hint(trigger.boxed(), state.t("player-queue"), icon_only);
   let menu = queue_content(state);
 
   popover(
@@ -1935,7 +2006,7 @@ fn queue_content(state: &State) -> Element<'_, Message> {
           .color(palette.text.metadata)]
         .spacing(TOKENS.spacing.s1)
         .width(Fill)
-        .into()
+        .boxed()
       } else {
         let current_id = state
           .playback
@@ -1943,7 +2014,9 @@ fn queue_content(state: &State) -> Element<'_, Message> {
           .now_playing
           .as_ref()
           .map(|view| view.item.item_id.as_str());
-        let mut rows = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+        let mut rows = Column::<Element<'_, Message>>::new()
+          .spacing(TOKENS.spacing.s1)
+          .width(Fill);
         for item in items {
           let is_current = current_id == Some(item.id.as_str());
           let row: Element<'_, Message> = if embedded {
@@ -1956,24 +2029,25 @@ fn queue_content(state: &State) -> Element<'_, Message> {
             };
             control_button_content(
               move |_| {
-                let mut label = row![]
+                let mut label = iced::widget::Row::<Element<'_, Message>>::new()
                   .spacing(TOKENS.spacing.s2)
                   .align_y(Alignment::Center)
                   .width(Fill);
                 if let (Some(season), Some(episode)) = (item.season_number, item.episode_number) {
                   label = label.push(
-                    text(format!("S{season:02}E{episode:02}"))
+                    (text(format!("S{season:02}E{episode:02}"))
                       .size(11)
-                      .color(palette.text.metadata),
+                      .color(palette.text.metadata))
+                    .boxed(),
                   );
                 }
-                label = label.push(text(item.name.clone()).width(Fill).size(13));
+                label = label.push((text(item.name.clone()).width(Fill).size(13)).boxed());
                 let marker: Element<'_, Message> = if is_current {
-                  icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
+                  icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).boxed()
                 } else {
-                  space::horizontal().width(14).into()
+                  space::horizontal().width(14).boxed()
                 };
-                row![label, marker].align_y(Alignment::Center).into()
+                row![label, marker].align_y(Alignment::Center).boxed()
               },
               row_variant,
             )
@@ -1983,27 +2057,32 @@ fn queue_content(state: &State) -> Element<'_, Message> {
             .on_press_maybe((!is_current).then_some(Message::Playback(
               PlaybackMessage::QueueItemSelected(Box::new(item.clone())),
             )))
-            .into()
+            .boxed()
           };
-          rows = rows.push(if is_current {
-            Element::from(container(row).id(QUEUE_CURRENT_ID).width(Fill))
-          } else {
-            row
-          });
+          rows = rows.push(
+            (if is_current {
+              container(row).id(QUEUE_CURRENT_ID).width(Fill).boxed()
+            } else {
+              row
+            })
+            .boxed(),
+          );
         }
         let mut list = scrollable(rows)
+          .smooth_scroll(false)
           .id(QUEUE_SCROLL_ID)
           .width(Fill)
           .style(jellypilot_ui::theme::scrollable);
         if embedded {
           let epoch = embedded_player::queue_artwork(state).epoch();
           list = list.on_scroll(move |viewport| {
+            let viewport = viewport.viewport;
             let offset = viewport.absolute_offset().y;
             Message::EmbeddedPlayer(embedded_player::Message::QueueScrolled {
               epoch,
               item_count: items.len(),
               top: offset > 0.5,
-              bottom: offset + viewport.bounds().height < viewport.content_bounds().height - 0.5,
+              bottom: offset + viewport.bounds.height < viewport.content.height - 0.5,
             })
           });
         }
@@ -2018,7 +2097,7 @@ fn queue_content(state: &State) -> Element<'_, Message> {
           for (edge, visible) in [(true, top), (false, bottom)] {
             if visible {
               layers = layers.push(
-                container(
+                (container(
                   container(space::horizontal())
                     .width(Fill)
                     .height(16)
@@ -2034,15 +2113,16 @@ fn queue_content(state: &State) -> Element<'_, Message> {
                   Alignment::Start
                 } else {
                   Alignment::End
-                }),
+                }))
+                .boxed(),
               );
             }
           }
-          iced::widget::keyed::Column::with_children([(items.len(), layers.into())])
+          iced::widget::keyed::Column::with_children([(items.len(), layers.boxed())])
             .width(Fill)
-            .into()
+            .boxed()
         } else {
-          list.into()
+          list.boxed()
         }
       }
     }
@@ -2051,14 +2131,14 @@ fn queue_content(state: &State) -> Element<'_, Message> {
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill)
-    .into(),
+    .boxed(),
     QueueState::Unavailable | QueueState::Failed => {
       column![text(state.t("player-unavailable-queue"))
         .size(12)
         .color(palette.text.metadata)]
       .spacing(TOKENS.spacing.s1)
       .width(Fill)
-      .into()
+      .boxed()
     }
   };
   if embedded {
@@ -2086,7 +2166,7 @@ fn embedded_queue_row<'a>(
       ]
       .spacing(TOKENS.spacing.s2_5)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     ButtonVariant::Text,
   )
@@ -2101,14 +2181,14 @@ fn embedded_queue_row<'a>(
   } else {
     queue_row_idle
   })
-  .into()
+  .boxed()
 }
 
 fn queue_row_label<'a>(
   state: &'a State,
   item: &'a VideoLibraryItem,
   is_current: bool,
-) -> Column<'a, Message> {
+) -> Column<Element<'a, Message>> {
   let title = queue_item_title(item);
   let mut label = column![ellipsis_text(title)
     .size(13)
@@ -2127,14 +2207,15 @@ fn queue_row_label<'a>(
   };
   if let Some(subtitle) = subtitle {
     label = label.push(
-      ellipsis_text(subtitle)
+      (ellipsis_text(subtitle)
         .size(12)
         .line_height(iced::Pixels(14.0))
         .color(if is_current {
           DARK_PALETTE.colors.secondary
         } else {
           DARK_PALETTE.text.metadata
-        }),
+        }))
+      .boxed(),
     );
   }
   label
@@ -2195,7 +2276,7 @@ fn queue_thumbnail<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<
       .content_fit(ContentFit::Cover)
       .width(56)
       .height(32)
-      .into()
+      .boxed()
   } else {
     container(icon_with_color(
       Icon::Movie,
@@ -2206,7 +2287,7 @@ fn queue_thumbnail<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<
     .height(32)
     .align_x(Alignment::Center)
     .align_y(Alignment::Center)
-    .into()
+    .boxed()
   };
   if let Some(image_id) = crate::app::home::landscape_image_id(item) {
     observe_image(
@@ -2366,7 +2447,7 @@ fn artwork_element<'a>(
       .content_fit(ContentFit::Cover)
       .width(width)
       .height(height)
-      .into();
+      .boxed();
   }
   container(icon_with_color(
     Icon::Movie,
@@ -2389,12 +2470,13 @@ fn artwork_element<'a>(
     },
     ..container::Style::default()
   })
-  .into()
+  .boxed()
 }
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::app::message::{Message, PlaybackMessage};
+  use iced::advanced::Widget as _;
   use jellypilot_core::intro_skipper::IntroSkipMode;
   use jellypilot_core::now_playing_adjustments::{Control, Input as AdjustmentInput};
   use jellypilot_media_server::VideoLibraryItem;
@@ -2503,7 +2585,7 @@ mod tests {
   #[cfg(target_os = "linux")]
   #[test]
   fn video_surface_toggles_only_on_left_press_inside_picture() {
-    use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree, Layout, Shell};
+    use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree, Shell};
     use iced::{mouse, Event, Point, Rectangle, Size};
 
     let renderer = iced::futures::executor::block_on(iced::Renderer::new(
@@ -2519,8 +2601,9 @@ mod tests {
     let bounds = Rectangle::with_size(Size::new(320.0, 180.0));
     let mut content = video_surface();
     let mut tree = Tree::empty();
-    tree.diff(content.as_widget_mut());
-    let node = content.as_widget_mut().layout(
+    tree.diff(&mut content);
+    let node = crate::app::test_support::layout_widget(
+      &mut content,
       &mut tree,
       &renderer,
       &layout::Limits::new(bounds.size(), bounds.size()),
@@ -2553,10 +2636,10 @@ mod tests {
       ),
     ] {
       let mut messages = iced::advanced::shell::Bus::new();
-      content.as_widget_mut().update(
+      content.update(
         &mut tree,
         &Event::Mouse(event),
-        Layout::new(&node),
+        node.layout(),
         mouse::Cursor::Available(cursor),
         &renderer,
         &mut Shell::new(
@@ -3285,11 +3368,11 @@ mod tests {
 
   #[tokio::test]
   async fn embedded_queue_chevron_is_absent_for_movies_and_retained_for_episodes() {
-    use iced::advanced::{layout, renderer::Headless, widget::Tree, Layout};
+    use iced::advanced::{layout, renderer::Headless, widget::Tree};
     use iced::Size;
 
-    fn has_chevron(layout: Layout<'_>) -> bool {
-      layout.bounds().size() == Size::new(14.0, 14.0) || layout.children().any(has_chevron)
+    fn has_chevron(tree: &Tree) -> bool {
+      tree.size == Size::new(14.0, 14.0) || tree.children.iter().any(has_chevron)
     }
 
     let renderer = iced::Renderer::new(
@@ -3309,12 +3392,13 @@ mod tests {
       let mut identity = embedded_identity(&state, &playing, false);
       let mut tree = Tree::new(&identity);
       tree.diff(&mut identity);
-      let node = identity.as_widget_mut().layout(
+      crate::app::test_support::layout_widget(
+        &mut identity,
         &mut tree,
         &renderer,
         &layout::Limits::new(Size::ZERO, Size::new(500.0, 100.0)),
       );
-      assert_eq!(has_chevron(Layout::new(&node)), visible, "{item_type}");
+      assert_eq!(has_chevron(&tree), visible, "{item_type}");
     }
   }
 
@@ -3467,15 +3551,8 @@ mod tests {
 
   #[tokio::test]
   async fn embedded_controls_keep_transport_centered_and_reflow_only_when_tools_need_space() {
-    use iced::advanced::{layout, renderer::Headless, widget::Tree, Layout};
-    use iced::{Point, Rectangle, Size};
-
-    fn boxes(layout: Layout<'_>, result: &mut Vec<Rectangle>) {
-      result.push(layout.bounds());
-      for child in layout.children() {
-        boxes(child, result);
-      }
-    }
+    use iced::advanced::{layout, renderer::Headless, widget::Tree};
+    use iced::{Point, Size};
 
     let mut state = State::boot(false);
     let mut now_playing = test_now_playing();
@@ -3533,7 +3610,8 @@ mod tests {
         let mut content = embedded_bar(&state, &now_playing, card_width);
         let mut tree = Tree::new(&content);
         tree.diff(&mut content);
-        let node = content.as_widget_mut().layout(
+        let node = crate::app::test_support::layout_widget(
+          &mut content,
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::new(card_width, 0.0), Size::new(card_width, 900.0)),
@@ -3543,8 +3621,7 @@ mod tests {
           expected_height,
           "window width {window_width}, {language:?}, skip toggle: {has_skip_toggle}"
         );
-        let mut measured = Vec::new();
-        boxes(Layout::new(&node), &mut measured);
+        let measured = node.absolute_bounds();
         assert!(
           measured
             .iter()

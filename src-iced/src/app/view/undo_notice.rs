@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 use iced::widget::{column, container, keyed, row, text};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_ui::icons::{Icon, IconSize};
@@ -21,9 +22,10 @@ pub(super) fn view(state: &State) -> Element<'_, Message> {
     .spacing(4);
     if notice.failed {
       copy = copy.push(
-        text(state.t("lists-undo-failed"))
+        (text(state.t("lists-undo-failed"))
           .size(12)
-          .color(state.palette().colors.error),
+          .color(state.palette().colors.error))
+        .boxed(),
       );
     }
     let blocked = notice.pending || accounts::content_mutations_blocked(&state.kernel);
@@ -80,5 +82,5 @@ pub(super) fn view(state: &State) -> Element<'_, Message> {
     .align_x(Alignment::End)
     .align_y(Alignment::End)
     .padding(16)
-    .into()
+    .boxed()
 }

@@ -11,7 +11,7 @@ use jellypilot_ui::widgets::motion;
 use super::super::message::Message;
 
 pub(super) fn fade(image: Image, key: u64) -> Element<'static, Message> {
-  Element::new(Fade { image, key })
+  iced::advanced::Widget::_boxed(Fade { image, key })
 }
 
 struct Fade {
@@ -25,6 +25,8 @@ struct State {
   from: f32,
   started: Option<Instant>,
 }
+
+impl widget::Meta for Fade {}
 
 impl Widget<Message, Theme, iced::Renderer> for Fade {
   fn tag(&self) -> widget::tree::Tag {
@@ -68,7 +70,7 @@ impl Widget<Message, Theme, iced::Renderer> for Fade {
     tree: &mut widget::Tree,
     renderer: &iced::Renderer,
     limits: &layout::Limits,
-  ) -> layout::Node {
+  ) {
     <Image as Widget<Message, Theme, iced::Renderer>>::layout(
       &mut self.image,
       tree,
@@ -81,7 +83,7 @@ impl Widget<Message, Theme, iced::Renderer> for Fade {
     &mut self,
     tree: &mut widget::Tree,
     event: &Event,
-    _layout: Layout<'_>,
+    _layout: Layout,
     _cursor: mouse::Cursor,
     _renderer: &iced::Renderer,
     shell: &mut Shell<'_, Message>,
@@ -115,7 +117,7 @@ impl Widget<Message, Theme, iced::Renderer> for Fade {
     renderer: &mut iced::Renderer,
     theme: &Theme,
     style: &renderer::Style,
-    layout: Layout<'_>,
+    layout: Layout,
     cursor: mouse::Cursor,
     viewport: &Rectangle,
   ) {

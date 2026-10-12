@@ -1,5 +1,6 @@
 //! Candidate library filters. Only Apply crosses into the shared browse query.
 
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, mouse_area, opaque, row, scrollable, space, stack, text, Column, Row,
 };
@@ -260,9 +261,10 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       if panel.row != row || panel.cursors[row] != index || !y.is_finite() {
         return Task::none();
       }
-      iced::widget::operation::scroll_to(
+      iced::widget::operation::scrollable::scroll_to(
         iced::widget::Id::new("tv-filter-panel"),
-        iced::widget::operation::AbsoluteOffset { x: 0.0, y },
+        iced::widget::operation::scrollable::AbsoluteOffset { x: 0.0, y },
+        iced::advanced::widget::operation::Animation::Instant,
       )
     }
     Message::Cancel(_) => {
@@ -468,12 +470,13 @@ fn reveal(state: &mut State) -> Task<AppMessage> {
     .iter()
     .enumerate()
     .map(|(row, offset)| {
-      iced::widget::operation::scroll_to(
+      iced::widget::operation::scrollable::scroll_to(
         scroll_id(row),
-        iced::widget::operation::AbsoluteOffset {
+        iced::widget::operation::scrollable::AbsoluteOffset {
           x: offset * scale,
           y: 0.0,
         },
+        iced::advanced::widget::operation::Animation::Instant,
       )
     })
     .collect();
@@ -489,7 +492,12 @@ fn reveal(state: &mut State) -> Task<AppMessage> {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&self.id) {
         self.target = Some(bounds);
       }
@@ -498,10 +506,11 @@ fn reveal(state: &mut State) -> Task<AppMessage> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&widget::Id::new("tv-filter-panel")) {
         self.viewport = Some((bounds, content, translation));
       }
@@ -578,11 +587,8 @@ fn control<'a>(
     .spacing(8.0 * scale)
     .align_y(Alignment::Center);
     if selected {
-      content = content.push(icon_with_color(
-        Icon::Check,
-        IconSize::Custom(20.0 * scale),
-        color,
-      ));
+      content =
+        content.push((icon_with_color(Icon::Check, IconSize::Custom(20.0 * scale), color)).boxed());
     }
     button(content)
       .width(Fill)
@@ -590,15 +596,15 @@ fn control<'a>(
       .padding([0.0, 20.0 * scale])
       .style(style::button_progress(style::PALETTE, progress, selected))
       .on_press_maybe(enabled.then(|| dispatch(message.clone())))
-      .into()
+      .boxed()
   }))
   .id(id)
-  .into()
+  .boxed()
 }
 
 pub fn view(state: &State) -> Element<'_, AppMessage> {
   let Some(panel) = state.tv.filters.panel.as_ref() else {
-    return space().into();
+    return space().boxed();
   };
   let scale = style::scale(state.shell.window_size.width);
   let mut content = column![column![
@@ -619,11 +625,11 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
   .spacing(24.0 * scale);
   match &panel.options {
     Options::Loading => {
-      content = content.push(text(state.t("tv-loading")).size(style::BODY * scale));
+      content = content.push((text(state.t("tv-loading")).size(style::BODY * scale)).boxed());
     }
     Options::Failed(error) => {
       content = content.push(
-        column![
+        (column![
           text(state.t("tv-filter-failed"))
             .size(style::BODY * scale)
             .color(style::PALETTE.colors.error),
@@ -631,11 +637,12 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
             .size(style::META * scale)
             .color(style::PALETTE.text.metadata)
         ]
-        .spacing(12.0 * scale),
+        .spacing(12.0 * scale))
+        .boxed(),
       );
     }
     Options::Ready(options) => {
-      let mut groups = Column::new().spacing(20.0 * scale);
+      let mut groups = Column::<Element<'_, AppMessage>>::new().spacing(20.0 * scale);
       for (row_index, title) in ["tv-filter-quality", "tv-filter-country", "tv-filter-genre"]
         .into_iter()
         .enumerate()
@@ -646,9 +653,9 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
           .saturating_sub(2)
           .min(count);
         let end = (start + 9).min(count);
-        let mut choices = Row::new().spacing(12.0 * scale);
+        let mut choices = Row::<Element<'_, AppMessage>>::new().spacing(12.0 * scale);
         if start > 0 {
-          choices = choices.push(space().width((start as f32 * 212.0 - 12.0) * scale));
+          choices = choices.push((space().width((start as f32 * 212.0 - 12.0) * scale)).boxed());
         }
         for (index, value) in options_for_row.iter().enumerate().take(end).skip(start) {
           let selected = value == &selected_value(&panel.draft, row_index);
@@ -663,12 +670,14 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
             option_id(row_index, index),
           );
           choices = choices.push(
-            mouse_area(container(button).width(200.0 * scale))
-              .on_enter(dispatch(Message::Focus(token, row_index, index))),
+            (mouse_area(container(button).width(200.0 * scale))
+              .on_enter(dispatch(Message::Focus(token, row_index, index))))
+            .boxed(),
           );
         }
         if count > end {
-          choices = choices.push(space().width(((count - end) as f32 * 212.0 - 12.0) * scale));
+          choices =
+            choices.push((space().width(((count - end) as f32 * 212.0 - 12.0) * scale)).boxed());
         }
         let scroll_token = panel.token.clone();
         let mut group = column![
@@ -677,11 +686,12 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
             .line_height(iced::Pixels(28.0 * scale))
             .color(style::PALETTE.text.metadata),
           scrollable(choices)
+            .smooth_scroll(false)
             .id(scroll_id(row_index))
             .on_scroll(move |viewport| dispatch(Message::Scrolled(
               scroll_token.clone(),
               row_index,
-              viewport.absolute_offset().x
+              viewport.viewport.absolute_offset().x
             )))
             .direction(scrollable::Direction::Horizontal(
               scrollable::Scrollbar::new()
@@ -692,14 +702,15 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         .spacing(8.0 * scale);
         if row_index == 0 && options.qualities.is_empty() {
           group = group.push(
-            text(state.t("tv-filter-quality-unavailable"))
+            (text(state.t("tv-filter-quality-unavailable"))
               .size(style::META * scale)
-              .color(style::PALETTE.text.metadata),
+              .color(style::PALETTE.text.metadata))
+            .boxed(),
           );
         }
-        groups = groups.push(group);
+        groups = groups.push((group).boxed());
       }
-      content = content.push(groups);
+      content = content.push((groups).boxed());
     }
   }
   let ready = matches!(panel.options, Options::Ready(_));
@@ -741,7 +752,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     "tv-filter-apply-hint"
   };
   content = content.push(
-    column![
+    (column![
       row![
         container(primary).width(216.0 * scale),
         container(cancel).width(160.0 * scale)
@@ -752,12 +763,14 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         .line_height(iced::Pixels(28.0 * scale))
         .color(style::PALETTE.text.metadata)
     ]
-    .spacing(16.0 * scale),
+    .spacing(16.0 * scale))
+    .boxed(),
   );
   let max_content_height =
     (state.shell.window_size.height - (2.0 * style::SAFE_Y + 80.0) * scale).max(1.0);
   let panel = container(
     scrollable(content)
+      .smooth_scroll(false)
       .id("tv-filter-panel")
       .height(iced::Length::Fit.max(max_content_height)),
   )
@@ -784,7 +797,7 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
         left: style::SAFE_X * scale
       })
   ]
-  .into()
+  .boxed()
 }
 
 #[cfg(test)]
@@ -1008,7 +1021,12 @@ mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&widget::Id::new("tv-filter-surface")) {
           self.panel = Some(bounds);
         } else if id == Some(&self.focus) {
@@ -1019,10 +1037,11 @@ mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: Rectangle,
-        content: Rectangle,
+        content: iced::Size,
         translation: Vector,
         _state: &mut dyn widget::operation::Scrollable,
       ) {
+        let content = iced::Rectangle::new(bounds.position(), content);
         if id == Some(&widget::Id::new("tv-filter-panel")) {
           self.scroll = Some((bounds, content, translation));
         }
@@ -1098,6 +1117,8 @@ mod tests {
           scroll: None,
         };
         let mut ui = UserInterface::build(view(&state), size, cache, &mut renderer);
+        // Focus visibility is measured on the frame after the reveal's scroll.
+        drop(crate::app::test_support::redraw_ui(&mut ui, &mut renderer));
         ui.operate(&renderer, &mut bounds);
         let surface = bounds.panel.expect("filter panel");
         assert!((surface.width - 768.0 * scale).abs() < 0.1);

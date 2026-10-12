@@ -200,13 +200,14 @@ pub(crate) fn lerp_background(
 /// `enabled = !reduced_motion && images_visible`; descendants read the policy
 /// through [`enabled`] without per-callsite plumbing.
 pub fn scope<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     enabled: bool,
 ) -> Element<'a, Message> {
-    Element::new(Scope {
-        content: content.into(),
+    (Scope {
+        content: content._boxed(),
         enabled,
     })
+    ._boxed()
 }
 
 struct Scope<'a, Message> {
@@ -216,45 +217,40 @@ struct Scope<'a, Message> {
 
 /// Forwards the child's own state like [`super::inert`], so wrapping or
 /// unwrapping the root never discards descendant widget state.
+impl<Message> iced::advanced::widget::Meta for Scope<'_, Message> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
     fn tag(&self) -> widget::tree::Tag {
-        self.content.as_widget().tag()
+        self.content.tag()
     }
 
     fn state(&self) -> widget::tree::State {
-        self.content.as_widget().state()
+        self.content.state()
     }
 
     fn diff(&mut self, tree: &mut Tree) {
-        with_policy(self.enabled, || self.content.as_widget_mut().diff(tree));
+        with_policy(self.enabled, || self.content.diff(tree));
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &iced::Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        with_policy(self.enabled, || {
-            self.content.as_widget_mut().layout(tree, renderer, limits)
-        })
+    fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) {
+        with_policy(self.enabled, || self.content.layout(tree, renderer, limits))
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn Operation,
     ) {
         with_policy(self.enabled, || {
             self.content
-                .as_widget_mut()
-                .operate(tree, layout, renderer, operation)
+                .operate(tree, layout, viewport, renderer, operation)
         });
     }
 
@@ -262,7 +258,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -270,7 +266,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
     ) {
         with_policy(self.enabled, || {
             self.content
-                .as_widget_mut()
                 .update(tree, event, layout, cursor, renderer, shell, viewport)
         });
     }
@@ -281,13 +276,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
         with_policy(self.enabled, || {
             self.content
-                .as_widget()
                 .draw(tree, renderer, theme, style, layout, cursor, viewport)
         });
     }
@@ -295,14 +289,13 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         with_policy(self.enabled, || {
             self.content
-                .as_widget()
                 .mouse_interaction(tree, layout, cursor, viewport, renderer)
         })
     }
@@ -310,15 +303,15 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Scope<'_, Message> {
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         let content = with_policy(self.enabled, || {
             self.content
-                .as_widget_mut()
-                .overlay(tree, layout, renderer, viewport, translation)
+                .overlay(tree, layout, renderer, viewport, translation, window)
         });
         // Overlay layers live outside the scoped traversal, so the policy must
         // be re-established around every overlay call.
@@ -341,16 +334,9 @@ struct PolicyOverlay<'a, Message> {
 }
 
 impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PolicyOverlay<'_, Message> {
-    fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-        with_policy(self.enabled, || {
-            self.content.as_overlay_mut().layout(renderer, bounds)
-        })
-    }
-
     fn update(
         &mut self,
         event: &Event,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -358,7 +344,7 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PolicyOverlay
         with_policy(self.enabled, || {
             self.content
                 .as_overlay_mut()
-                .update(event, layout, cursor, renderer, shell)
+                .update(event, cursor, renderer, shell)
         });
     }
 
@@ -367,49 +353,39 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PolicyOverlay
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
     ) {
         with_policy(self.enabled, || {
             self.content
                 .as_overlay()
-                .draw(renderer, theme, style, layout, cursor)
+                .draw(renderer, theme, style, cursor)
         });
     }
 
-    fn operate(
-        &mut self,
-        layout: Layout<'_>,
-        renderer: &iced::Renderer,
-        operation: &mut dyn widget::Operation,
-    ) {
+    fn operate(&mut self, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
         with_policy(self.enabled, || {
-            self.content
-                .as_overlay_mut()
-                .operate(layout, renderer, operation)
+            self.content.as_overlay_mut().operate(renderer, operation)
         });
     }
 
     fn mouse_interaction(
         &self,
-        layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         with_policy(self.enabled, || {
             self.content
                 .as_overlay()
-                .mouse_interaction(layout, cursor, renderer)
+                .mouse_interaction(cursor, renderer)
         })
     }
 
     fn overlay<'a>(
         &'a mut self,
-        layout: Layout<'a>,
         renderer: &iced::Renderer,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
         with_policy(self.enabled, || {
-            self.content.as_overlay_mut().overlay(layout, renderer)
+            self.content.as_overlay_mut().overlay(renderer)
         })
         .into_iter()
         .map(|content| {
@@ -435,17 +411,18 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for PolicyOverlay
 /// offset. Hit targets track the drawn position: events dispatch against the
 /// translated layout.
 pub fn transition<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     key: u64,
     enabled: bool,
     duration: Duration,
 ) -> Element<'a, Message> {
-    Element::new(Transition {
-        content: content.into(),
+    (Transition {
+        content: content._boxed(),
         key,
         enabled,
         duration,
     })
+    ._boxed()
 }
 
 /// The animated axis for [`resize`].
@@ -482,6 +459,11 @@ impl<Message, Renderer> Transition<'_, Message, Renderer> {
     fn offset(shown: f32) -> f32 {
         (1.0 - shown) * TRANSITION_OFFSET
     }
+}
+
+impl<Message, Renderer> iced::advanced::widget::Meta for Transition<'_, Message, Renderer> where
+    Renderer: iced::advanced::Renderer
+{
 }
 
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for Transition<'_, Message, Renderer>
@@ -537,30 +519,21 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let child = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        tree.size = tree.children[0].size;
         let offset = Self::offset(tree.state.downcast_ref::<TransitionState>().shown);
-        layout::Node::with_children(
-            child.size(),
-            vec![child.translate(Vector::new(0.0, offset))],
-        )
+        tree.children[0].translation = Vector::new(0.0, offset);
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
@@ -569,12 +542,13 @@ where
             layout.bounds(),
             tree.state.downcast_mut::<TransitionState>(),
         );
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().operate(
+        self.content.operate(
             &mut tree.children[0],
             child_layout,
+            viewport,
             renderer,
             operation,
         );
@@ -584,7 +558,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -592,10 +566,10 @@ where
     ) {
         let state = tree.state.downcast_mut::<TransitionState>();
         tick_layout(&mut state.tween, &mut state.shown, 1.0, event, shell);
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             child_layout,
@@ -612,14 +586,14 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget().draw(
+        self.content.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -633,40 +607,37 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return mouse::Interaction::None;
         };
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], child_layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return Vec::new();
         };
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             child_layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -684,17 +655,18 @@ where
 /// content it wants animated out; query [`Activity`] to learn when the exit
 /// has settled and the content can be dropped.
 pub fn collapse<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     visible: bool,
     enabled: bool,
     duration: Duration,
 ) -> Element<'a, Message> {
-    Element::new(Collapse {
-        content: content.into(),
+    (Collapse {
+        content: content._boxed(),
         visible,
         enabled,
         duration,
     })
+    ._boxed()
 }
 
 struct Collapse<'a, Message, Renderer = iced::Renderer> {
@@ -717,6 +689,11 @@ impl CollapseState {
     pub(crate) fn motion_active(&self) -> bool {
         self.tween.is_some()
     }
+}
+
+impl<Message, Renderer> iced::advanced::widget::Meta for Collapse<'_, Message, Renderer> where
+    Renderer: iced::advanced::Renderer
+{
 }
 
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for Collapse<'_, Message, Renderer>
@@ -764,30 +741,26 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let state = tree.state.downcast_ref::<CollapseState>();
-        let child = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
-        // The occupied height follows the revealed fraction so siblings
-        // collapse smoothly instead of jumping when the exit settles.
-        let size = Size::new(child.size().width, child.size().height * state.shown);
-        layout::Node::with_children(limits.resolve(Length::Fit, Length::Fit, size), vec![child])
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        let child = tree.children[0].size;
+        tree.size = limits.resolve(
+            Length::Fit,
+            Length::Fit,
+            Size::new(child.width, child.height * state.shown),
+        );
+        tree.children[0].translation = Vector::ZERO;
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
@@ -797,12 +770,13 @@ where
         if !state.visible {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().operate(
+        self.content.operate(
             &mut tree.children[0],
             child_layout,
+            viewport,
             renderer,
             operation,
         );
@@ -812,7 +786,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -825,7 +799,7 @@ where
         if !state.visible {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
         // The node bounds are the revealed region; outside it the child is
@@ -835,7 +809,7 @@ where
         } else {
             mouse::Cursor::Unavailable
         };
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             child_layout,
@@ -852,7 +826,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -860,13 +834,13 @@ where
         if state.shown <= 0.0 {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
         let child = &tree.children[0];
         let content = &self.content;
         if state.shown >= 1.0 {
-            content.as_widget().draw(
+            content.draw(
                 child,
                 renderer,
                 theme,
@@ -879,7 +853,7 @@ where
             // The node bounds already equal the revealed region; the layer
             // clips the still-full-height child to it.
             renderer.with_layer(layout.bounds(), |renderer| {
-                content.as_widget().draw(
+                content.draw(
                     child,
                     renderer,
                     theme,
@@ -895,7 +869,7 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
@@ -904,7 +878,7 @@ where
         if !state.visible {
             return mouse::Interaction::None;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return mouse::Interaction::None;
         };
         let cursor = if cursor.is_over(layout.bounds()) {
@@ -912,36 +886,33 @@ where
         } else {
             mouse::Cursor::Unavailable
         };
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], child_layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
         let state = tree.state.downcast_ref::<CollapseState>();
         if !state.visible {
             return Vec::new();
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return Vec::new();
         };
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             child_layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -958,17 +929,18 @@ where
 /// and the layer can be dropped. For docked content whose surroundings should
 /// shrink with it, use [`collapse`] instead.
 pub fn reveal<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     visible: bool,
     enabled: bool,
     duration: Duration,
 ) -> Element<'a, Message> {
-    Element::new(Reveal {
-        content: content.into(),
+    (Reveal {
+        content: content._boxed(),
         visible,
         enabled,
         duration,
     })
+    ._boxed()
 }
 
 struct Reveal<'a, Message, Renderer = iced::Renderer> {
@@ -991,6 +963,11 @@ impl RevealState {
     pub(crate) fn motion_active(&self) -> bool {
         self.tween.is_some()
     }
+}
+
+impl<Message, Renderer> iced::advanced::widget::Meta for Reveal<'_, Message, Renderer> where
+    Renderer: iced::advanced::Renderer
+{
 }
 
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for Reveal<'_, Message, Renderer>
@@ -1038,35 +1015,25 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let state = tree.state.downcast_ref::<RevealState>();
-        let child = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits);
-        // Full child layout while entering or exiting; only a settled hidden
-        // widget reports zero space.
-        let size = if !state.visible && state.tween.is_none() {
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        tree.size = if !state.visible && state.tween.is_none() {
             Size::ZERO
         } else {
-            child.size()
+            tree.children[0].size
         };
-        let offset = (1.0 - state.shown) * TRANSITION_OFFSET;
-        layout::Node::with_children(size, vec![child.translate(Vector::new(0.0, offset))])
+        tree.children[0].translation = Vector::new(0.0, (1.0 - state.shown) * TRANSITION_OFFSET);
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
@@ -1076,12 +1043,13 @@ where
         if !state.visible {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().operate(
+        self.content.operate(
             &mut tree.children[0],
             child_layout,
+            viewport,
             renderer,
             operation,
         );
@@ -1091,7 +1059,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -1104,10 +1072,10 @@ where
         if !state.visible {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             child_layout,
@@ -1124,7 +1092,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -1132,10 +1100,10 @@ where
         if state.shown <= 0.0 {
             return;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget().draw(
+        self.content.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -1149,7 +1117,7 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
@@ -1158,39 +1126,36 @@ where
         if !state.visible {
             return mouse::Interaction::None;
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return mouse::Interaction::None;
         };
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], child_layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
         let state = tree.state.downcast_ref::<RevealState>();
         if !state.visible {
             return Vec::new();
         }
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return Vec::new();
         };
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             child_layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -1203,19 +1168,20 @@ where
 /// The child is laid out under the animated size each frame, so hit targets
 /// match the drawn pixels throughout.
 pub fn resize<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
+    content: impl Widget<Message, Theme, iced::Renderer> + 'a,
     key: u64,
     enabled: bool,
     duration: Duration,
     axis: Axis,
 ) -> Element<'a, Message> {
-    Element::new(Resize {
-        content: content.into(),
+    (Resize {
+        content: content._boxed(),
         key,
         enabled,
         duration,
         axis,
     })
+    ._boxed()
 }
 
 struct Resize<'a, Message, Renderer = iced::Renderer> {
@@ -1269,7 +1235,7 @@ fn lerp_size(from: Size, to: Size, t: f32, axis: Axis) -> Size {
 }
 
 fn tighten(limits: &layout::Limits, size: Size, axis: Axis) -> layout::Limits {
-    let mut max = limits.max();
+    let mut max = limits.max;
     if matches!(axis, Axis::Horizontal | Axis::Both) {
         max.width = size.width;
     }
@@ -1277,6 +1243,11 @@ fn tighten(limits: &layout::Limits, size: Size, axis: Axis) -> layout::Limits {
         max.height = size.height;
     }
     layout::Limits::new(Size::ZERO, max)
+}
+
+impl<Message, Renderer> iced::advanced::widget::Meta for Resize<'_, Message, Renderer> where
+    Renderer: iced::advanced::Renderer
+{
 }
 
 impl<Message, Renderer> Widget<Message, Theme, Renderer> for Resize<'_, Message, Renderer>
@@ -1330,25 +1301,14 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
+        self.content.size()
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let state = tree.state.downcast_mut::<ResizeState>();
-        // Measure the natural target under the real limits first.
-        let natural = self
-            .content
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
-            .size();
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        let natural = tree.children[0].size;
         if state.tween.is_some() && natural != state.to {
-            // Preserve the displayed size without restarting the easing clock.
-            // Rebasing `from` must account for the progress already consumed.
             let remaining = 1.0 - state.shown;
             if remaining > f32::EPSILON {
                 state.from = Size::new(
@@ -1363,32 +1323,28 @@ where
         } else if state.tween.is_none() {
             state.to = natural;
         }
-
-        let (child, size) = if state.tween.is_some() {
+        let size = if state.tween.is_some() {
             let shown_size = lerp_size(state.from, state.to, state.shown, self.axis);
             state.shown_size = shown_size;
-            let child = self.content.as_widget_mut().layout(
+            self.content.layout(
                 &mut tree.children[0],
                 renderer,
                 &tighten(limits, shown_size, self.axis),
             );
-            (child, shown_size)
+            shown_size
         } else {
             state.shown_size = natural;
-            (
-                self.content
-                    .as_widget_mut()
-                    .layout(&mut tree.children[0], renderer, limits),
-                natural,
-            )
+            natural
         };
-        layout::Node::with_children(limits.resolve(Length::Fit, Length::Fit, size), vec![child])
+        tree.size = limits.resolve(Length::Fit, Length::Fit, size);
+        tree.children[0].translation = Vector::ZERO;
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
@@ -1397,12 +1353,13 @@ where
             layout.bounds(),
             tree.state.downcast_mut::<ResizeState>(),
         );
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
-        self.content.as_widget_mut().operate(
+        self.content.operate(
             &mut tree.children[0],
             child_layout,
+            viewport,
             renderer,
             operation,
         );
@@ -1412,17 +1369,17 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_mut::<ResizeState>();
-        tick_layout(&mut state.tween, &mut state.shown, 1.0, event, shell);
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
+        let state = tree.state.downcast_mut::<ResizeState>();
+        tick_layout(&mut state.tween, &mut state.shown, 1.0, event, shell);
         // A fixed-size child can overflow the animated bounds; its hit targets
         // only answer inside the displayed region.
         let cursor = if state.tween.is_some() && !cursor.is_over(layout.bounds()) {
@@ -1430,7 +1387,7 @@ where
         } else {
             cursor
         };
-        self.content.as_widget_mut().update(
+        self.content.update(
             &mut tree.children[0],
             event,
             child_layout,
@@ -1447,19 +1404,19 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<ResizeState>();
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return;
         };
         let child = &tree.children[0];
         let content = &self.content;
         if state.tween.is_some() {
             renderer.with_layer(layout.bounds(), |renderer| {
-                content.as_widget().draw(
+                content.draw(
                     child,
                     renderer,
                     theme,
@@ -1470,7 +1427,7 @@ where
                 );
             });
         } else {
-            content.as_widget().draw(
+            content.draw(
                 child,
                 renderer,
                 theme,
@@ -1485,13 +1442,13 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<ResizeState>();
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return mouse::Interaction::None;
         };
         let cursor = if state.tween.is_some() && !cursor.is_over(layout.bounds()) {
@@ -1499,32 +1456,29 @@ where
         } else {
             cursor
         };
-        self.content.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.content
+            .mouse_interaction(&tree.children[0], child_layout, cursor, viewport, renderer)
     }
 
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
-        layout: Layout<'a>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, Renderer>> {
-        let Some(child_layout) = layout.children().next() else {
+        let Some(child_layout) = super::child_layout(layout, tree, 0) else {
             return Vec::new();
         };
-        self.content.as_widget_mut().overlay(
+        self.content.overlay(
             &mut tree.children[0],
             child_layout,
             renderer,
             viewport,
             translation,
+            window,
         )
     }
 }
@@ -1667,20 +1621,20 @@ mod tests {
     }
 
     fn space<'a>(width: f32, height: f32) -> TestElement<'a> {
-        Space::new().width(width).height(height).into()
+        Space::new().width(width).height(height)._boxed()
     }
 
     fn button() -> TestElement<'static> {
         iced::widget::button(Space::new().width(100).height(40))
             .padding(0)
             .on_press(())
-            .into()
+            ._boxed()
     }
 
     fn click(
         widget: &mut impl Widget<(), Theme, ()>,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         point: Point,
     ) -> Vec<()> {
         let mut bus = iced::advanced::shell::Bus::new();
@@ -1740,12 +1694,16 @@ mod tests {
     #[test]
     fn transition_suppresses_initial_mount_and_same_key() {
         let mut widget = transition_widget(space(100.0, 100.0), 7);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits()).children()[0]
-                .bounds()
-                .y,
+            {
+                widget.layout(&mut tree, &(), &limits());
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y,
             0.0
         );
 
@@ -1753,9 +1711,13 @@ mod tests {
         let mut widget = transition_widget(space(100.0, 100.0), 7);
         widget.diff(&mut tree);
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits()).children()[0]
-                .bounds()
-                .y,
+            {
+                widget.layout(&mut tree, &(), &limits());
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y,
             0.0
         );
     }
@@ -1763,18 +1725,22 @@ mod tests {
     #[test]
     fn transition_animates_key_change_and_settles() {
         let mut widget = transition_widget(space(100.0, 100.0), 1);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
-        let layout = Layout::new(&node);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
 
         let mut widget = transition_widget(space(100.0, 100.0), 2);
         widget.diff(&mut tree);
-        let initial = widget.layout(&mut tree, &(), &limits).children()[0]
-            .bounds()
-            .y;
+        let initial = {
+            widget.layout(&mut tree, &(), &limits);
+            super::super::child_layout(Layout::new(tree.size), &tree, 0).expect("laid out child")
+        }
+        .bounds()
+        .y;
         assert!(initial > 0.0);
 
         let start = Instant::now();
@@ -1789,9 +1755,12 @@ mod tests {
             &mut shell,
             &viewport,
         );
-        let offset = widget.layout(&mut tree, &(), &limits).children()[0]
-            .bounds()
-            .y;
+        let offset = {
+            widget.layout(&mut tree, &(), &limits);
+            super::super::child_layout(Layout::new(tree.size), &tree, 0).expect("laid out child")
+        }
+        .bounds()
+        .y;
         assert!(
             offset > 0.0 && offset < initial,
             "mid-flight offset, got {offset}"
@@ -1814,9 +1783,13 @@ mod tests {
             &viewport,
         );
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits).children()[0]
-                .bounds()
-                .y,
+            {
+                widget.layout(&mut tree, &(), &limits);
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y,
             0.0
         );
         assert_eq!(
@@ -1829,13 +1802,14 @@ mod tests {
     #[test]
     fn transition_interrupt_retargets_from_displayed_progress() {
         let mut widget = transition_widget(space(100.0, 100.0), 1);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let mut widget = transition_widget(space(100.0, 100.0), 2);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
-        let layout = Layout::new(&node);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
 
         let start = Instant::now();
@@ -1850,18 +1824,25 @@ mod tests {
             &mut shell,
             &viewport,
         );
-        let mid = widget.layout(&mut tree, &(), &limits).children()[0]
-            .bounds()
-            .y;
+        let mid = {
+            widget.layout(&mut tree, &(), &limits);
+            super::super::child_layout(Layout::new(tree.size), &tree, 0).expect("laid out child")
+        }
+        .bounds()
+        .y;
         assert!(mid > 0.0 && mid < super::TRANSITION_OFFSET);
 
         // A second key change mid-flight continues from the displayed offset.
         let mut widget = transition_widget(space(100.0, 100.0), 3);
         widget.diff(&mut tree);
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits).children()[0]
-                .bounds()
-                .y,
+            {
+                widget.layout(&mut tree, &(), &limits);
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y,
             mid
         );
     }
@@ -1869,33 +1850,23 @@ mod tests {
     #[test]
     fn collapse_hides_events_and_collapses_when_settled() {
         let mut widget = collapse_widget(button(), true);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size().height, 40.0);
         assert_eq!(
-            click(
-                &mut widget,
-                &mut tree,
-                Layout::new(&node),
-                Point::new(10.0, 10.0)
-            ),
+            click(&mut widget, &mut tree, node, Point::new(10.0, 10.0)),
             vec![()]
         );
 
         // Flip to hidden: the exit animates while content is already inert.
         let mut widget = collapse_widget(button(), false);
         widget.diff(&mut tree);
-        assert!(click(
-            &mut widget,
-            &mut tree,
-            Layout::new(&node),
-            Point::new(10.0, 10.0)
-        )
-        .is_empty());
+        assert!(click(&mut widget, &mut tree, node, Point::new(10.0, 10.0)).is_empty());
 
-        let layout = Layout::new(&node);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
         let inside = mouse::Cursor::Available(Point::new(10.0, 10.0));
         assert_eq!(
@@ -1918,22 +1889,24 @@ mod tests {
         );
 
         // Settled hidden: the widget takes no space.
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size().height, 0.0, "settled hidden must be empty");
     }
 
     #[test]
     fn collapse_entrance_shrinks_bounds_progressively() {
         let mut widget = collapse_widget(space(100.0, 40.0), false);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size().height, 0.0, "mounted hidden stays empty");
 
         let mut widget = collapse_widget(space(100.0, 40.0), true);
         widget.diff(&mut tree);
-        let layout = Layout::new(&node);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
 
         let start = Instant::now();
@@ -1949,11 +1922,13 @@ mod tests {
             &viewport,
         );
         assert!(
-            shell.is_layout_invalid().is_some(),
+            shell.invalidation()
+                >= iced::advanced::shell::Invalidation::Layout(iced::advanced::shell::Diff::Skip),
             "collapse animates through real layout"
         );
 
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         let height = node.size().height;
         assert!(
             height > 0.0 && height < 40.0,
@@ -1963,33 +1938,23 @@ mod tests {
     #[test]
     fn reveal_keeps_full_layout_while_animating_and_hides_events() {
         let mut widget = reveal_widget(button(), true);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size().height, 40.0);
         assert_eq!(
-            click(
-                &mut widget,
-                &mut tree,
-                Layout::new(&node),
-                Point::new(10.0, 10.0)
-            ),
+            click(&mut widget, &mut tree, node, Point::new(10.0, 10.0)),
             vec![()]
         );
 
         // Flip to hidden: the exit animates while content is already inert.
         let mut widget = reveal_widget(button(), false);
         widget.diff(&mut tree);
-        assert!(click(
-            &mut widget,
-            &mut tree,
-            Layout::new(&node),
-            Point::new(10.0, 10.0)
-        )
-        .is_empty());
+        assert!(click(&mut widget, &mut tree, node, Point::new(10.0, 10.0)).is_empty());
 
-        let layout = Layout::new(&node);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
         let inside = mouse::Cursor::Available(Point::new(10.0, 10.0));
         assert_eq!(
@@ -2012,8 +1977,12 @@ mod tests {
             &mut shell,
             &viewport,
         );
-        let node = widget.layout(&mut tree, &(), &limits);
-        let offset = node.children()[0].bounds().y;
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
+        let offset = super::super::child_layout(node, &tree, 0)
+            .expect("laid out child")
+            .bounds()
+            .y;
         assert!(offset > 0.0 && offset < super::TRANSITION_OFFSET);
         assert_eq!(
             node.size().height,
@@ -2038,7 +2007,8 @@ mod tests {
             iced::window::RedrawRequest::Wait,
             "settled hidden must not demand frames"
         );
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), Size::ZERO, "settled hidden must be empty");
 
         // Cancelling before the first entrance frame has no distance to animate.
@@ -2046,14 +2016,15 @@ mod tests {
         widget.diff(&mut tree);
         let mut widget = reveal_widget(button(), false);
         widget.diff(&mut tree);
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), Size::ZERO);
         let mut bus = iced::advanced::shell::Bus::new();
         let mut shell = make_shell(&mut bus);
         widget.update(
             &mut tree,
             &redraw(Instant::now()),
-            Layout::new(&node),
+            node,
             mouse::Cursor::Unavailable,
             &(),
             &mut shell,
@@ -2065,29 +2036,32 @@ mod tests {
     #[test]
     fn resize_animates_key_change_and_stays_direct_otherwise() {
         let mut widget = resize_widget(space(100.0, 50.0), 1);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let limits = limits();
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), Size::new(100.0, 50.0), "first mount is direct");
 
         // Same key, different content size: continuous sizing stays direct.
         let mut widget = resize_widget(space(200.0, 50.0), 1);
         widget.diff(&mut tree);
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), Size::new(200.0, 50.0));
 
         // Key change animates through layout, starting at the displayed size.
         let mut widget = resize_widget(space(300.0, 50.0), 2);
         widget.diff(&mut tree);
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(
             node.size(),
             Size::new(200.0, 50.0),
             "animation starts at the displayed size"
         );
 
-        let layout = Layout::new(&node);
+        let layout = node;
         let viewport = Rectangle::with_size(LIMITS);
         let start = Instant::now();
         let mut bus = iced::advanced::shell::Bus::new();
@@ -2101,8 +2075,12 @@ mod tests {
             &mut shell,
             &viewport,
         );
-        assert!(shell.is_layout_invalid().is_some());
-        let node = widget.layout(&mut tree, &(), &limits);
+        assert!(
+            shell.invalidation()
+                >= iced::advanced::shell::Invalidation::Layout(iced::advanced::shell::Diff::Skip)
+        );
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         let width = node.size().width;
         assert!(
             width > 200.0 && width < 300.0,
@@ -2112,21 +2090,25 @@ mod tests {
         // A new external target must not jump the currently displayed width.
         let mut widget = resize_widget(space(350.0, 50.0), 2);
         widget.diff(&mut tree);
-        let node = widget.layout(&mut tree, &(), &limits);
+        widget.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
         assert!((node.size().width - width).abs() < 0.001);
         let mut bus = iced::advanced::shell::Bus::new();
         let mut shell = make_shell(&mut bus);
         widget.update(
             &mut tree,
             &redraw(start + Duration::from_secs(5)),
-            Layout::new(&node),
+            node,
             mouse::Cursor::Unavailable,
             &(),
             &mut shell,
             &viewport,
         );
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits).size(),
+            {
+                widget.layout(&mut tree, &(), &limits);
+                tree.size
+            },
             Size::new(350.0, 50.0)
         );
         assert_eq!(shell.redraw_request(), iced::window::RedrawRequest::Wait);
@@ -2135,24 +2117,31 @@ mod tests {
     #[test]
     fn disabled_scope_snaps_everything() {
         let mut widget = transition_widget(space(100.0, 100.0), 1);
-        let mut tree = Tree::new(&widget as &dyn Widget<(), Theme, ()>);
+        let mut tree = Tree::new(&widget);
         widget.diff(&mut tree);
         let mut widget = transition_widget(space(100.0, 100.0), 2);
         widget.diff(&mut tree);
         assert!(
-            widget.layout(&mut tree, &(), &limits()).children()[0]
-                .bounds()
-                .y
-                > 0.0
+            {
+                widget.layout(&mut tree, &(), &limits());
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y > 0.0
         );
 
         // Diff under a disabled scope snaps to the final state.
         let mut widget = transition_widget(space(100.0, 100.0), 2);
         with_policy(false, || widget.diff(&mut tree));
         assert_eq!(
-            widget.layout(&mut tree, &(), &limits()).children()[0]
-                .bounds()
-                .y,
+            {
+                widget.layout(&mut tree, &(), &limits());
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y,
             0.0
         );
 
@@ -2160,10 +2149,13 @@ mod tests {
         let mut widget = transition_widget(space(100.0, 100.0), 3);
         widget.diff(&mut tree);
         assert!(
-            widget.layout(&mut tree, &(), &limits()).children()[0]
-                .bounds()
-                .y
-                > 0.0
+            {
+                widget.layout(&mut tree, &(), &limits());
+                super::super::child_layout(Layout::new(tree.size), &tree, 0)
+                    .expect("laid out child")
+            }
+            .bounds()
+            .y > 0.0
         );
     }
 }

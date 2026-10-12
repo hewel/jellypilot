@@ -15,7 +15,7 @@ use iced::keyboard::{key, Key};
 use iced::touch;
 use iced::widget::svg::{self, Svg};
 use iced::widget::{button, space, text, Row};
-use iced::{Background, Element, Event, Length, Padding, Rectangle, Size, Theme};
+use iced::{Background, Element, Event, Length, Padding, Rectangle, Size, Theme, Vector};
 
 use crate::icons::{Icon, IconControlState, IconSize};
 use crate::tokens::TOKENS;
@@ -700,7 +700,8 @@ where
         + iced::advanced::text::Renderer
         + iced::advanced::svg::Renderer,
 {
-    let mut content = Row::new().spacing(spacing).align_y(iced::Alignment::Center);
+    let mut content: Row<Element<'a, Message, Theme, Renderer>> =
+        Row::new().spacing(spacing).align_y(iced::Alignment::Center);
 
     let status = match state {
         IconControlState::Rest => button::Status::Active,
@@ -723,6 +724,7 @@ where
             .size(label_size)
             .style(move |theme: &Theme| text::Style {
                 color: Some(content_color.load_or(|| style(theme, variant, status).text_color)),
+                ..text::Style::default()
             });
         if label_fill {
             label = label.width(Length::Fill);
@@ -732,29 +734,29 @@ where
 
     if trailing_icon {
         if let Some(label) = label {
-            content = content.push(label);
+            content = content.push(label._boxed());
         }
         if let Some(icon) = icon {
-            content = content.push(icon);
+            content = content.push(icon._boxed());
         }
     } else {
         if let Some(icon) = icon {
-            content = content.push(icon);
+            content = content.push(icon._boxed());
         }
         if let Some(label) = label {
-            content = content.push(label);
+            content = content.push(label._boxed());
         }
     }
 
     if content_centered {
-        Row::new()
-            .push(space::horizontal())
-            .push(content)
-            .push(space::horizontal())
+        Row::<Element<'a, Message, Theme, Renderer>>::new()
+            .push(space::horizontal()._boxed())
+            .push(content._boxed())
+            .push(space::horizontal()._boxed())
             .width(Length::Fill)
-            .into()
+            ._boxed()
     } else {
-        content.into()
+        content._boxed()
     }
 }
 
@@ -781,6 +783,16 @@ fn content_index(status: button::Status) -> usize {
         button::Status::Hovered => 1,
         button::Status::Disabled => 2,
     }
+}
+
+impl<'a, Message, Renderer> iced::advanced::widget::Meta for ControlButton<'a, Message, Renderer>
+where
+    Message: Clone + 'a,
+    Renderer: 'a
+        + iced::advanced::Renderer
+        + iced::advanced::text::Renderer
+        + iced::advanced::svg::Renderer,
+{
 }
 
 impl<'a, Message, Renderer> Widget<Message, Theme, Renderer>
@@ -816,42 +828,35 @@ where
         }
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        layout::positioned(
-            limits,
-            self.width,
-            Length::Fit.min(self.min_height),
-            self.padding,
-            |limits| {
-                // Measure intrinsic content before centering it in the taller hit area.
-                let limits = limits.loose();
-                let node = self.contents[0].as_widget_mut().layout(
-                    &mut tree.children[0],
-                    renderer,
-                    &limits,
-                );
-                for index in 1..self.contents.len() {
-                    let _ = self.contents[index].as_widget_mut().layout(
-                        &mut tree.children[index],
-                        renderer,
-                        &limits,
-                    );
-                }
-                node
-            },
-            |content, size| content.align(iced::Alignment::Start, iced::Alignment::Center, size),
-        )
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
+        let limits = limits
+            .width(self.width)
+            .height(Length::Fit.min(self.min_height));
+        let content_limits = limits.shrink(self.padding).loose();
+        for (content, child) in self.contents.iter_mut().zip(&mut tree.children) {
+            content.layout(child, renderer, &content_limits);
+        }
+        let content = tree.children[0].size;
+        let padding = self.padding.fit(content, limits.bounds());
+        let available =
+            limits
+                .shrink(padding)
+                .resolve(self.width, Length::Fit.min(self.min_height), content);
+        tree.size = available.expand(padding);
+        let translation = Vector::new(
+            padding.left,
+            padding.top + (available.height - content.height) / 2.0,
+        );
+        for child in &mut tree.children {
+            child.translation = translation;
+        }
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
@@ -859,12 +864,13 @@ where
         let index = content_index(state.status.unwrap_or(button::Status::Active));
         operation.focusable(self.id.as_ref(), layout.bounds(), state);
         operation.custom(self.id.as_ref(), layout.bounds(), state);
-        operation.container(self.id.as_ref(), layout.bounds());
-        if let Some(content_layout) = layout.children().next() {
+        operation.container(self.id.as_ref(), layout.bounds(), viewport);
+        if let Some(content_layout) = super::child_layout(layout, tree, 0) {
             operation.traverse(&mut |operation| {
-                self.contents[index].as_widget_mut().operate(
+                self.contents[index].operate(
                     &mut tree.children[index],
                     content_layout,
+                    viewport,
                     renderer,
                     operation,
                 );
@@ -876,7 +882,7 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
@@ -972,9 +978,9 @@ where
             event,
             Event::Window(iced::window::Event::RedrawRequested(_))
         ) {
-            if let Some(content_layout) = layout.children().next() {
+            if let Some(content_layout) = super::child_layout(layout, tree, 0) {
                 for (content, child) in self.contents.iter_mut().zip(tree.children.iter_mut()) {
-                    content.as_widget_mut().update(
+                    content.update(
                         child,
                         event,
                         content_layout,
@@ -994,7 +1000,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         renderer_style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -1052,9 +1058,9 @@ where
             );
         }
 
-        if let Some(content_layout) = layout.children().next() {
+        if let Some(content_layout) = super::child_layout(layout, tree, 0) {
             let index = content_index(status);
-            self.contents[index].as_widget().draw(
+            self.contents[index].draw(
                 &tree.children[index],
                 renderer,
                 theme,
@@ -1084,7 +1090,7 @@ where
     fn mouse_interaction(
         &self,
         _tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
@@ -1107,7 +1113,7 @@ where
         + iced::advanced::svg::Renderer,
 {
     fn from(control: ControlButton<'a, Message, Renderer>) -> Self {
-        Element::new(control)
+        (control)._boxed()
     }
 }
 
@@ -1120,7 +1126,7 @@ mod tests {
     use iced::advanced::Shell;
     use iced::keyboard::{key, Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::widget::button;
-    use iced::{Event, Length, Point, Rectangle, Size, Theme};
+    use iced::{Event, Length, Point, Rectangle, Size};
 
     use super::{ControlButton, State};
     use crate::icons::{Icon, IconSize};
@@ -1213,28 +1219,33 @@ mod tests {
                 .icon_size(IconSize::Md)
                 .width(Length::Fixed(120.0))
                 .padding([6.0, 10.0]);
-        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        let mut tree = Tree::new(&button);
         button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
 
-        let node = button.layout(&mut tree, &(), &limits);
+        button.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
 
         assert_eq!(node.size(), Size::new(120.0, IconSize::MD + 12.0));
-        assert_eq!(node.children().len(), 1);
         assert_eq!(
-            node.children()[0].bounds().position(),
+            super::super::child_layout(node, &tree, 0)
+                .expect("laid out child")
+                .bounds()
+                .position(),
             Point::new(10.0, 6.0)
         );
     }
 
     #[test]
     fn tall_icon_control_centers_content_in_its_hit_area() {
-        fn glyph_bounds(layout: Layout<'_>) -> Option<Rectangle> {
-            if layout.children().next().is_none() {
+        fn glyph_bounds(layout: Layout, tree: &Tree) -> Option<Rectangle> {
+            if super::super::child_layout(layout, tree, 0).is_none() {
                 let bounds = layout.bounds();
                 return (bounds.width > 0.0 && bounds.height > 0.0).then_some(bounds);
             }
-            layout.children().find_map(glyph_bounds)
+            layout
+                .iter(&tree.children)
+                .find_map(|(layout, tree)| glyph_bounds(layout, tree))
         }
 
         for width in [18.0, 100.0] {
@@ -1245,11 +1256,12 @@ mod tests {
                     .min_height(40.0)
                     .width(Length::Fixed(width))
                     .content_centered(true);
-            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+            let mut tree = Tree::new(&button);
             button.diff(&mut tree);
             let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
-            let node = button.layout(&mut tree, &(), &limits);
-            let glyph = glyph_bounds(Layout::new(&node)).expect("visible icon");
+            button.layout(&mut tree, &(), &limits);
+            let node = Layout::new(tree.size);
+            let glyph = glyph_bounds(node, &tree).expect("visible icon");
             assert_eq!(glyph.size(), Size::new(18.0, 18.0));
             assert_eq!(glyph.center(), Point::new(width / 2.0, 20.0));
         }
@@ -1269,17 +1281,14 @@ mod tests {
         let label = "The full server-provided audio track name must stay readable and clickable when it wraps.";
         let limits = layout::Limits::new(Size::ZERO, Size::new(120.0, 500.0));
         let mut expected: Element<'_, TestMessage> =
-            text(label).size(14).width(Length::Fill).into();
+            text(label).size(14).width(Length::Fill)._boxed();
         let mut expected_tree = Tree::new(&expected);
-        let text_height = expected
-            .as_widget_mut()
-            .layout(
-                &mut expected_tree,
-                &renderer,
-                &limits.shrink(Size::new(20.0, 8.0)),
-            )
-            .size()
-            .height;
+        expected.layout(
+            &mut expected_tree,
+            &renderer,
+            &limits.shrink(Size::new(20.0, 8.0)),
+        );
+        let text_height = expected_tree.size.height;
         assert!(
             text_height > 40.0,
             "the fixture must require multiple lines"
@@ -1290,7 +1299,7 @@ mod tests {
                 .label_size(14.0)
                 .label_fill(true),
             super::control_button_content(
-                move |_| text(label).size(14).width(Length::Fill).into(),
+                move |_| text(label).size(14).width(Length::Fill)._boxed(),
                 ButtonVariant::Tonal,
             ),
         ] {
@@ -1299,13 +1308,16 @@ mod tests {
                 .min_height(40.0)
                 .padding([4.0, 10.0])
                 .on_press(TestMessage::Clicked);
-            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, iced::Renderer>);
+            let mut tree = Tree::new(&button);
             button.diff(&mut tree);
-            let node = button.layout(&mut tree, &renderer, &limits);
+            button.layout(&mut tree, &renderer, &limits);
+            let node = Layout::new(tree.size);
             assert!(node.size().height >= text_height + 8.0);
-            assert!(node.size().width <= limits.max().width);
-            let layout = Layout::new(&node);
-            let content = layout.children().next().expect("button content").bounds();
+            assert!(node.size().width <= limits.max.width);
+            let layout = node;
+            let content = super::super::child_layout(layout, &tree, 0)
+                .expect("button content")
+                .bounds();
             assert!(content.y + content.height <= node.size().height - 4.0);
 
             for (position, activates) in [
@@ -1329,16 +1341,17 @@ mod tests {
                         mouse::Cursor::Available(position),
                         &renderer,
                         &mut shell,
-                        &Rectangle::with_size(limits.max()),
+                        &Rectangle::with_size(limits.max),
                     );
                 }
                 assert_eq!(messages.drain().count(), usize::from(activates));
             }
-            let constrained = button.layout(
+            button.layout(
                 &mut tree,
                 &renderer,
                 &layout::Limits::new(Size::ZERO, Size::new(120.0, 30.0)),
             );
+            let constrained = Layout::new(tree.size);
             assert!(
                 constrained.size().height <= 30.0,
                 "the parent's maximum still applies"
@@ -1377,7 +1390,7 @@ mod tests {
                 .spacing(TOKENS.spacing.s2_5)
                 .align_y(Alignment::Center)
                 .width(Length::Fill)
-                .into()
+                ._boxed()
             },
             ButtonVariant::Secondary,
         )
@@ -1385,20 +1398,21 @@ mod tests {
         .padding([4, 12])
         .width(Length::Fill)
         .on_press(TestMessage::Clicked);
-        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, iced::Renderer>);
+        let mut tree = Tree::new(&button);
         button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(216.0, 100.0));
 
-        let node = button.layout(&mut tree, &renderer, &limits);
-        let row = Layout::new(&node).children().next().expect("content row");
-        let mut children = row.children();
-        let icon = children.next().expect("library icon").bounds();
-        let label = children
-            .next()
-            .expect("label container")
-            .children()
+        button.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
+        let (row, row_tree) = node.iter(&tree.children).next().expect("content row");
+        let mut children = row.iter(&row_tree.children);
+        let icon = children.next().expect("library icon").0.bounds();
+        let (label_container, label_tree) = children.next().expect("label container");
+        let label = label_container
+            .iter(&label_tree.children)
             .next()
             .expect("library label")
+            .0
             .bounds();
         for bounds in [icon, label] {
             let center = bounds.y + bounds.height / 2.0;
@@ -1420,11 +1434,12 @@ mod tests {
         )
         .spacing(spacing)
         .padding(0);
-        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        let mut tree = Tree::new(&button);
         button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
 
-        let node = button.layout(&mut tree, &(), &limits);
+        button.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
 
         assert_eq!(node.size(), Size::new(IconSize::MD + spacing, IconSize::MD));
     }
@@ -1436,11 +1451,12 @@ mod tests {
                 .width(Length::Fixed(80.0))
                 .padding(0)
                 .on_press(TestMessage::Clicked);
-        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        let mut tree = Tree::new(&button);
         button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
-        let node = button.layout(&mut tree, &(), &limits);
-        let layout = Layout::new(&node);
+        button.layout(&mut tree, &(), &limits);
+        let node = Layout::new(tree.size);
+        let layout = node;
         let viewport = Rectangle::with_size(Size::new(100.0, 100.0));
         let inside = mouse::Cursor::Available(Point::new(5.0, 5.0));
         let outside = mouse::Cursor::Available(Point::new(90.0, 90.0));
@@ -1519,7 +1535,7 @@ mod tests {
         for mut button in [
             ControlButton::new(Some(Icon::Home), None, ButtonVariant::Tonal),
             ControlButton::with_content(
-                |_| iced::widget::Space::new().width(36.0).height(36.0).into(),
+                |_| iced::widget::Space::new().width(36.0).height(36.0)._boxed(),
                 ButtonVariant::Tonal,
             )
             .spacing(8.0),
@@ -1531,14 +1547,15 @@ mod tests {
                 .id("control-button-test")
                 .on_press(TestMessage::Clicked)
         }) {
-            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+            let mut tree = Tree::new(&button);
             button.diff(&mut tree);
             let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
-            let node = button.layout(&mut tree, &(), &limits);
-            let layout = Layout::new(&node);
+            button.layout(&mut tree, &(), &limits);
+            let node = Layout::new(tree.size);
+            let layout = node;
             let mut focus: Box<dyn Operation> =
                 Box::new(focusable::focus::<()>(Id::new("control-button-test")));
-            button.operate(&mut tree, layout, &(), focus.as_mut());
+            button.operate(&mut tree, layout, &layout.bounds(), &(), focus.as_mut());
             assert!(tree.state.downcast_ref::<State>().is_focused);
 
             let mut messages = iced::advanced::shell::Bus::new();

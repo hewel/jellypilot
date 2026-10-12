@@ -968,7 +968,7 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
       }
       state.shell.account_popover_open = false;
       state.shell.compact_search_open = state.shell.window_size.width < 1280.0;
-      operation::focus(SEARCH_INPUT_ID).chain(operation::select_all(SEARCH_INPUT_ID))
+      operation::focus(SEARCH_INPUT_ID).chain(operation::text_input::select_all(SEARCH_INPUT_ID))
     }
     ShellMessage::DismissCompactSearch | ShellMessage::ClearSearch => {
       state.shell.compact_search_open = false;

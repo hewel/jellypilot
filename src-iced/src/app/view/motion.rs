@@ -127,7 +127,7 @@ pub(crate) fn hero_key(state: &State) -> u64 {
 /// Reveals a surface over the surface duration, keeping its exit presentation
 /// until the animation settles.
 pub(crate) fn reveal<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   visible: bool,
 ) -> Element<'a, Message> {
   motion::reveal(content, visible, true, SURFACE_DURATION)
@@ -135,7 +135,7 @@ pub(crate) fn reveal<'a>(
 
 /// Transitions between keyed targets over the structural duration.
 pub(crate) fn transition<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   key: u64,
 ) -> Element<'a, Message> {
   motion::transition(content, key, true, STRUCTURAL_DURATION)
@@ -143,7 +143,7 @@ pub(crate) fn transition<'a>(
 
 /// Animates a discrete structural size change over the structural duration.
 pub(crate) fn resize<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   key: u64,
   axis: Axis,
 ) -> Element<'a, Message> {
@@ -153,7 +153,7 @@ pub(crate) fn resize<'a>(
 /// Collapses docked flow content over the surface duration so surrounding
 /// layout shrinks with it (e.g. the player bar's slot under the content).
 pub(crate) fn collapse<'a>(
-  content: impl Into<Element<'a, Message>>,
+  content: impl iced::advanced::Widget<Message, iced::Theme, iced::Renderer> + 'a,
   visible: bool,
 ) -> Element<'a, Message> {
   motion::collapse(content, visible, true, SURFACE_DURATION)

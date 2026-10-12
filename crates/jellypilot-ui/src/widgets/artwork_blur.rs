@@ -1,6 +1,6 @@
 //! Passive progressive blur behind the bottom of browsing artwork.
 
-use iced::advanced::Renderer;
+use iced::advanced::{Renderer, Widget};
 use iced::widget::{backdrop, container, space};
 use iced::{border::Radius, Alignment, Blur, Element, Length, Theme};
 
@@ -37,7 +37,7 @@ pub fn bottom<'a, Message: 'a, R: Renderer + 'a>(
     .width(Length::Fill)
     .height(height)
     .align_y(Alignment::End)
-    .into()
+    ._boxed()
 }
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ mod tests {
     }
 
     impl Renderer for Recorder {
-        fn blur_backdrop(&mut self, _radius: f32) {
+        fn blur_backdrop(&mut self, _blur: impl Into<iced::Blur>) {
             panic!("artwork requires a bounded backdrop");
         }
 
@@ -114,27 +114,26 @@ mod tests {
             .bottom_right(16.0);
         for (height, expected_band_height) in [(100.0, 50.0), (300.0, 80.0)] {
             let mut layer = bottom::<(), Recorder>(height, profile, radius);
-            let mut tree = widget::Tree::new(layer.as_widget());
+            let mut tree = widget::Tree::new(&layer);
+            tree.diff(&mut layer);
             let mut renderer = Recorder::default();
-            let node = layer
-                .as_widget_mut()
-                .layout(
-                    &mut tree,
-                    &renderer,
-                    &layout::Limits::new(Size::ZERO, Size::new(280.0, height + 120.0)),
-                )
-                .move_to(Point::new(10.0, 20.0));
+            layer.layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, Size::new(280.0, height + 120.0)),
+            );
+            let node = Layout::new(tree.size).move_to(Point::new(10.0, 20.0));
             let frame = node.bounds();
             assert_eq!(
                 frame.height, height,
                 "the band belongs to the artwork, not spare parent height"
             );
-            layer.as_widget().draw(
+            layer.draw(
                 &tree,
                 &mut renderer,
                 &Theme::Dark,
                 &renderer::Style::default(),
-                Layout::new(&node),
+                node,
                 mouse::Cursor::Unavailable,
                 &frame,
             );
@@ -155,12 +154,12 @@ mod tests {
                 height: complete.bounds.height / 2.0,
                 ..complete.bounds
             };
-            layer.as_widget().draw(
+            layer.draw(
                 &tree,
                 &mut renderer,
                 &Theme::Dark,
                 &renderer::Style::default(),
-                Layout::new(&node),
+                node,
                 mouse::Cursor::Unavailable,
                 &viewport,
             );
@@ -171,12 +170,12 @@ mod tests {
 
             let offscreen =
                 Rectangle::new(Point::new(0.0, frame.y + frame.height + 1.0), frame.size());
-            layer.as_widget().draw(
+            layer.draw(
                 &tree,
                 &mut renderer,
                 &Theme::Dark,
                 &renderer::Style::default(),
-                Layout::new(&node),
+                node,
                 mouse::Cursor::Unavailable,
                 &offscreen,
             );
@@ -199,17 +198,13 @@ mod tests {
             crate::tokens::TOKENS.artwork_blur.hero,
             12.0.into(),
         );
-        let mut tree = widget::Tree::new(layer.as_widget());
-        let node = layer.as_widget_mut().layout(&mut tree, &renderer, &limits);
+        let mut tree = widget::Tree::new(&layer);
+        tree.diff(&mut layer);
+        layer.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), size);
         assert_eq!(
-            layer.as_widget().mouse_interaction(
-                &tree,
-                Layout::new(&node),
-                cursor,
-                &viewport,
-                &renderer
-            ),
+            layer.mouse_interaction(&tree, node, cursor, &viewport, &renderer),
             mouse::Interaction::None
         );
         let mut bus = shell::Bus::default();
@@ -221,14 +216,8 @@ mod tests {
                 std::time::Instant::now(),
             )),
         ] {
-            layer.as_widget_mut().update(
-                &mut tree,
-                &event,
-                Layout::new(&node),
-                cursor,
-                &renderer,
-                &mut shell,
-                &viewport,
+            layer.update(
+                &mut tree, &event, node, cursor, &renderer, &mut shell, &viewport,
             );
         }
         assert!(!shell.is_event_captured());
@@ -238,26 +227,19 @@ mod tests {
         let target = button(Space::new().width(Length::Fill).height(size.height))
             .padding(0)
             .on_press(());
-        let mut content: Element<'_, (), Theme, Recorder> = stack![target, layer].into();
-        let mut tree = widget::Tree::new(content.as_widget());
-        content.as_widget_mut().diff(&mut tree);
-        let node = content
-            .as_widget_mut()
-            .layout(&mut tree, &renderer, &limits);
+        let mut content: Element<'_, (), Theme, Recorder> = stack![target, layer]._boxed();
+        let mut tree = widget::Tree::new(&content);
+        content.diff(&mut tree);
+        content.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size(), size);
         for event in [
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
         ] {
             let mut shell = Shell::new(&iced::window::Headless, shell::Waker::noop(), &mut bus);
-            content.as_widget_mut().update(
-                &mut tree,
-                &event,
-                Layout::new(&node),
-                cursor,
-                &renderer,
-                &mut shell,
-                &viewport,
+            content.update(
+                &mut tree, &event, node, cursor, &renderer, &mut shell, &viewport,
             );
         }
         assert_eq!(bus.len(), 1, "the artwork's click target remains reachable");

@@ -30,11 +30,12 @@ pub fn tracked_slider<'a, Message: 'a>(
     dragging: bool,
     on_event: impl Fn(Event) -> Message + 'a,
 ) -> Element<'a, Message> {
-    Element::new(TrackedSlider {
-        slider: slider.into(),
+    (TrackedSlider {
+        slider: slider._boxed(),
         dragging,
         on_event,
     })
+    ._boxed()
 }
 
 struct TrackedSlider<'a, F> {
@@ -55,6 +56,8 @@ struct State {
     messages: Bus<Event>,
 }
 
+impl<F> iced::advanced::widget::Meta for TrackedSlider<'_, F> {}
+
 impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
     for TrackedSlider<'_, F>
 {
@@ -67,7 +70,7 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
     }
 
     fn diff(&mut self, tree: &mut widget::Tree) {
-        tree.diff_children(&mut [self.slider.as_widget_mut()]);
+        tree.diff_children(&mut [&mut self.slider]);
         let state = tree.state.downcast_mut::<State>();
         if state.dragging && !self.dragging {
             // A relayout can rebuild this widget before the application
@@ -83,7 +86,7 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
             }
             // The pinned slider's interaction state is private. Reinitialize it rather
             // than synthesizing a release, which would commit the cancelled preview.
-            tree.children[0].state = self.slider.as_widget().state();
+            tree.children[0].state = self.slider.state();
             state.dragging = false;
             state.drag_start = None;
             state.restore_modifiers = true;
@@ -91,7 +94,7 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
     }
 
     fn size(&self) -> Size<Length> {
-        self.slider.as_widget().size()
+        self.slider.size()
     }
 
     fn layout(
@@ -99,29 +102,29 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
-        self.slider
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
+    ) {
+        self.slider.layout(&mut tree.children[0], renderer, limits);
+        tree.size = tree.children[0].size;
+        tree.children[0].translation = iced::Vector::ZERO;
     }
 
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
         self.slider
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
+            .operate(&mut tree.children[0], layout, viewport, renderer, operation);
     }
 
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &iced::Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -149,7 +152,7 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
 
         let dragging = state.dragging;
         let mut local = shell.local(&mut state.messages);
-        let child = self.slider.as_widget_mut();
+        let child = &mut self.slider;
         if state.restore_modifiers {
             child.update(
                 &mut tree.children[0],
@@ -197,11 +200,11 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.slider.as_widget().draw(
+        self.slider.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -215,18 +218,13 @@ impl<Message, F: Fn(Event) -> Message> Widget<Message, Theme, iced::Renderer>
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        self.slider.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
+        self.slider
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 }
 
@@ -242,7 +240,7 @@ mod tests {
         slider: Element<'static, Event>,
         tree: widget::Tree,
         renderer: iced::Renderer,
-        node: layout::Node,
+        node: Layout,
         messages: Bus<Event>,
     }
 
@@ -259,13 +257,14 @@ mod tests {
             ))
             .expect("software renderer");
             let mut slider = Self::view(50.0, false);
-            let mut tree = widget::Tree::new(slider.as_widget());
-            tree.diff(slider.as_widget_mut());
-            let node = slider.as_widget_mut().layout(
+            let mut tree = widget::Tree::new(&slider);
+            tree.diff(&mut slider);
+            slider.layout(
                 &mut tree,
                 &renderer,
                 &layout::Limits::new(Size::ZERO, Size::new(100.0, 16.0)),
             );
+            let node = Layout::new(tree.size);
             Self {
                 slider,
                 tree,
@@ -289,19 +288,20 @@ mod tests {
 
         fn rebuild(&mut self, value: f64, dragging: bool) {
             self.slider = Self::view(value, dragging);
-            self.tree.diff(self.slider.as_widget_mut());
-            self.node = self.slider.as_widget_mut().layout(
+            self.tree.diff(&mut self.slider);
+            self.slider.layout(
                 &mut self.tree,
                 &self.renderer,
                 &layout::Limits::new(Size::ZERO, Size::new(100.0, 16.0)),
             );
+            self.node = Layout::new(self.tree.size);
         }
 
         fn send(&mut self, event: iced::Event, x: f32) {
-            self.slider.as_widget_mut().update(
+            self.slider.update(
                 &mut self.tree,
                 &event,
-                Layout::new(&self.node),
+                self.node,
                 mouse::Cursor::Available(Point::new(x, 8.0)),
                 &self.renderer,
                 &mut Shell::new(&iced::window::Headless, Waker::noop(), &mut self.messages),
@@ -338,7 +338,7 @@ mod tests {
                 )
                 .delay(std::time::Duration::ZERO)
             })
-            .into()
+            ._boxed()
         }
 
         fn new() -> Self {

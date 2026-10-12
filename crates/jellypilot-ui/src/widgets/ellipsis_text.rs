@@ -12,7 +12,7 @@ use iced::advanced::text::{self, paragraph};
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{layout, renderer, Layout, Widget};
 use iced::mouse;
-use iced::widget::text::{Catalog, Format, State, Style, StyleFn, Wrapping};
+use iced::widget::text::{Catalog, Format, Style, StyleFn, Wrapping};
 use iced::{Color, Element, Font, Length, Pixels, Rectangle, Size};
 
 const ELLIPSIS: &str = "…";
@@ -129,7 +129,10 @@ where
         Theme::Class<'a>: From<StyleFn<'a, Theme>>,
     {
         let color = color.map(Into::into);
-        self.style(move |_theme| Style { color })
+        self.style(move |_theme| Style {
+            color,
+            ..Style::default()
+        })
     }
 
     /// Sets the style class of the text.
@@ -151,13 +154,15 @@ where
     EllipsisText::new(fragment)
 }
 
+impl<Theme: Catalog> iced::advanced::widget::Meta for EllipsisText<'_, Theme> {}
+
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for EllipsisText<'_, Theme>
 where
     Theme: Catalog,
     Renderer: text::Renderer,
 {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State<Renderer::Paragraph>>()
+        tree::Tag::of::<paragraph::Plain<Renderer::Paragraph>>()
     }
 
     fn state(&self) -> tree::State {
@@ -171,16 +176,13 @@ where
         }
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
+        let state = tree
+            .state
+            .downcast_mut::<paragraph::Plain<Renderer::Paragraph>>();
 
-        layout::sized(limits, self.format.width, self.format.height, |limits| {
-            let bounds = limits.max();
+        tree.size = layout::sized(limits, self.format.width, self.format.height, |limits| {
+            let bounds = limits.max;
             let size = self.format.size.unwrap_or_else(|| renderer.text_size());
             let font = self.format.font.unwrap_or_else(|| renderer.font());
             let line_height = self
@@ -223,7 +225,7 @@ where
             });
 
             state.min_bounds()
-        })
+        });
     }
 
     fn draw(
@@ -232,11 +234,13 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         defaults: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         _cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_ref::<State<Renderer::Paragraph>>();
+        let state = tree
+            .state
+            .downcast_ref::<paragraph::Plain<Renderer::Paragraph>>();
         let style = theme.style(&self.class);
 
         iced::widget::text::draw(
@@ -245,6 +249,7 @@ where
             layout.bounds(),
             state.raw(),
             style,
+            iced::Color::TRANSPARENT,
             viewport,
         );
     }
@@ -252,11 +257,27 @@ where
     fn operate(
         &mut self,
         _tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        _viewport: &Rectangle,
         _renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        operation.text(None, layout.bounds(), &self.fragment);
+        operation.text(None, layout.bounds(), &mut UnselectableText(&self.fragment));
+    }
+}
+
+// Text operations retain the original label even when the drawn paragraph is ellipsized.
+struct UnselectableText<'a>(&'a str);
+
+impl iced::advanced::widget::operation::Text for UnselectableText<'_> {
+    fn text(&self) -> text::Fragment<'_> {
+        self.0.into()
+    }
+    fn select(&mut self, _start: iced::Point, _end: iced::Point, _target: text::Target) {}
+    fn select_all(&mut self) {}
+    fn deselect(&mut self) {}
+    fn copy(&mut self) -> Option<String> {
+        None
     }
 }
 
@@ -268,7 +289,7 @@ where
     Renderer: text::Renderer + 'a,
 {
     fn from(text: EllipsisText<'a, Theme>) -> Self {
-        Element::new(text)
+        text._boxed()
     }
 }
 

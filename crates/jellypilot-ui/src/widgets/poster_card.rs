@@ -20,7 +20,7 @@ use iced::advanced::widget::{self, Operation, Tree, Widget};
 use iced::advanced::Shell;
 use iced::border::Radius;
 use iced::touch;
-use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
+use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
 /// Default corner radius for the poster artwork.
 pub const POSTER_RADIUS: f32 = TOKENS.radii.xl;
@@ -46,12 +46,12 @@ pub struct PosterCard<'a, Message, Theme = iced::Theme, Renderer = iced::Rendere
 impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
     /// Creates a new [`PosterCard`] with the given poster artwork and copy elements.
     pub fn new(
-        poster: impl Into<Element<'a, Message, Theme, Renderer>>,
-        copy: impl Into<Element<'a, Message, Theme, Renderer>>,
+        poster: impl Widget<Message, Theme, Renderer> + 'a,
+        copy: impl Widget<Message, Theme, Renderer> + 'a,
     ) -> Self {
         Self {
-            poster: poster.into(),
-            copy: copy.into(),
+            poster: poster._boxed(),
+            copy: copy._boxed(),
             on_press: None,
             width: Length::Fit,
             height: Length::Fit,
@@ -97,10 +97,18 @@ impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
 
 /// Convenience constructor for a [`PosterCard`].
 pub fn poster_card<'a, Message, Theme, Renderer>(
-    poster: impl Into<Element<'a, Message, Theme, Renderer>>,
-    copy: impl Into<Element<'a, Message, Theme, Renderer>>,
+    poster: impl Widget<Message, Theme, Renderer> + 'a,
+    copy: impl Widget<Message, Theme, Renderer> + 'a,
 ) -> PosterCard<'a, Message, Theme, Renderer> {
     PosterCard::new(poster, copy)
+}
+
+impl<'a, Message, Theme, Renderer> iced::advanced::widget::Meta
+    for PosterCard<'a, Message, Theme, Renderer>
+where
+    Message: 'a + Clone,
+    Renderer: 'a + iced::advanced::Renderer,
+{
 }
 
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -118,7 +126,7 @@ where
     }
 
     fn diff(&mut self, tree: &mut Tree) {
-        tree.diff_children(&mut [self.poster.as_widget_mut(), self.copy.as_widget_mut()]);
+        tree.diff_children(&mut [&mut self.poster, &mut self.copy]);
     }
 
     fn size(&self) -> Size<Length> {
@@ -128,64 +136,54 @@ where
         }
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let limits = limits.width(self.width).height(self.height);
-
-        let poster_node =
-            self.poster
-                .as_widget_mut()
-                .layout(&mut tree.children[0], renderer, &limits.loose());
-        let poster_size = poster_node.size();
-
-        let copy_limits = limits.loose();
-        let copy_node =
-            self.copy
-                .as_widget_mut()
-                .layout(&mut tree.children[1], renderer, &copy_limits);
-        let copy_size = copy_node.size();
-
-        let content_width = poster_size.width.max(copy_size.width);
-        let content_height = poster_size.height + copy_size.height;
-        let final_size = limits.resolve(
+        self.poster
+            .layout(&mut tree.children[0], renderer, &limits.loose());
+        let poster_size = tree.children[0].size;
+        self.copy
+            .layout(&mut tree.children[1], renderer, &limits.loose());
+        let copy_size = tree.children[1].size;
+        tree.size = limits.resolve(
             self.width,
             self.height,
-            Size::new(content_width, content_height),
+            Size::new(
+                poster_size.width.max(copy_size.width),
+                poster_size.height + copy_size.height,
+            ),
         );
-
-        let mut poster_node = poster_node;
-        let mut copy_node = copy_node;
-
-        poster_node.move_to_mut(Point::ORIGIN);
-        copy_node.move_to_mut(Point::new(0.0, poster_size.height));
-
-        layout::Node::with_children(final_size, vec![poster_node, copy_node])
+        tree.children[0].translation = Vector::ZERO;
+        tree.children[1].translation = Vector::new(0.0, poster_size.height);
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        operation.container(None, layout.bounds());
-        let mut children = layout.children();
+        operation.container(None, layout.bounds(), viewport);
+        let mut children = [
+            super::child_layout(layout, tree, 0),
+            super::child_layout(layout, tree, 1),
+        ]
+        .into_iter()
+        .flatten();
         if let (Some(poster_layout), Some(copy_layout)) = (children.next(), children.next()) {
             operation.traverse(&mut |operation| {
-                self.poster.as_widget_mut().operate(
+                self.poster.operate(
                     &mut tree.children[0],
                     poster_layout,
+                    viewport,
                     renderer,
                     operation,
                 );
-                self.copy.as_widget_mut().operate(
+                self.copy.operate(
                     &mut tree.children[1],
                     copy_layout,
+                    viewport,
                     renderer,
                     operation,
                 );
@@ -197,15 +195,20 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let mut children = layout.children();
+        let mut children = [
+            super::child_layout(layout, tree, 0),
+            super::child_layout(layout, tree, 1),
+        ]
+        .into_iter()
+        .flatten();
         if let (Some(poster_layout), Some(copy_layout)) = (children.next(), children.next()) {
-            self.poster.as_widget_mut().update(
+            self.poster.update(
                 &mut tree.children[0],
                 event,
                 poster_layout,
@@ -214,7 +217,7 @@ where
                 shell,
                 viewport,
             );
-            self.copy.as_widget_mut().update(
+            self.copy.update(
                 &mut tree.children[1],
                 event,
                 copy_layout,
@@ -267,11 +270,16 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let mut children = layout.children();
+        let mut children = [
+            super::child_layout(layout, tree, 0),
+            super::child_layout(layout, tree, 1),
+        ]
+        .into_iter()
+        .flatten();
         let Some(poster_layout) = children.next() else {
             return;
         };
@@ -279,7 +287,7 @@ where
             return;
         };
 
-        self.poster.as_widget().draw(
+        self.poster.draw(
             &tree.children[0],
             renderer,
             theme,
@@ -289,7 +297,7 @@ where
             viewport,
         );
 
-        self.copy.as_widget().draw(
+        self.copy.draw(
             &tree.children[1],
             renderer,
             theme,
@@ -303,7 +311,7 @@ where
     fn mouse_interaction(
         &self,
         _tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
@@ -320,12 +328,18 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'b>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
-        let mut children = layout.children();
+        let mut children = [
+            super::child_layout(layout, tree, 0),
+            super::child_layout(layout, tree, 1),
+        ]
+        .into_iter()
+        .flatten();
         let Some(poster_layout) = children.next() else {
             return Vec::new();
         };
@@ -334,19 +348,21 @@ where
         };
 
         let (poster_tree, copy_tree) = tree.children.split_at_mut(1);
-        let mut overlays = self.poster.as_widget_mut().overlay(
+        let mut overlays = self.poster.overlay(
             &mut poster_tree[0],
             poster_layout,
             renderer,
             viewport,
             translation,
+            window,
         );
-        overlays.extend(self.copy.as_widget_mut().overlay(
+        overlays.extend(self.copy.overlay(
             &mut copy_tree[0],
             copy_layout,
             renderer,
             viewport,
             translation,
+            window,
         ));
         overlays
     }
@@ -360,7 +376,7 @@ where
     Renderer: 'a + iced::advanced::Renderer,
 {
     fn from(card: PosterCard<'a, Message, Theme, Renderer>) -> Self {
-        Element::new(card)
+        card._boxed()
     }
 }
 
@@ -388,27 +404,31 @@ mod tests {
         let poster: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(poster_height)
-            .into();
+            ._boxed();
         let copy: Element<'_, TestMessage, iced::Theme, ()> =
             container(column![text("Title").size(14), text("Caption").size(12),])
                 .width(card_width)
                 .height(copy_height)
-                .into();
+                ._boxed();
 
         let mut card = poster_card(poster, copy)
             .width(card_width)
             .on_press(TestMessage::Clicked);
 
-        let mut tree = Tree::new(&card as &dyn Widget<TestMessage, iced::Theme, ()>);
+        let mut tree = Tree::new(&card);
         card.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
 
-        let node = card.layout(&mut tree, &renderer, &limits);
+        card.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
         assert_eq!(node.size().width, card_width);
         assert_eq!(node.size().height, poster_height + copy_height);
 
-        let children: Vec<_> = node.children().to_vec();
+        let children: Vec<_> = node
+            .iter(&tree.children)
+            .map(|(layout, _)| layout)
+            .collect::<Vec<_>>();
         assert_eq!(children.len(), 2);
         assert_eq!(children[0].size(), Size::new(card_width, poster_height));
         assert_eq!(children[0].bounds().position(), Point::ORIGIN);
@@ -428,22 +448,23 @@ mod tests {
         let poster: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(poster_height)
-            .into();
+            ._boxed();
         let copy: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(copy_height)
-            .into();
+            ._boxed();
 
         let mut card = poster_card(poster, copy)
             .width(card_width)
             .on_press(TestMessage::Clicked);
 
-        let mut tree = Tree::new(&card as &dyn Widget<TestMessage, iced::Theme, ()>);
+        let mut tree = Tree::new(&card);
         card.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
-        let node = card.layout(&mut tree, &renderer, &limits);
-        let layout = Layout::new(&node);
+        card.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
+        let layout = node;
         let viewport = Rectangle::with_size(Size::new(1000.0, 1000.0));
 
         let cursor_inside = mouse::Cursor::Available(Point::new(50.0, 50.0));
@@ -548,22 +569,23 @@ mod tests {
         let poster: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(poster_height)
-            .into();
+            ._boxed();
         let copy: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(copy_height)
-            .into();
+            ._boxed();
 
         let mut card_enabled = poster_card(poster, copy)
             .width(card_width)
             .on_press(TestMessage::Clicked);
 
-        let mut tree = Tree::new(&card_enabled as &dyn Widget<TestMessage, iced::Theme, ()>);
+        let mut tree = Tree::new(&card_enabled);
         card_enabled.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
-        let node = card_enabled.layout(&mut tree, &renderer, &limits);
-        let layout = Layout::new(&node);
+        card_enabled.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
+        let layout = node;
         let viewport = Rectangle::with_size(Size::new(1000.0, 1000.0));
 
         let cursor_inside = mouse::Cursor::Available(Point::new(50.0, 50.0));
@@ -581,22 +603,16 @@ mod tests {
         let poster2: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(poster_height)
-            .into();
+            ._boxed();
         let copy2: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
             .width(card_width)
             .height(copy_height)
-            .into();
+            ._boxed();
         let card_disabled: Element<'_, TestMessage, iced::Theme, ()> =
             poster_card(poster2, copy2).width(card_width).into();
 
         assert_eq!(
-            card_disabled.as_widget().mouse_interaction(
-                &tree,
-                layout,
-                cursor_inside,
-                &viewport,
-                &renderer
-            ),
+            card_disabled.mouse_interaction(&tree, layout, cursor_inside, &viewport, &renderer),
             mouse::Interaction::None
         );
     }

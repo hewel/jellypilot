@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 use iced::widget::{
   button, column, container, row, scrollable, space, text, text_input, Column, Row,
 };
@@ -29,6 +30,7 @@ use crate::i18n::Localizer;
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let content = scrollable(content_column(state))
+    .smooth_scroll(false)
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable);
@@ -44,10 +46,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
   ]
   .width(Fill)
   .height(Fill)
-  .into()
+  .boxed()
 }
 
-fn content_column(state: &State) -> Column<'_, Message> {
+fn content_column(state: &State) -> Column<Element<'_, Message>> {
   let has_feedback = state.settings.view.error.is_some() || state.settings.view.saved.is_some();
   // Keep the section at the same tree index as feedback appears or disappears.
   // Replacing its tree with the banner's would drop input focus on the first edit.
@@ -79,7 +81,7 @@ fn selected_section<'a>(state: &'a State, section: SettingsSection) -> Element<'
     SettingsSection::Diagnostics => column![diagnostics_section(state), about_block(state)]
       .spacing(TOKENS.spacing.s5)
       .width(Fill)
-      .into(),
+      .boxed(),
   }
 }
 
@@ -100,6 +102,7 @@ fn navigation(locale: Localizer, active: SettingsSection) -> Element<'static, Me
   container(
     column![
       scrollable(navigation_items(locale, active))
+        .smooth_scroll(false)
         .height(Fill)
         .style(jellypilot_ui::theme::scrollable),
       navigation_footer(locale),
@@ -111,11 +114,16 @@ fn navigation(locale: Localizer, active: SettingsSection) -> Element<'static, Me
   )
   .width(Fill)
   .height(Fill)
-  .into()
+  .boxed()
 }
 
-fn navigation_items(locale: Localizer, active: SettingsSection) -> Column<'static, Message> {
-  let mut items = Column::new().spacing(TOKENS.spacing.s1_5).width(Fill);
+fn navigation_items(
+  locale: Localizer,
+  active: SettingsSection,
+) -> Column<Element<'static, Message>> {
+  let mut items = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1_5)
+    .width(Fill);
   for section in SettingsSection::ALL {
     let selected = section == active;
     let button = control_button(
@@ -154,6 +162,7 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
           .font(MONO_FONT)
           .style(|theme| text::Style {
             color: Some(palette(theme).text.metadata),
+            ..text::Style::default()
           }),
         container(
           text("esc")
@@ -161,6 +170,7 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
             .font(MONO_FONT)
             .style(|theme| text::Style {
               color: Some(palette(theme).text.metadata),
+              ..text::Style::default()
             }),
         )
         .padding([TOKENS.spacing.s0_5, TOKENS.spacing.s1_5])
@@ -168,7 +178,7 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
       ]
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     ButtonVariant::Text,
   )
@@ -180,7 +190,7 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
     .padding(TOKENS.spacing.s2)
     .width(Fill)
     .align_x(Alignment::End)
-    .into()
+    .boxed()
 }
 
 const fn settings_icon(section: SettingsSection) -> Icon {
@@ -201,12 +211,12 @@ fn feedback(state: &State) -> Element<'_, Message> {
     return text(state.kernel.locale.message(error))
       .size(TOKENS.font_sizes.s13)
       .color(state.palette().colors.error)
-      .into();
+      .boxed();
   }
   if let Some(saved) = &state.settings.view.saved {
     return status_tag(state.kernel.locale.message(saved), BadgeVariant::Success);
   }
-  space::vertical().height(0).into()
+  space::vertical().height(0).boxed()
 }
 
 fn mpv_section(state: &State) -> Element<'_, Message> {
@@ -263,54 +273,53 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
     ]
     .spacing(TOKENS.spacing.s2),
     if cfg!(target_os = "linux") && crate::embedded::enabled() {
-      Element::from(
+      (column![
         column![
-          column![
-            text(state.t("settings-hdr-output"))
-              .font(HEADING_FONT)
-              .size(TOKENS.font_sizes.s14)
-              .color(palette.text.secondary),
-            text(state.t("settings-hdr-output-help"))
-              .size(TOKENS.font_sizes.s12)
-              .color(palette.text.body),
-          ]
-          .spacing(TOKENS.spacing.s0_5),
-          segmented_row(row![
-            segmented_option(
-              state.t("settings-hdr-auto"),
-              hdr_output == HdrOutput::Auto,
-              SettingsMessage::HdrOutputSelected(HdrOutput::Auto),
-            ),
-            segmented_option(
-              state.t("settings-hdr-on"),
-              hdr_output == HdrOutput::On,
-              SettingsMessage::HdrOutputSelected(HdrOutput::On),
-            ),
-            segmented_option(
-              state.t("settings-hdr-off"),
-              hdr_output == HdrOutput::Off,
-              SettingsMessage::HdrOutputSelected(HdrOutput::Off),
-            ),
-          ]),
-          text(match state.settings.view.hdr_state {
-            crate::embedded::HdrState::Active => state.t("settings-hdr-status-active"),
-            crate::embedded::HdrState::Unavailable => state.t("settings-hdr-status-unavailable"),
-            crate::embedded::HdrState::Sdr => state.t("settings-hdr-status-sdr"),
-          })
-          .size(TOKENS.font_sizes.s12)
-          .color(palette.text.body),
+          text(state.t("settings-hdr-output"))
+            .font(HEADING_FONT)
+            .size(TOKENS.font_sizes.s14)
+            .color(palette.text.secondary),
+          text(state.t("settings-hdr-output-help"))
+            .size(TOKENS.font_sizes.s12)
+            .color(palette.text.body),
         ]
-        .spacing(TOKENS.spacing.s2),
-      )
+        .spacing(TOKENS.spacing.s0_5),
+        segmented_row(row![
+          segmented_option(
+            state.t("settings-hdr-auto"),
+            hdr_output == HdrOutput::Auto,
+            SettingsMessage::HdrOutputSelected(HdrOutput::Auto),
+          ),
+          segmented_option(
+            state.t("settings-hdr-on"),
+            hdr_output == HdrOutput::On,
+            SettingsMessage::HdrOutputSelected(HdrOutput::On),
+          ),
+          segmented_option(
+            state.t("settings-hdr-off"),
+            hdr_output == HdrOutput::Off,
+            SettingsMessage::HdrOutputSelected(HdrOutput::Off),
+          ),
+        ]),
+        text(match state.settings.view.hdr_state {
+          crate::embedded::HdrState::Active => state.t("settings-hdr-status-active"),
+          crate::embedded::HdrState::Unavailable => state.t("settings-hdr-status-unavailable"),
+          crate::embedded::HdrState::Sdr => state.t("settings-hdr-status-sdr"),
+        })
+        .size(TOKENS.font_sizes.s12)
+        .color(palette.text.body),
+      ]
+      .spacing(TOKENS.spacing.s2))
+      .boxed()
     } else {
-      Element::from(space::horizontal().width(0))
+      (space::horizontal().width(0)).boxed()
     },
     labeled_field(
       palette,
       state.kernel.locale,
       state.t("settings-mpv-path"),
       state.t("settings-mpv-path-help"),
-      path.into(),
+      path.boxed(),
       SettingsMessage::SaveMpvPath,
     ),
     labeled_field(
@@ -318,13 +327,13 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
       state.kernel.locale,
       state.t("settings-mpv-args"),
       state.t("settings-mpv-args-help"),
-      args.into(),
+      args.boxed(),
       SettingsMessage::SaveMpvArgs,
     ),
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn playback_section(state: &State) -> Element<'_, Message> {
@@ -388,7 +397,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
       state.kernel.locale,
       state.t("settings-target-name"),
       state.t("settings-target-name-help"),
-      target.into(),
+      target.boxed(),
       SettingsMessage::SavePlaybackTargetName,
     ),
     choice_row(
@@ -402,7 +411,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
       state.kernel.locale,
       state.t("settings-tmdb-api-key"),
       state.t("settings-tmdb-api-key-help"),
-      tmdb_key.into(),
+      tmdb_key.boxed(),
       SettingsMessage::SaveTmdbApiKey,
     ),
     toggle_row(
@@ -424,15 +433,17 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn subtitles_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let mut menu = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+  let mut menu = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill);
   for language in SUBTITLE_LANGUAGE_OPTIONS {
     menu = menu.push(
-      control_button(
+      (control_button(
         None,
         Some(subtitle_language_label(state.kernel.locale, language)),
         ButtonVariant::Text,
@@ -444,7 +455,8 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
       .label_size(TOKENS.font_sizes.s12)
       .on_press(Message::Settings(SettingsMessage::SubtitleLanguageAdded(
         language.to_owned(),
-      ))),
+      ))))
+      .boxed(),
     );
   }
   let add = popover(
@@ -469,17 +481,20 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     Message::Settings(SettingsMessage::SubtitleMenuDismissed),
   );
   let languages = state.kernel.settings.snapshot().subtitle_languages();
-  let mut rows = Column::new().spacing(TOKENS.spacing.s2).width(Fill);
+  let mut rows = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s2)
+    .width(Fill);
   if languages.is_empty() {
     rows = rows.push(
-      text(state.t("settings-subtitle-empty"))
+      (text(state.t("settings-subtitle-empty"))
         .size(TOKENS.font_sizes.s12)
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
   for (index, language) in languages.iter().enumerate() {
     rows = rows.push(
-      row![
+      (row![
         text(state.format(
           "settings-subtitle-ranked",
           &[
@@ -517,7 +532,8 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center)
-      .wrap(),
+      .wrap())
+      .boxed(),
     );
   }
   column![
@@ -529,7 +545,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn shortcuts_section(state: &State) -> Element<'_, Message> {
@@ -555,7 +571,7 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn shortcut_row<'a>(state: &'a State, label: String, kind: ShortcutKind) -> Element<'a, Message> {
@@ -587,8 +603,9 @@ fn shortcut_row<'a>(state: &'a State, label: String, kind: ShortcutKind) -> Elem
         .font(MONO_FONT)
         .style(move |theme| text::Style {
           color: Some(settings_style::navigation_button(theme, variant, status).text_color),
+          ..text::Style::default()
         })
-        .into()
+        .boxed()
     },
     variant,
   )
@@ -619,7 +636,7 @@ fn shortcut_row<'a>(state: &'a State, label: String, kind: ShortcutKind) -> Elem
   .align_y(Alignment::Center)
   .spacing(TOKENS.spacing.s2_5)
   .wrap()
-  .into()
+  .boxed()
 }
 
 fn interface_section(state: &State) -> Element<'_, Message> {
@@ -642,7 +659,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
       .id("settings-enter-tv")
       .min_height(40.0)
       .on_press(Message::UiModeSelected(jellypilot_core::config::UiMode::Tv))
-      .into(),
+      .boxed(),
     ),
     choice_row(
       palette,
@@ -702,7 +719,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn language_row(state: &State) -> Element<'_, Message> {
@@ -723,13 +740,18 @@ fn language_row(state: &State) -> Element<'_, Message> {
     .iter()
     .find(|(_, value)| *value == selected)
     .map_or_else(|| state.t("language-system"), |(id, _)| state.t(id));
-  let mut menu = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+  let mut menu = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill);
   for (id, value) in options {
-    menu = menu.push(menu_option(
-      state.t(id),
-      value == selected,
-      SettingsMessage::UiLanguageSelected(value),
-    ));
+    menu = menu.push(
+      (menu_option(
+        state.t(id),
+        value == selected,
+        SettingsMessage::UiLanguageSelected(value),
+      ))
+      .boxed(),
+    );
   }
   let picker = popover(
     select_trigger(
@@ -768,7 +790,7 @@ fn storage_section(state: &State) -> Element<'_, Message> {
   ),]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn diagnostics_section(state: &State) -> Element<'_, Message> {
@@ -900,7 +922,9 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   .radius(TOKENS.radii.lg)
   .on_press(Message::Settings(SettingsMessage::ExportLogs));
 
-  let mut cards = Column::new().spacing(TOKENS.spacing.s5).width(Fill);
+  let mut cards = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s5)
+    .width(Fill);
   let mut count = 0_usize;
   for diagnostic in state.kernel.diagnostics.rows().filter(|diagnostic| {
     diagnostic_matches(
@@ -917,7 +941,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       DiagnosticLevel::Error => (Icon::Error, palette.colors.error),
     };
     cards = cards.push(
-      container(
+      (container(
         column![
           row![
             icon_with_color(level_icon, IconSize::Xs, level_color),
@@ -946,14 +970,16 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       )
       .padding(TOKENS.spacing.s3)
       .width(Fill)
-      .style(settings_style::event_card),
+      .style(settings_style::event_card))
+      .boxed(),
     );
   }
   if count == 0 {
     cards = cards.push(
-      text(state.t("settings-diagnostics-empty"))
+      (text(state.t("settings-diagnostics-empty"))
         .size(TOKENS.font_sizes.s12)
-        .color(palette.text.metadata),
+        .color(palette.text.metadata))
+      .boxed(),
     );
   }
   column![
@@ -981,7 +1007,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn about_block(state: &State) -> Element<'_, Message> {
@@ -1023,10 +1049,11 @@ fn about_block(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s1_5);
   if expanded {
     content = content.push(
-      text(FONT_LICENSES)
+      (text(FONT_LICENSES)
         .size(TOKENS.font_sizes.s12)
         .color(palette.text.body)
-        .width(Fill),
+        .width(Fill))
+      .boxed(),
     );
   }
   column![
@@ -1038,7 +1065,7 @@ fn about_block(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s4)
   .width(Fill)
-  .into()
+  .boxed()
 }
 
 fn labeled_field<'a>(
@@ -1080,7 +1107,7 @@ fn labeled_field<'a>(
     .wrap(),
   ]
   .spacing(TOKENS.spacing.s2)
-  .into()
+  .boxed()
 }
 
 fn choice_row<'a>(
@@ -1089,25 +1116,29 @@ fn choice_row<'a>(
   help: Option<String>,
   choice: Element<'a, Message>,
 ) -> Element<'a, Message> {
-  let mut copy = Column::new().spacing(TOKENS.spacing.s0_5).width(Fill);
+  let mut copy = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s0_5)
+    .width(Fill);
   copy = copy.push(
-    text(label)
+    (text(label)
       .font(HEADING_FONT)
       .size(TOKENS.font_sizes.s14)
-      .color(palette.text.secondary),
+      .color(palette.text.secondary))
+    .boxed(),
   );
   if let Some(help) = help {
     copy = copy.push(
-      text(help)
+      (text(help)
         .size(TOKENS.font_sizes.s12)
-        .color(palette.text.body),
+        .color(palette.text.body))
+      .boxed(),
     );
   }
   row![copy, choice]
     .spacing(TOKENS.spacing.s2_5)
     .align_y(Alignment::Center)
     .wrap()
-    .into()
+    .boxed()
 }
 
 fn toggle_row<'a>(
@@ -1125,15 +1156,15 @@ fn toggle_row<'a>(
     switch(enabled)
       .id(id)
       .on_press(Message::Settings(message))
-      .into(),
+      .boxed(),
   )
 }
 
-fn segmented_row<'a>(options: Row<'a, Message>) -> Element<'a, Message> {
+fn segmented_row<'a>(options: Row<Element<'a, Message>>) -> Element<'a, Message> {
   container(options.spacing(0).align_y(Alignment::Center))
     .padding(TOKENS.spacing.s0_5)
     .style(settings_style::segmented_group)
-    .into()
+    .boxed()
 }
 
 fn segmented_option(
@@ -1155,7 +1186,7 @@ fn segmented_option(
   .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s3])
   .min_height(40.0)
   .on_press(Message::Settings(message))
-  .into()
+  .boxed()
 }
 
 fn select_trigger<'a>(
@@ -1178,12 +1209,13 @@ fn select_trigger<'a>(
             color: Some(
               jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal).text_color,
             ),
+            ..text::Style::default()
           }),
         icon_for_control_state(Icon::ChevronDown, IconSize::Xs, ButtonVariant::Tonal, state,),
       ]
       .spacing(gap)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     ButtonVariant::Tonal,
   )
@@ -1212,12 +1244,13 @@ fn filter_trigger<'a>(
             color: Some(
               jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal).text_color,
             ),
+            ..text::Style::default()
           }),
         icon_for_control_state(Icon::ChevronDown, IconSize::Xs, ButtonVariant::Tonal, state,),
       ]
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center)
-      .into()
+      .boxed()
     },
     ButtonVariant::Tonal,
   )
@@ -1247,7 +1280,7 @@ fn menu_option(
   .width(Fill)
   .label_fill(true)
   .on_press(Message::Settings(message))
-  .into()
+  .boxed()
 }
 
 fn compact_icon_button<'a>(
@@ -1456,7 +1489,7 @@ mod tests {
     use iced::advanced::{layout, widget};
     use iced::Size;
 
-    fn assert_fits(node: &layout::Node, parent_x: f32, width: f32) {
+    fn assert_fits(node: &crate::app::test_support::LayoutGeometry, parent_x: f32, width: f32) {
       let bounds = node.bounds();
       let x = parent_x + bounds.x;
       assert!(
@@ -1497,8 +1530,9 @@ mod tests {
           state.shell.window_size = Size::new(width + 48.0, 760.0);
           let mut element = view(&state);
           let mut tree = widget::Tree::new(&element);
-          tree.diff(element.as_widget_mut());
-          let node = element.as_widget_mut().layout(
+          tree.diff(&mut element);
+          let node = crate::app::test_support::layout_widget(
+            &mut element,
             &mut tree,
             &renderer,
             &layout::Limits::new(Size::ZERO, Size::new(width, 712.0)),

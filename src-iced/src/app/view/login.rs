@@ -2,6 +2,7 @@ use crate::app::login::can_start_authentication;
 use crate::app::message::{LoginMessage, Message};
 use crate::app::shell::profile_action_id;
 use crate::app::state::{LoginMethod, QuickConnectState, State};
+use iced::widget::Widget as _;
 use iced::widget::{column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
@@ -57,11 +58,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
       method_button(state.t("login-password"), LoginMethod::Password, state),
     ]
     .spacing(10)
-    .into()
+    .boxed()
   } else {
     text(state.t("login-emby-password"))
       .color(palette.text.body)
-      .into()
+      .boxed()
   };
 
   // Key on the user's provider+method choice only: QuickConnect polling and
@@ -87,28 +88,33 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .width(Fill);
   if let Some(error) = &login.error {
     form = form.push(
-      text(state.kernel.locale.message(error))
+      (text(state.kernel.locale.message(error))
         .size(15)
-        .color(palette.colors.error),
+        .color(palette.colors.error))
+      .boxed(),
     );
   }
   if login.profiles_loading {
-    form = form.push(text(state.t("login-loading-saved")).color(palette.text.muted));
+    form = form.push((text(state.t("login-loading-saved")).color(palette.text.muted)).boxed());
   } else if !login.profiles.is_empty() {
-    form = form.push(saved_profiles(state));
+    form = form.push((saved_profiles(state)).boxed());
   }
 
   let card = container(form)
     .width(Length::Fixed(640.0))
     .padding(28)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised));
-  container(scrollable(card).style(jellypilot_ui::theme::scrollable))
-    .width(Fill)
-    .height(Fill)
-    .center_x(Fill)
-    .padding([36, 24])
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+  container(
+    scrollable(card)
+      .smooth_scroll(false)
+      .style(jellypilot_ui::theme::scrollable),
+  )
+  .width(Fill)
+  .height(Fill)
+  .center_x(Fill)
+  .padding([36, 24])
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+  .boxed()
 }
 
 fn login_key(provider: MediaServerProvider, method: LoginMethod) -> u64 {
@@ -138,7 +144,7 @@ fn provider_button<'a>(
     .spacing(TOKENS.spacing.s2)
     .padding([7, 14])
     .on_press(Message::Login(LoginMessage::ProviderSelected(provider)))
-    .into()
+    .boxed()
 }
 
 fn method_button<'a>(label: String, method: LoginMethod, state: &'a State) -> Element<'a, Message> {
@@ -157,7 +163,7 @@ fn method_button<'a>(label: String, method: LoginMethod, state: &'a State) -> El
     .spacing(TOKENS.spacing.s1_5)
     .padding([7, 14])
     .on_press(Message::Login(LoginMessage::MethodSelected(method)))
-    .into()
+    .boxed()
 }
 
 fn quick_connect(state: &State) -> Element<'_, Message> {
@@ -175,7 +181,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
         .spacing(TOKENS.spacing.s2)
         .padding([8, 16])
         .on_press_maybe(can_login.then_some(Message::Login(LoginMessage::QuickConnectSubmitted)))
-        .into()
+        .boxed()
     }
     QuickConnectState::Requesting => {
       quick_connect_progress(state, state.t("login-requesting-code"))
@@ -201,7 +207,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       ]
       .align_x(Alignment::Start)
       .spacing(14)
-      .into()
+      .boxed()
     }
     QuickConnectState::Approving => quick_connect_progress(state, state.t("login-approving")),
   };
@@ -211,7 +217,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
     content,
   ]
   .spacing(14)
-  .into()
+  .boxed()
 }
 
 fn quick_connect_progress<'a>(state: &State, label: String) -> Element<'a, Message> {
@@ -223,7 +229,7 @@ fn quick_connect_progress<'a>(state: &State, label: String) -> Element<'a, Messa
     cancel_button(state),
   ]
   .spacing(12)
-  .into()
+  .boxed()
 }
 
 fn cancel_button<'a>(state: &State) -> Element<'a, Message> {
@@ -236,7 +242,7 @@ fn cancel_button<'a>(state: &State) -> Element<'a, Message> {
   .spacing(TOKENS.spacing.s1_5)
   .padding([7, 12])
   .on_press(Message::Login(LoginMessage::QuickConnectCancelled))
-  .into()
+  .boxed()
 }
 
 fn password(state: &State) -> Element<'_, Message> {
@@ -285,21 +291,22 @@ fn password(state: &State) -> Element<'_, Message> {
 
   column![username, password, remember, submit]
     .spacing(12)
-    .into()
+    .boxed()
 }
 
 fn saved_profiles(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let can_login = can_start_authentication(&state.login, &state.kernel);
-  let mut profiles = Column::new().spacing(12).push(
-    row![
+  let mut profiles = Column::<Element<'_, Message>>::new().spacing(12).push(
+    (row![
       icon_with_color(Icon::User, IconSize::Lg, palette.colors.primary),
       text(state.t("login-saved"))
         .size(18)
         .color(palette.text.heading),
     ]
     .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+    .align_y(Alignment::Center))
+    .boxed(),
   );
   for (index, profile) in state.login.flow.profiles.iter().enumerate() {
     let key = profile.key().clone();
@@ -337,17 +344,18 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     ]
     .spacing(8);
     profiles = profiles.push(
-      container(profile_content)
+      (container(profile_content)
         .padding(16)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)),
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)))
+      .boxed(),
     );
   }
-  profiles.into()
+  profiles.boxed()
 }
 
 fn language_selector(state: &State) -> Element<'_, Message> {
   let selected = state.kernel.settings.snapshot().ui_language();
-  let mut choices = iced::widget::Row::new().spacing(TOKENS.spacing.s1);
+  let mut choices = iced::widget::Row::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s1);
   for (preference, label) in [
     (LanguagePreference::System, "language-system"),
     (
@@ -360,7 +368,7 @@ fn language_selector(state: &State) -> Element<'_, Message> {
     ),
   ] {
     choices = choices.push(
-      control_button(
+      (control_button(
         None,
         Some(state.t(label)),
         if preference == selected {
@@ -371,10 +379,11 @@ fn language_selector(state: &State) -> Element<'_, Message> {
       )
       .padding([7, 10])
       .min_height(40.0)
-      .on_press(Message::UiLanguageSelected(preference)),
+      .on_press(Message::UiLanguageSelected(preference)))
+      .boxed(),
     );
   }
   column![text(state.t("language-label")).size(12), choices]
     .spacing(TOKENS.spacing.s1)
-    .into()
+    .boxed()
 }

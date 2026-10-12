@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 pub(crate) mod account;
 mod activation_guard;
 pub(crate) mod browse;
@@ -69,7 +70,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
       account::modal_open(state)
     };
-    let base: Element<'_, Message> = if modal_open { inert(base) } else { base.into() };
+    let base: Element<'_, Message> = if modal_open {
+      inert(base)
+    } else {
+      base.boxed()
+    };
     let account = if state.tv_mode() {
       super::tv::account::modal_layer(state)
     } else {
@@ -79,7 +84,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   }
   .width(Fill)
   .height(Fill);
-  let layers: Element<'_, Message> = layers.into();
+  let layers: Element<'_, Message> = layers.boxed();
   let layers = stack![
     if (state.playback.viewing_queue.open
       || super::playback::tools::is_open(state)
@@ -113,17 +118,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
         left: TOKENS.spacing.s3,
       })
       .align_x(Alignment::End)
-      .into(),
-    None => iced::widget::Space::new().into(),
+      .boxed(),
+    None => iced::widget::Space::new().boxed(),
   };
-  let layers = layers.push(jellypilot_ui::widgets::motion::reveal(
-    toast_content,
-    !playback_active && state.kernel.active_toast.is_some(),
-    !playback_active
-      && state.shell.images_visible
-      && !state.kernel.settings.snapshot().reduced_motion(),
-    TOKENS.durations.ms200,
-  ));
+  let layers = layers.push(
+    (jellypilot_ui::widgets::motion::reveal(
+      toast_content,
+      !playback_active && state.kernel.active_toast.is_some(),
+      !playback_active
+        && state.shell.images_visible
+        && !state.kernel.settings.snapshot().reduced_motion(),
+      TOKENS.durations.ms200,
+    ))
+    .boxed(),
+  );
   player::guard_activation(layers, state)
 }
 
@@ -150,7 +158,7 @@ fn toast_view<'a>(
 
   let close_id = toast.id;
   let dismiss_button = control_button_content(
-    move |_| icon_with_color(Icon::Close, IconSize::Xs, text_color).into(),
+    move |_| icon_with_color(Icon::Close, IconSize::Xs, text_color).boxed(),
     ButtonVariant::Text,
   )
   .padding([3, 5])
@@ -204,5 +212,5 @@ fn toast_view<'a>(
       shadow: palette.shadows.raised_high.iced(),
       ..container::Style::default()
     })
-    .into()
+    .boxed()
 }

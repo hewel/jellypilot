@@ -1,4 +1,4 @@
-use iced::widget::operation::{self, AbsoluteOffset};
+use iced::widget::operation::{self, scrollable::AbsoluteOffset};
 use iced::Task;
 use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::browse_window::visible_display_range;
@@ -604,18 +604,21 @@ pub(super) fn focus_id(focus: Focus) -> iced::widget::Id {
 
 pub(super) fn restore_scroll(state: &State) -> Task<AppMessage> {
   Task::batch(
-    std::iter::once(operation::scroll_to(
+    std::iter::once(operation::scrollable::scroll_to(
       scroll_id(),
       AbsoluteOffset {
         x: 0.0,
         y: state.tv.offset,
       },
+      iced::advanced::widget::operation::Animation::Instant,
     ))
-    .chain(
-      state.tv.horizontal.iter().map(|(id, offset)| {
-        operation::scroll_to(id.clone(), AbsoluteOffset { x: *offset, y: 0.0 })
-      }),
-    ),
+    .chain(state.tv.horizontal.iter().map(|(id, offset)| {
+      operation::scrollable::scroll_to(
+        id.clone(),
+        AbsoluteOffset { x: *offset, y: 0.0 },
+        iced::advanced::widget::operation::Animation::Instant,
+      )
+    })),
   )
 }
 
@@ -648,7 +651,12 @@ pub(super) fn reveal_rail(state: &State) -> Task<AppMessage> {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&self.focus) {
         self.target = Some(bounds);
       }
@@ -657,10 +665,11 @@ pub(super) fn reveal_rail(state: &State) -> Task<AppMessage> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&widget::Id::new("tv-rail")) {
         self.viewport = Some((bounds, content, translation));
       }
@@ -678,6 +687,7 @@ pub(super) fn reveal_rail(state: &State) -> Task<AppMessage> {
           x: None,
           y: Some(y),
         },
+        iced::advanced::widget::operation::Animation::Instant,
       )))
     }
   }
@@ -708,7 +718,12 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
     fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation<AppMessage>)) {
       visit(self);
     }
-    fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+    fn container(
+      &mut self,
+      id: Option<&widget::Id>,
+      bounds: iced::Rectangle,
+      _viewport: &iced::Rectangle,
+    ) {
       if id == Some(&focus_id(self.focus)) {
         self.target = Some(
           if matches!(
@@ -732,10 +747,11 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
       &mut self,
       id: Option<&widget::Id>,
       bounds: iced::Rectangle,
-      content: iced::Rectangle,
+      content: iced::Size,
       _translation: iced::Vector,
       _state: &mut dyn widget::operation::Scrollable,
     ) {
+      let content = iced::Rectangle::new(bounds.position(), content);
       if id == Some(&scroll_id()) {
         self.viewport = Some((bounds, content));
       }
@@ -860,7 +876,12 @@ mod tests {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
-      fn container(&mut self, id: Option<&widget::Id>, bounds: iced::Rectangle) {
+      fn container(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: iced::Rectangle,
+        _viewport: &iced::Rectangle,
+      ) {
         if id == Some(&self.focus) {
           self.target = Some(bounds);
         }
@@ -869,7 +890,7 @@ mod tests {
         &mut self,
         id: Option<&widget::Id>,
         bounds: iced::Rectangle,
-        _content: iced::Rectangle,
+        _content: iced::Size,
         translation: iced::Vector,
         _state: &mut dyn widget::operation::Scrollable,
       ) {
@@ -889,6 +910,9 @@ mod tests {
       target: None,
       scroll: None,
     };
+    // Native coordinates follow the last presented frame, including an
+    // instantaneous programmatic scroll completed immediately before it.
+    drop(crate::app::test_support::redraw_ui(&mut ui, renderer));
     ui.operate(renderer, &mut bounds);
     let target = bounds.target.expect("focused rail button");
     let (viewport, translation) = bounds.scroll.expect("rail scrollable");

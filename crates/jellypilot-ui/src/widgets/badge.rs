@@ -1,5 +1,6 @@
 //! JellyPilot status tags (recast of legacy badges).
 
+use iced::advanced::Widget as _;
 use iced::font::Weight;
 use iced::widget::{container, row, space, text};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
@@ -82,7 +83,7 @@ pub fn status_tag<'a, Message: 'a>(
             ..container::Style::default()
         }
     })
-    .into()
+    ._boxed()
 }
 
 #[cfg(test)]
@@ -164,13 +165,20 @@ mod tests {
         .expect("software layout renderer");
 
         let mut tag = status_tag::<()>("Live", BadgeVariant::Error);
-        let mut tree = Tree::new(tag.as_widget());
-        tag.as_widget_mut().diff(&mut tree);
+        let mut tree = Tree::new(&tag);
+        tag.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
-        let node = tag.as_widget_mut().layout(&mut tree, &renderer, &limits);
-        let container_layout = Layout::new(&node);
-        let content_row = container_layout.children().next().expect("content row");
-        let dot_layout = content_row.children().next().expect("dot").bounds();
+        tag.layout(&mut tree, &renderer, &limits);
+        let node = Layout::new(tree.size);
+        let container_layout = node;
+        let content_row =
+            super::super::child_layout(container_layout, &tree, 0).expect("content row");
+        let dot_layout = content_row
+            .iter(&tree.children[0].children)
+            .next()
+            .expect("dot")
+            .0
+            .bounds();
 
         assert_eq!(node.size().height, 24.0, "status tag must be 24px tall");
         assert!(

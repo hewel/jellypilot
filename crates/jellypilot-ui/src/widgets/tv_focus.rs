@@ -61,6 +61,8 @@ impl State {
     }
 }
 
+impl<Message> iced::advanced::widget::Meta for Focus<'_, Message> {}
+
 impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
     fn tag(&self) -> widget::tree::Tag {
         widget::tree::Tag::of::<State>()
@@ -76,7 +78,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
     }
     fn size(&self) -> Size<Length> {
         self.frame.map_or_else(
-            || self.content.as_widget().size(),
+            || self.content.size(),
             |(size, _, _)| Size::new(Length::Fixed(size.width), Length::Fixed(size.height)),
         )
     }
@@ -85,44 +87,55 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
         tree: &mut widget::Tree,
         renderer: &iced::Renderer,
         limits: &layout::Limits,
-    ) -> layout::Node {
+    ) {
         let state = tree.state.downcast_mut::<State>();
         state.retarget(self.target, motion::enabled(), Instant::now());
         self.content = (self.build)(state.shown);
         tree.diff_children(&mut [&mut self.content]);
         let Some((size, horizontal, vertical)) = self.frame else {
-            let child =
-                self.content
-                    .as_widget_mut()
-                    .layout(&mut tree.children[0], renderer, limits);
-            return layout::Node::with_children(child.size(), vec![child]);
+            self.content.layout(&mut tree.children[0], renderer, limits);
+            tree.size = tree.children[0].size;
+            tree.children[0].translation = Vector::ZERO;
+            return;
         };
-        let child = self.content.as_widget_mut().layout(
+        self.content.layout(
             &mut tree.children[0],
             renderer,
             &layout::Limits::new(Size::ZERO, Size::INFINITE),
         );
         let slot = limits.resolve(Length::Fixed(size.width), Length::Fixed(size.height), size);
-        layout::Node::with_children(slot, vec![child.align(horizontal, vertical, slot)])
+        let child = &mut tree.children[0];
+        let x = match horizontal {
+            iced::Alignment::Start => 0.0,
+            iced::Alignment::Center => (slot.width - child.size.width) / 2.0,
+            iced::Alignment::End => slot.width - child.size.width,
+        };
+        let y = match vertical {
+            iced::Alignment::Start => 0.0,
+            iced::Alignment::Center => (slot.height - child.size.height) / 2.0,
+            iced::Alignment::End => slot.height - child.size.height,
+        };
+        child.translation = Vector::new(x, y);
+        tree.size = slot;
     }
     fn operate(
         &mut self,
         tree: &mut widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &iced::Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        if let Some(child) = layout.children().next() {
+        if let Some(child) = super::child_layout(layout, tree, 0) {
             self.content
-                .as_widget_mut()
-                .operate(&mut tree.children[0], child, renderer, operation);
+                .operate(&mut tree.children[0], child, viewport, renderer, operation);
         }
     }
     fn update(
         &mut self,
         tree: &mut widget::Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
         shell: &mut Shell<'_, Message>,
@@ -136,8 +149,8 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
             event,
             shell,
         );
-        if let Some(child) = layout.children().next() {
-            self.content.as_widget_mut().update(
+        if let Some(child) = super::child_layout(layout, tree, 0) {
+            self.content.update(
                 &mut tree.children[0],
                 event,
                 child,
@@ -154,12 +167,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
         renderer: &mut iced::Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        if let Some(child) = layout.children().next() {
-            self.content.as_widget().draw(
+        if let Some(child) = super::child_layout(layout, tree, 0) {
+            self.content.draw(
                 &tree.children[0],
                 renderer,
                 theme,
@@ -173,39 +186,33 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
     fn mouse_interaction(
         &self,
         tree: &widget::Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        layout
-            .children()
-            .next()
-            .map_or(mouse::Interaction::None, |child| {
-                self.content.as_widget().mouse_interaction(
-                    &tree.children[0],
-                    child,
-                    cursor,
-                    viewport,
-                    renderer,
-                )
-            })
+        super::child_layout(layout, tree, 0).map_or(mouse::Interaction::None, |child| {
+            self.content
+                .mouse_interaction(&tree.children[0], child, cursor, viewport, renderer)
+        })
     }
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut widget::Tree,
-        layout: Layout<'b>,
+        layout: Layout,
         renderer: &iced::Renderer,
         viewport: &Rectangle,
         translation: Vector,
+        window: Size,
     ) -> Vec<overlay::Element<'b, Message, Theme, iced::Renderer>> {
-        layout.children().next().map_or_else(Vec::new, |child| {
-            self.content.as_widget_mut().overlay(
+        super::child_layout(layout, tree, 0).map_or_else(Vec::new, |child| {
+            self.content.overlay(
                 &mut tree.children[0],
                 child,
                 renderer,
                 viewport,
                 translation,
+                window,
             )
         })
     }
@@ -213,7 +220,7 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Focus<'_, Message> {
 
 impl<'a, Message: 'a> From<Focus<'a, Message>> for Element<'a, Message> {
     fn from(focus: Focus<'a, Message>) -> Self {
-        Element::new(focus)
+        (focus)._boxed()
     }
 }
 
@@ -257,16 +264,17 @@ mod tests {
                     .width(slot.width * factor)
                     .height(slot.height * factor)
                     .on_press(())
-                    .into()
+                    ._boxed()
             })
             .frame(slot, Alignment::Center, Alignment::End);
-            let mut tree = widget::Tree::new(&control as &dyn Widget<(), Theme, iced::Renderer>);
+            let mut tree = widget::Tree::new(&control);
             control.diff(&mut tree);
-            let node = control
-                .layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, slot))
-                .move_to(Point::new(20.0, 20.0));
-            let layout = Layout::new(&node);
-            let child = layout.child(0).bounds();
+            control.layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, slot));
+            let node = Layout::new(tree.size).move_to(Point::new(20.0, 20.0));
+            let layout = node;
+            let child = super::super::child_layout(layout, &tree, 0)
+                .expect("laid out child")
+                .bounds();
             assert_eq!(node.size(), slot);
             assert!((child.center_x() - node.bounds().center_x()).abs() < 0.001);
             assert!((child.y + child.height - (20.0 + slot.height)).abs() < 0.001);

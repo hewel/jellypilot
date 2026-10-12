@@ -1,3 +1,4 @@
+use iced::widget::Widget as _;
 use std::borrow::Cow;
 
 use super::{account, browse, detail, home, motion, personal_lists, player, settings};
@@ -70,7 +71,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     ]
     .width(Fill)
     .height(Fill)
-    .into();
+    .boxed();
   }
   let palette = state.palette();
   let skeleton_phase = state.shell.skeleton_phase;
@@ -106,10 +107,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     });
   // The sidebar docks full-height so its bottom (Settings, user) never moves
   // when the player bar appears; the bar docks under the content region only.
-  let mut right = Column::new().spacing(0.0).push(
-    container(stack![content, super::undo_notice::view(state)])
+  let mut right = Column::<Element<'_, Message>>::new().spacing(0.0).push(
+    (container(stack![content, super::undo_notice::view(state)])
       .width(Fill)
-      .height(Fill),
+      .height(Fill))
+    .boxed(),
   );
   // The docked bar is a player-control surface: it collapses over the surface
   // duration so the content above reclaims its slot as it exits. When playback
@@ -118,23 +120,24 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let player_bar_visible = player_bar.is_some();
   let player_bar: Element<'_, Message> =
     if let Some(player_bar) = player_bar.or_else(|| player::retained_bar(state)) {
-      Column::new()
+      Column::<Element<'_, Message>>::new()
         .spacing(0.0)
         .push(
-          container(space::horizontal())
+          (container(space::horizontal())
             .width(Fill)
             .height(HAIRLINE_WIDTH)
             .style(move |_| {
               iced::widget::container::Style::default().background(palette.colors.outlineVariant)
-            }),
+            }))
+          .boxed(),
         )
-        .push(player_bar)
-        .into()
+        .push((player_bar).boxed())
+        .boxed()
     } else {
-      space().into()
+      space().boxed()
     };
   let player_bar = motion::collapse(player_bar, player_bar_visible);
-  right = right.push(player_bar);
+  right = right.push((player_bar).boxed());
   let body = row![sidebar, sidebar_divider, right]
     .spacing(0.0)
     .width(Fill)
@@ -151,11 +154,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.shell.settings_open {
       inert(base_view)
     } else {
-      base_view.into()
+      base_view.boxed()
     },
     settings_layer(state)
   ];
-  layers.width(Fill).height(Fill).into()
+  layers.width(Fill).height(Fill).boxed()
 }
 
 /// The Settings dialog wrapped in the shared surface reveal so open/close
@@ -180,7 +183,7 @@ fn control_only_view(state: &State) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+    .boxed()
 }
 
 fn sidebar(
@@ -188,7 +191,7 @@ fn sidebar(
   class: SizeClass,
   skeleton_phase: f32,
   reduced_motion: bool,
-) -> container::Container<'_, Message> {
+) -> container::Container<'_, Element<'_, Message>> {
   match class {
     SizeClass::Compact => sidebar_compact(state),
     SizeClass::Standard | SizeClass::Wide => sidebar_full(state, skeleton_phase, reduced_motion),
@@ -199,7 +202,7 @@ fn sidebar_full(
   state: &State,
   skeleton_phase: f32,
   reduced_motion: bool,
-) -> container::Container<'_, Message> {
+) -> container::Container<'_, Element<'_, Message>> {
   let search_draft = &state
     .full
     .as_ref()
@@ -210,26 +213,35 @@ fn sidebar_full(
     unified_search_field(state.kernel.locale, search_draft, Some(SEARCH_TRIGGER_ID));
   let personal_destination = Destination::PersonalLists(Route::Overview);
   let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
-  let personal_navigation = Column::new()
+  let personal_navigation = Column::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s0_5)
-    .push(destination_button(
-      Icon::Home,
-      state.t("common-home"),
-      Destination::Home,
-      state.shell.destination == Destination::Home,
-    ))
-    .push(destination_button(
-      Icon::Heart,
-      state.t("shell-personal-lists"),
-      personal_destination,
-      personal_active,
-    ))
-    .push(destination_button(
-      Icon::Filter,
-      state.t("saved-filters-title"),
-      Destination::SavedBrowse,
-      state.shell.destination == Destination::SavedBrowse,
-    ));
+    .push(
+      (destination_button(
+        Icon::Home,
+        state.t("common-home"),
+        Destination::Home,
+        state.shell.destination == Destination::Home,
+      ))
+      .boxed(),
+    )
+    .push(
+      (destination_button(
+        Icon::Heart,
+        state.t("shell-personal-lists"),
+        personal_destination,
+        personal_active,
+      ))
+      .boxed(),
+    )
+    .push(
+      (destination_button(
+        Icon::Filter,
+        state.t("saved-filters-title"),
+        Destination::SavedBrowse,
+        state.shell.destination == Destination::SavedBrowse,
+      ))
+      .boxed(),
+    );
 
   let libraries = match &state
     .full
@@ -239,31 +251,35 @@ fn sidebar_full(
     .data
     .shortcuts
   {
-    LoadState::Idle | LoadState::Loading => Column::new()
+    LoadState::Idle | LoadState::Loading => Column::<Element<'_, Message>>::new()
       .spacing(TOKENS.spacing.s0_5)
-      .push(shortcut_skeleton(skeleton_phase, reduced_motion))
-      .push(shortcut_skeleton(skeleton_phase, reduced_motion)),
+      .push((shortcut_skeleton(skeleton_phase, reduced_motion)).boxed())
+      .push((shortcut_skeleton(skeleton_phase, reduced_motion)).boxed()),
     LoadState::Ready(shortcuts) => {
-      let mut libraries = Column::new().spacing(TOKENS.spacing.s0_5);
+      let mut libraries = Column::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s0_5);
       for shortcut in shortcuts {
         let destination = Destination::Library {
           library_id: shortcut.id.clone(),
           collection_type: shortcut.collection_type.clone(),
         };
         let active = state.shell.destination == destination;
-        libraries = libraries.push(destination_button(
-          Icon::for_collection_type(&shortcut.collection_type),
-          &shortcut.name,
-          destination,
-          active,
-        ));
+        libraries = libraries.push(
+          (destination_button(
+            Icon::for_collection_type(&shortcut.collection_type),
+            &shortcut.name,
+            destination,
+            active,
+          ))
+          .boxed(),
+        );
       }
       libraries
     }
-    LoadState::Failed(_) => Column::new().push(
-      text(state.t("shell-libraries-unavailable"))
+    LoadState::Failed(_) => Column::<Element<'_, Message>>::new().push(
+      (text(state.t("shell-libraries-unavailable"))
         .size(12)
-        .color(state.palette().colors.warning),
+        .color(state.palette().colors.warning))
+      .boxed(),
     ),
   };
 
@@ -280,10 +296,11 @@ fn sidebar_full(
     .data
     .shortcuts
   {
-    library_heading = library_heading.push(space::horizontal()).push(
-      text(shortcuts.len().to_string())
+    library_heading = library_heading.push((space::horizontal()).boxed()).push(
+      (text(shortcuts.len().to_string())
         .size(12)
-        .color(state.palette().text.metadata),
+        .color(state.palette().text.metadata))
+      .boxed(),
     );
   }
   let library_heading = container(library_heading).padding(iced::Padding {
@@ -296,6 +313,7 @@ fn sidebar_full(
     .spacing(TOKENS.spacing.s2)
     .width(Fill);
   let libraries = scrollable(libraries)
+    .smooth_scroll(false)
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable);
@@ -313,7 +331,7 @@ fn sidebar_full(
     .width(Fill)
     .height(Fill);
 
-  container(content)
+  container(content.boxed())
     .padding([TOKENS.spacing.s4, TOKENS.spacing.s3])
     .height(Fill)
     .style(|_theme| container::Style {
@@ -356,12 +374,13 @@ fn unified_search_field<'a>(
       .size(11)
       .style(|theme| text::Style {
         color: Some(jellypilot_ui::tokens::palette(theme).text.metadata),
+        ..text::Style::default()
       }),
   )
   .center_x(Length::Fixed(44.0))
   .center_y(Length::Fixed(26.0));
   let trailing: Element<'_, Message> = if search_draft.is_empty() {
-    keycap.into()
+    keycap.boxed()
   } else {
     tooltip(
       control_button(Some(Icon::Close), None, ButtonVariant::Text)
@@ -377,10 +396,10 @@ fn unified_search_field<'a>(
     )
   };
 
-  search_field(leading, input, trailing).into()
+  search_field(leading, input, trailing).boxed()
 }
 
-fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
+fn sidebar_compact(state: &State) -> container::Container<'_, Element<'_, Message>> {
   let search_trigger = tooltip(
     control_button(Some(Icon::Search), None, ButtonVariant::Tonal)
       .style(sidebar::personal)
@@ -412,16 +431,19 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   );
   let personal_destination = Destination::PersonalLists(Route::Overview);
   let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
-  let personal_navigation = Column::new()
+  let personal_navigation = Column::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s1_5)
     .align_x(Alignment::Center)
     .width(Fill)
-    .push(compact_destination_button(
-      Icon::Home,
-      state.t("common-home"),
-      Destination::Home,
-      state.shell.destination == Destination::Home,
-    ));
+    .push(
+      (compact_destination_button(
+        Icon::Home,
+        state.t("common-home"),
+        Destination::Home,
+        state.shell.destination == Destination::Home,
+      ))
+      .boxed(),
+    );
   let libraries = match &state
     .full
     .as_ref()
@@ -430,19 +452,25 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     .data
     .shortcuts
   {
-    LoadState::Idle | LoadState::Loading => Column::new()
+    LoadState::Idle | LoadState::Loading => Column::<Element<'_, Message>>::new()
       .spacing(TOKENS.spacing.s2)
       .align_x(Alignment::Center)
-      .push(shortcut_skeleton(
-        state.shell.skeleton_phase,
-        state.kernel.settings.snapshot().reduced_motion(),
-      ))
-      .push(shortcut_skeleton(
-        state.shell.skeleton_phase,
-        state.kernel.settings.snapshot().reduced_motion(),
-      )),
+      .push(
+        (shortcut_skeleton(
+          state.shell.skeleton_phase,
+          state.kernel.settings.snapshot().reduced_motion(),
+        ))
+        .boxed(),
+      )
+      .push(
+        (shortcut_skeleton(
+          state.shell.skeleton_phase,
+          state.kernel.settings.snapshot().reduced_motion(),
+        ))
+        .boxed(),
+      ),
     LoadState::Ready(shortcuts) => {
-      let mut libraries = Column::new()
+      let mut libraries = Column::<Element<'_, Message>>::new()
         .spacing(TOKENS.spacing.s1_5)
         .align_x(Alignment::Center);
       for shortcut in shortcuts {
@@ -451,34 +479,40 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
           collection_type: shortcut.collection_type.clone(),
         };
         let active = state.shell.destination == destination;
-        libraries = libraries.push(compact_destination_button(
-          Icon::for_collection_type(&shortcut.collection_type),
-          &shortcut.name,
-          destination,
-          active,
-        ));
+        libraries = libraries.push(
+          (compact_destination_button(
+            Icon::for_collection_type(&shortcut.collection_type),
+            &shortcut.name,
+            destination,
+            active,
+          ))
+          .boxed(),
+        );
       }
       libraries
     }
-    LoadState::Failed(_) => Column::new().push(icon_with_color(
-      Icon::Warning,
-      IconSize::Sm,
-      state.palette().colors.warning,
-    )),
+    LoadState::Failed(_) => Column::<Element<'_, Message>>::new()
+      .push((icon_with_color(Icon::Warning, IconSize::Sm, state.palette().colors.warning)).boxed()),
   };
   let personal_navigation = personal_navigation
-    .push(compact_destination_button(
-      Icon::Heart,
-      state.t("shell-personal-lists"),
-      personal_destination,
-      personal_active,
-    ))
-    .push(compact_destination_button(
-      Icon::Filter,
-      state.t("saved-filters-title"),
-      Destination::SavedBrowse,
-      state.shell.destination == Destination::SavedBrowse,
-    ));
+    .push(
+      (compact_destination_button(
+        Icon::Heart,
+        state.t("shell-personal-lists"),
+        personal_destination,
+        personal_active,
+      ))
+      .boxed(),
+    )
+    .push(
+      (compact_destination_button(
+        Icon::Filter,
+        state.t("saved-filters-title"),
+        Destination::SavedBrowse,
+        state.shell.destination == Destination::SavedBrowse,
+      ))
+      .boxed(),
+    );
   let refreshing = crate::app::shell::refresh_busy(state);
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)
@@ -523,14 +557,14 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   let content = column![
     compact_search,
     personal_navigation,
-    scrollable(libraries).height(Fill),
+    scrollable(libraries).smooth_scroll(false).height(Fill),
     bottom
   ]
   .spacing(TOKENS.spacing.s4)
   .width(Fill)
   .height(Fill);
 
-  container(content)
+  container(content.boxed())
     .padding(TOKENS.spacing.s4)
     .height(Fill)
     .style(|_theme| container::Style {
@@ -564,9 +598,9 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   .style(move |_| container::Style::default().background(palette.colors.surface.scale_alpha(0.6)));
   // The account layer blurs the complete scene, including Settings, once.
   if crate::app::accounts::blocking_modal(&state.accounts) {
-    dialog.into()
+    dialog.boxed()
   } else {
-    modal(TOKENS.modal.backdrop_blur_sigma, dialog)
+    modal(TOKENS.modal.backdrop_blur_sigma, dialog).boxed()
   }
 }
 
@@ -644,7 +678,7 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1)
     .align_y(Alignment::Center)
     .width(Fill)
-    .into()
+    .boxed()
 }
 
 fn destination_button<'a>(
@@ -676,6 +710,7 @@ fn destination_button<'a>(
             .font(if active { HEADING_FONT } else { BODY_FONT })
             .style(move |theme| text::Style {
               color: Some(jellypilot_ui::widgets::button::style(theme, variant, status).text_color),
+              ..text::Style::default()
             })
         )
         .width(Fill),
@@ -683,7 +718,7 @@ fn destination_button<'a>(
       .spacing(TOKENS.spacing.s2_5)
       .align_y(Alignment::Center)
       .width(Fill)
-      .into()
+      .boxed()
     },
     variant,
   )
@@ -700,7 +735,7 @@ fn destination_button<'a>(
   focus_tooltip(btn, tooltip_label, TooltipOptions::default())
 }
 fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
-  skeleton_block(Length::Fill, 38.0, skeleton_phase, reduced_motion).into()
+  skeleton_block(Length::Fill, 38.0, skeleton_phase, reduced_motion).boxed()
 }
 
 fn compact_destination_button<'a>(
