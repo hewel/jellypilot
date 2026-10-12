@@ -30,7 +30,7 @@ static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 fn next_epoch() -> u64 {
   NEXT_EPOCH
-    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
       value.checked_add(1)
     })
     .unwrap_or_else(|_| std::process::abort())

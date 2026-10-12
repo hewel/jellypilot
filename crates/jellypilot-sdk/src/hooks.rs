@@ -14,6 +14,10 @@
 /// to end the player session and clear its recovery point. The hook is
 /// invoked for `activate_candidate`, `disconnect`, and `sign_out` whenever a
 /// profile is currently active.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait injects must_use on boxed futures; rust-clippy#17529"
+)]
 #[async_trait::async_trait]
 pub trait SdkHooks: Send + Sync {
     /// Returns `true` when teardown finished and the handoff may proceed.

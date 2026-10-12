@@ -34,7 +34,7 @@ Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-plat
 **JellyPilot** is a native desktop client for [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/): a complete library browser, player, and cast receiver — not a wrapper around the web interface. Native UI and real MPV playback, with no browser in between.
 
 - **🖥️ A full desktop client, not a web wrapper**: Browse movies and series, curate Favorites, Watchlist, and Watch History, and switch between multiple servers and accounts — all in a fast, custom-drawn native interface.
-- **🎬 Embedded MPV playback (Linux default)**: The pinned, host-enabled mpv fork renders right inside the player window — 10-bit Vulkan surface, direct VAAPI hardware decoding, and Dolby Vision Profile 5 SDR tone-mapping — with floating controls and zero interference from your system MPV configuration.
+- **🎬 Embedded MPV playback (Linux default)**: The pinned, host-enabled mpv fork renders right inside the player window — 10-bit video textures with 8-bit SDR presentation fallback, direct VAAPI hardware decoding, and Dolby Vision Profile 5 SDR tone-mapping — with floating controls and zero interference from your system MPV configuration.
 - **🚀 External MPV playback (Windows & macOS default, optional on Linux)**: Drives a standalone MPV process over JSON IPC. Your personal `mpv.conf`, custom GLSL shaders, input scripts, and profiles remain fully in charge.
 - **📺 Cast receiver & remote control**: Automatically discovered on your local network as a native cast target by Jellyfin clients. Transport commands, playback progress, and track changes sync bidirectionally across the main window, player bar, and system tray.
 
@@ -70,7 +70,7 @@ Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-plat
 | :--- | :--- |
 | 🎞️ **Multi-Server & Account Management** | Connect to multiple Jellyfin and Emby servers with saved profiles, OS keychain credential storage, Quick Connect, and instant account switching |
 | 📚 **Rich Browsing & Personal Lists** | Movies and series libraries with live filters, virtualized poster grids, and cached artwork; account-scoped Watchlist, Favorites, and detailed Watch History |
-| 🎬 **Dual-Mode MPV Playback Engine** | Embedded MPV by default on Linux (10-bit Vulkan surface, direct VAAPI hardware decoding, Dolby Vision Profile 5 SDR tone-mapping); External MPV on Windows/macOS over JSON IPC (your configs, shaders, and scripts stay in charge) |
+| 🎬 **Dual-Mode MPV Playback Engine** | Embedded MPV by default on Linux (10-bit video textures, 8-bit SDR presentation fallback, direct VAAPI hardware decoding, Dolby Vision Profile 5 SDR tone-mapping); External MPV on Windows/macOS over JSON IPC (your configs, shaders, and scripts stay in charge) |
 | ⏭️ **Smart Playback & Binge-Watching** | In-player episode drawer, automatic/manual native intro skipping, per-season volume memory, automatic next-episode progression, responsive floating controls, and customizable shortcuts |
 | 💬 **Audio Tracks & External Subtitles** | Server-hosted external subtitles, embedded audio/subtitle stream switcher, and configurable preferred subtitle language order |
 | 📺 **Cast Receiver & Remote Sync** | Discovered as a native cast device in Jellyfin; bidirectional playback command mirroring, progress reporting, and full system tray background integration |
@@ -286,12 +286,14 @@ On Windows, the library is `lib/jellypilot/libmpv-2.dll` and the baseline comes 
 The Windows baseline requests `hwdec=d3d11va-copy`: hardware-decoded frames pass through
 system memory before upload to the existing Vulkan renderer. Unsupported codecs or devices
 can fall back to software decoding. Start it with `bun run task iced run --release --embedded`.
-Windows presentation prefers `Rgb10a2Unorm`, then falls back to `Bgra8Unorm` or
+Linux and Windows presentation prefer `Rgb10a2Unorm`, then fall back to `Bgra8Unorm` or
 `Rgba8Unorm` if the window surface cannot present 10-bit output. The mpv producer and
-private video texture remain 10-bit; final UI composition and presentation use 8-bit targets.
+private video texture remain 10-bit. Linux keeps its float scene attachment; Windows
+uses the selected surface format for UI composition. Final presentation on either
+platform uses the selected bit depth, so 8-bit output may increase visible banding.
 The selected format is recorded in startup logs, with a warning on 8-bit fallback.
 sRGB attachments are excluded to avoid encoding mpv's gamma-encoded SDR pixels twice.
-Linux continues to require `Rgb10a2Unorm` presentation (ADR 0041).
+See [ADR 0047](docs/adr/0047-linux-embedded-sdr-presentation.md).
 The MPV build task stages the main DLL; use the Windows packaging task below to collect
 its runtime dependencies for distribution. Changing the source baseline requires restaging
 it (the MPV build task does this); an already running player keeps its startup configuration.
@@ -358,7 +360,7 @@ mpv before removing its process-private IPC directory.
 
 Linux Wayland Embedded MPV offers **experimental HDR10 output** in Settings →
 MPV → HDR output (experimental).
-**Auto** selects HDR for decoded PQ or HLG video when the pinned host and Vulkan
+**Auto** selects HDR for decoded PQ or HLG video when the pinned host and a 10-bit Vulkan
 surface support PQ, returning to SDR for SDR video or when video is unloaded.
 Pausing retains the source mode. **On** keeps the whole window in HDR whenever
 supported, including SDR video mapped into PQ; **Off** stays SDR. Unsupported

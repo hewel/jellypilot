@@ -32,6 +32,10 @@ pub trait SecureCredentialStore: Send + Sync {
 /// connected for a `disconnect` cleanup retry, and new playback and content
 /// writes remain blocked until that retry succeeds. This is where the app
 /// finishes playback and remote teardown.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait injects must_use on boxed futures; rust-clippy#17529"
+)]
 #[uniffi::export(foreign, async_runtime = "tokio")]
 #[async_trait::async_trait]
 pub trait SdkHooks: Send + Sync {

@@ -63,7 +63,7 @@ static NEXT_VIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn next_view_generation() -> u64 {
   NEXT_VIEW_GENERATION
-    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
       value.checked_add(1)
     })
     .expect("detail view identity exhausted")

@@ -63,7 +63,7 @@ pub struct BrowseDeliveryToken(u64);
 impl BrowseDeliveryToken {
     fn next() -> Result<Self, LibraryBrowseCoreError> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .map(Self)
