@@ -40,6 +40,12 @@ import kotlinx.coroutines.withTimeout
 
 internal data class GestureSeek(val token: Long, val positionSeconds: Double)
 
+/** A prepared subtitle is either an mpv track ID (including Off) or a load's external source. */
+internal sealed interface StartupSubtitle {
+  data class Track(val id: Int) : StartupSubtitle
+  data class External(val sourceIndex: Int) : StartupSubtitle
+}
+
 /** Android resource owner. Media-server policy and reporting belong to the shared SDK. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHandler {
@@ -233,6 +239,58 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   fun loadUrl(url: String, subtitle: Uri?) = load(MediaLocator.Remote(url), null, subtitle)
   fun loadFile(uri: Uri, subtitle: Uri?) = load(null, uri, subtitle)
 
+  /**
+   * Starts one media item inside the caller's serialized, admitted operation.
+   * [beforeResume] runs only after paused configuration is confirmed; it owns business writes,
+   * not native commands. Success acknowledges physical resume. Failure/cancellation waits for
+   * physical retirement, without rolling back writes already made by [beforeResume].
+   */
+  suspend fun startMedia(
+    request: MediaLoad,
+    volume: Int? = null,
+    audio: Int? = null,
+    subtitle: StartupSubtitle? = null,
+    stillCurrent: () -> Boolean,
+    bindGeneration: (Long) -> Unit = {},
+    beforeResume: suspend () -> Unit = {},
+  ): Boolean {
+    if (!stillCurrent()) return false
+    var accepted = false
+    try {
+      val generation = loadMedia(
+        if (request.startPaused) request else request.copy(startPaused = true),
+        stillCurrent,
+        bindGeneration,
+      )
+      val current = { snapshot.value.generation == generation && stillCurrent() }
+      val subtitleId = when (subtitle) {
+        null -> null
+        is StartupSubtitle.Track -> subtitle.id
+        is StartupSubtitle.External -> {
+          val observed = withTimeout(10_000) {
+            snapshot.first { !current() || !admissionEligible || it.error != null ||
+              it.tracks.any { track -> track.kind == TrackKind.SUBTITLE && track.externalSourceIndex == subtitle.sourceIndex } }
+          }
+          if (!current() || !admissionEligible || observed.error != null) return false
+          observed.tracks.firstOrNull { it.kind == TrackKind.SUBTITLE && it.externalSourceIndex == subtitle.sourceIndex }
+            ?.mpvId ?: return false
+        }
+      }
+      if (!configureMedia(volume, audio, subtitleId, current)) return false
+      beforeResume()
+      accepted = resumeMedia(stillCurrent = current)
+      return accepted
+    } catch (_: TimeoutCancellationException) {
+      return false
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+      throw cancelled
+    } catch (_: Exception) {
+      return false
+    } finally {
+      if (!accepted) retireMedia()
+    }
+  }
+
   /** Submits a prepared SDK plan without moving Surface or video ownership across FFI. */
   suspend fun loadMedia(
     request: MediaLoad,
@@ -377,7 +435,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
     if (!acknowledged) retireMedia()
   }
   /** Initial preferences settle while paused, before the admitted operation may make audio audible. */
-  suspend fun configureMedia(volume: Int?, audio: Int?, subtitle: Int?, stillCurrent: () -> Boolean): Boolean {
+  private suspend fun configureMedia(volume: Int?, audio: Int?, subtitle: Int?, stillCurrent: () -> Boolean): Boolean {
     val generation = snapshot.value.generation
     val submitted = synchronized(policyLock) {
       val current = host
@@ -550,7 +608,7 @@ internal class NativePlayback(context: Context) : AutoCloseable, PlayerIntentHan
   }
 
   /** Never releases an SDK admission while native teardown is merely requested or timed out. */
-  suspend fun retireMedia() = withContext(NonCancellable) {
+  private suspend fun retireMedia() = withContext(NonCancellable) {
     if (!stopAndWait()) {
       // A wedged ordinary stop makes this host unusable. Disposal is the final physical boundary;
       // a stuck native destroy deliberately keeps account admission closed until process restart.

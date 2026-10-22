@@ -104,8 +104,15 @@ Natural-end automatic episode advance retains settings by the same contract, but
 source-review evidence only in this revision. The tests do not measure
 pixels, subtitle brightness, physical screen brightness or SDR/HDR appearance; those remain human
 checks. Tests with no Surface establish property/lifecycle behavior only.
-`PreparedPlaybackBoundaryTest` additionally creates two resource owners in one process, checks their
-distinct MediaSessions initialize, and verifies releasing one leaves the other ready.
+`PreparedPlaybackBoundaryTest` exercises startup through `NativePlayback.startMedia`: a held media
+response cannot acknowledge startup, the business checkpoint observes confirmed paused volume/track
+selection, and success waits for physical resume. It covers failed earlier external subtitle sources,
+revoked load/startup-resume, checkpoint failure, and cancellation while the checkpoint is suspended.
+Failed startup must be physically retired before completion; a failed business write does not undo
+earlier completed writes. The separate ordinary-resume case must retain the same paused session.
+It also creates two resource owners in one process, checks their distinct MediaSessions initialize,
+and verifies releasing one leaves the other ready. These are device instrumentation scenarios;
+host checks and instrumentation compilation do not establish native execution.
 Native file observations are accepted only while the started load still owns the visible
 generation. The picture-settings stop/replacement fixture also checks that late native callbacks
 cannot revive Ready after stop, and queued brightness/speed commands are rejected after retirement.

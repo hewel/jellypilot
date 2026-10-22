@@ -159,35 +159,31 @@ internal class MediaPlaybackCoordinator(
       val accepted = withContext(NonCancellable) { session.runAdmitted(object : PlaybackHostOperation {
         override suspend fun execute(): Boolean {
           if (!canStart(command) || !originCurrent() || current !== entry) return false
-          var accepted = false
-          return try {
-            player.loadMedia(
-              MediaLoad(
-                locator = MediaLocator.Remote(plan.streamUrl.value()),
-                mediaId = plan.itemId,
-                startPositionSeconds = plan.startPositionSeconds,
-                startPaused = true,
-                externalSubtitles = plan.externalSubtitles.map { NativeSubtitle(MediaLocator.Remote(it.url.value()), it.title, it.language) },
-              ),
-              stillCurrent = { canStart(command) && originCurrent() && current === entry },
-              bindGeneration = entry.generation::set,
-            )
-            val stillCurrent = { canStart(command) && originCurrent() && current === entry }
-            val externalIndex = plan.externalSubtitles.indexOfFirst { it.providerIndex == plan.subtitleStreamIndex }
-            if (externalIndex >= 0) withTimeout(10_000) {
-              player.snapshot.first { it.generation != entry.generation.get() || !stillCurrent() || it.error != null ||
-                it.tracks.any { track -> track.kind == TrackKind.SUBTITLE && track.externalSourceIndex == externalIndex } }
+          // The SDK resolves embedded/Off IDs; external IDs only exist after native loading.
+          val subtitle = plan.mpvSubtitleIndex?.let { StartupSubtitle.Track(it.toInt()) }
+            ?: plan.subtitleStreamIndex?.let { index ->
+              val source = plan.externalSubtitles.indexOfFirst { it.providerIndex == index }
+              if (source < 0) return false
+              StartupSubtitle.External(source)
             }
-            val audio = plan.mpvAudioIndex?.toInt()
-            val subtitle = plan.mpvSubtitleIndex?.toInt() ?: plan.subtitleStreamIndex?.let { providerToPlayer(entry, TrackKind.SUBTITLE, it) }
-            if (plan.subtitleStreamIndex != null && subtitle == null) return false
-            if (!player.configureMedia(plan.initialVolume?.toInt(), audio, subtitle, stillCurrent)) return false
-            selection?.audioStreamIndex?.let { session.rememberTrack("Audio", it) }
-            selection?.subtitleStreamIndex?.let { session.rememberTrack("Subtitle", it) }
-            accepted = player.resumeMedia(stillCurrent = stillCurrent)
-            accepted
-          } catch (_: Exception) { false }
-          finally { if (!accepted) player.retireMedia() }
+          return player.startMedia(
+            MediaLoad(
+              locator = MediaLocator.Remote(plan.streamUrl.value()),
+              mediaId = plan.itemId,
+              startPositionSeconds = plan.startPositionSeconds,
+              startPaused = true,
+              externalSubtitles = plan.externalSubtitles.map { NativeSubtitle(MediaLocator.Remote(it.url.value()), it.title, it.language) },
+            ),
+            volume = plan.initialVolume?.toInt(),
+            audio = plan.mpvAudioIndex?.toInt(),
+            subtitle = subtitle,
+            stillCurrent = { canStart(command) && originCurrent() && current === entry },
+            bindGeneration = entry.generation::set,
+            beforeResume = {
+              selection?.audioStreamIndex?.let { session.rememberTrack("Audio", it) }
+              selection?.subtitleStreamIndex?.let { session.rememberTrack("Subtitle", it) }
+            },
+          )
         }
       }) }
       if (!accepted || !canStart(command) || !originCurrent()) {

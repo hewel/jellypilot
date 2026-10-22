@@ -5,12 +5,18 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.hewel.jellypilot.player.MediaLoad
 import io.github.hewel.jellypilot.player.MediaLocator
+import io.github.hewel.jellypilot.player.PlayerSnapshot
 import io.github.hewel.jellypilot.player.PlayerStatus
+import io.github.hewel.jellypilot.player.TrackKind
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -51,24 +57,39 @@ class PreparedPlaybackBoundaryTest {
     } finally { isolated.close() }
   }
 
-  @Test fun preparedLoadReceiptWaitsForFileLoadedAndConfirmsPausedConfiguration() = withPlayer { player, media ->
+  @Test fun startupWaitsForLoadedAndPausedConfigurationBeforeBusinessCheckpointAndResume() = withPlayer { player, media ->
     HeldMediaServer(media).use { server -> runBlocking {
-      val receipt = async(Dispatchers.Default) { player.loadMedia(MediaLoad(MediaLocator.Remote(server.url), "receipt", startPaused = true)) }
+      val generation = AtomicLong(-1)
+      val configured = CompletableDeferred<PlayerSnapshot>()
+      val resume = CompletableDeferred<Unit>()
+      val receipt = async(Dispatchers.Default) {
+        player.startMedia(
+          MediaLoad(MediaLocator.Remote(server.url), "receipt"),
+          volume = 27, audio = 1, subtitle = StartupSubtitle.Track(-1),
+          stillCurrent = { true }, bindGeneration = generation::set,
+          beforeResume = {
+            configured.complete(player.snapshot.value)
+            resume.await()
+          },
+        )
+      }
       try {
         assertTrue("native HTTP open must be in flight", server.awaitRequest())
         assertFalse("load submission cannot acknowledge business admission", receipt.isCompleted)
+        assertFalse("business writes cannot precede loaded/configured media", configured.isCompleted)
         server.release()
-        val generation = withTimeout(25_000) { receipt.await() }
-        val loaded = withTimeout(25_000) { player.snapshot.first { it.generation == generation && it.tracks.isNotEmpty() } }
-        assertEquals(PlayerStatus.READY, loaded.status)
-        assertTrue("selection/volume must settle before unpausing", loaded.paused)
-        val audio = loaded.tracks.first { it.kind == io.github.hewel.jellypilot.player.TrackKind.AUDIO }.mpvId
-        assertTrue(player.configureMedia(27, audio, -1) { true })
-        val configured = player.snapshot.value
-        assertEquals(27, configured.volumePercent)
-        assertTrue(configured.paused)
-        assertTrue(configured.tracks.none { it.kind == io.github.hewel.jellypilot.player.TrackKind.SUBTITLE && it.isSelected })
-      } finally { server.release(); assertTrue(player.stopAndWait()) }
+        val paused = withTimeout(25_000) { configured.await() }
+        assertEquals(generation.get(), paused.generation)
+        assertTrue("startup forces paused loading even without a paused request", paused.paused)
+        assertEquals(27, paused.volumePercent)
+        assertTrue(paused.tracks.any { it.kind == TrackKind.AUDIO && it.mpvId == 1 && it.isSelected })
+        assertTrue(paused.tracks.none { it.kind == TrackKind.SUBTITLE && it.isSelected })
+        assertFalse("the business checkpoint must settle before resume", receipt.isCompleted)
+        resume.complete(Unit)
+        assertTrue(withTimeout(25_000) { receipt.await() })
+        assertEquals(generation.get(), player.snapshot.value.generation)
+        assertFalse("success acknowledges physical resume", player.snapshot.value.paused)
+      } finally { server.release(); resume.complete(Unit); receipt.cancelAndJoin(); assertTrue(player.stopAndWait()) }
     } }
   }
 
@@ -76,13 +97,17 @@ class PreparedPlaybackBoundaryTest {
     HeldMediaServer(media).use { server -> runBlocking {
       val current = AtomicBoolean(true)
       val receipt = async(Dispatchers.Default) {
-        runCatching { player.loadMedia(MediaLoad(MediaLocator.Remote(server.url), "revoked", startPaused = true), current::get) }
+        player.startMedia(
+          MediaLoad(MediaLocator.Remote(server.url), "revoked"),
+          stillCurrent = current::get,
+          beforeResume = { fail("a revoked load cannot reach business writes") },
+        )
       }
       try {
         assertTrue(server.awaitRequest())
         current.set(false)
         server.release()
-        assertTrue("a revoked origin must fail instead of acknowledging the load", withTimeout(25_000) { receipt.await() }.isFailure)
+        assertFalse("a revoked origin must fail instead of acknowledging startup", withTimeout(25_000) { receipt.await() })
         assertEquals(PlayerStatus.IDLE, player.snapshot.value.status)
         assertFalse(player.snapshot.value.playWhenReady)
       } finally { server.release(); assertTrue(player.stopAndWait()) }
@@ -95,15 +120,21 @@ class PreparedPlaybackBoundaryTest {
     val subtitle = File(media.parentFile, "requested-subtitle.srt")
     check(stagedSubtitle.renameTo(subtitle))
     try {
-      val generation = player.loadMedia(MediaLoad(MediaLocator.LocalFile(media.path), "subtitles", startPaused = true,
-        externalSubtitles = listOf(
-          io.github.hewel.jellypilot.player.ExternalSubtitle(MediaLocator.LocalFile(File(media.parentFile, "missing.srt").path)),
-          io.github.hewel.jellypilot.player.ExternalSubtitle(MediaLocator.LocalFile(subtitle.path)),
-        )))
-      val loaded = withTimeout(25_000) { player.snapshot.first { it.generation == generation && it.tracks.any { track -> track.isExternal && track.externalSourceIndex == 1 } } }
-      val external = loaded.tracks.single { it.isExternal && it.externalSourceIndex == 1 }
-      assertEquals("failed source 0 must not relabel source 1", 1, external.externalSourceIndex)
-      assertTrue(player.configureMedia(null, null, external.mpvId) { true })
+      assertTrue(player.startMedia(
+        MediaLoad(MediaLocator.LocalFile(media.path), "subtitles",
+          externalSubtitles = listOf(
+            io.github.hewel.jellypilot.player.ExternalSubtitle(MediaLocator.LocalFile(File(media.parentFile, "missing.srt").path)),
+            io.github.hewel.jellypilot.player.ExternalSubtitle(MediaLocator.LocalFile(subtitle.path)),
+          )),
+        subtitle = StartupSubtitle.External(1),
+        stillCurrent = { true },
+        beforeResume = {
+          val configured = player.snapshot.value
+          assertTrue(configured.paused)
+          val selected = configured.tracks.single { it.kind == TrackKind.SUBTITLE && it.isSelected }
+          assertEquals("failed source 0 must not relabel source 1", 1, selected.externalSourceIndex)
+        },
+      ))
     } finally { assertTrue(player.stopAndWait()) }
   } }
 
@@ -126,6 +157,57 @@ class PreparedPlaybackBoundaryTest {
       assertTrue(retained.status == PlayerStatus.READY || retained.status == PlayerStatus.BUFFERING)
       assertTrue(retained.paused)
       assertFalse(retained.playWhenReady)
+    } finally { player.setEligible(true); assertTrue(player.stopAndWait()) }
+  } }
+
+  @Test fun failedBusinessCheckpointRetiresStartupWithoutRollingBackCompletedWrites() = withPlayer { player, media -> runBlocking {
+    var remembered = false
+    val accepted = player.startMedia(
+      MediaLoad(MediaLocator.LocalFile(media.path), "checkpoint-failed"),
+      stillCurrent = { true },
+      beforeResume = { remembered = true; error("later business write failed") },
+    )
+    assertTrue("startup does not roll back a completed business write", remembered)
+    assertFalse(accepted)
+    assertEquals("failure cannot release admission before retirement", PlayerStatus.IDLE, player.snapshot.value.status)
+    assertFalse(player.snapshot.value.playWhenReady)
+  } }
+
+  @Test fun cancellationDuringBusinessCheckpointWaitsForStartupRetirement() = withPlayer { player, media -> runBlocking {
+    val entered = CompletableDeferred<Unit>()
+    val receipt = async(Dispatchers.Default) {
+      player.startMedia(
+        MediaLoad(MediaLocator.LocalFile(media.path), "checkpoint-cancelled"),
+        stillCurrent = { true },
+        beforeResume = { entered.complete(Unit); awaitCancellation() },
+      )
+    }
+    try {
+      withTimeout(25_000) { entered.await() }
+      receipt.cancelAndJoin()
+      assertTrue(receipt.isCancelled)
+      assertEquals("cancellation cannot release admission before retirement", PlayerStatus.IDLE, player.snapshot.value.status)
+      assertFalse(player.snapshot.value.playWhenReady)
+    } finally { receipt.cancelAndJoin(); assertTrue(player.stopAndWait()) }
+  } }
+
+  @Test fun admissionLossDuringStartupResumeRetiresInsteadOfRetainingAPausedSession() = withPlayer { player, media -> runBlocking {
+    val revoked = AtomicBoolean(false)
+    try {
+      val accepted = player.startMedia(
+        MediaLoad(MediaLocator.LocalFile(media.path), "startup-resume-revoked"),
+        stillCurrent = {
+          if (player.snapshot.value.paused) true else {
+            revoked.set(true)
+            player.setEligible(false)
+            false
+          }
+        },
+      )
+      assertTrue("the test must reach physical resume before revoking it", revoked.get())
+      assertFalse(accepted)
+      assertEquals(PlayerStatus.IDLE, player.snapshot.value.status)
+      assertFalse(player.snapshot.value.playWhenReady)
     } finally { player.setEligible(true); assertTrue(player.stopAndWait()) }
   } }
 
