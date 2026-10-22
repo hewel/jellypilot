@@ -187,7 +187,7 @@ Download `jellypilot-*.dmg` from [GitHub Releases](https://github.com/hewel/jell
 - [Rust](https://rustup.rs/) 1.98 or newer
 - [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
 - Linux GUI: GTK 3, `libxkbcommon`, and Wayland development packages (`libgtk-3-dev`, `libxkbcommon-dev`, `libwayland-dev`, `wayland-protocols`)
-- Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader, FFmpeg dev libraries, `libplacebo` >= 7.360.1, and `libass`.
+- Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader, FFmpeg dev libraries, `libplacebo` >= 7.360.1, `libass`, and Lua or LuaJIT development files (Ubuntu: `libluajit-5.1-dev`; Arch: `luajit`). Lua support is required for the host's `osc=no` option.
 - Windows Embedded MPV: the same native build tools and media libraries in a Windows environment such as MSYS2 UCRT64, plus Lua or LuaJIT development files. The build requires D3D hardware decoding and Lua support; Lua provides the `osc` option even when the host sets `osc=no`.
 
 </details>
@@ -268,7 +268,7 @@ down to 768 logical pixels; at 900 pixels and below, the landscape thumbnail is 
 
 ```bash
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
-# Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1, libass.
+# Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1, libass, Lua/LuaJIT.
 bun run task mpv build --source /absolute/path/to/mpv
 bun run task iced run
 ```

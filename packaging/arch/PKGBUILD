@@ -17,6 +17,7 @@ depends=(
   'ffmpeg'
   'libplacebo'
   'libass'
+  'luajit'
   'vulkan-icd-loader'
 )
 optdepends=(
