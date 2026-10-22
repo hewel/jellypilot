@@ -220,7 +220,7 @@ jobs:
                 libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols \
                 libfuse2t64 file \
                 libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
-                libswresample-dev libswscale-dev libplacebo-dev libass-dev \
+                libswresample-dev libswscale-dev libplacebo-dev libass-dev libluajit-5.1-dev \
                 libvulkan-dev glslang-dev libshaderc-dev liblcms2-dev
               # Ubuntu 26.04 ships libplacebo 7.360.0; pinned mpv meson wants 7.360.1.
               curl --retry 8 --retry-all-errors --retry-delay 2 -fL \
@@ -296,7 +296,7 @@ jobs:
               set -euo pipefail
               pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland \
                 meson ninja pkgconf vulkan-headers vulkan-icd-loader ffmpeg libplacebo libass \
-                shaderc lcms2
+                shaderc lcms2 luajit
               useradd --create-home builder
               mkdir -p /work/target/release/bundle
               chown -R builder:builder /work

@@ -41,6 +41,7 @@ depends = [
   "libswscale9",
   "libplacebo360",
   "libass9",
+  "libluajit-5.1-2",
   "libvulkan1",
 ]
 [deb.files]

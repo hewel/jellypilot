@@ -9,11 +9,11 @@
     "-Dlibmpv=true",
     "-Dcplayer=false",
     "-Dvulkan=enabled",
+    "-Dlua=enabled",
     "-Dbuild-date=false"
   ],
   "windowsMesonOptions": [
-    "-Dd3d-hwaccel=enabled",
-    "-Dlua=enabled"
+    "-Dd3d-hwaccel=enabled"
   ],
   "requiredPackages": [
     "vulkan >= 1.3.238",
