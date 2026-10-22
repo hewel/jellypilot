@@ -3,10 +3,14 @@
 use std::fmt;
 use std::sync::Arc;
 
+use jellypilot_core::browse_model::{BrowseQueryPolicy, BrowseSource};
+use jellypilot_core::request_gate::RequestGate;
 pub use jellypilot_core::saved_browse::{SavedBrowseDraft, SavedBrowseFilter, SavedBrowseId};
 use jellypilot_core::saved_browse::{SavedBrowseStore, SavedBrowseStoreError};
 use jellypilot_core::watchlist::ProfileScope;
-use jellypilot_media_server::{VideoLibraryKind, VideoLibraryShortcut};
+use jellypilot_media_server::VideoLibraryKind;
+
+use crate::browse::{BrowsePresentation, BrowseSession};
 
 use crate::{OperationToken, Sdk, SdkError, SdkInner, SdkState};
 
@@ -56,14 +60,6 @@ impl From<SavedBrowseStoreError> for SavedBrowseError {
     }
 }
 
-/// One confirmed directory match and its complete saved query. Consumers install
-/// both together; the display-name snapshot never substitutes for library identity.
-#[derive(Clone, Debug)]
-pub struct ResolvedSavedBrowse {
-    pub filter: SavedBrowseFilter,
-    pub library: VideoLibraryShortcut,
-}
-
 impl SdkInner {
     fn saved_browse_scope<'a>(
         &self,
@@ -101,7 +97,31 @@ impl SdkInner {
         let state = self.state.lock().map_err(|_| SdkError::Closed)?;
         let scope = self.saved_browse_scope(&state, token, require_admission)?;
         let mut store = SavedBrowseStore::load_in_dir(self.config.storage_dir.clone())?;
-        operation(&mut store, scope)
+        self.saved_browse_scope(&state, token, require_admission)?;
+        let result = operation(&mut store, scope);
+        // Committed store truth survives cancellation of result delivery.
+        let notifications = if result.is_ok() {
+            let records = store.records_for(scope);
+            state
+                .browsers
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .map(|browser| {
+                    let changed =
+                        browser.token_scope() == &token.scope && browser.reconcile_saved(&records);
+                    (browser, changed)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        drop(state);
+        for (browser, changed) in notifications {
+            if changed {
+                browser.notify_saved_changed();
+            }
+        }
+        result
     }
 
     async fn run_saved_browse<T: Send + 'static>(
@@ -176,14 +196,14 @@ impl Sdk {
             .await
     }
 
-    /// Always refreshes the current user's directory. Missing identity after a
-    /// successful response differs from a transport failure; no query condition
-    /// or stale facet value is normalized away while resolving the destination.
-    pub async fn saved_browse_resolve_for_apply(
+    /// Resolves a fresh directory and adopts the complete saved query under
+    /// an independent lifetime. Cancelling the manager afterwards cannot close it.
+    pub async fn open_saved_browser(
         &self,
         token: Arc<OperationToken>,
         id: SavedBrowseId,
-    ) -> Result<ResolvedSavedBrowse, SavedBrowseError> {
+        presentation: BrowsePresentation,
+    ) -> Result<Arc<BrowseSession>, SavedBrowseError> {
         let filter = self
             .inner
             .run_saved_browse(Arc::clone(&token), true, move |store, scope| {
@@ -194,18 +214,7 @@ impl Sdk {
             })
             .await?;
         let libraries = self.library_shortcuts(Arc::clone(&token)).await?;
-        // Rename/delete can settle while HTTP is in flight. Do not deliver an
-        // older record even when the scope itself has not changed.
-        let expected = filter.clone();
-        self.inner
-            .run_saved_browse(token, true, move |store, scope| {
-                let current = store.get(scope, id).ok_or(SavedBrowseError::Missing)?;
-                if current != &expected {
-                    return Err(SdkError::Stale.into());
-                }
-                Ok(())
-            })
-            .await?;
+        let adopted_token = self.new_operation_token()?;
         let collection_type = match filter.collection_type {
             VideoLibraryKind::Movies => "movies",
             VideoLibraryKind::TvShows => "tvshows",
@@ -216,6 +225,42 @@ impl Sdk {
                 library.id == filter.library_id && library.collection_type == collection_type
             })
             .ok_or(SavedBrowseError::LibraryUnavailable)?;
-        Ok(ResolvedSavedBrowse { filter, library })
+        let inner = Arc::clone(&self.inner);
+        let worker_token = Arc::clone(&token);
+        let (session, work) = self
+            .inner
+            .handle
+            .spawn_blocking(move || {
+                let mut state = inner.state.lock().map_err(|_| SdkError::Closed)?;
+                let scope = inner.saved_browse_scope(&state, &worker_token, true)?;
+                inner.check_browse_scope(&state, &adopted_token)?;
+                let store = SavedBrowseStore::load_in_dir(inner.config.storage_dir.clone())?;
+                let current = store.get(scope, id).ok_or(SavedBrowseError::Missing)?;
+                if current != &filter {
+                    return Err(SdkError::Stale.into());
+                }
+                inner.saved_browse_scope(&state, &worker_token, true)?;
+                let source = BrowseSource::Library {
+                    session: RequestGate::default().begin_login(),
+                    shortcut: library,
+                };
+                let policy = BrowseQueryPolicy::saved(filter, presentation);
+                inner
+                    .create_browser(&mut state, &adopted_token, source, policy)
+                    .map_err(SavedBrowseError::from)
+            })
+            .await
+            .map_err(|_| SdkError::Storage("saved filter worker failed".to_owned()))??;
+        let admission = {
+            let state = self.inner.state.lock().map_err(|_| SdkError::Closed)?;
+            self.inner
+                .saved_browse_scope(&state, &token, true)
+                .map(|_| ())
+        };
+        // A completed worker is not delivery: its caller may have retired
+        // while this future was unpolled. Drop rejected owners only unlocked.
+        admission?;
+        session.dispatch(work);
+        Ok(session)
     }
 }

@@ -72,7 +72,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
   private var browserSuspended = false
   /** Incremented on every suspend intent; lets a failed detail load resume only its own suspension. */
   private var browserSuspendEpoch = 0L
-  /** Monotonic session generation; published into BrowserUi so the grid keys its viewport per session, not per scope-relative identity. */
+  /** Stable session generation; SDK viewport revisions distinguish same-handle query resets. */
   private var browserGeneration = 0L
   private var browserSequence = 0L
   private var libraries = emptyList<VideoLibraryShortcut>()
@@ -628,11 +628,7 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     }
   }
 
-  /**
-   * Replaces the browse session with one immutable SDK query. The old session
-   * is closed before the new one exists, so a stale query can never publish
-   * into the new projection.
-   */
+  /** Replaces the query owner only for a new Library/Search navigation entry. */
   private fun openBrowserSession(query: BrowseQuery) {
     closeBrowserSession()
     if (sdk.activeProfile() == null) return
@@ -681,6 +677,8 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     if (browseSession !== session || browserGeneration != generation || !sdk.isScopeActive(snapshot.scope)) return
     val scope = snapshot.scope
     val previous = state.value.browser
+    // A synchronous preference edit may publish ahead of an already-resumed collector.
+    if (previous.generation == generation && snapshot.revision < previous.revision) return
     val newFailure = (snapshot.status == BrowseStatus.FAILED &&
       (previous.generation != generation || previous.status != BrowseUiStatus.Failed || previous.error != snapshot.error)) ||
       (snapshot.refreshError != null && (previous.generation != generation || previous.refreshError != snapshot.refreshError))
@@ -689,6 +687,8 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
         browser = BrowserUi(
           revision = snapshot.revision,
           generation = generation,
+          viewportRevision = snapshot.viewportRevision,
+          identity = snapshot.identity,
           status = when (snapshot.status) {
             BrowseStatus.INACTIVE -> BrowseUiStatus.Inactive
             BrowseStatus.LOADING -> BrowseUiStatus.Loading
@@ -707,6 +707,17 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
           refreshing = snapshot.refreshing,
           refreshError = snapshot.refreshError,
         ),
+        librarySort = if (it.destination != Destination.Library) it.librarySort else when (snapshot.preferences.sort) {
+          VideoLibrarySort.TITLE -> LibrarySort.Title
+          VideoLibrarySort.RELEASE_DATE -> LibrarySort.Year
+          VideoLibrarySort.RECENTLY_ADDED -> LibrarySort.DateAdded
+        },
+        libraryPlayed = if (it.destination != Destination.Library) it.libraryPlayed else when (snapshot.preferences.playedFilter) {
+          VideoLibraryPlayedFilter.ALL -> PlayedFilter.All
+          VideoLibraryPlayedFilter.PLAYED -> PlayedFilter.Played
+          VideoLibraryPlayedFilter.UNPLAYED -> PlayedFilter.Unplayed
+        },
+        libraryFavorites = if (it.destination == Destination.Library) snapshot.preferences.favoritesOnly else it.libraryFavorites,
       )
     }
     // An item/query failure does not prove disconnection. Confirm through a separate authenticated endpoint.
@@ -807,12 +818,10 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
     }
   }
 
-  /** Viewport demand from the grid; the SDK owns all page scheduling. The
-   *  generation fence drops emissions a replaced grid can still send before
-   *  Compose removes its effect. */
-  fun setBrowserDisplayRange(generation: Long, start: UInt, end: UInt) {
-    if (generation != browserGeneration) return
-    browserCall { it.setDisplayRange(start, end) }
+  /** Revision-stamped viewport demand cannot advance a replaced or reset query. */
+  fun setBrowserDisplayRange(generation: Long, viewportRevision: ULong, start: UInt, end: UInt) {
+    if (generation != browserGeneration || viewportRevision != state.value.browser.viewportRevision) return
+    browserCall { it.setDisplayRange(viewportRevision, start, end) }
   }
 
   /** Retries retained failures without discarding usable results. */
@@ -890,13 +899,28 @@ internal class AppViewModel(application: Application, private val sdk: Jellypilo
       ),
     )
   }
-  fun setLibraryFilters(played: PlayedFilter, favorites: Boolean) {
-    mutableState.update { it.copy(libraryPlayed = played, libraryFavorites = favorites) }
-    openLibrarySession()
+  private fun editLibraryPreferences(edit: (BrowsePreferences) -> BrowsePreferences) {
+    if (state.value.destination != Destination.Library) return
+    val session = browseSession ?: return
+    browserCall {
+      // Read current conditions from the owner, never from optimistic UI state.
+      it.setPreferences(edit(it.snapshot().preferences))
+      publish(session, it.snapshot(), browserGeneration, confirmedRevision)
+    }
   }
-  fun setLibrarySort(sort: LibrarySort) {
-    mutableState.update { it.copy(librarySort = sort) }
-    openLibrarySession()
+
+  fun setLibraryFilters(played: PlayedFilter, favorites: Boolean) = editLibraryPreferences {
+    it.copy(
+      playedFilter = when (played) { PlayedFilter.All -> VideoLibraryPlayedFilter.ALL; PlayedFilter.Played -> VideoLibraryPlayedFilter.PLAYED; PlayedFilter.Unplayed -> VideoLibraryPlayedFilter.UNPLAYED },
+      favoritesOnly = favorites,
+    )
+  }
+
+  fun setLibrarySort(sort: LibrarySort) = editLibraryPreferences {
+    it.copy(
+      sort = when (sort) { LibrarySort.DateAdded -> VideoLibrarySort.RECENTLY_ADDED; LibrarySort.Title -> VideoLibrarySort.TITLE; LibrarySort.Year -> VideoLibrarySort.RELEASE_DATE },
+      sortDirection = if (sort == LibrarySort.Title) VideoLibrarySortDirection.ASCENDING else VideoLibrarySortDirection.DESCENDING,
+    )
   }
   fun search(value: String) {
     if (state.value.destination != Destination.Search) return

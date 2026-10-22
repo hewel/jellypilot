@@ -13,14 +13,71 @@ use std::sync::Arc;
 use iced::futures::StreamExt;
 use iced::Task;
 use iced_runtime::Action;
-use jellypilot_core::browse_model::BrowsePageSettlement;
+use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_media_server::{JellyfinClient, MediaServerProvider, SavedSession};
-use jellypilot_sdk::browse::PageRequest;
+use jellypilot_sdk::browse::{BrowsePresentation, BrowseSession, BrowseSnapshot};
+use jellypilot_sdk::saved_browse::SavedBrowseDraft;
 
 use super::browse::{self, Surface};
 use super::kernel::Kernel;
 use super::message::{BrowseMessage, Message};
 use super::state::State;
+
+pub(crate) fn activate_sdk_fixture(kernel: &mut Kernel, fixture: &BrowseFixture) {
+  kernel.sdk.adopt_test_session(SavedSession {
+    provider: MediaServerProvider::Jellyfin,
+    server_url: fixture.server_url().into(),
+    access_token: "fixture-token".into(),
+    user_id: "fixture-user".into(),
+    user_name: "Fixture".into(),
+    server_name: None,
+    device_id: None,
+  });
+  let profile = kernel.sdk.active_profile().expect("active fixture profile");
+  super::accounts::sync_activated(kernel, &profile);
+}
+
+pub(crate) async fn open_saved_fixture(
+  kernel: &mut Kernel,
+  fixture: &mut BrowseFixture,
+  draft: SavedBrowseDraft,
+) -> Arc<BrowseSession> {
+  let library = serde_json::json!({
+    "Id": draft.library_id,
+    "Name": draft.library_name,
+    "CollectionType": match draft.collection_type {
+      jellypilot_media_server::VideoLibraryKind::Movies => "movies",
+      jellypilot_media_server::VideoLibraryKind::TvShows => "tvshows",
+    },
+  });
+  let filter = kernel
+    .sdk
+    .saved_browse_save(kernel.sdk.new_operation_token().unwrap(), draft)
+    .await
+    .expect("save fixture definition");
+  let opened = kernel.sdk.open_saved_browser(
+    kernel.sdk.new_operation_token().unwrap(),
+    filter.id,
+    BrowsePresentation::Desktop,
+  );
+  tokio::pin!(opened);
+  let deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
+  tokio::pin!(deadline);
+  loop {
+    tokio::select! {
+      () = &mut deadline => panic!("saved query did not resolve"),
+      result = &mut opened => return result.expect("fresh saved query"),
+      request = fixture.requests.recv() => {
+        let request = request.expect("browse fixture remains available");
+        if request.target().starts_with("/UserViews?") {
+          request.reply(FixtureReply::Json(serde_json::json!({"Items":[library]}).to_string()));
+        } else {
+          request.reply(FixtureReply::Page { total: 1, artwork: false });
+        }
+      }
+    }
+  }
+}
 
 /// One accepted HTTP request, parked until the test replies or drops it.
 /// Dropping without replying closes the connection, which resolves the
@@ -123,23 +180,12 @@ impl BrowseFixture {
     client
   }
 
-  /// Waits for the next request while driving `stream`, so the task's
-  /// futures can reach the server. Stream actions are consumed.
-  pub(crate) async fn next_request(
-    &mut self,
-    stream: &mut iced::futures::stream::BoxStream<'static, Action<Message>>,
-  ) -> FixtureRequest {
-    let mut deadline = std::pin::pin!(tokio::time::sleep(std::time::Duration::from_secs(10)));
-    let mut stream_done = false;
-    loop {
-      tokio::select! {
-        () = &mut deadline => panic!("browse task did not issue an HTTP request"),
-        action = stream.next(), if !stream_done => stream_done = action.is_none(),
-        request = self.requests.recv() => {
-          break request.expect("browse fixture server remains available");
-        }
-      }
-    }
+  /// Waits for an independently executing SDK query to reach the HTTP seam.
+  pub(crate) async fn receive_request(&mut self) -> FixtureRequest {
+    tokio::time::timeout(std::time::Duration::from_secs(10), self.requests.recv())
+      .await
+      .expect("SDK query reaches the fixture")
+      .expect("browse fixture remains available")
   }
 
   /// Drives the task to completion, replying to each fixture request with
@@ -187,27 +233,58 @@ impl BrowseFixture {
     outputs
   }
 
-  /// Runs one SDK page request to its settlement, replying `reply` to every
-  /// request that reaches the fixture.
-  pub(crate) async fn run_request(
+  /// Drives real SDK requests until the requested observable snapshot arrives.
+  pub(crate) async fn wait_for_snapshot(
     &mut self,
-    request: PageRequest,
-    reply: FixtureReply,
-  ) -> BrowsePageSettlement {
-    let mut deadline = std::pin::pin!(tokio::time::sleep(std::time::Duration::from_secs(10)));
-    let mut run = std::pin::pin!(request.run());
+    session: &Arc<BrowseSession>,
+    mut ready: impl FnMut(&BrowseSnapshot) -> bool,
+    mut respond: impl FnMut(&FixtureRequest) -> FixtureReply,
+  ) -> BrowseSnapshot {
+    let deadline = tokio::time::sleep(std::time::Duration::from_secs(10));
+    tokio::pin!(deadline);
+    let mut snapshot = session.snapshot().expect("active query snapshot");
     loop {
+      if ready(&snapshot) {
+        return snapshot;
+      }
       tokio::select! {
-        () = &mut deadline => panic!("SDK page request did not settle"),
-        settlement = &mut run => break settlement,
-        received = self.requests.recv() => {
-          match received {
-            Some(received) => received.reply(reply.clone()),
-            None => panic!("browse fixture server stopped before page settlement"),
-          }
+        () = &mut deadline => panic!("SDK query did not reach the expected snapshot: {snapshot:?}"),
+        next = session.next_snapshot(snapshot.revision) => {
+          snapshot = next.expect("active query notification");
+        }
+        request = self.requests.recv() => {
+          let request = request.expect("browse fixture remains available");
+          let reply = respond(&request);
+          request.reply(reply);
         }
       }
     }
+  }
+
+  pub(crate) async fn settle_session(
+    &mut self,
+    session: &Arc<BrowseSession>,
+    respond: impl FnMut(&FixtureRequest) -> FixtureReply,
+  ) -> BrowseSnapshot {
+    self
+      .wait_for_snapshot(
+        session,
+        |snapshot| {
+          !snapshot.refreshing
+            && match &snapshot.view {
+              LibraryBrowseView::Loading => false,
+              LibraryBrowseView::Failed { retry_busy, .. } => !retry_busy,
+              LibraryBrowseView::Ready {
+                is_fetching_more,
+                retry_busy,
+                ..
+              } => !is_fetching_more && !retry_busy,
+              _ => true,
+            }
+        },
+        respond,
+      )
+      .await
   }
 }
 
@@ -299,35 +376,7 @@ fn page_body(start_index: u32, limit: u32, total: u32, artwork: bool) -> String 
   format!(r#"{{"Items":[{items}],"TotalRecordCount":{total},"StartIndex":{start_index}}}"#)
 }
 
-/// Extracts the page settlement carried by a task output message.
-pub(crate) fn page_settled(message: Message) -> Option<BrowsePageSettlement> {
-  if let Message::Browse(BrowseMessage::PageSettled(settlement)) = message {
-    Some(settlement)
-  } else {
-    None
-  }
-}
-
-/// Dispatches a settlement through the browse update boundary and returns the
-/// follow-up task for the caller to drain or drop.
-pub(crate) fn dispatch_settlement(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  window_size: iced::Size,
-  settlement: BrowsePageSettlement,
-) -> Task<Message> {
-  browse::update(
-    surface,
-    kernel,
-    None,
-    false,
-    window_size,
-    BrowseMessage::PageSettled(settlement),
-  )
-}
-
-/// Drives `task` and every follow-up task produced by dispatching its page
-/// settlements through `browse::update`, until no work remains.
+/// Drives native tasks and the current SDK query through observable snapshots.
 pub(crate) async fn drain_task(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -337,17 +386,35 @@ pub(crate) async fn drain_task(
   respond: &mut dyn FnMut(&FixtureRequest) -> FixtureReply,
 ) {
   let mut tasks = vec![task];
-  while let Some(task) = tasks.pop() {
-    for message in fixture.run_task(task, &mut *respond).await {
-      if let Message::Browse(BrowseMessage::PageSettled(settlement)) = message {
-        tasks.push(dispatch_settlement(
-          surface,
-          kernel,
-          window_size,
-          settlement,
-        ));
+  loop {
+    while let Some(task) = tasks.pop() {
+      for message in fixture.run_task(task, &mut *respond).await {
+        if let Message::Browse(message) = message {
+          tasks.push(browse::update(surface, kernel, false, window_size, message));
+        }
       }
     }
+    let Some(session) = surface.session.clone() else {
+      break;
+    };
+    let snapshot = fixture.settle_session(&session, &mut *respond).await;
+    if surface
+      .projection
+      .as_ref()
+      .is_some_and(|current| current.revision == snapshot.revision)
+    {
+      break;
+    }
+    tasks.push(browse::update(
+      surface,
+      kernel,
+      false,
+      window_size,
+      BrowseMessage::SnapshotChanged {
+        session_id: session.id(),
+        snapshot: Box::new(snapshot),
+      },
+    ));
   }
 }
 
@@ -360,10 +427,35 @@ pub(crate) async fn drain_state_task(
   respond: &mut dyn FnMut(&FixtureRequest) -> FixtureReply,
 ) {
   let mut tasks = vec![task];
-  while let Some(task) = tasks.pop() {
-    for message in fixture.run_task(task, &mut *respond).await {
-      tasks.push(super::update::update(state, message));
+  loop {
+    while let Some(task) = tasks.pop() {
+      for message in fixture.run_task(task, &mut *respond).await {
+        tasks.push(super::update::update(state, message));
+      }
     }
+    let Some(session) = state
+      .full
+      .as_ref()
+      .and_then(|full| full.browse.session.clone())
+    else {
+      break;
+    };
+    let snapshot = fixture.settle_session(&session, &mut *respond).await;
+    if state
+      .full
+      .as_ref()
+      .and_then(|full| full.browse.projection.as_ref())
+      .is_some_and(|current| current.revision == snapshot.revision)
+    {
+      break;
+    }
+    tasks.push(super::update::update(
+      state,
+      Message::Browse(BrowseMessage::SnapshotChanged {
+        session_id: session.id(),
+        snapshot: Box::new(snapshot),
+      }),
+    ));
   }
 }
 

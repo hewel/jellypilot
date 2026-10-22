@@ -12,6 +12,7 @@ use jellypilot_media_server::{
 use super::{
     controlled_http_server, test_candidate, test_sdk, test_session, HttpRequest, MemoryCredential,
 };
+use crate::browse::{BrowsePresentation, BrowseSource};
 use crate::saved_browse::{SavedBrowseDraft, SavedBrowseError};
 use crate::{Sdk, SdkConfig, SdkError, SdkHooks};
 
@@ -126,19 +127,30 @@ async fn apply_always_refreshes_exact_library_and_preserves_unlisted_conditions(
     ] {
         let success = response == directory(&library_id(), "movies");
         let (resolved, ()) = tokio::join!(
-            sdk.saved_browse_resolve_for_apply(sdk.new_operation_token().unwrap(), filter.id),
+            sdk.open_saved_browser(
+                sdk.new_operation_token().unwrap(),
+                filter.id,
+                BrowsePresentation::Desktop
+            ),
             async {
                 request(&mut requests).await.reply.send(response).unwrap();
             },
         );
         if success {
-            let resolved = resolved.unwrap();
-            assert_eq!(resolved.filter, filter);
-            assert_eq!(resolved.library.name, "Renamed library");
+            let session = resolved.unwrap();
+            let snapshot = session.snapshot().unwrap();
+            assert_eq!(snapshot.saved.unwrap().filter, filter);
+            assert!(
+                matches!(snapshot.source, BrowseSource::Library { shortcut, .. } if shortcut.name == "Renamed library")
+            );
             assert_eq!(
-                resolved.filter.preferences.filters.genre.as_deref(),
+                snapshot.preferences.filters.genre.as_deref(),
                 Some("Old genre")
             );
+            // Adoption starts the one complete query immediately.
+            let page = requests.recv().await.unwrap();
+            assert!(!page.headers.starts_with("GET /UserViews?"));
+            session.close();
         } else {
             assert!(matches!(
                 resolved,
@@ -147,7 +159,11 @@ async fn apply_always_refreshes_exact_library_and_preserves_unlisted_conditions(
         }
     }
     let (failed, ()) = tokio::join!(
-        sdk.saved_browse_resolve_for_apply(sdk.new_operation_token().unwrap(), filter.id),
+        sdk.open_saved_browser(
+            sdk.new_operation_token().unwrap(),
+            filter.id,
+            BrowsePresentation::Desktop
+        ),
         async {
             request(&mut requests)
                 .await
@@ -180,7 +196,7 @@ async fn apply_retires_directory_results_after_scope_change_or_explicit_cancel()
             .unwrap();
         let token = sdk.new_operation_token().unwrap();
         let (result, ()) = tokio::join!(
-            sdk.saved_browse_resolve_for_apply(Arc::clone(&token), filter.id),
+            sdk.open_saved_browser(Arc::clone(&token), filter.id, BrowsePresentation::Desktop),
             async {
                 let request = request(&mut requests).await;
                 if switch_scope {
@@ -211,7 +227,11 @@ async fn disconnected_directory_remains_a_retryable_request_failure() {
         .unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        sdk.saved_browse_resolve_for_apply(sdk.new_operation_token().unwrap(), filter.id),
+        sdk.open_saved_browser(
+            sdk.new_operation_token().unwrap(),
+            filter.id,
+            BrowsePresentation::Desktop,
+        ),
     )
     .await
     .expect("connection refusal is bounded");
@@ -238,7 +258,11 @@ async fn rename_or_delete_during_apply_does_not_deliver_an_older_definition() {
             .await
             .unwrap();
         let (result, ()) = tokio::join!(
-            sdk.saved_browse_resolve_for_apply(sdk.new_operation_token().unwrap(), filter.id),
+            sdk.open_saved_browser(
+                sdk.new_operation_token().unwrap(),
+                filter.id,
+                BrowsePresentation::Desktop
+            ),
             async {
                 let request = request(&mut requests).await;
                 if delete {
@@ -403,4 +427,262 @@ async fn failed_account_handoff_keeps_previous_filters_and_query_definition() {
         .await;
     assert!(matches!(result, Err(SdkError::HandoffAborted)));
     assert_eq!(sdk.saved_browse_list(token).await.unwrap(), vec![saved]);
+}
+
+#[tokio::test]
+async fn adopted_saved_owner_preserves_baseline_through_rename_storage_failure_and_deletion() {
+    use crate::browse::BrowseCondition;
+    use jellypilot_core::config::{BrowseFilterSettings, SettingsStore};
+
+    let (url, mut requests, _server) = controlled_http_server().await;
+    let (sdk, dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &url));
+    let mut defaults = SettingsStore::load_in_dir(dir.path().to_path_buf()).unwrap();
+    defaults
+        .set_browse_filters(
+            BrowseFilterSettings::default().with_sort(VideoLibrarySort::RecentlyAdded),
+        )
+        .unwrap();
+    let ordinary_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
+    let filter = sdk
+        .saved_browse_save(sdk.new_operation_token().unwrap(), draft("Cinema"))
+        .await
+        .unwrap();
+    let manager = sdk.new_operation_token().unwrap();
+    let (opened, ()) = tokio::join!(
+        sdk.open_saved_browser(Arc::clone(&manager), filter.id, BrowsePresentation::Tv),
+        async {
+            request(&mut requests)
+                .await
+                .reply
+                .send(directory(&library_id(), "movies"))
+                .unwrap();
+        },
+    );
+    let session = opened.unwrap();
+    manager.cancel();
+    let initial = session.snapshot().unwrap();
+    assert_eq!(initial.preferences, filter.preferences);
+    assert_eq!(initial.saved.as_ref().unwrap().filter, filter);
+    assert!(!initial.saved.as_ref().unwrap().modified);
+
+    session.remove_condition(BrowseCondition::Genre).unwrap();
+    let modified = session.snapshot().unwrap();
+    assert!(modified.saved.as_ref().unwrap().modified);
+    session.suspend().unwrap();
+    session
+        .set_presentation(BrowsePresentation::Desktop)
+        .unwrap();
+    session.set_presentation(BrowsePresentation::Tv).unwrap();
+    assert_eq!(
+        session.snapshot().unwrap().preferences,
+        modified.preferences
+    );
+    sdk.saved_browse_rename(
+        sdk.new_operation_token().unwrap(),
+        filter.id,
+        "Renamed".into(),
+    )
+    .await
+    .unwrap();
+    let renamed = session.snapshot().unwrap().saved.unwrap();
+    assert_eq!(renamed.filter.name, "Renamed");
+    assert_eq!(renamed.filter.preferences, filter.preferences);
+    assert!(renamed.modified);
+
+    let saved_path = dir.path().join("saved-browse.json");
+    let stored = std::fs::read(&saved_path).unwrap();
+    std::fs::write(&saved_path, "invalid saved storage").unwrap();
+    assert!(matches!(
+        sdk.saved_browse_list(sdk.new_operation_token().unwrap())
+            .await,
+        Err(SavedBrowseError::Sdk(SdkError::Storage(_))),
+    ));
+    assert!(!session.snapshot().unwrap().saved.unwrap().deleted);
+    std::fs::write(&saved_path, stored).unwrap();
+    sdk.saved_browse_delete(sdk.new_operation_token().unwrap(), filter.id)
+        .await
+        .unwrap();
+    let deleted = session.snapshot().unwrap();
+    assert!(deleted.saved.as_ref().unwrap().deleted);
+    assert_eq!(deleted.preferences, modified.preferences);
+    assert_eq!(
+        deleted.saved.unwrap().filter.preferences,
+        filter.preferences
+    );
+    session.clear_conditions().unwrap();
+    assert!(session.snapshot().unwrap().saved.unwrap().deleted);
+    assert_eq!(
+        std::fs::read(dir.path().join("config.json")).unwrap(),
+        ordinary_bytes
+    );
+}
+
+#[tokio::test]
+async fn confirmed_external_absence_reconciles_without_replacing_current_conditions() {
+    let (url, mut requests, _server) = controlled_http_server().await;
+    let (sdk, dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &url));
+    let filter = sdk
+        .saved_browse_save(sdk.new_operation_token().unwrap(), draft("Cinema"))
+        .await
+        .unwrap();
+    let (opened, ()) = tokio::join!(
+        sdk.open_saved_browser(
+            sdk.new_operation_token().unwrap(),
+            filter.id,
+            BrowsePresentation::Desktop
+        ),
+        async {
+            request(&mut requests)
+                .await
+                .reply
+                .send(directory(&library_id(), "movies"))
+                .unwrap();
+        },
+    );
+    let session = opened.unwrap();
+    let before = session.snapshot().unwrap();
+    let mut store =
+        jellypilot_core::saved_browse::SavedBrowseStore::load_in_dir(dir.path().to_path_buf())
+            .unwrap();
+    store.remove(&filter.scope, filter.id).unwrap();
+    assert!(sdk
+        .saved_browse_list(sdk.new_operation_token().unwrap())
+        .await
+        .unwrap()
+        .is_empty());
+    let after = session.snapshot().unwrap();
+    assert!(after.saved.unwrap().deleted);
+    assert_eq!(after.preferences, before.preferences);
+    assert_eq!(after.identity, before.identity);
+    assert_eq!(after.viewport_revision, before.viewport_revision);
+}
+
+#[test]
+fn saved_adoption_rechecks_delivery_after_completed_worker_waits_unpolled() {
+    for retire in ["cancel", "scope", "handoff"] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (url, mut requests, _server) = controlled_http_server::<String>().await;
+            let dir = tempfile::tempdir().unwrap();
+            let sdk = Sdk::with_handle(
+                SdkConfig {
+                    storage_dir: dir.path().to_path_buf(),
+                    device_name: "saved-delivery-fence".into(),
+                },
+                AuthStore::with_credential(Arc::new(MemoryCredential::default())),
+                None,
+                runtime.handle().clone(),
+            );
+            sdk.adopt_test_session(test_session("ada", &url));
+            let filter = sdk
+                .saved_browse_save(sdk.new_operation_token().unwrap(), draft("Cinema"))
+                .await
+                .unwrap();
+            let manager = sdk.new_operation_token().unwrap();
+            let mut open = Box::pin(sdk.open_saved_browser(
+                Arc::clone(&manager),
+                filter.id,
+                BrowsePresentation::Desktop,
+            ));
+            let directory_request = tokio::select! {
+                result = &mut open => panic!("directory has not replied: {}", result.is_ok()),
+                request = request(&mut requests) => request,
+            };
+
+            // Keep the adoption worker queued while polling the directory
+            // result. The second live token proves its independent lifetime
+            // has been minted and the same poll queued the final worker.
+            let (entered, entered_rx) = tokio::sync::oneshot::channel();
+            let (release, release_rx) = std::sync::mpsc::channel();
+            let blocker = runtime.handle().spawn_blocking(move || {
+                entered.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            entered_rx.await.unwrap();
+            directory_request
+                .reply
+                .send(directory(&library_id(), "movies"))
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let queued = {
+                        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                        assert!(open.as_mut().poll(&mut context).is_pending());
+                        sdk.inner
+                            .state
+                            .lock()
+                            .unwrap()
+                            .tokens
+                            .values()
+                            .flatten()
+                            .filter(|token| token.strong_count() > 0)
+                            .count()
+                            == 2
+                    };
+                    if queued {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("final adoption worker queues");
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if sdk
+                        .inner
+                        .state
+                        .lock()
+                        .unwrap()
+                        .browsers
+                        .iter()
+                        .any(|browser| browser.strong_count() > 0)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("worker constructs the complete owner");
+            // There is only one blocking thread. Once this barrier runs,
+            // the adoption worker has returned, but `open` remains unpolled.
+            runtime.handle().spawn_blocking(|| ()).await.unwrap();
+            assert!(
+                requests.try_recv().is_err(),
+                "undelivered owners must not start page requests"
+            );
+            match retire {
+                "cancel" => manager.cancel(),
+                "scope" => sdk.adopt_test_session(test_session("grace", &url)),
+                _ => sdk.inner.state.lock().unwrap().handoff_in_progress = true,
+            }
+            assert!(matches!(
+                (retire, open.await),
+                ("cancel", Err(SavedBrowseError::Sdk(SdkError::Cancelled)))
+                    | ("scope", Err(SavedBrowseError::Sdk(SdkError::Stale)))
+                    | (
+                        "handoff",
+                        Err(SavedBrowseError::Sdk(SdkError::OperationInProgress))
+                    )
+            ));
+            assert!(sdk
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .browsers
+                .iter()
+                .all(|browser| browser.strong_count() == 0));
+            assert!(requests.try_recv().is_err());
+        });
+    }
 }

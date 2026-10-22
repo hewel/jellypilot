@@ -5,7 +5,6 @@ use iced::window;
 use jellypilot_auth::{SavedProfileKey, SavedProfilesSnapshot};
 use jellypilot_sdk::{ActivationOutcome, ProfileCandidate, QuickConnectOutcome, SdkError};
 
-use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::{AppMode, IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::LanguagePreference;
@@ -200,14 +199,27 @@ pub enum BrowseMessage {
   PlayedFilterChanged(VideoLibraryPlayedFilter),
   FavoritesToggled,
   ViewModeSelected(super::browse::ViewMode),
-  Scrolled(scrollable::Viewport),
+  Scrolled {
+    epoch: u64,
+    viewport_revision: u64,
+    viewport: scrollable::Viewport,
+  },
   GridViewportMeasured {
     epoch: u64,
+    viewport_revision: u64,
     offset_y: f32,
     height: f32,
   },
   Retry,
-  PageSettled(BrowsePageSettlement),
+  SnapshotChanged {
+    session_id: u64,
+    snapshot: Box<jellypilot_sdk::browse::BrowseSnapshot>,
+  },
+  SnapshotFailed {
+    session_id: u64,
+    revision: u64,
+    error: jellypilot_sdk::SdkError,
+  },
   ArtworkLoaded(super::artwork::ImageCompletion),
 }
 

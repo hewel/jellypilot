@@ -389,10 +389,13 @@ impl JellypilotSdk {
             .map_err(SdkError::from)
     }
 
-    /// Opens one scope-bound result set with SDK-owned paging and cancellation.
+    /// Opens an ephemeral Android query with SDK-owned preferences, paging and cancellation.
     pub fn open_browser(&self, query: BrowseQuery) -> Result<Arc<BrowseSession>, SdkError> {
         self.sdk
-            .open_browser(query.into())
+            .open_browser(
+                query.into(),
+                jellypilot_sdk::browse::BrowsePresentation::Android,
+            )
             .map(|inner| Arc::new(BrowseSession { inner }))
             .map_err(SdkError::from)
     }

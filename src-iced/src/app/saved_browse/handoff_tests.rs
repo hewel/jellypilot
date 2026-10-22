@@ -102,7 +102,8 @@ async fn interrupted_initial_load_can_retry_after_failed_handoff() {
 #[tokio::test]
 async fn interrupted_rename_preserves_draft_records_and_applied_query_for_retry() {
   tokio::time::timeout(Duration::from_secs(5), async {
-    let mut state = connected_state();
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    let mut state = super::tests::state(&fixture);
     let preferences = BrowsePreferences {
       played_filter: VideoLibraryPlayedFilter::Played,
       filters: jellypilot_media_server::VideoLibraryFilters {
@@ -111,28 +112,10 @@ async fn interrupted_rename_preserves_draft_records_and_applied_query_for_retry(
       },
       ..Default::default()
     };
-    let record = state
-      .kernel
-      .sdk
-      .saved_browse_save(
-        state.kernel.sdk.new_operation_token().unwrap(),
-        SavedBrowseDraft {
-          name: "Original".into(),
-          library_id: "movies".into(),
-          library_name: "Movies".into(),
-          collection_type: VideoLibraryKind::Movies,
-          preferences: preferences.clone(),
-        },
-      )
-      .await
-      .unwrap();
+    let record = super::tests::save(&state, "Original", preferences.clone()).await;
+    super::tests::apply(&mut state, &mut fixture, record.id).await;
     state.saved_browse.loaded = true;
     state.saved_browse.records = vec![record.clone()];
-    state.full.as_mut().unwrap().browse.saved = Some(AppliedFilter {
-      filter: record.clone(),
-      deleted: false,
-    });
-    state.full.as_mut().unwrap().browse.advanced_filters = preferences.filters.clone();
     let receipt = target(&state);
     drop(update(
       &mut state,
@@ -171,13 +154,11 @@ async fn interrupted_rename_preserves_draft_records_and_applied_query_for_retry(
     assert_eq!(editor.name, "After rollback");
     assert!(editor.error.is_some());
     assert_eq!(state.saved_browse.records, vec![record.clone()]);
-    let applied = state.full.as_ref().unwrap().browse.saved.as_ref().unwrap();
+    let snapshot = super::tests::session(&state).snapshot().unwrap();
+    let applied = snapshot.saved.unwrap();
     assert_eq!(applied.filter.preferences, preferences);
     assert!(!applied.deleted);
-    assert_eq!(
-      state.full.as_ref().unwrap().browse.advanced_filters,
-      preferences.filters
-    );
+    assert_eq!(snapshot.preferences, preferences);
 
     let receipt = target(&state);
     let completion = output(update(

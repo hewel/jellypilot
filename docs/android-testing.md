@@ -111,9 +111,11 @@ generation. The picture-settings stop/replacement fixture also checks that late 
 cannot revive Ready after stop, and queued brightness/speed commands are rejected after retirement.
 
 `BrowserContinuationTest` opens an isolated synthetic library through the real UniFFI bindings,
-registers `nextSnapshot` on `Main.immediate`, then changes the displayed range synchronously.
-It checks that repeated range changes return and deliver the matching snapshot instead of
-deadlocking during an inline continuation. It never uses the app's saved server or credentials.
+registers `nextSnapshot` on `Main.immediate`, then changes the displayed range and query preferences
+synchronously. It checks inline continuation reentry, stale viewport rejection after an edit,
+same-owner filter/sort changes, retained Library/Search navigation, temporary preference carry-over,
+and disconnect cleanup. It never uses the app's saved server or credentials. These are device
+instrumentation scenarios; a host check or instrumentation-source compilation is not execution evidence.
 `RemoteTargetLifecycleTest` uses a synthetic HTTP/WebSocket peer to verify repeated background
 cleanup and reconnect, failed registration, and replacement while an older registration is pending.
 

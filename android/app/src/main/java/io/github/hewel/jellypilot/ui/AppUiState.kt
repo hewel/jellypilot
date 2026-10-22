@@ -121,8 +121,11 @@ internal enum class BrowseUiStatus { Inactive, Loading, Empty, Ready, Failed }
  */
 internal data class BrowserUi(
   val revision: ULong = 0uL,
-  /** Process-unique generation of the owning session; keys viewport state so a replaced session never inherits another query's scroll position. */
+  /** Process-unique generation of the owning session; retained navigation keeps this key. */
   val generation: Long = 0L,
+  /** Changes only when the SDK resets this session's query viewport. */
+  val viewportRevision: ULong = 0uL,
+  val identity: String = "",
   val status: BrowseUiStatus = BrowseUiStatus.Inactive,
   val slots: List<MediaUi?> = emptyList(),
   val visibleStart: UInt = 0u,
@@ -191,6 +194,7 @@ internal data class AppUiState(
   val historyHasMore: Boolean = false,
   val episodesHaveMore: Boolean = false,
   val listUndo: ListUndoUi? = null,
+  /** Read-only accepted SDK projection, carried into the next ordinary library selection. */
   val libraryPlayed: PlayedFilter = PlayedFilter.All,
   val libraryFavorites: Boolean = false,
   val librarySort: LibrarySort = LibrarySort.DateAdded,

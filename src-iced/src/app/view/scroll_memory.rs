@@ -645,9 +645,11 @@ mod tests {
         .smooth_scroll(false)
         .id(widget::Id::new("page"))
         .on_scroll(|scroll| {
-          Message::Browse(crate::app::message::BrowseMessage::Scrolled(
-            scroll.viewport,
-          ))
+          Message::Browse(crate::app::message::BrowseMessage::Scrolled {
+            epoch: 0,
+            viewport_revision: 0,
+            viewport: scroll.viewport,
+          })
         })
         .width(Fill)
         .height(Fill)
@@ -722,7 +724,7 @@ mod tests {
       &mut bus,
     );
     let requested_offset = bus.drain().find_map(|(message, _)| match message {
-      Message::Browse(crate::app::message::BrowseMessage::Scrolled(viewport)) => {
+      Message::Browse(crate::app::message::BrowseMessage::Scrolled { viewport, .. }) => {
         Some(viewport.absolute_offset().y)
       }
       _ => None,

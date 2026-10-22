@@ -105,22 +105,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let class = SizeClass::from_width(state.shell.window_size.width);
   let library_label = state.t("browse-library");
   let title = match &state.shell.destination {
-    Destination::Library { library_id, .. } => match &state
+    Destination::Library { .. } => state
       .full
       .as_ref()
-      .expect("FullUi required")
-      .home
-      .data
-      .shortcuts
-    {
-      jellypilot_core::LoadState::Ready(shortcuts) => shortcuts
-        .iter()
-        .find(|shortcut| shortcut.id == *library_id)
-        .map_or(library_label.as_str(), |shortcut| shortcut.name.as_str()),
-      jellypilot_core::LoadState::Idle
-      | jellypilot_core::LoadState::Loading
-      | jellypilot_core::LoadState::Failed(_) => library_label.as_str(),
-    },
+      .and_then(|full| full.browse.projection.as_ref())
+      .and_then(|snapshot| match &snapshot.source {
+        jellypilot_core::browse_model::BrowseSource::Library { shortcut, .. } => {
+          Some(shortcut.name.as_str())
+        }
+        jellypilot_core::browse_model::BrowseSource::Search { .. } => None,
+      })
+      .unwrap_or(library_label.as_str()),
     Destination::Search(query) => query,
     Destination::Home
     | Destination::SavedBrowse
@@ -152,7 +147,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state
       .full
       .as_ref()
-      .is_some_and(|full| full.browse.saved.is_some())
+      .is_some_and(|full| full.browse.saved().is_some())
     {
       header = header.push((super::saved_browse::active_summary(state)).boxed());
     }
@@ -172,6 +167,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     browse_body(state, class),
     navigation.boxed(),
     matches!(browse.view, LibraryBrowseView::Ready { .. }).then(|| browse.scroll_id.clone()),
+    (browse.artwork.epoch(), browse.viewport_revision()),
   );
   let mut surface = stack![body].width(Fill).height(Fill);
   let (failure, busy) = match &browse.view {
@@ -181,15 +177,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
       ..
     } => (
       browse
-        .browser
-        .model()
-        .refresh_failure()
+        .projection
+        .as_ref()
+        .and_then(|snapshot| snapshot.refresh_failure.as_ref())
         .or(load_more_failure.as_ref()),
-      *retry_busy || browse.browser.model().is_refreshing(),
+      *retry_busy || browse.refreshing(),
     ),
     LibraryBrowseView::Empty => (
-      browse.browser.model().refresh_failure(),
-      browse.browser.model().is_refreshing(),
+      browse
+        .projection
+        .as_ref()
+        .and_then(|snapshot| snapshot.refresh_failure.as_ref()),
+      browse.refreshing(),
     ),
     _ => (None, false),
   };
@@ -204,6 +203,7 @@ fn browse_scroll<'a>(
   content: Element<'a, Message>,
   navigation: Element<'a, Message>,
   ready_id: Option<iced::widget::Id>,
+  currency: (u64, u64),
 ) -> Element<'a, Message> {
   let mut body = scrollable(jellypilot_ui::widgets::sticky_navigation::header(
     content, navigation, true,
@@ -213,9 +213,13 @@ fn browse_scroll<'a>(
   .height(Fill)
   .style(jellypilot_ui::theme::scrollable);
   if let Some(id) = &ready_id {
-    body = body
-      .id(id.clone())
-      .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport.viewport)));
+    body = body.id(id.clone()).on_scroll(move |viewport| {
+      Message::Browse(BrowseMessage::Scrolled {
+        epoch: currency.0,
+        viewport_revision: currency.1,
+        viewport: viewport.viewport,
+      })
+    });
   }
   iced::advanced::Widget::_boxed(BrowseScroll {
     content: body.boxed(),
@@ -360,9 +364,7 @@ impl Widget<Message, Theme, iced::Renderer> for BrowseScroll<'_> {
 
 fn toolbar(state: &State) -> Element<'_, Message> {
   let browse = &state.full.as_ref().expect("FullUi required").browse;
-  let filters = browse
-    .filters
-    .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
+  let filters = browse.filter_settings();
   let favorites = control_button(
     Some(if filters.favorites_only() {
       Icon::HeartFilled
@@ -412,9 +414,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
 
 fn sort_control(state: &State) -> Element<'_, Message> {
   let browse = &state.full.as_ref().expect("FullUi required").browse;
-  let filters = browse
-    .filters
-    .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
+  let filters = browse.filter_settings();
   let sort_trigger = control_button(
     Some(Icon::ChevronDown),
     Some(sort_label(state.kernel.locale, filters.sort())),
@@ -654,7 +654,7 @@ fn ready_surface<'a>(
       None => skeleton_cell(metrics.cell_width, skeleton_phase, reduced_motion),
     },
   );
-  let grid = observe_grid_viewport(grid, surface.artwork.epoch());
+  let grid = observe_grid_viewport(grid, surface.artwork.epoch(), surface.viewport_revision());
   let mut content = Column::<Element<'_, Message>>::new().width(Fill);
   if surface.mode == ViewMode::List && available_width >= LIST_COLUMNS_MIN_WIDTH {
     content = content.push((list_heading(state)).boxed());
@@ -1652,6 +1652,7 @@ mod tests {
           .height(56)
           .boxed(),
         id.map(iced::widget::Id::new),
+        (0, 0),
       ),
       memory,
     )
@@ -1789,6 +1790,7 @@ mod tests {
           .height(56)
           .boxed(),
           id.map(iced::widget::Id::new),
+          (0, 0),
         ),
         &memory,
       )
@@ -1919,12 +1921,17 @@ mod tests {
     );
     let mut ui = UserInterface::build(
       super::super::image_observer::observe_images(browse_scroll(
-        iced::widget::column![space::vertical().height(40), observe_grid_viewport(grid, 7)].boxed(),
+        iced::widget::column![
+          space::vertical().height(40),
+          observe_grid_viewport(grid, 7, 0)
+        ]
+        .boxed(),
         container(space::horizontal())
           .width(Fill)
           .height(56)
           .boxed(),
         Some(iced::widget::Id::new("grid")),
+        (0, 0),
       )),
       Size::new(320.0, 180.0),
       Cache::new(),
@@ -1946,6 +1953,7 @@ mod tests {
       let geometry = messages.drain().find_map(|(message, _)| match message {
         Message::Browse(BrowseMessage::GridViewportMeasured {
           epoch: 7,
+          viewport_revision: 0,
           offset_y,
           height,
         }) => Some((offset_y, height)),
@@ -1987,12 +1995,17 @@ mod tests {
         },
       );
       super::super::image_observer::observe_images(browse_scroll(
-        iced::widget::column![space::vertical().height(40), observe_grid_viewport(grid, 7)].boxed(),
+        iced::widget::column![
+          space::vertical().height(40),
+          observe_grid_viewport(grid, 7, 0)
+        ]
+        .boxed(),
         container(space::horizontal())
           .width(Fill)
           .height(56)
           .boxed(),
         Some(iced::widget::Id::new("grid")),
+        (0, 0),
       ))
     }
 
@@ -2023,7 +2036,7 @@ mod tests {
           &mut bus,
         );
         assert!(bus.drain().any(|(message, _)| matches!(message,
-          Message::Browse(BrowseMessage::Scrolled(viewport))
+          Message::Browse(BrowseMessage::Scrolled { viewport, .. })
             if viewport.absolute_offset().y == 600.0
         )));
       }
@@ -2046,13 +2059,14 @@ mod tests {
             Message::ImageObserved { .. } => images += 1,
             Message::Browse(BrowseMessage::GridViewportMeasured {
               epoch: 7,
+              viewport_revision: 0,
               offset_y,
               height,
             }) => {
               viewport = ArtworkGridViewport { offset_y, height };
               measured = true;
             }
-            Message::Browse(BrowseMessage::Scrolled(_)) => scrolls += 1,
+            Message::Browse(BrowseMessage::Scrolled { .. }) => scrolls += 1,
             other => panic!("unexpected redraw message: {other:?}"),
           }
         }

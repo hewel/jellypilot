@@ -8,7 +8,7 @@ use jellypilot_media_server::VideoUserDataAction;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::{controlled_http_server, test_sdk, test_session, HttpRequest};
-use crate::browse::{BrowseQuery, BrowseSession, BrowseSnapshot};
+use crate::browse::{BrowsePresentation, BrowseQuery, BrowseSession, BrowseSnapshot};
 use crate::{Sdk, SdkError};
 
 type Requests = UnboundedReceiver<HttpRequest<String>>;
@@ -94,9 +94,12 @@ async fn wait_until(
 }
 
 fn open(sdk: &Sdk) -> Arc<BrowseSession> {
-    sdk.open_browser(BrowseQuery::Search {
-        query: "movie".to_owned(),
-    })
+    sdk.open_browser(
+        BrowseQuery::Search {
+            query: "movie".to_owned(),
+        },
+        BrowsePresentation::Android,
+    )
     .expect("open browser")
 }
 
@@ -476,4 +479,315 @@ async fn cancelled_unpolled_mutation_does_not_publish_confirmed_flags() {
         mutation.await.expect_err("cancelled delivery"),
         SdkError::Cancelled
     );
+}
+
+fn library() -> jellypilot_media_server::VideoLibraryShortcut {
+    jellypilot_media_server::VideoLibraryShortcut {
+        id: OLD_ID.to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: None,
+        artwork_image_id: None,
+    }
+}
+
+#[tokio::test]
+async fn ordinary_failed_write_retains_query_request_and_persisted_defaults() {
+    use jellypilot_core::browse_model::BrowsePreferences;
+    use jellypilot_core::config::{BrowseFilterSettings, SettingsStore};
+    use jellypilot_media_server::VideoLibrarySort;
+
+    let (server, mut requests, _server_task) = controlled_http_server().await;
+    let (sdk, dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let mut settings = SettingsStore::load_in_dir(dir.path().to_path_buf()).unwrap();
+    settings
+        .set_browse_filters(
+            BrowseFilterSettings::default().with_sort(VideoLibrarySort::RecentlyAdded),
+        )
+        .unwrap();
+    let session = sdk
+        .open_library_browser(library(), BrowsePresentation::Desktop)
+        .unwrap();
+    let before = session.snapshot().unwrap();
+    let initial = next_request(&mut requests).await;
+    let bytes = std::fs::read(dir.path().join("config.json")).unwrap();
+    let blocked = dir.path().join("config.json.tmp");
+    std::fs::create_dir(&blocked).unwrap();
+    let preferences = BrowsePreferences {
+        sort: VideoLibrarySort::ReleaseDate,
+        ..before.preferences.clone()
+    };
+    assert!(matches!(
+        session.set_preferences(preferences.clone()),
+        Err(SdkError::Storage(_))
+    ));
+    let unchanged = session.snapshot().unwrap();
+    assert_eq!(unchanged.identity, before.identity);
+    assert_eq!(unchanged.revision, before.revision);
+    assert_eq!(unchanged.preferences, before.preferences);
+    assert_eq!(
+        std::fs::read(dir.path().join("config.json")).unwrap(),
+        bytes
+    );
+    initial.reply.send(page(0, 1, 1, false)).unwrap();
+    let ready = wait_until(&session, |snapshot| {
+        matches!(snapshot.view, LibraryBrowseView::Ready { .. })
+    })
+    .await;
+    assert_eq!(ready.preferences, before.preferences);
+
+    std::fs::remove_dir(blocked).unwrap();
+    session.set_preferences(preferences.clone()).unwrap();
+    let replacement = next_request(&mut requests).await;
+    replacement.reply.send(page(0, 1, 2, false)).unwrap();
+    let accepted = wait_until(&session, |snapshot| {
+        matches!(snapshot.view, LibraryBrowseView::Ready { .. })
+    })
+    .await;
+    assert_eq!(accepted.preferences, preferences);
+    assert!(accepted.viewport_revision > ready.viewport_revision);
+    assert_eq!(
+        SettingsStore::load_in_dir(dir.path().to_path_buf())
+            .unwrap()
+            .snapshot()
+            .browse_filters()
+            .sort(),
+        VideoLibrarySort::ReleaseDate,
+    );
+}
+
+#[tokio::test]
+async fn retained_ordinary_owners_are_independent_and_android_edits_are_ephemeral() {
+    use jellypilot_core::browse_model::BrowsePreferences;
+    use jellypilot_media_server::{VideoLibraryPlayedFilter, VideoLibrarySort};
+
+    let (server, _requests, _server_task) = controlled_http_server::<String>().await;
+    let (sdk, dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let open = || {
+        sdk.open_browser(
+            BrowseQuery::Library {
+                library: library(),
+                preferences: BrowsePreferences::default(),
+            },
+            BrowsePresentation::Android,
+        )
+        .unwrap()
+    };
+    let first = open();
+    let retained = open();
+    assert_ne!(first.id(), retained.id());
+    let before = retained.snapshot().unwrap();
+    first
+        .set_preferences(BrowsePreferences {
+            sort: VideoLibrarySort::RecentlyAdded,
+            played_filter: VideoLibraryPlayedFilter::Unplayed,
+            favorites_only: true,
+            ..BrowsePreferences::default()
+        })
+        .unwrap();
+    assert_eq!(retained.snapshot().unwrap().identity, before.identity);
+    assert_eq!(retained.snapshot().unwrap().preferences, before.preferences);
+    assert!(!dir.path().join("config.json").exists());
+    first.suspend().unwrap();
+    first.resume().unwrap();
+    assert_eq!(
+        first.snapshot().unwrap().preferences.sort,
+        VideoLibrarySort::RecentlyAdded
+    );
+}
+
+#[tokio::test]
+async fn old_viewport_cannot_advance_replacement_query() {
+    use jellypilot_core::browse_model::BrowsePreferences;
+    use jellypilot_media_server::VideoLibrarySort;
+
+    let (server, mut requests, _server_task) = controlled_http_server().await;
+    let (sdk, _dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let session = sdk
+        .open_browser(
+            BrowseQuery::Library {
+                library: library(),
+                preferences: BrowsePreferences::default(),
+            },
+            BrowsePresentation::Android,
+        )
+        .unwrap();
+    let old = session.snapshot().unwrap();
+    let obsolete = next_request(&mut requests).await;
+    session
+        .set_preferences(BrowsePreferences {
+            sort: VideoLibrarySort::ReleaseDate,
+            ..BrowsePreferences::default()
+        })
+        .unwrap();
+    let current = next_request(&mut requests).await;
+    let _ = obsolete.reply.send(page(0, 20_000, 1, false));
+    current.reply.send(page(0, 20_000, 100, false)).unwrap();
+    let ready = wait_until(&session, |snapshot| {
+        matches!(snapshot.view, LibraryBrowseView::Ready { .. })
+    })
+    .await;
+    session
+        .set_display_range_for_revision(old.viewport_revision, 10_000, 10_012)
+        .unwrap();
+    let unchanged = session.snapshot().unwrap();
+    assert_eq!(unchanged.revision, ready.revision);
+    assert!(matches!(
+        unchanged.view,
+        LibraryBrowseView::Ready {
+            visible_start: 0,
+            ..
+        }
+    ));
+    session
+        .set_display_range_for_revision(ready.viewport_revision, 10_000, 10_012)
+        .unwrap();
+    assert!(matches!(
+        session.snapshot().unwrap().view,
+        LibraryBrowseView::Ready {
+            visible_start: 10_000,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn retired_or_handoff_scope_cannot_write_ordinary_preferences() {
+    use jellypilot_core::browse_model::BrowsePreferences;
+    use jellypilot_media_server::VideoLibrarySort;
+
+    for retire in ["scope", "handoff", "cancel"] {
+        let (server, _requests, _server_task) = controlled_http_server::<String>().await;
+        let (sdk, dir) = test_sdk();
+        sdk.adopt_test_session(test_session("ada", &server));
+        let session = sdk
+            .open_library_browser(library(), BrowsePresentation::Desktop)
+            .unwrap();
+        let preferences = BrowsePreferences {
+            sort: VideoLibrarySort::ReleaseDate,
+            ..BrowsePreferences::default()
+        };
+        match retire {
+            "scope" => sdk.adopt_test_session(test_session("grace", &server)),
+            "handoff" => sdk.inner.state.lock().unwrap().handoff_in_progress = true,
+            _ => sdk.cancel_scope_operations(),
+        }
+        let error = session.set_preferences(preferences).unwrap_err();
+        assert!(matches!(
+            error,
+            SdkError::Stale | SdkError::OperationInProgress | SdkError::Cancelled
+        ));
+        assert!(!dir.path().join("config.json").exists());
+    }
+}
+
+#[tokio::test]
+async fn presentation_and_advanced_only_edits_never_overwrite_ordinary_defaults() {
+    use jellypilot_core::config::{BrowseFilterSettings, SettingsStore};
+    use jellypilot_media_server::VideoLibraryPlayedFilter;
+
+    let (server, _requests, _server_task) = controlled_http_server::<String>().await;
+    let (sdk, dir) = test_sdk();
+    sdk.adopt_test_session(test_session("ada", &server));
+    let mut settings = SettingsStore::load_in_dir(dir.path().to_path_buf()).unwrap();
+    settings
+        .set_browse_filters(
+            BrowseFilterSettings::default()
+                .with_favorites_only(true)
+                .with_played_filter(VideoLibraryPlayedFilter::Played),
+        )
+        .unwrap();
+    let before = std::fs::read(dir.path().join("config.json")).unwrap();
+    let session = sdk
+        .open_library_browser(library(), BrowsePresentation::Desktop)
+        .unwrap();
+    let mut preferences = session.snapshot().unwrap().preferences;
+    preferences.filters.genre = Some("Unlisted genre".into());
+    // Even unavailable ordinary storage cannot reject ephemeral normalization.
+    std::fs::create_dir(dir.path().join("config.json.tmp")).unwrap();
+    session.set_preferences(preferences).unwrap();
+    session.set_presentation(BrowsePresentation::Tv).unwrap();
+    let tv = session.snapshot().unwrap();
+    assert!(!tv.preferences.favorites_only);
+    assert_eq!(tv.preferences.played_filter, VideoLibraryPlayedFilter::All);
+    assert_eq!(
+        tv.preferences.filters.genre.as_deref(),
+        Some("Unlisted genre")
+    );
+    let mut advanced = tv.preferences;
+    advanced.filters.country = Some("Unlisted country".into());
+    session.set_preferences(advanced).unwrap();
+    session
+        .set_presentation(BrowsePresentation::Desktop)
+        .unwrap();
+    assert!(session.snapshot().unwrap().preferences.filters.is_empty());
+    assert_eq!(
+        std::fs::read(dir.path().join("config.json")).unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn explicit_resets_persist_defaults_hidden_by_tv_normalization() {
+    use crate::browse::BrowseCondition;
+    use jellypilot_core::config::{BrowseFilterSettings, SettingsStore};
+    use jellypilot_media_server::VideoLibraryPlayedFilter;
+
+    for action in [
+        "clear-current-defaults",
+        "clear-advanced",
+        "remove-advanced",
+    ] {
+        let (server, _requests, _server_task) = controlled_http_server::<String>().await;
+        let (sdk, dir) = test_sdk();
+        sdk.adopt_test_session(test_session("ada", &server));
+        let mut settings = SettingsStore::load_in_dir(dir.path().to_path_buf()).unwrap();
+        settings
+            .set_browse_filters(
+                BrowseFilterSettings::default()
+                    .with_favorites_only(true)
+                    .with_played_filter(VideoLibraryPlayedFilter::Played),
+            )
+            .unwrap();
+        let session = sdk
+            .open_library_browser(library(), BrowsePresentation::Tv)
+            .unwrap();
+        if action != "clear-current-defaults" {
+            let mut preferences = session.snapshot().unwrap().preferences;
+            preferences.filters.country = Some("Unlisted country".into());
+            session.set_preferences(preferences).unwrap();
+        }
+        let before = session.snapshot().unwrap();
+        let persisted = std::fs::read(dir.path().join("config.json")).unwrap();
+        let temporary = dir.path().join("config.json.tmp");
+        std::fs::create_dir(&temporary).unwrap();
+        let reset = || {
+            if action == "remove-advanced" {
+                session.remove_condition(BrowseCondition::Country)
+            } else {
+                session.clear_conditions()
+            }
+        };
+        assert!(matches!(reset(), Err(SdkError::Storage(_))));
+        let failed = session.snapshot().unwrap();
+        assert_eq!(failed.identity, before.identity);
+        assert_eq!(failed.preferences, before.preferences);
+        assert_eq!(
+            std::fs::read(dir.path().join("config.json")).unwrap(),
+            persisted
+        );
+        std::fs::remove_dir(temporary).unwrap();
+        reset().unwrap();
+        assert_eq!(session.snapshot().unwrap().preferences, Default::default());
+        assert_eq!(
+            SettingsStore::load_in_dir(dir.path().to_path_buf())
+                .unwrap()
+                .snapshot()
+                .browse_filters(),
+            BrowseFilterSettings::default(),
+        );
+    }
 }

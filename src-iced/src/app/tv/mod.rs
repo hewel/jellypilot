@@ -69,11 +69,15 @@ pub enum Message {
   ClockTick,
   Focus(Focus),
   Activate(Focus),
-  Scrolled(f32),
+  Scrolled {
+    offset: f32,
+    browse: Option<(u64, u64)>,
+  },
   Revealed {
     focus: Focus,
     destination: Destination,
     session: jellypilot_core::request_gate::SessionToken,
+    browse: Option<(u64, u64)>,
     y: f32,
     horizontal: Option<(iced::widget::Id, f32)>,
   },
@@ -107,6 +111,34 @@ pub struct Surface {
   next_press: u64,
   detail_page: Option<(String, Option<String>, usize)>,
   detail_overview_expanded: bool,
+  browse_currency: Option<(u64, u64)>,
+}
+
+pub(super) fn browse_currency(state: &State) -> Option<(u64, u64)> {
+  if !matches!(
+    state.shell.destination,
+    Destination::Library { .. } | Destination::Search(_)
+  ) {
+    return None;
+  }
+  let browse = &state.full.as_ref()?.browse;
+  Some((
+    browse.session.as_ref()?.id(),
+    browse.projection.as_ref()?.viewport_revision,
+  ))
+}
+
+fn current_browse_currency(state: &State, receipt: Option<(u64, u64)>) -> bool {
+  if receipt != browse_currency(state) {
+    return false;
+  }
+  receipt.is_none_or(|(_, revision)| {
+    state
+      .full
+      .as_ref()
+      .and_then(|full| full.browse.session.as_ref())
+      .is_some_and(|session| session.viewport_revision().ok() == Some(revision))
+  })
 }
 
 struct ConfirmPress {
@@ -186,6 +218,7 @@ struct Memory {
   offset: f32,
   horizontal: Vec<(iced::widget::Id, f32)>,
   focused_item: Option<String>,
+  browse: Option<(u64, u64)>,
 }
 
 fn remember_horizontal(state: &mut State, id: iced::widget::Id, offset: f32) {
@@ -322,7 +355,10 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       state.tv.focused_item = None;
       navigation::activate(state, focus)
     }
-    Message::Scrolled(offset) => {
+    Message::Scrolled { offset, browse } => {
+      if !current_browse_currency(state, browse) {
+        return Task::none();
+      }
       state.tv.offset = offset;
       Task::none()
     }
@@ -330,12 +366,14 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       focus,
       destination,
       session,
+      browse,
       y,
       horizontal,
     } => {
       if focus != state.tv.focus
         || destination != state.shell.destination
         || session != state.kernel.request_gate.current_session()
+        || !current_browse_currency(state, browse)
       {
         return Task::none();
       }
@@ -401,6 +439,20 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
   filters::reconcile(state);
   let destination = state.shell.destination.clone();
   let mut restore = false;
+  let currency = browse_currency(state);
+  let previous_currency = state.tv.browse_currency;
+  if state.tv.destination.as_ref() == Some(&destination)
+    && currency.is_some()
+    && state.tv.browse_currency != currency
+  {
+    state.tv.offset = 0.0;
+    state.tv.focused_item = None;
+    if matches!(state.tv.focus, Focus::Grid(_)) {
+      state.tv.focus = Focus::Header(0);
+    }
+    restore = true;
+  }
+  state.tv.browse_currency = currency;
   if state.tv.destination.as_ref() != Some(&destination) {
     if let Some(previous) = state.tv.destination.take() {
       state
@@ -413,6 +465,7 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
         offset: state.tv.offset,
         horizontal: std::mem::take(&mut state.tv.horizontal),
         focused_item: state.tv.focused_item.take(),
+        browse: previous_currency,
       });
       if state.tv.memory.len() > 32 {
         state.tv.memory.remove(0);
@@ -422,7 +475,7 @@ pub fn reconcile(state: &mut State) -> Task<AppMessage> {
       .tv
       .memory
       .iter()
-      .find(|saved| saved.destination == destination);
+      .find(|saved| saved.destination == destination && saved.browse == currency);
     state.tv.horizontal = saved
       .map(|saved| saved.horizontal.clone())
       .unwrap_or_default();
@@ -594,7 +647,7 @@ mod tests {
       collection_type: "movies".to_owned(),
     };
     let mut fixture = crate::app::test_support::BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
     let source = jellypilot_core::browse_model::BrowseSource::Search {
       session: state.kernel.request_gate.current_session(),
       query: "TV library".to_owned(),
@@ -623,6 +676,109 @@ mod tests {
     drop(reconcile(&mut state));
     assert_eq!(state.tv.focus, Focus::Grid(12));
     assert_eq!(state.tv.offset, 400.0);
+  }
+
+  #[tokio::test]
+  async fn query_viewport_reset_rejects_late_tv_scroll_and_reveal_deliveries() {
+    const LIBRARY: &str = "00000000000000000000000000000001";
+    let mut state = state();
+    state.shell.destination = Destination::Library {
+      library_id: LIBRARY.into(),
+      collection_type: "movies".into(),
+    };
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
+    let source = jellypilot_core::browse_model::BrowseSource::Library {
+      session: state.kernel.request_gate.current_session(),
+      shortcut: jellypilot_media_server::VideoLibraryShortcut {
+        id: LIBRARY.into(),
+        name: "Library".into(),
+        collection_type: "movies".into(),
+        item_count: None,
+        artwork_image_id: None,
+      },
+    };
+    let browse = &mut state.full.as_mut().unwrap().browse;
+    browse.presentation = jellypilot_sdk::browse::BrowsePresentation::Tv;
+    let task = crate::app::browse::start(browse, &mut state.kernel, Some(source));
+    crate::app::test_support::drain_task(
+      browse,
+      &mut state.kernel,
+      &mut fixture,
+      state.shell.window_size,
+      task,
+      &mut |_| crate::app::test_support::FixtureReply::Page {
+        total: 1000,
+        artwork: false,
+      },
+    )
+    .await;
+    let session = browse.session.clone().unwrap();
+    drop(reconcile(&mut state));
+    state.tv.focus = Focus::Grid(12);
+    state.tv.offset = 400.0;
+    let old_currency = browse_currency(&state);
+    let mut preferences = session.snapshot().unwrap().preferences;
+    preferences.sort = jellypilot_media_server::VideoLibrarySort::RecentlyAdded;
+    session.set_preferences(preferences).unwrap();
+    drop(crate::app::browse::sync_snapshot(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
+    drop(reconcile(&mut state));
+    assert_eq!(state.tv.offset, 0.0);
+    assert_ne!(browse_currency(&state), old_currency);
+    drop(update(
+      &mut state,
+      Message::Scrolled {
+        offset: 8_000.0,
+        browse: old_currency,
+      },
+    ));
+    let message = Message::Revealed {
+      focus: state.tv.focus,
+      destination: state.shell.destination.clone(),
+      session: state.kernel.request_gate.current_session(),
+      browse: old_currency,
+      y: 8_000.0,
+      horizontal: None,
+    };
+    drop(update(&mut state, message));
+    assert_eq!(state.tv.offset, 0.0);
+    let currency = browse_currency(&state);
+    drop(update(
+      &mut state,
+      Message::Scrolled {
+        offset: 280.0,
+        browse: currency,
+      },
+    ));
+    assert_eq!(state.tv.offset, 280.0);
+    let old_scroll_id = navigation::active_scroll_id(&state);
+    state.shell.destination = Destination::SavedBrowse;
+    drop(reconcile(&mut state));
+    let replacement = crate::app::test_support::open_saved_fixture(
+      &mut state.kernel,
+      &mut fixture,
+      jellypilot_sdk::saved_browse::SavedBrowseDraft {
+        name: "New saved query".into(),
+        library_id: LIBRARY.into(),
+        library_name: "Library".into(),
+        collection_type: jellypilot_media_server::VideoLibraryKind::Movies,
+        preferences: Default::default(),
+      },
+    )
+    .await;
+    drop(crate::app::shell::apply_saved_browse(
+      &mut state,
+      replacement,
+    ));
+    drop(reconcile(&mut state));
+    assert_eq!(
+      state.tv.offset, 0.0,
+      "another owner must not restore route-only scroll memory"
+    );
+    assert_ne!(navigation::active_scroll_id(&state), old_scroll_id);
   }
 
   #[test]

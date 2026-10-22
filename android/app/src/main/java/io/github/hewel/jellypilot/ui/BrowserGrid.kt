@@ -27,7 +27,7 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
   val count = if (browser.isVirtual) browser.totalCount.coerceAtMost(Int.MAX_VALUE.toUInt()).toInt() else browser.slots.size
   // Report the visible window expanded by one viewport on each side, rounded
   // outward to complete rows; the SDK owns page scheduling from this demand.
-  LaunchedEffect(gridState, count, backPreview) {
+  LaunchedEffect(gridState, browser.generation, browser.viewportRevision, count, backPreview) {
     if (backPreview) return@LaunchedEffect
     snapshotFlow {
       val visible = gridState.layoutInfo.visibleItemsInfo
@@ -42,7 +42,7 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
       val end = (((last + span + columns) / columns) * columns).coerceAtMost(count.toLong())
       start to end
     }.distinctUntilChanged().collect { range ->
-      if (range != null) model.setBrowserDisplayRange(browser.generation, range.first.toUInt(), range.second.toUInt())
+      if (range != null) model.setBrowserDisplayRange(browser.generation, browser.viewportRevision, range.first.toUInt(), range.second.toUInt())
     }
   }
   BoxWithConstraints(Modifier.fillMaxSize()) {

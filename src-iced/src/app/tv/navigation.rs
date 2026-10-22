@@ -368,7 +368,7 @@ pub(super) fn activate(state: &mut State, focus: Focus) -> Task<AppMessage> {
       if state
         .full
         .as_ref()
-        .and_then(|full| full.browse.filters)
+        .map(|full| full.browse.filter_settings())
         .unwrap_or_default()
         .sort()
         == VideoLibrarySort::RecentlyAdded
@@ -588,6 +588,15 @@ pub(super) fn scroll_id() -> iced::widget::Id {
   iced::widget::Id::new("tv-content")
 }
 
+pub(super) fn active_scroll_id(state: &State) -> iced::widget::Id {
+  if super::browse_currency(state).is_some() {
+    if let Some(full) = state.full.as_ref() {
+      return full.browse.scroll_id.clone();
+    }
+  }
+  scroll_id()
+}
+
 pub(super) fn browse_header_height(state: &State) -> f32 {
   (if matches!(state.shell.destination, Destination::Library { .. }) {
     272.0
@@ -605,7 +614,7 @@ pub(super) fn focus_id(focus: Focus) -> iced::widget::Id {
 pub(super) fn restore_scroll(state: &State) -> Task<AppMessage> {
   Task::batch(
     std::iter::once(operation::scrollable::scroll_to(
-      scroll_id(),
+      active_scroll_id(state),
       AbsoluteOffset {
         x: 0.0,
         y: state.tv.offset,
@@ -709,6 +718,8 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
     focus: Focus,
     destination: Destination,
     session: jellypilot_core::request_gate::SessionToken,
+    browse: Option<(u64, u64)>,
+    scroll_id: iced::widget::Id,
     target: Option<iced::Rectangle>,
     viewport: Option<(iced::Rectangle, iced::Rectangle)>,
     horizontal: Option<(iced::widget::Id, Option<(iced::Rectangle, iced::Rectangle)>)>,
@@ -752,7 +763,7 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
       _state: &mut dyn widget::operation::Scrollable,
     ) {
       let content = iced::Rectangle::new(bounds.position(), content);
-      if id == Some(&scroll_id()) {
+      if id == Some(&self.scroll_id) {
         self.viewport = Some((bounds, content));
       }
       if let Some((horizontal_id, geometry)) = &mut self.horizontal {
@@ -780,6 +791,7 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
         focus: self.focus,
         destination: self.destination.clone(),
         session: self.session,
+        browse: self.browse,
         y,
         horizontal,
       }))
@@ -795,6 +807,8 @@ pub(super) fn reveal_measured(state: &State) -> Task<AppMessage> {
     focus: state.tv.focus,
     destination: state.shell.destination.clone(),
     session: state.kernel.request_gate.current_session(),
+    browse: super::browse_currency(state),
+    scroll_id: active_scroll_id(state),
     target: None,
     viewport: None,
     horizontal: horizontal.map(|id| (id, None)),

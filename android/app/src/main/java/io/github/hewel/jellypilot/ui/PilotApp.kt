@@ -35,22 +35,19 @@ internal fun PilotApp(model: AppViewModel, playerContent: @Composable () -> Unit
   var sourceDestination by rememberSaveable(scopeKey) { mutableStateOf(Destination.Home) }
   SideEffect { if (state.destination != Destination.Search) sourceDestination = state.destination }
   val homeScroll = key(scopeKey) { rememberLazyListState() }
-  // Source library and pushed search never share a scroll anchor.
-  val libraryGrid = rememberLazyGridState()
-  val searchGrid = rememberLazyGridState()
-  var libraryGeneration by rememberSaveable { mutableLongStateOf(-1L) }
-  var searchGeneration by rememberSaveable { mutableLongStateOf(-1L) }
-  LaunchedEffect(state.destination, state.browser.generation) {
-    if (state.detail == null && !state.showPlayer) {
-      if (state.destination == Destination.Library && state.browser.generation != libraryGeneration) {
-        if (libraryGeneration != -1L) libraryGrid.scrollToItem(0)
-        libraryGeneration = state.browser.generation
-      } else if (state.destination == Destination.Search && state.browser.generation != searchGeneration) {
-        if (searchGeneration != -1L) searchGrid.scrollToItem(0)
-        searchGeneration = state.browser.generation
-      }
-    }
+  // Retained routes keep their grid; a same-handle query reset creates a fresh
+  // grid before any new-revision viewport effect can report old geometry.
+  var libraryViewport by rememberSaveable(scopeKey) { mutableStateOf("") }
+  var searchViewport by rememberSaveable(scopeKey) { mutableStateOf("") }
+  val viewport = "${state.browser.generation}:${state.browser.viewportRevision}"
+  val libraryKey = if (state.destination == Destination.Library && state.browser.generation != 0L) viewport else libraryViewport
+  val searchKey = if (state.destination == Destination.Search && state.browser.generation != 0L) viewport else searchViewport
+  SideEffect {
+    libraryViewport = libraryKey
+    searchViewport = searchKey
   }
+  val libraryGrid = key(scopeKey, libraryKey) { rememberLazyGridState() }
+  val searchGrid = key(scopeKey, searchKey) { rememberLazyGridState() }
   val imeVisible = WindowInsets.isImeVisible
   BackHandler(state.remoteController != null || state.showSignIn || (state.detail != null && !imeVisible) || state.showPlayer || (state.detail == null && state.destination == Destination.Search) ||
     (state.detail == null && state.destination == Destination.Account && state.accountPage != AccountPage.Overview)) {

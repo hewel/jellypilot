@@ -1,4 +1,4 @@
-//! Profile-owned saved query orchestration. Only the Browser executes a query.
+//! Profile-owned saved query manager; the SDK owns applied query state.
 
 #[cfg(test)]
 mod handoff_tests;
@@ -14,8 +14,10 @@ use jellypilot_media_server::{
   VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibraryQuality, VideoLibrarySort,
   VideoLibrarySortDirection,
 };
+pub use jellypilot_sdk::browse::BrowseCondition as Condition;
+use jellypilot_sdk::browse::{BrowsePresentation, BrowseSession};
 use jellypilot_sdk::saved_browse::{
-  ResolvedSavedBrowse, SavedBrowseDraft, SavedBrowseError, SavedBrowseFilter, SavedBrowseId,
+  SavedBrowseDraft, SavedBrowseError, SavedBrowseFilter, SavedBrowseId,
 };
 use jellypilot_sdk::OperationToken;
 
@@ -23,28 +25,11 @@ use super::message::Message as AppMessage;
 use super::state::{Destination, State};
 use crate::i18n::UiText;
 
-#[derive(Clone)]
-pub struct AppliedFilter {
-  pub filter: SavedBrowseFilter,
-  pub deleted: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordAction {
   Apply,
   Rename,
   Delete,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Condition {
-  Sort,
-  Direction,
-  Played,
-  Favorites,
-  Quality,
-  Country,
-  Genre,
 }
 
 #[derive(Clone)]
@@ -130,7 +115,7 @@ pub enum Completion {
   Loaded(Vec<SavedBrowseFilter>),
   Written(SavedBrowseFilter),
   Deleted(SavedBrowseId),
-  Resolved(Box<ResolvedSavedBrowse>),
+  Opened(Arc<BrowseSession>),
 }
 
 #[derive(Clone)]
@@ -153,7 +138,7 @@ pub fn target(state: &State) -> Target {
     query: state
       .full
       .as_ref()
-      .and_then(|full| full.browse.browser.model().identity().map(str::to_owned)),
+      .and_then(|full| full.browse.identity().map(str::to_owned)),
   }
 }
 
@@ -171,10 +156,13 @@ fn current(state: &State, receipt: &Target) -> bool {
 pub fn current_preferences(state: &State) -> Option<BrowsePreferences> {
   matches!(state.shell.destination, Destination::Library { .. })
     .then(|| {
-      state
-        .full
-        .as_ref()
-        .map(|full| super::browse::preferences(&full.browse, &state.kernel))
+      state.full.as_ref().and_then(|full| {
+        full
+          .browse
+          .projection
+          .as_ref()
+          .map(|projection| projection.preferences.clone())
+      })
     })
     .flatten()
 }
@@ -183,10 +171,8 @@ pub fn modified(state: &State) -> bool {
   state
     .full
     .as_ref()
-    .and_then(|full| full.browse.saved.as_ref())
-    .is_some_and(|saved| {
-      current_preferences(state).is_some_and(|preferences| preferences != saved.filter.preferences)
-    })
+    .and_then(|full| full.browse.saved())
+    .is_some_and(|saved| saved.modified)
 }
 
 /// Complete labels include values unavailable in a presentation's ordinary toolbar.
@@ -318,25 +304,6 @@ pub fn reconcile(state: &mut State) {
       editor.error = Some(error);
     } else {
       state.saved_browse.error = Some(error);
-    }
-  }
-  if let Some(saved) = state
-    .full
-    .as_mut()
-    .and_then(|full| full.browse.saved.as_mut())
-  {
-    if state.saved_browse.loaded {
-      if let Some(record) = state
-        .saved_browse
-        .records
-        .iter()
-        .find(|record| record.id == saved.filter.id)
-      {
-        saved.filter.name.clone_from(&record.name);
-        saved.deleted = false;
-      } else {
-        saved.deleted = true;
-      }
     }
   }
 }
@@ -540,13 +507,18 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
             return Task::none();
           };
           let sdk = Arc::clone(&state.kernel.sdk);
+          let presentation = if state.tv_mode() {
+            BrowsePresentation::Tv
+          } else {
+            BrowsePresentation::Desktop
+          };
           Task::perform(
             async move {
               if action == RecordAction::Apply {
                 sdk
-                  .saved_browse_resolve_for_apply(token, id)
+                  .open_saved_browser(token, id, presentation)
                   .await
-                  .map(|resolved| Completion::Resolved(Box::new(resolved)))
+                  .map(Completion::Opened)
               } else {
                 sdk
                   .saved_browse_delete(token, id)
@@ -641,40 +613,31 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
             );
           iced::widget::operation::focus(focus)
         }
-        Ok(Completion::Resolved(resolved)) => {
-          if let Some(record) = state
-            .saved_browse
-            .records
-            .iter_mut()
-            .find(|record| record.id == resolved.filter.id)
-          {
-            *record = resolved.filter.clone();
-          }
-          super::shell::apply_saved_browse(state, *resolved)
-        }
+        Ok(Completion::Opened(session)) => super::shell::apply_saved_browse(state, session),
       }
     }
   }
 }
 
 fn remove(state: &mut State, condition: Option<Condition>) -> Task<AppMessage> {
-  let Some(mut preferences) = current_preferences(state) else {
+  if current_preferences(state).is_none() {
     return Task::none();
-  };
-  let defaults = BrowsePreferences::default();
-  match condition {
-    None => preferences = defaults,
-    Some(Condition::Sort) => preferences.sort = defaults.sort,
-    Some(Condition::Direction) => preferences.sort_direction = defaults.sort_direction,
-    Some(Condition::Played) => preferences.played_filter = defaults.played_filter,
-    Some(Condition::Favorites) => preferences.favorites_only = false,
-    Some(Condition::Quality) => preferences.filters.quality = None,
-    Some(Condition::Country) => preferences.filters.country = None,
-    Some(Condition::Genre) => preferences.filters.genre = None,
   }
-  let source = super::shell::browse_source(state);
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
-  super::browse::commit_preferences(&mut full.browse, &mut state.kernel, source, preferences)
+  let Some(session) = &full.browse.session else {
+    return Task::none();
+  };
+  let result = match condition {
+    Some(condition) => session.remove_condition(condition),
+    None => session.clear_conditions(),
+  };
+  if let Err(error) = result {
+    return state.kernel.show_toast(
+      super::state::NoticeLevel::Error,
+      UiText::new("browse-save-filters-failed").arg("details", error.to_string()),
+    );
+  }
+  super::browse::sync_snapshot(&mut full.browse, &mut state.kernel)
 }

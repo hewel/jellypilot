@@ -1,6 +1,6 @@
-//! Browse surface (ADR 0029): Library Browser paging, filter/sort
-//! preferences, the scroll-driven display window, the sidebar search input,
-//! and the browse artwork pipeline (grid cards).
+//! Browse presentation: query ownership and execution live in the SDK.
+
+use std::sync::Arc;
 
 use crate::i18n::UiText;
 use iced::widget::operation;
@@ -11,7 +11,9 @@ use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{VideoLibraryFilters, VideoLibrarySortDirection};
-use jellypilot_sdk::browse::{BrowseWork, Browser};
+use jellypilot_sdk::browse::{
+  AppliedSavedBrowse, BrowsePresentation, BrowseQuery, BrowseSession, BrowseSnapshot,
+};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
@@ -34,11 +36,10 @@ struct ScrollSnapshot {
   id: iced::widget::Id,
 }
 
-/// Browse surface slice: the SDK-owned Library Browser and its derived view,
-/// the artwork cells bound for the grid cards, the tracked scroll viewport,
-/// and the sidebar search input text.
 pub struct Surface {
-  pub browser: Browser,
+  pub session: Option<Arc<BrowseSession>>,
+  /// Read-only query metadata projected from SDK notifications.
+  pub projection: Option<BrowseProjection>,
   pub view: LibraryBrowseView,
   pub artwork: ImageCollection,
   pub viewport: BrowseViewport,
@@ -46,19 +47,43 @@ pub struct Surface {
   pub scroll_id: iced::widget::Id,
   pub sort_menu_open: bool,
   pub search_input: String,
-  pub filters: Option<BrowseFilterSettings>,
-  pub advanced_filters: VideoLibraryFilters,
   pub mode: ViewMode,
-  pub saved: Option<super::saved_browse::AppliedFilter>,
-  /// The active presentation supplies its measured geometry; absent for desktop.
+  pub presentation: BrowsePresentation,
   pub presentation_grid: Option<ArtworkGridMetrics>,
   alternate_scroll: Option<ScrollSnapshot>,
+}
+
+/// Cached SDK metadata; the item window is moved into `Surface::view`.
+pub struct BrowseProjection {
+  pub revision: u64,
+  pub identity: String,
+  pub source: BrowseSource,
+  pub preferences: BrowsePreferences,
+  pub saved: Option<AppliedSavedBrowse>,
+  pub viewport_revision: u64,
+  pub refreshing: bool,
+  pub refresh_failure: Option<jellypilot_core::LibraryBrowseFailure>,
+}
+
+fn install_projection(surface: &mut Surface, snapshot: BrowseSnapshot) {
+  surface.view = snapshot.view;
+  surface.projection = Some(BrowseProjection {
+    revision: snapshot.revision,
+    identity: snapshot.identity,
+    source: snapshot.source,
+    preferences: snapshot.preferences,
+    saved: snapshot.saved,
+    viewport_revision: snapshot.viewport_revision,
+    refreshing: snapshot.refreshing,
+    refresh_failure: snapshot.refresh_failure,
+  });
 }
 
 impl Default for Surface {
   fn default() -> Self {
     Self {
-      browser: Browser::default(),
+      session: None,
+      projection: None,
       view: LibraryBrowseView::Inactive,
       artwork: ImageCollection::default(),
       viewport: BrowseViewport::default(),
@@ -66,10 +91,8 @@ impl Default for Surface {
       scroll_id: iced::widget::Id::unique(),
       sort_menu_open: false,
       search_input: String::new(),
-      filters: None,
-      advanced_filters: VideoLibraryFilters::default(),
       mode: ViewMode::Grid,
-      saved: None,
+      presentation: BrowsePresentation::Desktop,
       presentation_grid: None,
       alternate_scroll: None,
     }
@@ -77,51 +100,98 @@ impl Default for Surface {
 }
 
 impl Surface {
-  /// Before layout, bound materialization by the window rather than waiting for
-  /// scroll input. Only the image observers may turn these cells into demand.
   pub(crate) fn grid_viewport(&self, window_size: iced::Size) -> ArtworkGridViewport {
     self.grid_viewport.unwrap_or_else(|| {
       ArtworkGridViewport::from_scroll_geometry(self.viewport.offset_y, window_size.height, 0.0)
     })
   }
+
+  pub(crate) fn preferences(&self) -> BrowsePreferences {
+    self
+      .projection
+      .as_ref()
+      .map(|snapshot| snapshot.preferences.clone())
+      .unwrap_or_default()
+  }
+
+  pub(crate) fn filter_settings(&self) -> BrowseFilterSettings {
+    self
+      .projection
+      .as_ref()
+      .map_or_else(BrowseFilterSettings::default, |projection| {
+        let preferences = &projection.preferences;
+        BrowseFilterSettings::default()
+          .with_sort(preferences.sort)
+          .with_sort_direction(preferences.sort_direction)
+          .with_played_filter(preferences.played_filter)
+          .with_favorites_only(preferences.favorites_only)
+      })
+  }
+
+  pub(crate) fn saved(&self) -> Option<&AppliedSavedBrowse> {
+    self.projection.as_ref()?.saved.as_ref()
+  }
+
+  pub(crate) fn identity(&self) -> Option<&str> {
+    self
+      .projection
+      .as_ref()
+      .map(|snapshot| snapshot.identity.as_str())
+  }
+
+  pub(crate) fn refreshing(&self) -> bool {
+    self
+      .projection
+      .as_ref()
+      .is_some_and(|snapshot| snapshot.refreshing)
+  }
+
+  pub(crate) fn viewport_revision(&self) -> u64 {
+    self
+      .projection
+      .as_ref()
+      .map_or(0, |snapshot| snapshot.viewport_revision)
+  }
 }
 
-/// Browser and query context owned by one navigation-history entry.
+/// Navigation retains the same query owner, never a reconstructed query.
 pub(crate) struct Snapshot {
-  browser: Browser,
+  session: Option<Arc<BrowseSession>>,
   viewport: BrowseViewport,
   grid_viewport: Option<ArtworkGridViewport>,
   scroll_id: iced::widget::Id,
-  filters: Option<BrowseFilterSettings>,
-  advanced_filters: VideoLibraryFilters,
   search_input: String,
   mode: ViewMode,
-  saved: Option<super::saved_browse::AppliedFilter>,
+  viewport_revision: Option<u64>,
+  saved: bool,
   alternate_scroll: Option<ScrollSnapshot>,
 }
 
 pub(crate) fn snapshot_uses_saved(snapshot: &Snapshot) -> bool {
-  snapshot.saved.is_some()
+  snapshot.saved
 }
 
 pub(crate) fn snapshot(surface: &mut Surface, submitted_query: Option<&str>) -> Snapshot {
-  // Suspending cancels the in-flight page requests; their late settlements
-  // arrive rejected and are dropped by the currency check.
-  surface.browser.suspend();
-  let browser = std::mem::take(&mut surface.browser);
-  sync_view(surface);
-  Snapshot {
-    browser,
+  if let Some(session) = &surface.session {
+    let _ = session.suspend();
+  }
+  let snapshot = Snapshot {
+    session: surface.session.take(),
     viewport: surface.viewport,
     grid_viewport: surface.grid_viewport,
     scroll_id: surface.scroll_id.clone(),
-    filters: surface.filters,
-    advanced_filters: surface.advanced_filters.clone(),
     search_input: submitted_query.unwrap_or(&surface.search_input).to_owned(),
     mode: surface.mode,
-    saved: surface.saved.take(),
+    viewport_revision: surface
+      .projection
+      .as_ref()
+      .map(|snapshot| snapshot.viewport_revision),
+    saved: surface.saved().is_some(),
     alternate_scroll: surface.alternate_scroll.take(),
-  }
+  };
+  surface.projection = None;
+  surface.view = LibraryBrowseView::Inactive;
+  snapshot
 }
 
 pub(crate) fn restore(
@@ -129,144 +199,80 @@ pub(crate) fn restore(
   kernel: &mut Kernel,
   snapshot: Snapshot,
   window_size: iced::Size,
-  source: Option<BrowseSource>,
-  allow_advanced_filters: bool,
+  tv: bool,
 ) -> Task<Message> {
-  begin_artwork_view(surface);
-  // Replacing the browser drops the previous owner, cancelling its requests.
-  surface.browser = snapshot.browser;
+  leave_view(surface);
+  surface.session = snapshot.session;
   surface.viewport = snapshot.viewport;
   surface.grid_viewport = snapshot.grid_viewport;
   surface.scroll_id = snapshot.scroll_id;
-  surface.filters = snapshot.filters;
-  surface.advanced_filters = snapshot.advanced_filters;
   surface.search_input = snapshot.search_input;
   surface.mode = snapshot.mode;
-  surface.saved = snapshot.saved;
   surface.alternate_scroll = snapshot.alternate_scroll;
   surface.sort_menu_open = false;
-  if allow_advanced_filters && normalize_tv_filters(surface, kernel) {
-    // A desktop snapshot can carry criteria with no controls in the TV toolbar.
-    surface.browser.reset();
-    return start(surface, kernel, source);
-  }
-  if !allow_advanced_filters
-    && surface.saved.is_none()
-    && surface.advanced_filters != VideoLibraryFilters::default()
-  {
-    surface.advanced_filters = VideoLibraryFilters::default();
-    surface.browser.reset();
-    return start(surface, kernel, source);
-  }
-  let resumed = if surface.advanced_filters.is_empty() {
-    surface.browser.resume()
+  surface.presentation = if tv {
+    BrowsePresentation::Tv
   } else {
-    if let Some(client) = &kernel.client {
-      client.library().invalidate_filter_catalog();
-    }
-    surface.browser.resume_with_refresh()
+    BrowsePresentation::Desktop
   };
-  let work = match resumed {
-    Ok(work) => work,
-    Err(error) => {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not restore library browsing: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-open-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      sync_view(surface);
-      return prepare_artwork(surface);
-    }
+  let Some(session) = surface.session.clone() else {
+    return Task::none();
   };
-  sync_view(surface);
+  // Restore the old revision before presentation normalization so a reset
+  // invalidates the retained geometry even if requests finish immediately.
+  if let Ok(projection) = session.snapshot() {
+    install_projection(surface, projection);
+    if let (Some(projection), Some(revision)) =
+      (&mut surface.projection, snapshot.viewport_revision)
+    {
+      projection.viewport_revision = revision;
+    }
+  }
+  if let Err(error) = session
+    .set_presentation(surface.presentation)
+    .and_then(|()| session.resume())
+  {
+    return report_error(kernel, "browse-open-failed", error);
+  }
   Task::batch([
-    apply_work(surface, work),
+    sync_snapshot(surface, kernel),
     sync_scroll_window(surface, kernel, window_size),
     prepare_artwork(surface),
   ])
 }
 
-/// Keep the TV toolbar truthful without writing over desktop saved preferences.
-pub(crate) fn normalize_tv_filters(surface: &mut Surface, kernel: &Kernel) -> bool {
-  if surface.saved.is_some() {
-    return false;
+pub(crate) fn set_presentation(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  presentation: BrowsePresentation,
+) -> Task<Message> {
+  surface.presentation = presentation;
+  if let Some(session) = &surface.session {
+    if let Err(error) = session.set_presentation(presentation) {
+      return report_error(kernel, "browse-open-failed", error);
+    }
   }
-  use jellypilot_media_server::VideoLibraryPlayedFilter;
-  let original = surface
-    .filters
-    .unwrap_or_else(|| kernel.settings.snapshot().browse_filters());
-  let played = match original.played_filter() {
-    VideoLibraryPlayedFilter::Played => VideoLibraryPlayedFilter::All,
-    value => value,
-  };
-  let filters = original
-    .with_favorites_only(false)
-    .with_played_filter(played);
-  surface.filters = Some(filters);
-  filters != original
-}
-
-pub(crate) fn preferences(surface: &Surface, kernel: &Kernel) -> BrowsePreferences {
-  BrowsePreferences {
-    filters: surface.advanced_filters.clone(),
-    ..BrowsePreferences::from(
-      surface
-        .filters
-        .unwrap_or_else(|| kernel.settings.snapshot().browse_filters()),
-    )
-  }
-}
-
-/// Installs one complete query without mutating ordinary browsing defaults.
-pub(crate) fn install_preferences(surface: &mut Surface, preferences: BrowsePreferences) {
-  surface.filters = Some(filter_settings(&preferences));
-  surface.advanced_filters = preferences.filters;
-}
-
-fn filter_settings(preferences: &BrowsePreferences) -> BrowseFilterSettings {
-  BrowseFilterSettings::default()
-    .with_sort(preferences.sort)
-    .with_sort_direction(preferences.sort_direction)
-    .with_played_filter(preferences.played_filter)
-    .with_favorites_only(preferences.favorites_only)
+  sync_snapshot(surface, kernel)
 }
 
 pub(crate) fn commit_preferences(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  source: Option<BrowseSource>,
   preferences: BrowsePreferences,
 ) -> Task<Message> {
-  if surface.saved.is_none() {
-    if let Err(error) = kernel
-      .settings
-      .set_browse_filters(filter_settings(&preferences))
-    {
-      return kernel.show_toast(
-        super::state::NoticeLevel::Error,
-        UiText::new("browse-save-filters-failed")
-          .arg("details", sanitize_message(&error.to_string())),
-      );
-    }
+  let Some(session) = &surface.session else {
+    return Task::none();
+  };
+  if let Err(error) = session.set_preferences(preferences) {
+    return report_error(kernel, "browse-save-filters-failed", error);
   }
-  install_preferences(surface, preferences);
-  start(surface, kernel, source)
+  sync_snapshot(surface, kernel)
 }
 
-/// `source` is the router-resolved browse source for the current destination
-/// (computed only for the filter-mutation messages, the only arms that
-/// restart browsing), `in_library` whether the current destination is a
-/// Library route (filter mutations apply nowhere else), and `window_size` the
-/// shell's tracked window size. These are computed by the top-level router so
-/// this module never reads navigation, home, playback, or shell state (ADR
-/// 0029).
+/// Route admission remains in the shell; mutations apply only to Library routes.
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  source: Option<BrowseSource>,
   in_library: bool,
   window_size: iced::Size,
   message: BrowseMessage,
@@ -320,13 +326,13 @@ pub fn update(
     }
     BrowseMessage::SortChanged(sort) => {
       surface.sort_menu_open = false;
-      persist_filters(surface, kernel, source, in_library, |filters| {
+      persist_filters(surface, kernel, in_library, |filters| {
         filters.with_sort(sort)
       })
     }
     BrowseMessage::SortDirectionToggled => {
       surface.sort_menu_open = false;
-      persist_filters(surface, kernel, source, in_library, |filters| {
+      persist_filters(surface, kernel, in_library, |filters| {
         let direction = match filters.sort_direction() {
           VideoLibrarySortDirection::Ascending => VideoLibrarySortDirection::Descending,
           VideoLibrarySortDirection::Descending => VideoLibrarySortDirection::Ascending,
@@ -335,26 +341,32 @@ pub fn update(
       })
     }
     BrowseMessage::PlayedFilterChanged(played_filter) => {
-      persist_filters(surface, kernel, source, in_library, |filters| {
+      persist_filters(surface, kernel, in_library, |filters| {
         filters.with_played_filter(played_filter)
       })
     }
-    BrowseMessage::FavoritesToggled => {
-      persist_filters(surface, kernel, source, in_library, |filters| {
-        filters.with_favorites_only(!filters.favorites_only())
-      })
-    }
-    BrowseMessage::Scrolled(viewport) => {
+    BrowseMessage::FavoritesToggled => persist_filters(surface, kernel, in_library, |filters| {
+      filters.with_favorites_only(!filters.favorites_only())
+    }),
+    BrowseMessage::Scrolled {
+      epoch,
+      viewport_revision,
+      viewport,
+    } => {
+      if !current_geometry(surface, epoch, viewport_revision) {
+        return Task::none();
+      }
       let offset = viewport.absolute_offset();
       surface.viewport = BrowseViewport { offset_y: offset.y };
       Task::none()
     }
     BrowseMessage::GridViewportMeasured {
       epoch,
+      viewport_revision,
       offset_y,
       height,
     } => {
-      if epoch != surface.artwork.epoch() {
+      if !current_geometry(surface, epoch, viewport_revision) {
         return Task::none();
       }
       let measured = ArtworkGridViewport { offset_y, height };
@@ -365,60 +377,75 @@ pub fn update(
       sync_scroll_window(surface, kernel, window_size)
     }
     BrowseMessage::Retry => {
-      let work = match surface.browser.retry() {
-        Ok(work) => work,
-        Err(error) => {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Error,
-            DiagnosticCategory::Connection,
-            format!("Could not retry library browsing: {error}"),
-          );
-          kernel.notice = Some(
-            UiText::new("browse-retry-failed").arg("details", sanitize_message(&error.to_string())),
-          );
-          return Task::none();
-        }
+      let Some(session) = &surface.session else {
+        return Task::none();
       };
-      sync_view(surface);
-      apply_work(surface, work)
+      if let Err(error) = session.retry() {
+        return report_error(kernel, "browse-retry-failed", error);
+      }
+      sync_snapshot(surface, kernel)
     }
-    BrowseMessage::PageSettled(settlement) => {
-      if !surface.browser.model().is_current_settlement(&settlement) {
+    BrowseMessage::SnapshotChanged {
+      session_id,
+      snapshot,
+    } => {
+      if surface
+        .session
+        .as_ref()
+        .is_none_or(|session| session.id() != session_id)
+        || surface
+          .projection
+          .as_ref()
+          .is_some_and(|current| current.revision >= snapshot.revision)
+      {
         return Task::none();
       }
-      if let Err(error) = &settlement.result {
-        kernel.diagnostics.record(
-          DiagnosticLevel::Error,
-          DiagnosticCategory::Connection,
-          format!("Browse page load failed: {error}"),
-        );
-        if surface.browser.model().is_refreshing() {
-          kernel.notice = Some(
-            UiText::new("browse-refresh-failed")
-              .arg("details", sanitize_message(&error.to_string())),
-          );
-        }
+      // A queued notification must not revive a revoked profile/session.
+      if surface
+        .session
+        .as_ref()
+        .is_none_or(|session| session.viewport_revision().is_err())
+      {
+        return Task::none();
       }
-      let work = match surface.browser.settle(settlement) {
-        Ok(work) => work,
-        Err(error) => {
-          kernel.diagnostics.record(
-            DiagnosticLevel::Error,
-            DiagnosticCategory::Connection,
-            format!("Could not apply library results: {error}"),
-          );
-          kernel.notice = Some(
-            UiText::new("browse-apply-failed").arg("details", sanitize_message(&error.to_string())),
-          );
-          return Task::none();
-        }
-      };
-      sync_view(surface);
+      let reset = apply_snapshot(surface, *snapshot, kernel);
       Task::batch([
-        apply_work(surface, work),
+        reset,
         sync_scroll_window(surface, kernel, window_size),
         prepare_artwork(surface),
       ])
+    }
+    BrowseMessage::SnapshotFailed {
+      session_id,
+      revision,
+      error,
+    } => {
+      if surface.session.as_ref().is_none_or(|session| {
+        session.id() != session_id || session.revision().ok() != Some(revision)
+      }) || surface
+        .projection
+        .as_ref()
+        .is_some_and(|current| current.revision >= revision)
+      {
+        return Task::none();
+      }
+      let message = sanitize_message(&error.to_string());
+      if matches!(surface.view, LibraryBrowseView::Loading) {
+        surface.view = LibraryBrowseView::Failed {
+          message: message.clone(),
+          retryable: true,
+          retry_busy: false,
+        };
+      }
+      if let Some(projection) = &mut surface.projection {
+        projection.revision = revision;
+        projection.refreshing = false;
+        projection.refresh_failure = Some(jellypilot_core::LibraryBrowseFailure {
+          message,
+          retryable: true,
+        });
+      }
+      report_error(kernel, "browse-apply-failed", error)
     }
     BrowseMessage::ArtworkLoaded(completion) => {
       surface
@@ -429,109 +456,104 @@ pub fn update(
   }
 }
 
-/// Commits a TV filter draft as one query change. The browse model resets the
-/// viewport before requesting the first page and rejects old-query deliveries.
+fn current_geometry(surface: &Surface, epoch: u64, viewport_revision: u64) -> bool {
+  epoch == surface.artwork.epoch()
+    && viewport_revision == surface.viewport_revision()
+    && surface.session.as_ref().is_some_and(|session| {
+      session
+        .viewport_revision()
+        .is_ok_and(|current| current == viewport_revision)
+    })
+}
+
+/// Commits a TV filter draft to the current SDK query.
 pub(crate) fn apply_advanced_filters(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  source: Option<BrowseSource>,
   filters: VideoLibraryFilters,
 ) -> Task<Message> {
-  if !matches!(source, Some(BrowseSource::Library { .. })) || surface.advanced_filters == filters {
+  if !surface
+    .projection
+    .as_ref()
+    .is_some_and(|projection| matches!(projection.source, BrowseSource::Library { .. }))
+  {
     return Task::none();
   }
-  surface.advanced_filters = filters;
-  if let Some(client) = &kernel.client {
-    client.library().invalidate_filter_catalog();
-  }
-  start(surface, kernel, source)
+  let mut preferences = surface.preferences();
+  preferences.filters = filters;
+  commit_preferences(surface, kernel, preferences)
 }
 
 fn persist_filters(
   surface: &mut Surface,
   kernel: &mut Kernel,
-  source: Option<BrowseSource>,
   in_library: bool,
   mutation: impl FnOnce(BrowseFilterSettings) -> BrowseFilterSettings,
 ) -> Task<Message> {
   if !in_library {
     return Task::none();
   }
-  let filters = mutation(
-    surface
-      .filters
-      .unwrap_or_else(|| kernel.settings.snapshot().browse_filters()),
-  );
-  if let Err(error) = if surface.saved.is_none() {
-    kernel.settings.set_browse_filters(filters)
-  } else {
-    Ok(false)
-  } {
-    kernel.diagnostics.record(
-      DiagnosticLevel::Error,
-      DiagnosticCategory::Connection,
-      format!("Could not save library filters: {error}"),
-    );
-    kernel.notice = Some(
-      UiText::new("browse-save-filters-failed")
-        .arg("details", sanitize_message(&error.to_string())),
-    );
-    return Task::none();
-  }
-  surface.filters = Some(filters);
-  start(surface, kernel, source)
+  let filters = mutation(surface.filter_settings());
+  let mut preferences = surface.preferences();
+  preferences.sort = filters.sort();
+  preferences.sort_direction = filters.sort_direction();
+  preferences.played_filter = filters.played_filter();
+  preferences.favorites_only = filters.favorites_only();
+  commit_preferences(surface, kernel, preferences)
 }
 
-/// Starts (or reconfigures) the Library Browser for `source`. The top-level
-/// router also calls this when navigating to a Library or Search
-/// destination.
+/// Opens ordinary browsing with the SDK's persisted default policy.
 pub fn start(
   surface: &mut Surface,
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
 ) -> Task<Message> {
   let Some(source) = source else {
-    begin_artwork_view(surface);
-    surface.browser.reset();
-    sync_view(surface);
+    leave_view(surface);
     kernel.notice = Some(UiText::new("browse-library-unavailable"));
     return Task::none();
   };
-  let _ = *surface
-    .filters
-    .get_or_insert_with(|| kernel.settings.snapshot().browse_filters());
-  let preferences = preferences(surface, kernel);
-  let work = match surface
-    .browser
-    .configure(kernel.client.clone(), source, preferences)
+  if surface.saved().is_none()
+    && surface
+      .projection
+      .as_ref()
+      .is_some_and(|snapshot| match (&snapshot.source, &source) {
+        (
+          BrowseSource::Library {
+            shortcut: current, ..
+          },
+          BrowseSource::Library { shortcut: next, .. },
+        ) => current.id == next.id && current.collection_type == next.collection_type,
+        (BrowseSource::Search { query: current, .. }, BrowseSource::Search { query: next, .. }) => {
+          current == next
+        }
+        _ => false,
+      })
   {
-    Ok(work) => work,
-    Err(error) => {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not open library browsing: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-open-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      sync_view(surface);
-      return Task::none();
-    }
-  };
-  // A reconfigure that changes nothing (same source and preferences, e.g.
-  // re-selecting the active filter) emits no work: the model retains its
-  // pages, so no page settlement will re-drive artwork preparation. Tearing
-  // the artwork view down here would strand a settled grid on placeholders,
-  // but the view is still re-synced so an in-flight load keeps reflecting
-  // Loading.
-  if work.is_empty() {
-    sync_view(surface);
-    return Task::none();
+    return sync_snapshot(surface, kernel);
   }
-  begin_artwork_view(surface);
-  sync_view(surface);
-  apply_work(surface, work)
+  let opened = match source {
+    BrowseSource::Library { shortcut, .. } => kernel
+      .sdk
+      .open_library_browser(shortcut, surface.presentation),
+    BrowseSource::Search { query, .. } => kernel
+      .sdk
+      .open_browser(BrowseQuery::Search { query }, surface.presentation),
+  };
+  match opened {
+    Ok(session) => adopt(surface, kernel, session),
+    Err(error) => report_error(kernel, "browse-open-failed", error),
+  }
+}
+
+pub(crate) fn adopt(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  session: Arc<BrowseSession>,
+) -> Task<Message> {
+  leave_view(surface);
+  surface.session = Some(session);
+  sync_snapshot(surface, kernel)
 }
 
 /// Recomputes the scroll-driven display window and loads newly visible pages.
@@ -572,109 +594,106 @@ pub(crate) fn set_display_range(
   kernel: &mut Kernel,
   range: std::ops::Range<u32>,
 ) -> Task<Message> {
-  // Metadata-only peek: the hot scroll path must not clone the window's
-  // items via `display_range()` just to compare the range.
-  if surface.browser.model().peek_display_range().as_ref() == Some(&range) {
+  let (Some(session), Some(projection)) = (&surface.session, &surface.projection) else {
+    return Task::none();
+  };
+  if let LibraryBrowseView::Ready {
+    visible_start,
+    visible_items,
+    ..
+  } = &surface.view
+  {
+    if *visible_start == range.start && visible_items.len() == (range.end - range.start) as usize {
+      return Task::none();
+    }
+  }
+  if let Err(error) =
+    session.set_display_range_for_revision(projection.viewport_revision, range.start, range.end)
+  {
+    return report_error(kernel, "browse-load-more-failed", error);
+  }
+  sync_snapshot(surface, kernel)
+}
+
+pub(crate) fn sync_snapshot(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  let Some(session) = &surface.session else {
+    return Task::none();
+  };
+  match session.snapshot() {
+    Ok(snapshot) => {
+      if surface
+        .projection
+        .as_ref()
+        .is_some_and(|current| current.revision == snapshot.revision)
+      {
+        return Task::none();
+      }
+      let reset = apply_snapshot(surface, snapshot, kernel);
+      Task::batch([reset, prepare_artwork(surface)])
+    }
+    Err(error) => report_error(kernel, "browse-open-failed", error),
+  }
+}
+
+fn apply_snapshot(
+  surface: &mut Surface,
+  snapshot: BrowseSnapshot,
+  kernel: &mut Kernel,
+) -> Task<Message> {
+  let reset_viewport = surface
+    .projection
+    .as_ref()
+    .is_none_or(|current| current.viewport_revision != snapshot.viewport_revision);
+  if snapshot.refresh_failure.is_some()
+    && surface
+      .projection
+      .as_ref()
+      .is_some_and(|current| current.refreshing)
+  {
+    if let Some(error) = &snapshot.refresh_failure {
+      kernel.notice =
+        Some(UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.message)));
+    }
+  }
+  install_projection(surface, snapshot);
+  if !reset_viewport {
     return Task::none();
   }
-  let work = match surface.browser.set_display_range(range) {
-    Ok(work) => work,
-    Err(error) => {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not load more library items: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-load-more-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      return Task::none();
-    }
-  };
-  sync_view(surface);
-  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
+  surface.viewport.offset_y = 0.0;
+  surface.grid_viewport = None;
+  surface.alternate_scroll = None;
+  surface.scroll_id = iced::widget::Id::unique();
+  // Retire geometry callbacks before accepting any new-query page projection.
+  surface.artwork.clear();
+  operation::scrollable::scroll_to(
+    surface.scroll_id.clone(),
+    operation::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+    iced::advanced::widget::operation::Animation::Instant,
+  )
 }
 
-fn sync_view(surface: &mut Surface) {
-  surface.view = surface.browser.model().view();
-}
-
-/// Refreshes the model's stored query without releasing usable image demand.
 pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  if !surface.browser.model().is_refreshing() {
-    if let Some(client) = &kernel.client {
-      client.library().invalidate_filter_catalog();
-    }
-  }
-  let work = match surface.browser.refresh() {
-    Ok(work) => work,
-    Err(error) => {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not refresh this page: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      return Task::none();
-    }
+  let Some(session) = &surface.session else {
+    return Task::none();
   };
-  sync_view(surface);
-  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
+  if let Err(error) = session.refresh() {
+    return report_error(kernel, "browse-refresh-failed", error);
+  }
+  sync_snapshot(surface, kernel)
 }
 
-pub(crate) fn apply_user_data_update(
-  surface: &mut Surface,
+fn report_error(
   kernel: &mut Kernel,
-  update: &jellypilot_media_server::VideoUserDataUpdate,
+  label: &'static str,
+  error: jellypilot_sdk::SdkError,
 ) -> Task<Message> {
-  let work = match surface.browser.apply_user_data_update(update) {
-    Ok(work) => work,
-    Err(error) => {
-      kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Connection,
-        format!("Could not refresh confirmed library changes: {error}"),
-      );
-      kernel.notice = Some(
-        UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
-      );
-      sync_view(surface);
-      return Task::none();
-    }
-  };
-  sync_view(surface);
-  Task::batch([apply_work(surface, work), prepare_artwork(surface)])
-}
-
-fn apply_work(surface: &mut Surface, work: BrowseWork) -> Task<Message> {
-  // Viewport resets must land before page requests: Task::batch runs in
-  // parallel, so a fast settlement could evaluate the stale near-tail offset
-  // and advance another window before scroll-to-zero is applied.
-  let mut reset = Task::none();
-  if work.reset_viewport {
-    surface.viewport.offset_y = 0.0;
-    surface.grid_viewport = None;
-    surface.alternate_scroll = None;
-    // Loading placeholders have no ready-grid ID. A new query identity
-    // also resets remembered offsets when its first real layout appears.
-    surface.scroll_id = iced::widget::Id::unique();
-    reset = operation::scrollable::scroll_to(
-      surface.scroll_id.clone(),
-      operation::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
-      iced::advanced::widget::operation::Animation::Instant,
-    );
-  }
-  // The SDK owns request cancellation; the futures only deliver settlements.
-  // `run` is a lazy async fn, so requests start when the chained task polls
-  // them — after the viewport reset has been emitted.
-  let requests = Task::batch(work.requests.into_iter().map(|request| {
-    Task::perform(request.run(), |settlement| {
-      Message::Browse(BrowseMessage::PageSettled(settlement))
-    })
-  }));
-  reset.chain(requests)
+  kernel.diagnostics.record(
+    DiagnosticLevel::Error,
+    DiagnosticCategory::Connection,
+    format!("Library browsing failed: {error}"),
+  );
+  kernel.notice = Some(UiText::new(label).arg("details", sanitize_message(&error.to_string())));
+  Task::none()
 }
 
 /// Retains candidates in the sparse metadata window; measured images start loads.
@@ -708,8 +727,11 @@ fn begin_artwork_view(surface: &mut Surface) {
 /// releases this view's image demand, and resets the browser.
 pub(crate) fn leave_view(surface: &mut Surface) {
   begin_artwork_view(surface);
-  surface.browser.reset();
-  sync_view(surface);
+  if let Some(session) = surface.session.take() {
+    session.close();
+  }
+  surface.projection = None;
+  surface.view = LibraryBrowseView::Inactive;
   surface.alternate_scroll = None;
 }
 
@@ -717,9 +739,6 @@ pub(crate) fn leave_view(surface: &mut Surface) {
 /// page requests, drops the artwork cells, and resets the browser and view.
 pub(crate) fn reset(surface: &mut Surface) {
   leave_view(surface);
-  surface.filters = None;
-  surface.advanced_filters = VideoLibraryFilters::default();
-  surface.saved = None;
 }
 
 #[cfg(test)]
@@ -734,7 +753,7 @@ mod tests {
   use jellypilot_media_server::VideoLibraryItem;
 
   use crate::app::test_support::{
-    dispatch_settlement, drain_task, fixture_item_id, page_settled, BrowseFixture, FixtureReply,
+    activate_sdk_fixture, drain_task, fixture_item_id, BrowseFixture, FixtureReply,
   };
 
   use super::*;
@@ -781,7 +800,7 @@ mod tests {
   fn fixture_surface() -> (Surface, Kernel, BrowseFixture) {
     let (surface, mut kernel) = test_fixture();
     let fixture = BrowseFixture::new();
-    kernel.client = Some(fixture.client());
+    activate_sdk_fixture(&mut kernel, &fixture);
     (surface, kernel, fixture)
   }
 
@@ -791,10 +810,42 @@ mod tests {
       query: query.to_owned(),
     }
   }
+  fn display_range(surface: &Surface) -> std::ops::Range<u32> {
+    let LibraryBrowseView::Ready {
+      visible_start,
+      visible_items,
+      ..
+    } = &surface.view
+    else {
+      panic!("ready projection required");
+    };
+    *visible_start..*visible_start + visible_items.len() as u32
+  }
+
+  async fn settle(
+    surface: &mut Surface,
+    kernel: &mut Kernel,
+    fixture: &mut BrowseFixture,
+    total: u32,
+  ) {
+    drain_task(
+      surface,
+      kernel,
+      fixture,
+      window_size(),
+      Task::none(),
+      &mut |_| FixtureReply::Page {
+        total,
+        artwork: false,
+      },
+    )
+    .await;
+  }
 
   #[tokio::test]
   async fn advanced_filters_restore_in_tv_and_restart_unfiltered_in_desktop() {
     let (mut surface, mut kernel, _fixture) = fixture_surface();
+    surface.presentation = BrowsePresentation::Tv;
     let source = BrowseSource::Library {
       session: kernel.request_gate.current_session(),
       shortcut: jellypilot_media_server::VideoLibraryShortcut {
@@ -805,6 +856,7 @@ mod tests {
         artwork_image_id: None,
       },
     };
+    drop(start(&mut surface, &mut kernel, Some(source)));
     let filters = VideoLibraryFilters {
       country: Some("Japan".to_owned()),
       ..Default::default()
@@ -812,15 +864,9 @@ mod tests {
     drop(apply_advanced_filters(
       &mut surface,
       &mut kernel,
-      Some(source.clone()),
       filters.clone(),
     ));
-    let identity = surface
-      .browser
-      .model()
-      .identity()
-      .expect("filtered query")
-      .to_owned();
+    let identity = surface.identity().expect("filtered query").to_owned();
     surface.viewport.offset_y = 600.0;
     let saved = snapshot(&mut surface, None);
     leave_view(&mut surface);
@@ -829,24 +875,19 @@ mod tests {
       &mut kernel,
       saved,
       window_size(),
-      Some(source.clone()),
       true,
     ));
-    assert_eq!(surface.advanced_filters, filters);
-    assert_eq!(surface.browser.model().identity(), Some(identity.as_str()));
+    assert_eq!(surface.preferences().filters, filters);
+    assert_eq!(surface.identity(), Some(identity.as_str()));
     assert_eq!(surface.viewport.offset_y, 600.0);
     let saved = snapshot(&mut surface, None);
     leave_view(&mut surface);
-    let task = restore(
-      &mut surface,
-      &mut kernel,
-      saved,
-      window_size(),
-      Some(source),
-      false,
+    let task = restore(&mut surface, &mut kernel, saved, window_size(), false);
+    assert_eq!(
+      surface.preferences().filters,
+      VideoLibraryFilters::default()
     );
-    assert_eq!(surface.advanced_filters, VideoLibraryFilters::default());
-    assert_ne!(surface.browser.model().identity(), Some(identity.as_str()));
+    assert_ne!(surface.identity(), Some(identity.as_str()));
     assert_eq!(surface.viewport.offset_y, 0.0);
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
     assert!(
@@ -873,18 +914,16 @@ mod tests {
     )
     .await;
     surface.search_input = "retained query".to_owned();
-    surface.filters = Some(kernel.settings.snapshot().browse_filters());
     surface.viewport.offset_y = 600.0;
     surface.grid_viewport = Some(ArtworkGridViewport {
       offset_y: 600.0,
       height: 500.0,
     });
     let grid_id = surface.scroll_id.clone();
-    let filters = surface.filters;
+    let filters = surface.filter_settings();
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::ViewModeSelected(ViewMode::List),
@@ -892,37 +931,36 @@ mod tests {
     let list_id = surface.scroll_id.clone();
     assert_ne!(list_id, grid_id);
     let epoch = surface.artwork.epoch();
+    let viewport_revision = surface.viewport_revision();
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::GridViewportMeasured {
         epoch,
+        viewport_revision,
         offset_y: 810.0,
         height: 405.0,
       },
     ));
     let expected = visible_display_range(810.0, 405.0, 1, 81.0, 240);
-    assert_eq!(surface.browser.model().peek_display_range(), Some(expected));
+    assert_eq!(display_range(&surface), expected);
     surface.viewport.offset_y = 810.0;
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::ViewModeSelected(ViewMode::Grid),
     ));
     assert_eq!(surface.viewport.offset_y, 600.0);
     assert_eq!(surface.scroll_id, grid_id);
-    assert_eq!(surface.filters, filters);
+    assert_eq!(surface.filter_settings(), filters);
     assert_eq!(surface.search_input, "retained query");
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::ViewModeSelected(ViewMode::List),
@@ -934,7 +972,6 @@ mod tests {
       &mut kernel,
       saved,
       window_size(),
-      None,
       true,
     ));
     assert_eq!(surface.mode, ViewMode::List);
@@ -947,229 +984,157 @@ mod tests {
   async fn resumed_refresh_rejects_departed_results_and_retains_cards_on_failure() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "original");
-    let task = start(&mut surface, &mut kernel, Some(source));
-    drain_task(
-      &mut surface,
-      &mut kernel,
-      &mut fixture,
-      window_size(),
-      task,
-      &mut |_| FixtureReply::Page {
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    settle(&mut surface, &mut kernel, &mut fixture, 240).await;
+    drop(set_display_range(&mut surface, &mut kernel, 192..216));
+    let session = surface.session.clone().unwrap();
+    fixture
+      .settle_session(&session, |_| FixtureReply::Page {
         total: 240,
         artwork: false,
-      },
-    )
-    .await;
-    // Load the deep window the failed refresh must retain.
-    let mut pending = surface
-      .browser
-      .set_display_range(192..216)
-      .expect("display range applies")
-      .requests;
-    while let Some(request) = pending.pop() {
-      let settlement = fixture
-        .run_request(
-          request,
-          FixtureReply::Page {
-            total: 240,
-            artwork: false,
-          },
-        )
-        .await;
-      pending.extend(
-        surface
-          .browser
-          .settle(settlement)
-          .expect("deep page settles")
-          .requests,
-      );
-    }
-    sync_view(&mut surface);
+      })
+      .await;
+    drop(sync_snapshot(&mut surface, &mut kernel));
     surface.viewport.offset_y = 8_000.0;
     surface.grid_viewport = Some(ArtworkGridViewport {
       offset_y: 8_000.0,
       height: WINDOW_HEIGHT,
     });
     let scroll_id = surface.scroll_id.clone();
-
-    let mut refresh_stream = iced_runtime::task::into_stream(refresh(&mut surface, &mut kernel))
-      .expect("refresh emits page work");
-    let departed_request = fixture.next_request(&mut refresh_stream).await;
+    drop(refresh(&mut surface, &mut kernel));
+    let departed_request = fixture.receive_request().await;
+    let departed = session.snapshot().unwrap();
     let saved = snapshot(&mut surface, Some("original"));
     departed_request.reply(FixtureReply::Failure);
-    let departed = fixture
-      .run_stream(&mut refresh_stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("cancelled refresh still settles");
-    assert!(!saved.browser.model().is_current_settlement(&departed));
-
-    let mut restore_stream = iced_runtime::task::into_stream(restore(
+    drop(restore(
       &mut surface,
       &mut kernel,
       saved,
       window_size(),
-      None,
       true,
-    ))
-    .expect("restore resumes page work");
-    let settlements = fixture
-      .run_stream(&mut restore_stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .filter_map(page_settled)
-      .collect::<Vec<_>>();
-    // The departed settlement is rejected while the resumed refresh is still
-    // in flight; the current failures then complete it.
-    drop(dispatch_settlement(
+    ));
+    let revision = surface.projection.as_ref().unwrap().revision;
+    drop(update(
       &mut surface,
       &mut kernel,
+      false,
       window_size(),
-      departed,
+      BrowseMessage::SnapshotChanged {
+        session_id: session.id(),
+        snapshot: Box::new(departed),
+      },
     ));
-    assert!(surface.browser.model().is_refreshing());
-    for settlement in settlements {
-      let task = dispatch_settlement(&mut surface, &mut kernel, window_size(), settlement);
-      drain_task(
-        &mut surface,
-        &mut kernel,
-        &mut fixture,
-        window_size(),
-        task,
-        &mut |_| FixtureReply::Failure,
-      )
+    assert_eq!(surface.projection.as_ref().unwrap().revision, revision);
+    fixture
+      .settle_session(&session, |_| FixtureReply::Failure)
       .await;
-    }
-    assert!(!surface.browser.model().is_refreshing());
-    assert!(surface.browser.model().refresh_failure().is_some());
+    drop(sync_snapshot(&mut surface, &mut kernel));
+    assert!(!surface.refreshing());
+    assert!(surface
+      .projection
+      .as_ref()
+      .unwrap()
+      .refresh_failure
+      .is_some());
     assert_eq!(surface.viewport.offset_y, 8_000.0);
     assert_eq!(surface.scroll_id, scroll_id);
-    surface
-      .browser
-      .set_display_range(192..216)
-      .expect("display range applies");
-    sync_view(&mut surface);
-    assert_eq!(
-      surface.grid_viewport,
-      Some(ArtworkGridViewport {
-        offset_y: 8_000.0,
-        height: WINDOW_HEIGHT,
-      })
-    );
+    drop(set_display_range(&mut surface, &mut kernel, 192..216));
     let LibraryBrowseView::Ready { visible_items, .. } = &surface.view else {
-      panic!("failed refresh must preserve deep cached pages");
+      panic!("retained cards");
     };
     assert_eq!(
       visible_items[0].item.as_ref().unwrap().id,
       fixture_item_id(192)
     );
-    let retry = update(
+    drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::Retry,
-    );
-    assert!(surface.browser.model().is_refreshing());
-    let retry = fixture
-      .run_task(retry, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("retry emits a settlement");
-    assert!(surface.browser.model().is_current_settlement(&retry));
+    ));
+    assert!(surface.refreshing());
+    fixture
+      .settle_session(&session, |_| FixtureReply::Failure)
+      .await;
   }
 
   #[tokio::test]
   async fn empty_refresh_failure_survives_history_and_retries_without_resetting_scroll() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "empty");
-    let task = start(&mut surface, &mut kernel, Some(source));
-    drain_task(
-      &mut surface,
-      &mut kernel,
-      &mut fixture,
-      window_size(),
-      task,
-      &mut |_| FixtureReply::Page {
-        total: 0,
-        artwork: false,
-      },
-    )
-    .await;
-    let failure = fixture
-      .run_task(refresh(&mut surface, &mut kernel), |_| {
-        FixtureReply::Failure
-      })
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("refresh emits a settlement");
-    drop(dispatch_settlement(
-      &mut surface,
-      &mut kernel,
-      window_size(),
-      failure,
-    ));
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    settle(&mut surface, &mut kernel, &mut fixture, 0).await;
+    let session = surface.session.clone().unwrap();
+    drop(refresh(&mut surface, &mut kernel));
+    fixture
+      .settle_session(&session, |_| FixtureReply::Failure)
+      .await;
+    drop(sync_snapshot(&mut surface, &mut kernel));
     let saved = snapshot(&mut surface, Some("empty"));
     drop(restore(
       &mut surface,
       &mut kernel,
       saved,
       window_size(),
-      None,
       true,
     ));
     assert!(matches!(surface.view, LibraryBrowseView::Empty));
-    assert!(surface.browser.model().refresh_failure().is_some());
+    assert!(surface
+      .projection
+      .as_ref()
+      .unwrap()
+      .refresh_failure
+      .is_some());
     let scroll_id = surface.scroll_id.clone();
-    let retry = update(
+    drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::Retry,
-    );
-    assert!(surface.browser.model().is_refreshing());
+    ));
+    assert!(surface.refreshing());
     assert_eq!(surface.scroll_id, scroll_id);
-    for message in fixture.run_task(retry, |_| FixtureReply::Failure).await {
-      if let Some(settlement) = page_settled(message) {
-        drop(dispatch_settlement(
-          &mut surface,
-          &mut kernel,
-          window_size(),
-          settlement,
-        ));
-      }
-    }
+    fixture
+      .settle_session(&session, |_| FixtureReply::Failure)
+      .await;
+    drop(sync_snapshot(&mut surface, &mut kernel));
     assert!(matches!(surface.view, LibraryBrowseView::Empty));
-    assert!(surface.browser.model().refresh_failure().is_some());
+    assert!(surface
+      .projection
+      .as_ref()
+      .unwrap()
+      .refresh_failure
+      .is_some());
   }
 
   #[tokio::test]
-  async fn snapshot_cancels_owned_delivery_without_a_separate_leave_hook() {
+  async fn snapshot_suspends_owned_delivery_without_a_separate_leave_hook() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "pending");
-    let mut stream =
-      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
-        .expect("start emits page work");
-    let request = fixture.next_request(&mut stream).await;
-    let mut saved = snapshot(&mut surface, Some("pending"));
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    let request = fixture.receive_request().await;
+    let session = surface.session.clone().unwrap();
+    let saved = snapshot(&mut surface, Some("pending"));
     request.reply(FixtureReply::Failure);
-    let settlement = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("cancelled delivery still settles");
-    assert!(!saved.browser.model().is_current_settlement(&settlement));
-    let work = saved.browser.resume().expect("resume reissues work");
-    let request = work.requests.into_iter().next().expect("resumed request");
-    let resumed = fixture.run_request(request, FixtureReply::Failure).await;
-    assert!(saved.browser.model().is_current_settlement(&resumed));
+    assert!(surface.session.is_none());
+    drop(restore(
+      &mut surface,
+      &mut kernel,
+      saved,
+      window_size(),
+      false,
+    ));
+    assert_eq!(surface.session.as_ref().unwrap().id(), session.id());
+    fixture
+      .settle_session(&session, |_| FixtureReply::Page {
+        total: 1,
+        artwork: false,
+      })
+      .await;
+    drop(sync_snapshot(&mut surface, &mut kernel));
+    assert!(matches!(surface.view, LibraryBrowseView::Ready { .. }));
   }
 
   #[tokio::test]
@@ -1214,16 +1179,15 @@ mod tests {
     let task = refresh(&mut surface, &mut kernel);
     assert!(surface.artwork.get(&item.id).is_some());
     assert_eq!(surface.artwork.epoch(), epoch);
-    for message in fixture.run_task(task, |_| FixtureReply::Failure).await {
-      if let Some(settlement) = page_settled(message) {
-        drop(dispatch_settlement(
-          &mut surface,
-          &mut kernel,
-          window_size(),
-          settlement,
-        ));
-      }
-    }
+    drain_task(
+      &mut surface,
+      &mut kernel,
+      &mut fixture,
+      window_size(),
+      task,
+      &mut |_| FixtureReply::Failure,
+    )
+    .await;
     assert!(surface.artwork.get(&item.id).is_some());
     assert_eq!(surface.artwork.epoch(), epoch);
   }
@@ -1232,10 +1196,8 @@ mod tests {
   async fn identical_browse_resubmit_starts_no_new_page_request() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "arrival");
-    let mut stream =
-      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source.clone())))
-        .expect("start emits page work");
-    let request = fixture.next_request(&mut stream).await;
+    drop(start(&mut surface, &mut kernel, Some(source.clone())));
+    let request = fixture.receive_request().await;
 
     let resubmit = start(&mut surface, &mut kernel, Some(source));
 
@@ -1245,77 +1207,156 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn stale_settlement_is_rejected_without_touching_the_reopened_query() {
+  async fn departed_snapshot_is_rejected_after_reopening_the_same_query() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
     let source = search_source(&kernel, "arrival");
-    let mut first_stream =
-      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source.clone())))
-        .expect("first start emits page work");
-    let first_request = fixture.next_request(&mut first_stream).await;
+    drop(start(&mut surface, &mut kernel, Some(source.clone())));
+    let request = fixture.receive_request().await;
+    let departed = surface.session.clone().unwrap();
+    let stale = departed.snapshot().unwrap();
     leave_view(&mut surface);
-    first_request.reply(FixtureReply::Failure);
-    let stale = fixture
-      .run_stream(&mut first_stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("cancelled request still settles");
-
-    let mut reopened_stream =
-      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
-        .expect("reopen emits page work");
-    let reopened_request = fixture.next_request(&mut reopened_stream).await;
-
+    request.reply(FixtureReply::Failure);
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    let current = surface.session.clone().unwrap();
+    assert_ne!(current.id(), departed.id());
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
-      BrowseMessage::PageSettled(stale),
+      BrowseMessage::SnapshotChanged {
+        session_id: departed.id(),
+        snapshot: Box::new(stale),
+      },
     ));
-
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
-    reopened_request.reply(FixtureReply::Failure);
-    let reopened = fixture
-      .run_stream(&mut reopened_stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("reopened request settles");
-    assert!(surface.browser.model().is_current_settlement(&reopened));
+    fixture
+      .settle_session(&current, |_| FixtureReply::Page {
+        total: 1,
+        artwork: false,
+      })
+      .await;
+    drop(sync_snapshot(&mut surface, &mut kernel));
+    assert!(matches!(surface.view, LibraryBrowseView::Ready { .. }));
   }
 
   #[tokio::test]
-  async fn reset_viewport_work_clears_scroll_before_page_requests_start() {
-    use iced::futures::StreamExt;
+  async fn scoped_snapshot_failure_exposes_retry_and_late_failure_cannot_replace_recovery() {
     let (mut surface, mut kernel, mut fixture) = fixture_surface();
-    surface.viewport.offset_y = 640.0;
+    let source = search_source(&kernel, "failure delivery");
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    let request = fixture.receive_request().await;
+    let session = surface.session.clone().unwrap();
+    session.suspend().unwrap();
+    let revision = session.revision().unwrap();
+    let failure = BrowseMessage::SnapshotFailed {
+      session_id: session.id(),
+      revision,
+      error: jellypilot_sdk::SdkError::Request("Could not apply browse results".into()),
+    };
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      window_size(),
+      failure.clone(),
+    ));
+    assert!(matches!(
+      surface.view,
+      LibraryBrowseView::Failed {
+        retryable: true,
+        retry_busy: false,
+        ..
+      }
+    ));
+    assert!(kernel.notice.is_some());
+    session.resume().unwrap();
+    drop(sync_snapshot(&mut surface, &mut kernel));
+    assert!(matches!(surface.view, LibraryBrowseView::Loading));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      window_size(),
+      failure,
+    ));
+    assert!(matches!(surface.view, LibraryBrowseView::Loading));
+    request.reply(FixtureReply::Failure);
+  }
+
+  #[tokio::test]
+  async fn query_reset_retires_old_geometry_before_new_pages_can_advance_the_window() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
+    let epoch = surface.artwork.epoch();
+    let viewport_revision = surface.viewport_revision();
+    surface.viewport.offset_y = 8_000.0;
     surface.grid_viewport = Some(ArtworkGridViewport {
-      offset_y: 640.0,
+      offset_y: 8_000.0,
       height: 300.0,
     });
     let source = search_source(&kernel, "reset");
-    let mut stream =
-      iced_runtime::task::into_stream(start(&mut surface, &mut kernel, Some(source)))
-        .expect("configure emits page work");
-
-    let first = stream.next().await.expect("scroll reset is emitted first");
-    assert!(matches!(first, iced_runtime::Action::Widget(_)));
+    drop(start(&mut surface, &mut kernel, Some(source)));
     assert_eq!(surface.viewport.offset_y, 0.0);
     assert_eq!(surface.grid_viewport, None);
-    // The page request reaches the server only after the reset action.
-    let request = fixture.next_request(&mut stream).await;
-    assert!(request.target().to_lowercase().contains("startindex=0"));
-    request.reply(FixtureReply::Page {
-      total: 0,
-      artwork: false,
-    });
-    drop(
-      fixture
-        .run_stream(&mut stream, |_| FixtureReply::Failure)
-        .await,
-    );
+    settle(&mut surface, &mut kernel, &mut fixture, 264).await;
+    let before = display_range(&surface);
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        viewport_revision,
+        offset_y: 8_000.0,
+        height: 300.0,
+      },
+    ));
+    assert_eq!(surface.grid_viewport, None);
+    assert_eq!(display_range(&surface), before);
+    assert_eq!(before.start, 0);
+  }
+
+  #[tokio::test]
+  async fn sdk_query_reset_rejects_geometry_before_its_notification_is_consumed() {
+    let (mut surface, mut kernel, mut fixture) = fixture_surface();
+    let source = BrowseSource::Library {
+      session: kernel.request_gate.current_session(),
+      shortcut: jellypilot_media_server::VideoLibraryShortcut {
+        id: "movies".into(),
+        name: "Movies".into(),
+        collection_type: "movies".into(),
+        item_count: None,
+        artwork_image_id: None,
+      },
+    };
+    drop(start(&mut surface, &mut kernel, Some(source)));
+    settle(&mut surface, &mut kernel, &mut fixture, 264).await;
+    let epoch = surface.artwork.epoch();
+    let viewport_revision = surface.viewport_revision();
+    let session = surface.session.clone().unwrap();
+    let mut preferences = session.snapshot().unwrap().preferences;
+    preferences.sort = jellypilot_media_server::VideoLibrarySort::ReleaseDate;
+    session.set_preferences(preferences).unwrap();
+    // The callback still has the current artwork epoch, but belongs to the
+    // previous SDK viewport revision and must not alter even cached geometry.
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      true,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        viewport_revision,
+        offset_y: 8_000.0,
+        height: 300.0,
+      },
+    ));
+    assert_eq!(surface.grid_viewport, None);
+    drop(sync_snapshot(&mut surface, &mut kernel));
+    assert_ne!(surface.viewport_revision(), viewport_revision);
+    settle(&mut surface, &mut kernel, &mut fixture, 264).await;
+    assert_eq!(display_range(&surface).start, 0);
   }
 
   #[tokio::test]
@@ -1349,11 +1390,7 @@ mod tests {
       grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
       surface.mode,
     );
-    let initial = surface
-      .browser
-      .model()
-      .display_range()
-      .expect("metadata window");
+    let initial = display_range(&surface);
     assert_eq!(initial.start, 0);
     assert!(
       (initial.end as usize / metrics.columns) as f32 * metrics.row_height >= 2.0 * WINDOW_HEIGHT
@@ -1361,14 +1398,15 @@ mod tests {
     assert!(initial.end < 264, "scroll projection must remain sparse");
 
     let epoch = surface.artwork.epoch();
+    let viewport_revision = surface.viewport_revision();
     let task = update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::GridViewportMeasured {
         epoch,
+        viewport_revision,
         offset_y: -120.0,
         height: WINDOW_HEIGHT,
       },
@@ -1385,11 +1423,7 @@ mod tests {
       },
     )
     .await;
-    let measured_initial = surface
-      .browser
-      .model()
-      .display_range()
-      .expect("measured metadata window");
+    let measured_initial = display_range(&surface);
     assert_eq!(
       measured_initial,
       visible_display_range(
@@ -1406,11 +1440,11 @@ mod tests {
     let task = update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::GridViewportMeasured {
         epoch,
+        viewport_revision,
         offset_y: 2750.0,
         height: WINDOW_HEIGHT,
       },
@@ -1427,11 +1461,7 @@ mod tests {
       },
     )
     .await;
-    let scrolled = surface
-      .browser
-      .model()
-      .display_range()
-      .expect("scrolled metadata window");
+    let scrolled = display_range(&surface);
     let first_row = scrolled.start as usize / metrics.columns;
     let end_row = scrolled.end as usize / metrics.columns;
     assert!(first_row as f32 * metrics.row_height <= 2750.0 - WINDOW_HEIGHT);
@@ -1451,17 +1481,17 @@ mod tests {
       )
       .await;
     assert!(outputs.is_empty());
-    assert_eq!(surface.browser.model().display_range(), Some(scrolled));
+    assert_eq!(display_range(&surface), scrolled);
 
     // Scrolling back up restores the earlier window.
     let task = update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::GridViewportMeasured {
         epoch,
+        viewport_revision,
         offset_y: -120.0,
         height: WINDOW_HEIGHT,
       },
@@ -1478,10 +1508,7 @@ mod tests {
       },
     )
     .await;
-    assert_eq!(
-      surface.browser.model().display_range(),
-      Some(measured_initial)
-    );
+    assert_eq!(display_range(&surface), measured_initial);
   }
 
   #[test]
@@ -1536,6 +1563,7 @@ mod tests {
   fn recreated_grid_ignores_previous_epoch_geometry() {
     let (mut surface, mut kernel) = test_fixture();
     let epoch = surface.artwork.epoch();
+    let viewport_revision = surface.viewport_revision();
     surface.grid_viewport = Some(ArtworkGridViewport {
       offset_y: 400.0,
       height: 300.0,
@@ -1544,11 +1572,11 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
-      None,
       false,
       window_size(),
       BrowseMessage::GridViewportMeasured {
         epoch,
+        viewport_revision,
         offset_y: 400.0,
         height: 300.0,
       },

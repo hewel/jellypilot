@@ -615,18 +615,10 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
         return Task::none();
       }
       let previous_notice = state.kernel.notice.clone();
-      let source = match &message {
-        BrowseMessage::SortChanged(_)
-        | BrowseMessage::SortDirectionToggled
-        | BrowseMessage::PlayedFilterChanged(_)
-        | BrowseMessage::FavoritesToggled => shell::browse_source(state),
-        _ => None,
-      };
       let full = state.full.as_mut().expect("FullUi checked above");
       let task = browse::update(
         &mut full.browse,
         &mut state.kernel,
-        source,
         matches!(state.shell.destination, Destination::Library { .. }),
         state.shell.window_size,
         message,
@@ -3390,36 +3382,29 @@ pub(crate) mod tests {
 
     let mut state = test_state();
     let mut fixture = crate::app::test_support::BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
     state.kernel.connection = ConnectionPhase::Connected;
     state
       .shell
       .navigate_to(Destination::Search("scroll regression".into()));
     let source = shell::browse_source(&state).unwrap();
     let browse = &mut state.full.as_mut().unwrap().browse;
-    let mut pending = browse
-      .browser
-      .configure(Some(fixture.client()), source, Default::default())
-      .unwrap()
-      .requests;
-    let mut expanded = false;
-    while let Some(request) = pending.pop() {
-      let settlement = fixture
-        .run_request(
-          request,
-          crate::app::test_support::FixtureReply::Page {
-            total: 240,
-            artwork: true,
-          },
-        )
-        .await;
-      pending.extend(browse.browser.settle(settlement).unwrap().requests);
-      if !expanded {
-        expanded = true;
-        pending.extend(browse.browser.set_display_range(0..240).unwrap().requests);
-      }
-    }
-    browse.view = browse.browser.model().view();
+    drop(browse::start(browse, &mut state.kernel, Some(source)));
+    let session = browse.session.clone().unwrap();
+    fixture
+      .settle_session(&session, |_| crate::app::test_support::FixtureReply::Page {
+        total: 240,
+        artwork: true,
+      })
+      .await;
+    session.set_display_range(0, 240).unwrap();
+    fixture
+      .settle_session(&session, |_| crate::app::test_support::FixtureReply::Page {
+        total: 240,
+        artwork: true,
+      })
+      .await;
+    drop(browse::sync_snapshot(browse, &mut state.kernel));
     let image_id = {
       let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
         panic!("fixture pages must ready the view");
@@ -3524,7 +3509,7 @@ pub(crate) mod tests {
 
     let mut state = test_state();
     let mut fixture = BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
     state.kernel.connection = ConnectionPhase::Connected;
     let destination = Destination::Search("original query".to_owned());
     state.shell.navigate_to(destination.clone());
@@ -3600,7 +3585,7 @@ pub(crate) mod tests {
 
     let mut state = test_state();
     let mut fixture = BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
     state.kernel.connection = ConnectionPhase::Connected;
     state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
@@ -3775,11 +3760,11 @@ pub(crate) mod tests {
 
   #[tokio::test]
   async fn entering_control_only_cancels_browse_and_resets_library_surfaces() {
-    use crate::app::test_support::{page_settled, BrowseFixture, FixtureReply};
+    use crate::app::test_support::{activate_sdk_fixture, BrowseFixture};
 
     let mut state = test_state();
     let mut fixture = BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    activate_sdk_fixture(&mut state.kernel, &fixture);
     state.kernel.connection = ConnectionPhase::Connected;
     state.shell.window_size = iced::Size::new(1440.0, 810.0);
     state.shell.destination = Destination::Library {
@@ -3795,28 +3780,23 @@ pub(crate) mod tests {
         artwork_image_id: None,
       }]);
     let source = shell::browse_source(&state).unwrap();
-    let mut stream = iced_runtime::task::into_stream(browse::start(
+    drop(browse::start(
       &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       Some(source),
-    ))
-    .expect("browse start emits page work");
-    let request = fixture.next_request(&mut stream).await;
+    ));
+    let request = fixture.receive_request().await;
+    let session = state.full.as_ref().unwrap().browse.session.clone().unwrap();
 
     drop(shell::apply_app_mode(
       &mut state,
       jellypilot_core::config::AppMode::ControlOnly,
     ));
 
-    // The SDK cancels the in-flight request when the surface resets; its
-    // settlement still arrives, rejected, without reaching the server reply.
-    let settlement = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("cancelled request still settles");
-    assert!(settlement.result.is_err());
+    assert!(matches!(
+      session.snapshot(),
+      Err(jellypilot_sdk::SdkError::Closed)
+    ));
     drop(request);
     assert_eq!(state.shell.destination, Destination::NowPlaying);
     assert!(state.shell.navigation_stack.is_empty());

@@ -31,6 +31,16 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     // Account operations must finish even while the last window is hidden.
     Subscription::run_with(state.kernel.sdk_handoff.clone(), account_handoff_stream),
   ];
+  if let Some(session) = state
+    .full
+    .as_ref()
+    .and_then(|full| full.browse.session.as_ref())
+  {
+    subscriptions.push(Subscription::run_with(
+      BrowseNotifications(std::sync::Arc::clone(session)),
+      browse_snapshot_stream,
+    ));
+  }
   subscriptions.push(super::embedded_player::subscription(state));
   if state.tv_mode() {
     subscriptions.push(super::tv::subscription(state));
@@ -151,6 +161,88 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
   }
   Subscription::batch(subscriptions)
+}
+
+#[derive(Clone)]
+struct BrowseNotifications(std::sync::Arc<jellypilot_sdk::browse::BrowseSession>);
+
+impl PartialEq for BrowseNotifications {
+  fn eq(&self, other: &Self) -> bool {
+    self.0.id() == other.0.id()
+  }
+}
+impl Eq for BrowseNotifications {}
+impl std::hash::Hash for BrowseNotifications {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    std::hash::Hash::hash(&self.0.id(), state);
+  }
+}
+
+fn browse_snapshot_stream(owner: &BrowseNotifications) -> impl Stream<Item = Message> {
+  let session = std::sync::Arc::clone(&owner.0);
+  iced::stream::channel(1, async move |mut output| {
+    let mut next = session.snapshot();
+    loop {
+      let revision = match next {
+        Ok(snapshot) => {
+          let revision = snapshot.revision;
+          if output
+            .send(Message::Browse(
+              super::message::BrowseMessage::SnapshotChanged {
+                session_id: session.id(),
+                snapshot: Box::new(snapshot),
+              },
+            ))
+            .await
+            .is_err()
+          {
+            return;
+          }
+          revision
+        }
+        Err(_) => {
+          let Ok(revision) = session.revision() else {
+            return;
+          };
+          // A recovery may have overtaken the failed read. Publish that
+          // snapshot instead; otherwise wait at the failure's revision.
+          match session.snapshot() {
+            Ok(snapshot) => {
+              next = Ok(snapshot);
+              continue;
+            }
+            Err(error) => {
+              if matches!(
+                error,
+                jellypilot_sdk::SdkError::Cancelled
+                  | jellypilot_sdk::SdkError::Closed
+                  | jellypilot_sdk::SdkError::Stale
+                  | jellypilot_sdk::SdkError::NoActiveProfile
+                  | jellypilot_sdk::SdkError::OperationInProgress
+              ) {
+                return;
+              }
+              if output
+                .send(Message::Browse(
+                  super::message::BrowseMessage::SnapshotFailed {
+                    session_id: session.id(),
+                    revision,
+                    error,
+                  },
+                ))
+                .await
+                .is_err()
+              {
+                return;
+              }
+            }
+          }
+          revision
+        }
+      };
+      next = session.next_snapshot(revision).await;
+    }
+  })
 }
 
 type ApplicationShortcutEvent = ((bool, bool, bool, bool, bool), (Event, event::Status));

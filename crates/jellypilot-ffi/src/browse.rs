@@ -29,6 +29,17 @@ impl From<BrowsePreferences> for CorePreferences {
     }
 }
 
+impl From<CorePreferences> for BrowsePreferences {
+    fn from(value: CorePreferences) -> Self {
+        Self {
+            sort: value.sort.into(),
+            sort_direction: value.sort_direction.into(),
+            played_filter: value.played_filter.into(),
+            favorites_only: value.favorites_only,
+        }
+    }
+}
+
 #[derive(Clone, Debug, uniffi::Enum)]
 pub enum BrowseQuery {
     Library {
@@ -68,6 +79,8 @@ pub enum BrowseStatus {
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct BrowseSnapshot {
     pub revision: u64,
+    pub viewport_revision: u64,
+    pub preferences: BrowsePreferences,
     pub scope: ProfileScopeRef,
     pub identity: String,
     pub status: BrowseStatus,
@@ -87,6 +100,8 @@ impl From<sdk::BrowseSnapshot> for BrowseSnapshot {
     fn from(value: sdk::BrowseSnapshot) -> Self {
         let mut result = Self {
             revision: value.revision,
+            viewport_revision: value.viewport_revision,
+            preferences: value.preferences.into(),
             scope: value.scope.into(),
             identity: value.identity,
             status: BrowseStatus::Inactive,
@@ -147,7 +162,7 @@ impl From<sdk::BrowseSnapshot> for BrowseSnapshot {
     }
 }
 
-/// Immutable query/scope binding; paging, refresh and cancellation live in Rust.
+/// Scope-bound query owner; preferences, paging, refresh and cancellation live in Rust.
 #[derive(uniffi::Object)]
 pub struct BrowseSession {
     pub(crate) inner: Arc<sdk::BrowseSession>,
@@ -167,8 +182,22 @@ impl BrowseSession {
             .map_err(Into::into)
     }
 
-    pub fn set_display_range(&self, start: u32, end: u32) -> Result<(), SdkError> {
-        self.inner.set_display_range(start, end).map_err(Into::into)
+    pub fn set_preferences(&self, preferences: BrowsePreferences) -> Result<(), SdkError> {
+        self.inner
+            .set_preferences(preferences.into())
+            .map_err(Into::into)
+    }
+
+    /// Drops geometry emitted before the current query reset its viewport.
+    pub fn set_display_range(
+        &self,
+        viewport_revision: u64,
+        start: u32,
+        end: u32,
+    ) -> Result<(), SdkError> {
+        self.inner
+            .set_display_range_for_revision(viewport_revision, start, end)
+            .map_err(Into::into)
     }
 
     pub fn refresh(&self) -> Result<(), SdkError> {

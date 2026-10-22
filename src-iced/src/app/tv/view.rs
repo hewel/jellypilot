@@ -78,6 +78,7 @@ fn browse_view(state: &State) -> Element<'_, AppMessage> {
       Destination::PersonalLists(_) | Destination::SavedBrowse
     );
   let height = navigation::viewport_height(state) + if page_footer { 80.0 * scale } else { 0.0 };
+  let browse_currency = super::browse_currency(state);
   // The viewport extends into the safe gutter. Content padding cancels its
   // translation, preserving the original slots while focused posters can grow.
   let page: Element<'_, AppMessage> = if state.tv.settings.open {
@@ -106,9 +107,12 @@ fn browse_view(state: &State) -> Element<'_, AppMessage> {
         bottom: 0.0,
       }))
       .smooth_scroll(false)
-      .id(navigation::scroll_id())
-      .on_scroll(|viewport| {
-        AppMessage::Tv(Message::Scrolled(viewport.viewport.absolute_offset().y))
+      .id(navigation::active_scroll_id(state))
+      .on_scroll(move |viewport| {
+        AppMessage::Tv(Message::Scrolled {
+          offset: viewport.viewport.absolute_offset().y,
+          browse: browse_currency,
+        })
       })
       .width(width + 16.0 * scale)
       .height(height + style::POSTER_CLEARANCE * scale)
@@ -819,16 +823,19 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
   let Some(full) = state.full.as_ref() else {
     return status(state, state.t("tv-loading"), scale);
   };
-  let title = if let Destination::Library { library_id, .. } = &state.shell.destination {
-    navigation::shortcuts(state)
-      .iter()
-      .find(|library| library.id == *library_id)
-      .map(|library| library.name.clone())
-      .unwrap_or_else(|| state.t("browse-library"))
-  } else {
-    state.t("browse-library")
-  };
-  let selected = full.browse.filters.unwrap_or_default();
+  let title = full
+    .browse
+    .projection
+    .as_ref()
+    .and_then(|snapshot| match &snapshot.source {
+      jellypilot_core::browse_model::BrowseSource::Library { shortcut, .. } => {
+        Some(shortcut.name.clone())
+      }
+      jellypilot_core::browse_model::BrowseSource::Search { .. } => None,
+    })
+    .unwrap_or_else(|| state.t("browse-library"));
+  let selected = full.browse.filter_settings();
+  let advanced_filters = full.browse.preferences().filters;
   let filters = row![
     action(
       state,
@@ -849,19 +856,19 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
     action(
       state,
       Focus::Header(2),
-      if super::filters::active_count(&full.browse.advanced_filters) == 0 {
+      if super::filters::active_count(&advanced_filters) == 0 {
         state.t("tv-filter-title")
       } else {
         state.format(
           "tv-filter-active",
           &[(
             "count",
-            super::filters::active_count(&full.browse.advanced_filters).into(),
+            super::filters::active_count(&advanced_filters).into(),
           )],
         )
       },
       Some(Icon::Filter),
-      super::filters::active_count(&full.browse.advanced_filters) > 0,
+      super::filters::active_count(&advanced_filters) > 0,
       scale
     ),
     action(
@@ -986,7 +993,11 @@ fn library(state: &State, scale: f32) -> Element<'_, AppMessage> {
           }
         },
       );
-      observe_grid_viewport(grid, full.browse.artwork.epoch())
+      observe_grid_viewport(
+        grid,
+        full.browse.artwork.epoch(),
+        full.browse.viewport_revision(),
+      )
     }
     LibraryBrowseView::Empty => status(state, state.t("browse-empty-library"), scale),
     LibraryBrowseView::Failed { .. } => status(state, state.t("browse-library-load-failed"), scale),

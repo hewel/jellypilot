@@ -136,6 +136,154 @@ impl BrowsePreferences {
     }
 }
 
+/// Presentation-specific ordinary-query policy. Saved conditions are portable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowsePresentation {
+    Desktop,
+    Tv,
+    Android,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowseCondition {
+    Sort,
+    Direction,
+    Played,
+    Favorites,
+    Quality,
+    Country,
+    Genre,
+}
+
+/// Read-only projection of an applied definition and its original baseline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppliedSavedBrowse {
+    pub filter: crate::saved_browse::SavedBrowseFilter,
+    pub deleted: bool,
+    pub modified: bool,
+}
+
+/// Pure current-query policy; storage and request execution belong to the SDK.
+#[derive(Clone, Debug)]
+pub struct BrowseQueryPolicy {
+    preferences: BrowsePreferences,
+    presentation: BrowsePresentation,
+    saved: Option<AppliedSavedBrowse>,
+}
+
+impl BrowseQueryPolicy {
+    #[must_use]
+    pub fn ordinary(preferences: BrowsePreferences, presentation: BrowsePresentation) -> Self {
+        let mut policy = Self {
+            preferences,
+            presentation,
+            saved: None,
+        };
+        policy.normalize(false);
+        policy
+    }
+
+    #[must_use]
+    pub fn saved(
+        filter: crate::saved_browse::SavedBrowseFilter,
+        presentation: BrowsePresentation,
+    ) -> Self {
+        Self {
+            preferences: filter.preferences.clone(),
+            presentation,
+            saved: Some(AppliedSavedBrowse {
+                filter,
+                deleted: false,
+                modified: false,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn preferences(&self) -> &BrowsePreferences {
+        &self.preferences
+    }
+
+    #[must_use]
+    pub fn applied_saved(&self) -> Option<&AppliedSavedBrowse> {
+        self.saved.as_ref()
+    }
+
+    #[must_use]
+    pub fn persists_defaults(&self) -> bool {
+        self.saved.is_none() && self.presentation != BrowsePresentation::Android
+    }
+
+    pub fn set_preferences(&mut self, preferences: BrowsePreferences) {
+        self.preferences = preferences;
+        self.normalize(false);
+    }
+
+    pub fn set_presentation(&mut self, presentation: BrowsePresentation) {
+        self.presentation = presentation;
+        self.normalize(true);
+    }
+
+    pub fn remove_condition(&mut self, condition: BrowseCondition) {
+        match condition {
+            BrowseCondition::Sort => self.preferences.sort = VideoLibrarySort::Title,
+            BrowseCondition::Direction => {
+                self.preferences.sort_direction = VideoLibrarySortDirection::Ascending
+            }
+            BrowseCondition::Played => {
+                self.preferences.played_filter = VideoLibraryPlayedFilter::All
+            }
+            BrowseCondition::Favorites => self.preferences.favorites_only = false,
+            BrowseCondition::Quality => self.preferences.filters.quality = None,
+            BrowseCondition::Country => self.preferences.filters.country = None,
+            BrowseCondition::Genre => self.preferences.filters.genre = None,
+        }
+        self.normalize(false);
+    }
+
+    pub fn clear_conditions(&mut self) {
+        self.set_preferences(BrowsePreferences::default());
+    }
+
+    /// A confirmed record updates only its name, never the applied baseline.
+    pub fn reconcile_saved(&mut self, records: &[crate::saved_browse::SavedBrowseFilter]) -> bool {
+        let Some(saved) = &mut self.saved else {
+            return false;
+        };
+        if let Some(record) = records.iter().find(|record| record.id == saved.filter.id) {
+            if saved.filter.name == record.name {
+                return false;
+            }
+            saved.filter.name.clone_from(&record.name);
+        } else {
+            if saved.deleted {
+                return false;
+            }
+            saved.deleted = true;
+        }
+        true
+    }
+
+    fn normalize(&mut self, restore: bool) {
+        if let Some(saved) = &mut self.saved {
+            saved.modified = self.preferences != saved.filter.preferences;
+            return;
+        }
+        match self.presentation {
+            BrowsePresentation::Desktop if restore => {
+                self.preferences.filters = VideoLibraryFilters::default()
+            }
+            BrowsePresentation::Tv => {
+                self.preferences.favorites_only = false;
+                if self.preferences.played_filter == VideoLibraryPlayedFilter::Played {
+                    self.preferences.played_filter = VideoLibraryPlayedFilter::All;
+                }
+            }
+            BrowsePresentation::Desktop | BrowsePresentation::Android => {}
+        }
+    }
+}
+
 /// One token-correlated request for the media-server adapter.
 #[derive(Clone, Debug)]
 pub struct BrowsePageRequest {
@@ -2463,5 +2611,78 @@ mod tests {
             .refresh_failure()
             .is_some_and(|failure| !failure.retryable));
         assert_eq!(visible_ids(&model), original);
+    }
+}
+
+#[cfg(test)]
+mod query_policy_tests {
+    use super::*;
+
+    fn conditions() -> BrowsePreferences {
+        BrowsePreferences {
+            played_filter: VideoLibraryPlayedFilter::Played,
+            favorites_only: true,
+            filters: VideoLibraryFilters {
+                country: Some("Unlisted country".into()),
+                genre: Some("Unlisted genre".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ordinary_presentation_restore_applies_native_policy_without_touching_other_conditions() {
+        let mut policy = BrowseQueryPolicy::ordinary(conditions(), BrowsePresentation::Desktop);
+        assert!(!policy.preferences().filters.is_empty());
+        policy.set_presentation(BrowsePresentation::Tv);
+        assert!(!policy.preferences().favorites_only);
+        assert_eq!(
+            policy.preferences().played_filter,
+            VideoLibraryPlayedFilter::All
+        );
+        assert_eq!(policy.preferences().filters, conditions().filters);
+        policy.set_presentation(BrowsePresentation::Desktop);
+        assert!(policy.preferences().filters.is_empty());
+    }
+
+    #[test]
+    fn deleted_saved_context_keeps_immutable_baseline_and_portable_conditions() {
+        use crate::saved_browse::{SavedBrowseFilter, SavedBrowseId};
+        use crate::watchlist::ProfileScope;
+        use jellypilot_media_server::{MediaServerProvider, VideoLibraryKind};
+
+        let filter = SavedBrowseFilter {
+            id: SavedBrowseId(1),
+            name: "Cinema".into(),
+            scope: ProfileScope::new(
+                MediaServerProvider::Jellyfin,
+                "https://media.example",
+                "ada",
+            )
+            .unwrap(),
+            library_id: "movies".into(),
+            collection_type: VideoLibraryKind::Movies,
+            library_name: "Movies".into(),
+            preferences: conditions(),
+        };
+        let mut policy = BrowseQueryPolicy::saved(filter.clone(), BrowsePresentation::Tv);
+        assert_eq!(policy.preferences(), &filter.preferences);
+        policy.set_presentation(BrowsePresentation::Desktop);
+        policy.remove_condition(BrowseCondition::Country);
+        let mut renamed = filter.clone();
+        renamed.name = "Renamed".into();
+        renamed.preferences = BrowsePreferences::default();
+        assert!(policy.reconcile_saved(&[renamed]));
+        let applied = policy.applied_saved().unwrap();
+        assert!(applied.modified);
+        assert_eq!(applied.filter.preferences, filter.preferences);
+        assert_eq!(applied.filter.name, "Renamed");
+        assert!(policy.reconcile_saved(&[]));
+        assert!(policy.applied_saved().unwrap().deleted);
+        assert!(!policy.persists_defaults());
+        policy.set_preferences(filter.preferences.clone());
+        assert!(!policy.applied_saved().unwrap().modified);
+        assert!(policy.applied_saved().unwrap().deleted);
     }
 }

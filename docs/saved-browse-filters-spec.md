@@ -47,10 +47,29 @@ can mark it deleted; a storage failure is not evidence of deletion.
 Apply resolves the saved library ID and collection type against refreshed
 shortcuts for the active account. On success, install the route and all saved
 preferences atomically, reset the viewport and issue one new browse query.
-Cancel the old query and reject late pages through the existing Browser route.
+Cancel the old query and reject late pages through its owning `BrowseSession`.
 Do not briefly load default conditions before applying individual fields.
 Restoring or editing an applied saved query does not rewrite the ordinary global
 browse defaults; its current conditions and stored definition remain separate.
+
+Each retained Library Browser query has one SDK `BrowseSession`, shared by
+Desktop/TV and Android's ordinary browsing through its thin FFI adapter. The
+core query policy owns conditions, the applied definition's comparison baseline,
+Modified, and presentation normalization. The SDK owns execution, scoped
+storage, and confirmed rename/deletion reconciliation. Navigation retains the
+query handle; presentation retains only its snapshots, scroll, focus and inputs.
+
+Desktop/TV opens ordinary queries from SDK-managed defaults. Explicit ordinary
+condition resets persist those defaults even if TV normalization already made
+the visible values equal; automatic normalization and advanced-only edits do
+not. A failed defaults write leaves the current query unchanged. Android keeps
+its existing temporary ordinary preferences and adds no Saved Filters interface.
+
+Apply accepts a saved ID and operation token, not a caller-assembled baseline.
+The SDK checks the record and scope again after directory resolution and before
+delivering the complete owner. Cancelling the manager after successful delivery
+does not close the adopted query. Snapshot and viewport revisions prevent queued
+presentation work from restoring an older query or its geometry.
 
 If a successful directory read cannot find that exact library/type, show
 Library unavailable and retain the definition for rename/delete. A failed

@@ -228,11 +228,7 @@ pub(super) fn save_button(state: &State) -> Element<'_, Message> {
 }
 
 pub(super) fn active_summary(state: &State) -> Element<'_, Message> {
-  let Some(applied) = state
-    .full
-    .as_ref()
-    .and_then(|full| full.browse.saved.as_ref())
-  else {
+  let Some(applied) = state.full.as_ref().and_then(|full| full.browse.saved()) else {
     return space().boxed();
   };
   let Some(preferences) = saved_browse::current_preferences(state) else {
@@ -527,7 +523,7 @@ mod tests {
         "user",
       )
       .unwrap(),
-      library_id: "library".into(),
+      library_id: "00000000000000000000000000000001".into(),
       collection_type: VideoLibraryKind::Movies,
       library_name: "A library with a complete name".into(),
       preferences,
@@ -873,12 +869,32 @@ mod tests {
       library_id: record.library_id.clone(),
       collection_type: "movies".into(),
     };
-    let browse = &mut state.full.as_mut().unwrap().browse;
-    crate::app::browse::install_preferences(browse, record.preferences.clone());
-    browse.saved = Some(saved_browse::AppliedFilter {
-      filter: record,
-      deleted: true,
-    });
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
+    let session = crate::app::test_support::open_saved_fixture(
+      &mut state.kernel,
+      &mut fixture,
+      jellypilot_sdk::saved_browse::SavedBrowseDraft {
+        name: record.name,
+        library_id: record.library_id,
+        library_name: record.library_name,
+        collection_type: record.collection_type,
+        preferences: record.preferences,
+      },
+    )
+    .await;
+    let id = session.snapshot().unwrap().saved.unwrap().filter.id;
+    state
+      .kernel
+      .sdk
+      .saved_browse_delete(state.kernel.sdk.new_operation_token().unwrap(), id)
+      .await
+      .unwrap();
+    drop(crate::app::browse::adopt(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      session,
+    ));
     let mut ui = UserInterface::build(
       active_summary(&state),
       Size::new(240.0, 180.0),

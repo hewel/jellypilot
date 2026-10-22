@@ -1,28 +1,17 @@
 use super::*;
 use crate::app::message::BrowseMessage;
-use crate::app::test_support::{page_settled, BrowseFixture, FixtureReply};
-use crate::app::{accounts, browse, shell};
+use crate::app::test_support::{activate_sdk_fixture, BrowseFixture, FixtureReply};
+use crate::app::{browse, shell};
 use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::config::UiMode;
-use jellypilot_media_server::{
-  MediaServerProvider, SavedSession, VideoLibraryFilters, VideoLibraryShortcut,
-};
+use jellypilot_media_server::{VideoLibraryFilters, VideoLibraryShortcut};
+use jellypilot_sdk::browse::BrowseSession;
 
 const LIBRARY: &str = "00000000000000000000000000000001";
 
-fn state(fixture: &BrowseFixture) -> State {
+pub(super) fn state(fixture: &BrowseFixture) -> State {
   let mut state = crate::app::update::tests::test_state();
-  state.kernel.sdk.adopt_test_session(SavedSession {
-    provider: MediaServerProvider::Jellyfin,
-    server_url: fixture.server_url().into(),
-    access_token: "fixture-token".into(),
-    user_id: "fixture-user".into(),
-    user_name: "Fixture".into(),
-    server_name: None,
-    device_id: None,
-  });
-  let profile = state.kernel.sdk.active_profile().unwrap();
-  accounts::sync_activated(&mut state.kernel, &profile);
+  activate_sdk_fixture(&mut state.kernel, fixture);
   state.full.as_mut().unwrap().home.data.shortcuts =
     jellypilot_core::LoadState::Ready(vec![library()]);
   state
@@ -52,7 +41,11 @@ fn preferences() -> BrowsePreferences {
   }
 }
 
-async fn save(state: &State, name: &str, preferences: BrowsePreferences) -> SavedBrowseFilter {
+pub(super) async fn save(
+  state: &State,
+  name: &str,
+  preferences: BrowsePreferences,
+) -> SavedBrowseFilter {
   state
     .kernel
     .sdk
@@ -84,12 +77,10 @@ fn settle(state: &mut State, message: AppMessage) -> Task<AppMessage> {
   let task = match message {
     AppMessage::SavedBrowse(message) => update(state, message),
     AppMessage::Browse(message) => {
-      let source = shell::browse_source(state);
       let full = state.full.as_mut().unwrap();
       browse::update(
         &mut full.browse,
         &mut state.kernel,
-        source,
         true,
         state.shell.window_size,
         message,
@@ -101,78 +92,150 @@ fn settle(state: &mut State, message: AppMessage) -> Task<AppMessage> {
   task
 }
 
-fn resolved(filter: SavedBrowseFilter) -> ResolvedSavedBrowse {
-  ResolvedSavedBrowse {
-    filter,
-    library: library(),
-  }
+pub(super) fn session(state: &State) -> Arc<BrowseSession> {
+  state.full.as_ref().unwrap().browse.session.clone().unwrap()
 }
 
-#[tokio::test]
-async fn apply_resolves_fresh_directory_then_installs_one_complete_query_and_rejects_old_page() {
-  let mut fixture = BrowseFixture::new();
-  let mut state = state(&fixture);
-  let defaults = state.kernel.settings.snapshot().browse_filters();
-  let filter = save(&state, "Everything", preferences()).await;
-  let ordinary = shell::navigate(
-    &mut state,
+pub(super) fn sync(state: &mut State) {
+  drop(browse::sync_snapshot(
+    &mut state.full.as_mut().unwrap().browse,
+    &mut state.kernel,
+  ));
+}
+
+fn directory() -> FixtureReply {
+  FixtureReply::Json(
+    serde_json::json!({"Items":[{
+      "Id":LIBRARY,"Name":"Fresh Cinema","CollectionType":"movies"
+    }]})
+    .to_string(),
+  )
+}
+
+async fn finish_query(state: &mut State, fixture: &mut BrowseFixture) {
+  let session = session(state);
+  let snapshot = fixture
+    .settle_session(&session, |_| FixtureReply::Page {
+      total: 1,
+      artwork: false,
+    })
+    .await;
+  drop(settle(
+    state,
+    AppMessage::Browse(BrowseMessage::SnapshotChanged {
+      session_id: session.id(),
+      snapshot: Box::new(snapshot),
+    }),
+  ));
+}
+
+pub(super) async fn apply(state: &mut State, fixture: &mut BrowseFixture, id: SavedBrowseId) {
+  let load = action(state, Action::Reload);
+  for message in fixture
+    .run_task(load, |_| FixtureReply::Page {
+      total: 1,
+      artwork: false,
+    })
+    .await
+  {
+    drop(settle(state, message));
+  }
+  let task = action(
+    state,
+    Action::Record {
+      id,
+      action: RecordAction::Apply,
+    },
+  );
+  for message in fixture
+    .run_task(task, |request| {
+      if request.target().starts_with("/UserViews?") {
+        directory()
+      } else {
+        FixtureReply::Page {
+          total: 1,
+          artwork: false,
+        }
+      }
+    })
+    .await
+  {
+    drop(settle(state, message));
+  }
+  finish_query(state, fixture).await;
+}
+
+fn ordinary(state: &mut State) {
+  drop(shell::navigate(
+    state,
     Destination::Library {
       library_id: LIBRARY.into(),
       collection_type: "movies".into(),
     },
-  );
-  let mut old_stream = iced_runtime::task::into_stream(ordinary).unwrap();
-  let old_request = fixture.next_request(&mut old_stream).await;
+  ));
+}
+
+#[tokio::test]
+async fn apply_resolves_fresh_directory_then_installs_one_complete_query_and_rejects_old_snapshot()
+{
+  let mut fixture = BrowseFixture::new();
+  let mut state = state(&fixture);
+  let filter = save(&state, "Everything", preferences()).await;
+  ordinary(&mut state);
+  let old = session(&state);
+  let old_snapshot = old.snapshot().unwrap();
+  let defaults = old_snapshot.preferences.clone();
+  let old_request = fixture.receive_request().await;
   let load = shell::navigate(&mut state, Destination::SavedBrowse);
   for message in fixture
-    .run_task(load, |_| panic!("loading definitions is local"))
+    .run_task(load, |_| panic!("definition loading is local"))
     .await
   {
     drop(settle(&mut state, message));
   }
-  let apply = action(
+  let task = action(
     &mut state,
     Action::Record {
       id: filter.id,
       action: RecordAction::Apply,
     },
   );
-  assert_eq!(state.shell.destination, Destination::SavedBrowse);
   let mut directories = 0;
-  let messages = fixture.run_task(apply, |request| {
-    directories += 1;
-    assert!(request.target().starts_with("/UserViews?"));
-    FixtureReply::Json(serde_json::json!({"Items":[{"Id":LIBRARY,"Name":"Fresh Cinema","CollectionType":"movies"}]}).to_string())
-  }).await;
-  assert_eq!(directories, 1);
-  assert_eq!(
-    state.shell.destination,
-    Destination::SavedBrowse,
-    "directory delivery does not partially install preferences"
-  );
-  assert_eq!(messages.len(), 1);
-  let query = settle(&mut state, messages.into_iter().next().unwrap());
-  assert_eq!(current_preferences(&state), Some(preferences()));
-  assert_eq!(state.kernel.settings.snapshot().browse_filters(), defaults);
-  assert!(!modified(&state));
-  let mut requests = 0;
-  let pages = fixture
-    .run_task(query, |request| {
-      requests += 1;
+  let mut pages = 0;
+  let mut respond = |request: &crate::app::test_support::FixtureRequest| {
+    if request.target().starts_with("/UserViews?") {
+      directories += 1;
+      directory()
+    } else {
       assert!(request.target().contains("/Items?"));
+      pages += 1;
       FixtureReply::Page {
         total: 1,
         artwork: false,
       }
-    })
-    .await;
-  assert_eq!(
-    requests, 1,
-    "one initial Browser query, with no intermediate default query"
-  );
-  for message in pages {
+    }
+  };
+  let messages = fixture.run_task(task, &mut respond).await;
+  assert_eq!(state.shell.destination, Destination::SavedBrowse);
+  for message in messages {
     drop(settle(&mut state, message));
   }
+  assert_eq!(current_preferences(&state), Some(preferences()));
+  assert!(!modified(&state));
+  let current = session(&state);
+  let snapshot = fixture.settle_session(&current, &mut respond).await;
+  assert_eq!(directories, 1);
+  assert_eq!(
+    pages, 1,
+    "one complete initial query, never an intermediate default query"
+  );
+  drop(settle(
+    &mut state,
+    AppMessage::Browse(BrowseMessage::SnapshotChanged {
+      session_id: current.id(),
+      snapshot: Box::new(snapshot),
+    }),
+  ));
   assert!(
     matches!(
       state.full.as_ref().unwrap().browse.view,
@@ -184,28 +247,20 @@ async fn apply_resolves_fresh_directory_then_installs_one_complete_query_and_rej
     total: 20,
     artwork: false,
   });
-  let stale = fixture
-    .run_stream(&mut old_stream, |_| FixtureReply::Failure)
-    .await
-    .into_iter()
-    .find_map(page_settled)
-    .unwrap();
-  assert!(!state
-    .full
-    .as_ref()
-    .unwrap()
-    .browse
-    .browser
-    .model()
-    .is_current_settlement(&stale));
   drop(settle(
     &mut state,
-    AppMessage::Browse(BrowseMessage::PageSettled(stale)),
+    AppMessage::Browse(BrowseMessage::SnapshotChanged {
+      session_id: old.id(),
+      snapshot: Box::new(old_snapshot),
+    }),
   ));
+  assert_eq!(session(&state).id(), current.id());
   assert!(matches!(
     state.full.as_ref().unwrap().browse.view,
     LibraryBrowseView::Empty
   ));
+  ordinary(&mut state);
+  assert_eq!(current_preferences(&state), Some(defaults));
 }
 
 #[tokio::test]
@@ -213,21 +268,9 @@ async fn apply_failure_keeps_route_and_complete_context_and_can_retry() {
   let mut fixture = BrowseFixture::new();
   let mut state = state(&fixture);
   let filter = save(&state, "Unavailable", preferences()).await;
-  drop(shell::apply_saved_browse(
-    &mut state,
-    resolved(filter.clone()),
-  ));
+  apply(&mut state, &mut fixture, filter.id).await;
   state.saved_browse.records = vec![filter.clone()];
-  let identity = state
-    .full
-    .as_ref()
-    .unwrap()
-    .browse
-    .browser
-    .model()
-    .identity()
-    .unwrap()
-    .to_owned();
+  let previous = session(&state).id();
   for response in [
     FixtureReply::Failure,
     FixtureReply::Json("{\"Items\":[]}".into()),
@@ -245,44 +288,25 @@ async fn apply_failure_keeps_route_and_complete_context_and_can_retry() {
     assert!(state.saved_browse.pending.is_none());
     assert!(state.saved_browse.error.is_some());
     assert_eq!(current_preferences(&state), Some(preferences()));
-    assert_eq!(
-      state
-        .full
-        .as_ref()
-        .unwrap()
-        .browse
-        .browser
-        .model()
-        .identity(),
-      Some(identity.as_str())
-    );
+    assert_eq!(session(&state).id(), previous);
     assert_eq!(state.saved_browse.records, vec![filter.clone()]);
-    assert!(
-      !state
-        .full
-        .as_ref()
-        .unwrap()
-        .browse
-        .saved
-        .as_ref()
-        .unwrap()
-        .deleted
-    );
+    assert!(!session(&state).snapshot().unwrap().saved.unwrap().deleted);
   }
+  apply(&mut state, &mut fixture, filter.id).await;
+  assert_ne!(session(&state).id(), previous);
+  assert!(state.saved_browse.error.is_none());
 }
 
 #[tokio::test]
 async fn saved_context_survives_detail_modes_and_deleted_definition_until_ordinary_navigation() {
-  let fixture = BrowseFixture::new();
+  let mut fixture = BrowseFixture::new();
   let mut state = state(&fixture);
+  ordinary(&mut state);
+  let defaults = current_preferences(&state).unwrap();
+  finish_query(&mut state, &mut fixture).await;
   let filter = save(&state, "Retained", preferences()).await;
-  drop(shell::apply_saved_browse(
-    &mut state,
-    resolved(filter.clone()),
-  ));
-  state.saved_browse.loaded = true;
-  state.saved_browse.records = vec![filter.clone()];
-  let original_defaults = state.kernel.settings.snapshot().browse_filters();
+  apply(&mut state, &mut fixture, filter.id).await;
+  let owner = session(&state).id();
   for mode in [UiMode::Tv, UiMode::Desktop] {
     drop(shell::apply_ui_mode(&mut state, mode));
     assert_eq!(current_preferences(&state), Some(preferences()));
@@ -299,6 +323,7 @@ async fn saved_context_survives_detail_modes_and_deleted_definition_until_ordina
       },
     ));
     drop(shell::navigate_back(&mut state));
+    assert_eq!(session(&state).id(), owner);
     assert_eq!(current_preferences(&state), Some(preferences()));
   }
   state
@@ -307,147 +332,70 @@ async fn saved_context_survives_detail_modes_and_deleted_definition_until_ordina
     .saved_browse_delete(state.kernel.sdk.new_operation_token().unwrap(), filter.id)
     .await
     .unwrap();
-  state.saved_browse.records.clear();
-  reconcile(&mut state);
-  assert!(
-    state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .saved
-      .as_ref()
-      .unwrap()
-      .deleted
-  );
+  sync(&mut state);
+  assert!(session(&state).snapshot().unwrap().saved.unwrap().deleted);
   drop(shell::navigate(
     &mut state,
     Destination::Detail("another-item".into()),
   ));
   drop(shell::navigate_back(&mut state));
   assert_eq!(current_preferences(&state), Some(preferences()));
-  assert!(
-    state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .saved
-      .as_ref()
-      .unwrap()
-      .deleted
-  );
-  assert_eq!(
-    state.kernel.settings.snapshot().browse_filters(),
-    original_defaults
-  );
-  drop(shell::navigate(
-    &mut state,
-    Destination::Library {
-      library_id: LIBRARY.into(),
-      collection_type: "movies".into(),
-    },
-  ));
-  assert!(state.full.as_ref().unwrap().browse.saved.is_none());
-  assert_eq!(
-    current_preferences(&state).unwrap().filters,
-    VideoLibraryFilters::default()
-  );
+  assert!(session(&state).snapshot().unwrap().saved.unwrap().deleted);
+  ordinary(&mut state);
+  assert!(session(&state).snapshot().unwrap().saved.is_none());
+  assert_eq!(current_preferences(&state), Some(defaults));
 }
 
 #[tokio::test]
 async fn clearing_ordinary_conditions_changes_real_query_and_defaults_but_saved_clear_does_not() {
   let mut fixture = BrowseFixture::new();
   let mut state = state(&fixture);
-  drop(shell::navigate(
+  ordinary(&mut state);
+  finish_query(&mut state, &mut fixture).await;
+  session(&state).set_preferences(preferences()).unwrap();
+  sync(&mut state);
+  finish_query(&mut state, &mut fixture).await;
+  let queued = session(&state).snapshot().unwrap();
+  let before = queued.identity.clone();
+  drop(action(&mut state, Action::ClearConditions));
+  finish_query(&mut state, &mut fixture).await;
+  let session_id = session(&state).id();
+  drop(settle(
     &mut state,
-    Destination::Library {
-      library_id: LIBRARY.into(),
-      collection_type: "movies".into(),
-    },
+    AppMessage::Browse(BrowseMessage::SnapshotChanged {
+      session_id,
+      snapshot: Box::new(queued),
+    }),
   ));
-  let source = shell::browse_source(&state);
-  drop(browse::commit_preferences(
-    &mut state.full.as_mut().unwrap().browse,
-    &mut state.kernel,
-    source,
-    preferences(),
-  ));
-  let before = state
-    .full
-    .as_ref()
-    .unwrap()
-    .browse
-    .browser
-    .model()
-    .identity()
-    .unwrap()
-    .to_owned();
-  let query = action(&mut state, Action::ClearConditions);
-  let mut requests = 0;
-  for message in fixture
-    .run_task(query, |_| {
-      requests += 1;
-      FixtureReply::Page {
-        total: 1,
-        artwork: false,
-      }
-    })
-    .await
-  {
-    drop(settle(&mut state, message));
-  }
-  assert_eq!(requests, 1);
   assert!(matches!(
     state.full.as_ref().unwrap().browse.view,
     LibraryBrowseView::Ready { .. }
   ));
-  assert_ne!(
-    state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .browser
-      .model()
-      .identity(),
-    Some(before.as_str())
-  );
+  assert_ne!(session(&state).snapshot().unwrap().identity, before);
   assert_eq!(
     current_preferences(&state),
     Some(BrowsePreferences::default())
   );
-  assert_eq!(
-    BrowsePreferences::from(state.kernel.settings.snapshot().browse_filters()),
-    BrowsePreferences::default()
-  );
-  let filter = save(&state, "Default", BrowsePreferences::default()).await;
-  drop(shell::apply_saved_browse(
-    &mut state,
-    resolved(filter.clone()),
-  ));
-  let ordinary_defaults = state
-    .kernel
-    .settings
-    .snapshot()
-    .browse_filters()
-    .with_favorites_only(true)
-    .with_sort(VideoLibrarySort::RecentlyAdded);
-  state
-    .kernel
-    .settings
-    .set_browse_filters(ordinary_defaults)
+
+  let ordinary_defaults = BrowsePreferences {
+    sort: VideoLibrarySort::RecentlyAdded,
+    favorites_only: true,
+    ..Default::default()
+  };
+  session(&state)
+    .set_preferences(ordinary_defaults.clone())
     .unwrap();
-  browse::install_preferences(&mut state.full.as_mut().unwrap().browse, preferences());
+  sync(&mut state);
+  finish_query(&mut state, &mut fixture).await;
+  let filter = save(&state, "Default", BrowsePreferences::default()).await;
+  apply(&mut state, &mut fixture, filter.id).await;
+  session(&state).set_preferences(preferences()).unwrap();
+  sync(&mut state);
   assert!(modified(&state));
   drop(action(&mut state, Action::ClearConditions));
   assert!(
     !modified(&state),
-    "Clear compares against the saved definition rather than forcing dirty"
-  );
-  assert_eq!(
-    state.kernel.settings.snapshot().browse_filters(),
-    ordinary_defaults
+    "reverting conditions restores the saved baseline"
   );
   assert_eq!(
     state
@@ -458,6 +406,8 @@ async fn clearing_ordinary_conditions_changes_real_query_and_defaults_but_saved_
       .unwrap(),
     vec![filter]
   );
+  ordinary(&mut state);
+  assert_eq!(current_preferences(&state), Some(ordinary_defaults));
 }
 
 #[tokio::test]
@@ -467,21 +417,9 @@ async fn failed_rename_preserves_draft_and_context_and_stale_editor_or_profile_a
   let mut state = state(&fixture);
   let filter = save(&state, "Keep", preferences()).await;
   let other = save(&state, "Duplicate", BrowsePreferences::default()).await;
-  drop(shell::apply_saved_browse(
-    &mut state,
-    resolved(filter.clone()),
-  ));
+  apply(&mut state, &mut fixture, filter.id).await;
   state.saved_browse.records = vec![filter.clone(), other];
-  let identity = state
-    .full
-    .as_ref()
-    .unwrap()
-    .browse
-    .browser
-    .model()
-    .identity()
-    .unwrap()
-    .to_owned();
+  let identity = session(&state).snapshot().unwrap().identity;
   drop(action(
     &mut state,
     Action::Record {
@@ -504,17 +442,7 @@ async fn failed_rename_preserves_draft_and_context_and_stale_editor_or_profile_a
     "saved-filters-duplicate-name"
   );
   assert_eq!(state.saved_browse.records[0], filter);
-  assert_eq!(
-    state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .browser
-      .model()
-      .identity(),
-    Some(identity.as_str())
-  );
+  assert_eq!(session(&state).snapshot().unwrap().identity, identity);
   let stale = target(&state);
   drop(action(&mut state, Action::CloseEditor));
   drop(action(

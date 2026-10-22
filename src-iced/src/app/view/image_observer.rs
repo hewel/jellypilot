@@ -52,11 +52,12 @@ pub(crate) fn observe_images(content: Element<'_, Message>) -> Element<'_, Messa
 pub(crate) fn observe_grid_viewport(
   content: Element<'_, Message>,
   epoch: u64,
+  viewport_revision: u64,
 ) -> Element<'_, Message> {
   iced::advanced::Widget::_boxed(Observer {
     content,
     image: None,
-    grid_epoch: Some(epoch),
+    grid_epoch: Some((epoch, viewport_revision)),
   })
 }
 
@@ -81,14 +82,14 @@ impl Identity {
 #[derive(Default)]
 struct State {
   image: Option<Identity>,
-  grid_epoch: Option<u64>,
+  grid_epoch: Option<(u64, u64)>,
   inventory: Option<Inventory>,
 }
 
 struct Observer<'a> {
   content: Element<'a, Message>,
   image: Option<Identity>,
-  grid_epoch: Option<u64>,
+  grid_epoch: Option<(u64, u64)>,
 }
 
 impl widget::Meta for Observer<'_> {
@@ -356,6 +357,7 @@ struct Report {
 #[derive(Clone, Copy, PartialEq)]
 struct GridGeometry {
   epoch: u64,
+  viewport_revision: u64,
   offset_y: f32,
   height: f32,
 }
@@ -428,6 +430,7 @@ impl Inventory {
           .messages
           .push(Message::Browse(BrowseMessage::GridViewportMeasured {
             epoch: grid.epoch,
+            viewport_revision: grid.viewport_revision,
             offset_y: grid.offset_y,
             height: grid.height,
           }));
@@ -468,10 +471,11 @@ impl widget::Operation for Measure<'_> {
     let Some(state) = state.downcast_mut::<State>() else {
       return;
     };
-    if let Some(epoch) = state.grid_epoch {
+    if let Some((epoch, viewport_revision)) = state.grid_epoch {
       if let Some(viewport) = self.clip.visible {
         self.inventory.measured_grid = Some(GridGeometry {
           epoch,
+          viewport_revision,
           offset_y: viewport.y - bounds.y,
           height: viewport.height,
         });
@@ -730,7 +734,7 @@ mod tests {
   fn sparse_grid_reports_signed_header_offset_and_full_parent_viewport() {
     let mut inventory = Inventory::default();
     let mut markers = [State {
-      grid_epoch: Some(7),
+      grid_epoch: Some((7, 11)),
       ..State::default()
     }];
     // The real grid begins after a 40px count header and margin. Its short
@@ -741,6 +745,7 @@ mod tests {
       changes.as_slice(),
       [Message::Browse(BrowseMessage::GridViewportMeasured {
         epoch: 7,
+        viewport_revision: 11,
         offset_y: -40.0,
         height: 100.0
       })]
@@ -756,11 +761,12 @@ mod tests {
       changes.as_slice(),
       [Message::Browse(BrowseMessage::GridViewportMeasured {
         epoch: 7,
+        viewport_revision: 11,
         offset_y: 160.0,
         height: 100.0
       })]
     ));
-    markers[0].grid_epoch = Some(8);
+    markers[0].grid_epoch = Some((8, 12));
     let changes = measure(&mut inventory, &mut markers, bounds, scrolled);
     assert!(matches!(
       changes.as_slice(),

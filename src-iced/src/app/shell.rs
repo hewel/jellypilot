@@ -73,7 +73,7 @@ impl RefreshTarget {
           state.shell.destination,
           Destination::Library { .. } | Destination::Search(_)
         )
-        .then(|| full.browse.browser.model().identity().map(str::to_owned))
+        .then(|| full.browse.identity().map(str::to_owned))
         .flatten()
       }),
     }
@@ -85,10 +85,7 @@ impl RefreshTarget {
         self.destination,
         Destination::Library { .. } | Destination::Search(_)
       ) || self.browse_identity.as_deref()
-        == state
-          .full
-          .as_ref()
-          .and_then(|full| full.browse.browser.model().identity()))
+        == state.full.as_ref().and_then(|full| full.browse.identity()))
   }
 }
 
@@ -111,7 +108,7 @@ fn active_browse_refreshing(state: &State) -> bool {
   ) && state
     .full
     .as_ref()
-    .is_some_and(|full| full.browse.browser.model().is_refreshing())
+    .is_some_and(|full| full.browse.refreshing())
 }
 
 pub(crate) fn refresh_busy(state: &State) -> bool {
@@ -404,13 +401,12 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
     UiMode::Tv => {
       state.shell.desktop_window_size = Some(previous_size);
       state.shell.desktop_full_window_size = previous_full_size;
-      let source = browse_source(state);
-      if matches!(source, Some(BrowseSource::Library { .. })) {
-        if let Some(full) = state.full.as_mut() {
-          if browse::normalize_tv_filters(&mut full.browse, &state.kernel) {
-            tasks.push(browse::start(&mut full.browse, &mut state.kernel, source));
-          }
-        }
+      if let Some(full) = state.full.as_mut() {
+        tasks.push(browse::set_presentation(
+          &mut full.browse,
+          &mut state.kernel,
+          jellypilot_sdk::browse::BrowsePresentation::Tv,
+        ));
       }
       if player_was_visible {
         tasks.push(navigate(state, Destination::NowPlaying));
@@ -442,16 +438,12 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
     UiMode::Desktop => {
       state.shell.full_window_size = state.shell.desktop_full_window_size.take();
       tasks.push(super::tv::leave(state));
-      let source = browse_source(state);
       if let Some(full) = state.full.as_mut() {
-        if full.browse.saved.is_none() {
-          tasks.push(browse::apply_advanced_filters(
-            &mut full.browse,
-            &mut state.kernel,
-            source,
-            Default::default(),
-          ));
-        }
+        tasks.push(browse::set_presentation(
+          &mut full.browse,
+          &mut state.kernel,
+          jellypilot_sdk::browse::BrowsePresentation::Desktop,
+        ));
       }
       let geometry = mode_geometry(state.app_mode(), state.shell.desktop_window_size.take());
       if let Some(id) = state.shell.window_id {
@@ -839,18 +831,17 @@ pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Mess
       && state
         .full
         .as_ref()
-        .is_some_and(|full| full.browse.saved.is_some())
+        .is_some_and(|full| full.browse.saved().is_some())
     {
       super::saved_browse::leave(state);
       let source = browse_source(state);
       let tv = state.tv_mode();
       let full = state.full.as_mut().expect("library has FullUi");
-      full.browse.saved = None;
-      full.browse.filters = None;
-      full.browse.advanced_filters = Default::default();
-      if tv {
-        browse::normalize_tv_filters(&mut full.browse, &state.kernel);
-      }
+      full.browse.presentation = if tv {
+        jellypilot_sdk::browse::BrowsePresentation::Tv
+      } else {
+        jellypilot_sdk::browse::BrowsePresentation::Desktop
+      };
       return browse::start(&mut full.browse, &mut state.kernel, source);
     }
     return Task::none();
@@ -866,16 +857,21 @@ pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Mess
   activate_destination(state, previous)
 }
 
-/// Resolve has already validated the exact current library. Install the route
-/// and complete preference set before the single Browser configure call.
+/// Adopts a complete, scoped SDK query without opening an intermediate query.
 pub(crate) fn apply_saved_browse(
   state: &mut State,
-  resolved: jellypilot_sdk::saved_browse::ResolvedSavedBrowse,
+  session: std::sync::Arc<jellypilot_sdk::browse::BrowseSession>,
 ) -> Task<Message> {
+  let Ok(projection) = session.snapshot() else {
+    return Task::none();
+  };
+  let BrowseSource::Library { shortcut, .. } = projection.source else {
+    return Task::none();
+  };
   let previous = state.shell.destination.clone();
   let destination = Destination::Library {
-    library_id: resolved.library.id.clone(),
-    collection_type: resolved.library.collection_type.clone(),
+    library_id: shortcut.id,
+    collection_type: shortcut.collection_type,
   };
   if previous != destination {
     state.shell.page_state = capture_page(state);
@@ -889,37 +885,8 @@ pub(crate) fn apply_saved_browse(
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
-  if let jellypilot_core::LoadState::Ready(shortcuts) = &mut full.home.data.shortcuts {
-    if let Some(previous) = shortcuts
-      .iter_mut()
-      .find(|library| library.id == resolved.library.id)
-    {
-      *previous = resolved.library.clone();
-    } else {
-      shortcuts.push(resolved.library.clone());
-    }
-  } else {
-    full.home.data.shortcuts = jellypilot_core::LoadState::Ready(vec![resolved.library.clone()]);
-  }
-  browse::install_preferences(&mut full.browse, resolved.filter.preferences.clone());
-  full.browse.saved = Some(super::saved_browse::AppliedFilter {
-    filter: resolved.filter,
-    deleted: false,
-  });
   full.browse.search_input.clear();
-  full.browse.browser.reset();
-  full.browse.viewport = Default::default();
-  full.browse.grid_viewport = None;
-  full.browse.scroll_id = iced::widget::Id::unique();
-  let session = state.kernel.request_gate.current_session();
-  browse::start(
-    &mut full.browse,
-    &mut state.kernel,
-    Some(BrowseSource::Library {
-      session,
-      shortcut: resolved.library,
-    }),
-  )
+  browse::adopt(&mut full.browse, &mut state.kernel, session)
 }
 
 fn capture_page(state: &mut State) -> Option<PageState> {
@@ -1146,7 +1113,7 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
   match &state.shell.destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } | Destination::Search(_) => {
-      if full.browse.browser.model().identity().is_some() {
+      if full.browse.session.is_some() {
         browse::refresh(&mut full.browse, &mut state.kernel)
       } else {
         browse::start(&mut full.browse, &mut state.kernel, source)
@@ -1283,7 +1250,6 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
         &mut state.kernel,
         *snapshot,
         state.shell.window_size,
-        source,
         allow_advanced_filters,
       ),
       PageState::Detail(snapshot) => {
@@ -1313,20 +1279,21 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
   match destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } => {
-      full.browse.saved = None;
-      full.browse.filters = None;
-      full.browse.advanced_filters = Default::default();
-      if allow_advanced_filters {
-        browse::normalize_tv_filters(&mut full.browse, &state.kernel);
-      }
+      full.browse.presentation = if allow_advanced_filters {
+        jellypilot_sdk::browse::BrowsePresentation::Tv
+      } else {
+        jellypilot_sdk::browse::BrowsePresentation::Desktop
+      };
       full.browse.search_input.clear();
       browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Search(query) => {
-      full.browse.saved = None;
       full.browse.search_input = query;
-      full.browse.filters = None;
-      full.browse.advanced_filters = Default::default();
+      full.browse.presentation = if allow_advanced_filters {
+        jellypilot_sdk::browse::BrowsePresentation::Tv
+      } else {
+        jellypilot_sdk::browse::BrowsePresentation::Desktop
+      };
       browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Detail(item_id) => {
@@ -1363,6 +1330,19 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       collection_type,
     } => {
       let full = state.full.as_ref()?;
+      if let Some(BrowseSource::Library { shortcut, .. }) = full
+        .browse
+        .projection
+        .as_ref()
+        .map(|snapshot| &snapshot.source)
+      {
+        if shortcut.id == *library_id && shortcut.collection_type == *collection_type {
+          return Some(BrowseSource::Library {
+            session,
+            shortcut: shortcut.clone(),
+          });
+        }
+      }
       let jellypilot_core::LoadState::Ready(shortcuts) = &full.home.data.shortcuts else {
         return None;
       };
@@ -1432,13 +1412,9 @@ mod tests {
   use super::*;
   use jellypilot_core::browse_model::LibraryBrowseView;
 
-  use crate::app::test_support::{page_settled, BrowseFixture, FixtureReply, FixtureRequest};
-
-  /// The still-unanswered initial page request and its task stream.
-  struct PendingBrowse {
-    stream: iced::futures::stream::BoxStream<'static, iced_runtime::Action<Message>>,
-    request: FixtureRequest,
-  }
+  use crate::app::test_support::{
+    activate_sdk_fixture, BrowseFixture, FixtureReply, FixtureRequest,
+  };
 
   fn test_library() -> jellypilot_media_server::VideoLibraryShortcut {
     jellypilot_media_server::VideoLibraryShortcut {
@@ -1452,11 +1428,11 @@ mod tests {
 
   /// Boots a Library destination whose initial page request is parked at the
   /// fixture, unanswered, so tests control when (or whether) it settles.
-  async fn browsing_state() -> (State, BrowseFixture, PendingBrowse) {
+  async fn browsing_state() -> (State, BrowseFixture, FixtureRequest) {
     let mut state = State::boot(false);
     state.kernel = test_fixture().1;
-    let fixture = BrowseFixture::new();
-    state.kernel.client = Some(fixture.client());
+    let mut fixture = BrowseFixture::new();
+    activate_sdk_fixture(&mut state.kernel, &fixture);
     state.full = Some(super::super::state::FullUi::default());
     state.shell.destination = Destination::Library {
       library_id: "movies".into(),
@@ -1465,15 +1441,13 @@ mod tests {
     state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![test_library()]);
     let source = browse_source(&state).unwrap();
-    let mut stream = iced_runtime::task::into_stream(browse::start(
+    drop(browse::start(
       &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       Some(source),
-    ))
-    .expect("browse start emits page work");
-    let mut fixture = fixture;
-    let request = fixture.next_request(&mut stream).await;
-    (state, fixture, PendingBrowse { stream, request })
+    ));
+    let request = fixture.receive_request().await;
+    (state, fixture, request)
   }
 
   #[tokio::test]
@@ -1487,16 +1461,15 @@ mod tests {
       &mut state,
       Destination::Search("another query".into()),
     ));
-    let mut stream =
-      iced_runtime::task::into_stream(navigate_back(&mut state)).expect("restore emits page work");
-    let request = fixture.next_request(&mut stream).await;
-    request.reply(FixtureReply::Failure);
+    drop(navigate_back(&mut state));
+    let owner = state.full.as_ref().unwrap().browse.session.clone().unwrap();
     let resumed = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("resumed request settles");
+      .settle_session(&owner, |_| FixtureReply::Failure)
+      .await;
+    drop(browse::sync_snapshot(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
     drop(update_shell(
       &mut state,
       ShellMessage::DirectoryLoaded {
@@ -1505,14 +1478,7 @@ mod tests {
         result: Ok(vec![test_library()]),
       },
     ));
-    assert!(state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .browser
-      .model()
-      .is_current_settlement(&resumed));
+    assert_eq!(owner.snapshot().unwrap().revision, resumed.revision);
     assert!(!refresh_busy(&state));
   }
 
@@ -1523,31 +1489,17 @@ mod tests {
     drop(update_shell(&mut state, ShellMessage::RefreshCurrent));
     let generation = state.shell.refresh_generation;
     let session = state.kernel.request_gate.current_session();
-    // A filter mutation reconfigures the browser, which changes the logical
-    // identity the captured refresh target is bound to.
-    state.full.as_mut().unwrap().browse.filters = Some(
-      state
-        .kernel
-        .settings
-        .snapshot()
-        .browse_filters()
-        .with_sort(jellypilot_media_server::VideoLibrarySort::ReleaseDate),
-    );
-    let source = browse_source(&state).unwrap();
-    let mut stream = iced_runtime::task::into_stream(browse::start(
+    let owner = state.full.as_ref().unwrap().browse.session.clone().unwrap();
+    let mut preferences = owner.snapshot().unwrap().preferences;
+    preferences.sort = jellypilot_media_server::VideoLibrarySort::ReleaseDate;
+    owner.set_preferences(preferences).unwrap();
+    let changed = fixture
+      .settle_session(&owner, |_| FixtureReply::Failure)
+      .await;
+    drop(browse::sync_snapshot(
       &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
-      Some(source),
-    ))
-    .expect("reconfigured browse emits page work");
-    let request = fixture.next_request(&mut stream).await;
-    request.reply(FixtureReply::Failure);
-    let changed = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
-      .await
-      .into_iter()
-      .find_map(page_settled)
-      .expect("reconfigured request settles");
+    ));
     reconcile_refresh(&mut state);
     drop(update_shell(
       &mut state,
@@ -1557,58 +1509,55 @@ mod tests {
         result: Ok(vec![test_library()]),
       },
     ));
-    assert!(state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
-      .browser
-      .model()
-      .is_current_settlement(&changed));
+    assert_eq!(owner.snapshot().unwrap().revision, changed.revision);
     assert!(!refresh_busy(&state));
   }
 
   #[tokio::test]
-  async fn browse_refresh_busy_follows_model_settlement_not_task_completion() {
+  async fn browse_refresh_busy_follows_session_settlement_not_task_completion() {
     let (mut state, mut fixture, pending) = browsing_state().await;
-    pending.request.reply(FixtureReply::Page {
+    pending.reply(FixtureReply::Page {
       total: 0,
       artwork: false,
     });
-    let mut stream = pending.stream;
-    let settlements = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
+    let owner = state.full.as_ref().unwrap().browse.session.clone().unwrap();
+    fixture
+      .settle_session(&owner, |_| FixtureReply::Failure)
       .await;
-    for message in settlements {
-      drop(super::super::update::update(&mut state, message));
-    }
-    let mut stream = iced_runtime::task::into_stream(browse::refresh(
+    drop(browse::sync_snapshot(
       &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
-    ))
-    .expect("refresh emits page work");
-    let request = fixture.next_request(&mut stream).await;
+    ));
+    drop(browse::refresh(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
+    let request = fixture.receive_request().await;
     state.shell.refresh = Some(RefreshRun {
       target: Some(RefreshTarget::capture(&state)),
       phase: RefreshPhase::BrowsePage,
     });
     let session = state.kernel.request_gate.current_session();
     let generation = state.shell.refresh_generation;
-    drop(super::super::update::update(
+    drop(update_shell(
       &mut state,
-      Message::Shell(ShellMessage::RefreshFinished {
+      ShellMessage::RefreshFinished {
         session,
         generation,
-      }),
+      },
     ));
     assert!(refresh_busy(&state));
     request.reply(FixtureReply::Failure);
-    let settlements = fixture
-      .run_stream(&mut stream, |_| FixtureReply::Failure)
+    let snapshot = fixture
+      .settle_session(&owner, |_| FixtureReply::Failure)
       .await;
-    for message in settlements {
-      drop(super::super::update::update(&mut state, message));
-    }
+    drop(super::super::update::update(
+      &mut state,
+      Message::Browse(super::super::message::BrowseMessage::SnapshotChanged {
+        session_id: owner.id(),
+        snapshot: Box::new(snapshot),
+      }),
+    ));
     assert!(!refresh_busy(&state));
     assert!(matches!(
       state.full.as_ref().unwrap().browse.view,

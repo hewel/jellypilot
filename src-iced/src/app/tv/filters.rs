@@ -115,7 +115,7 @@ pub fn open(state: &mut State) -> Task<AppMessage> {
   let Some(full) = state.full.as_ref() else {
     return Task::none();
   };
-  let applied = full.browse.advanced_filters.clone();
+  let applied = full.browse.preferences().filters;
   state.tv.press = None;
   state.tv.filters.panel = Some(Panel {
     token: Token {
@@ -286,25 +286,16 @@ pub fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       let changed = state
         .full
         .as_ref()
-        .is_some_and(|full| full.browse.advanced_filters != draft);
-      let source = crate::app::shell::browse_source(state);
-      if source.is_none() {
-        return Task::none();
-      }
+        .is_some_and(|full| full.browse.preferences().filters != draft);
       close(state);
       if !changed {
         return Task::none();
       }
-      state.tv.offset = 0.0;
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      let task = crate::app::browse::apply_advanced_filters(
-        &mut full.browse,
-        &mut state.kernel,
-        source,
-        draft,
-      );
+      let task =
+        crate::app::browse::apply_advanced_filters(&mut full.browse, &mut state.kernel, draft);
       Task::batch([task, super::navigation::restore_scroll(state)])
     }
     Message::Focus(_, row, index) => {
@@ -829,6 +820,25 @@ mod tests {
     state
   }
 
+  async fn browsing_state() -> (State, crate::app::test_support::BrowseFixture) {
+    let mut state = state();
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
+    let source = crate::app::shell::browse_source(&state);
+    let browse = &mut state.full.as_mut().unwrap().browse;
+    browse.presentation = jellypilot_sdk::browse::BrowsePresentation::Tv;
+    drop(crate::app::browse::start(browse, &mut state.kernel, source));
+    let session = browse.session.clone().unwrap();
+    fixture
+      .settle_session(&session, |_| crate::app::test_support::FixtureReply::Page {
+        total: 0,
+        artwork: false,
+      })
+      .await;
+    drop(crate::app::browse::sync_snapshot(browse, &mut state.kernel));
+    (state, fixture)
+  }
+
   fn options() -> VideoLibraryFilterOptions {
     VideoLibraryFilterOptions {
       qualities: vec![VideoLibraryQuality::Hd, VideoLibraryQuality::Uhd],
@@ -851,26 +861,25 @@ mod tests {
     token
   }
 
-  #[test]
-  fn choices_are_a_draft_and_back_preserves_query_count_and_scroll() {
-    let mut state = state();
-    state
-      .full
-      .as_mut()
-      .expect("full")
-      .browse
-      .advanced_filters
-      .country = Some("Canada".to_owned());
-    state.full.as_mut().expect("full").browse.view =
-      jellypilot_core::browse_model::LibraryBrowseView::Empty;
+  #[tokio::test]
+  async fn choices_are_a_draft_and_back_preserves_query_count_and_scroll() {
+    let (mut state, mut fixture) = browsing_state().await;
+    let session = state.full.as_ref().unwrap().browse.session.clone().unwrap();
+    let mut preferences = session.snapshot().unwrap().preferences;
+    preferences.filters.country = Some("Canada".into());
+    session.set_preferences(preferences).unwrap();
+    fixture
+      .settle_session(&session, |_| crate::app::test_support::FixtureReply::Page {
+        total: 0,
+        artwork: false,
+      })
+      .await;
+    drop(crate::app::browse::sync_snapshot(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
     state.tv.offset = 680.0;
-    let before = state
-      .full
-      .as_ref()
-      .expect("full")
-      .browse
-      .advanced_filters
-      .clone();
+    let before = state.full.as_ref().unwrap().browse.preferences().filters;
     let token = ready(&mut state);
     drop(update(&mut state, Message::Select(token.clone(), 0, 2)));
     drop(update(&mut state, Message::Select(token, 1, 2)));
@@ -879,7 +888,13 @@ mod tests {
       before
     );
     assert_eq!(
-      state.full.as_ref().expect("full").browse.advanced_filters,
+      state
+        .full
+        .as_ref()
+        .expect("full")
+        .browse
+        .preferences()
+        .filters,
       before
     );
     assert!(matches!(
@@ -897,20 +912,32 @@ mod tests {
     );
   }
 
-  #[test]
-  fn apply_commits_once_and_reset_all_only_changes_its_dimension() {
-    let mut state = state();
+  #[tokio::test]
+  async fn apply_commits_once_and_reset_all_only_changes_its_dimension() {
+    let (mut state, _fixture) = browsing_state().await;
     let token = ready(&mut state);
     drop(update(&mut state, Message::Select(token.clone(), 0, 2)));
     drop(update(&mut state, Message::Select(token.clone(), 1, 1)));
     drop(update(&mut state, Message::Select(token.clone(), 2, 2)));
     drop(update(&mut state, Message::Select(token.clone(), 1, 0)));
     assert_eq!(
-      state.full.as_ref().expect("full").browse.advanced_filters,
+      state
+        .full
+        .as_ref()
+        .expect("full")
+        .browse
+        .preferences()
+        .filters,
       VideoLibraryFilters::default()
     );
     drop(update(&mut state, Message::Apply(token.clone())));
-    let applied = &state.full.as_ref().expect("full").browse.advanced_filters;
+    let applied = state
+      .full
+      .as_ref()
+      .expect("full")
+      .browse
+      .preferences()
+      .filters;
     assert_eq!(applied.quality, Some(VideoLibraryQuality::Uhd));
     assert_eq!(applied.country, None);
     assert_eq!(applied.genre.as_deref(), Some("Comedy"));
@@ -974,7 +1001,13 @@ mod tests {
     reconcile(&mut state);
     assert!(!is_open(&state));
     assert_eq!(
-      state.full.as_ref().expect("full").browse.advanced_filters,
+      state
+        .full
+        .as_ref()
+        .expect("full")
+        .browse
+        .preferences()
+        .filters,
       VideoLibraryFilters::default()
     );
   }

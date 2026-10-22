@@ -380,7 +380,7 @@ fn settle(
       );
       collections::apply_confirmed(&mut full.collections, &update);
       Task::batch([
-        browse::apply_user_data_update(&mut full.browse, &mut state.kernel, &update),
+        browse::sync_snapshot(&mut full.browse, &mut state.kernel),
         detail::apply_confirmed(&mut full.detail, &mut state.kernel, &update, refresh_detail),
         personal_lists::apply_user_data_update(
           &mut full.personal_lists,

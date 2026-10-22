@@ -280,11 +280,7 @@ fn close_conditions(state: &mut State) {
 
 pub fn conditions_label(state: &State) -> String {
   let mut label = state.t("saved-filters-conditions");
-  if let Some(saved) = state
-    .full
-    .as_ref()
-    .and_then(|full| full.browse.saved.as_ref())
-  {
+  if let Some(saved) = state.full.as_ref().and_then(|full| full.browse.saved()) {
     label.push_str(" · ");
     if saved.deleted {
       label.push_str(&state.format(
@@ -916,7 +912,7 @@ fn conditions_view(state: &State, bounds: Size, scale: f32) -> Element<'_, AppMe
   if state
     .full
     .as_ref()
-    .is_some_and(|full| full.browse.saved.is_some())
+    .is_some_and(|full| full.browse.saved().is_some())
   {
     body = body.push((text(conditions_label(state)).size(style::BODY * scale)).boxed());
   }
@@ -1123,14 +1119,13 @@ fn reveal(state: &State) -> Task<AppMessage> {
 mod tests {
   use super::*;
   use iced::advanced::Widget as _;
-  use jellypilot_core::{
-    browse_model::BrowsePreferences, config::BrowseFilterSettings, watchlist::ProfileScope,
-    LoadState,
-  };
+  use jellypilot_core::{browse_model::BrowsePreferences, watchlist::ProfileScope, LoadState};
   use jellypilot_media_server::{
     MediaServerProvider, VideoLibraryFilters, VideoLibraryKind, VideoLibraryPlayedFilter,
     VideoLibraryQuality, VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection,
   };
+
+  const LIBRARY: &str = "00000000000000000000000000000001";
 
   fn preferences() -> BrowsePreferences {
     BrowsePreferences {
@@ -1155,7 +1150,7 @@ mod tests {
         "alice",
       )
       .unwrap(),
-      library_id: "library".into(),
+      library_id: LIBRARY.into(),
       library_name: "Library".into(),
       collection_type: VideoLibraryKind::Movies,
       preferences: preferences(),
@@ -1168,34 +1163,53 @@ mod tests {
     state.shell.window_size = Size::new(1920.0, 1080.0);
     state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
     state.shell.destination = Destination::Library {
-      library_id: "library".into(),
+      library_id: LIBRARY.into(),
       collection_type: "movies".into(),
     };
     state.full = Some(crate::app::state::FullUi::default());
     let full = state.full.as_mut().unwrap();
     full.home.data.shortcuts = LoadState::Ready(vec![VideoLibraryShortcut {
-      id: "library".into(),
+      id: LIBRARY.into(),
       name: "Library".into(),
       collection_type: "movies".into(),
       item_count: None,
       artwork_image_id: None,
     }]);
-    full.browse.filters = Some(
-      BrowseFilterSettings::default()
-        .with_sort(VideoLibrarySort::ReleaseDate)
-        .with_sort_direction(VideoLibrarySortDirection::Descending)
-        .with_played_filter(VideoLibraryPlayedFilter::Played)
-        .with_favorites_only(true),
-    );
-    full.browse.advanced_filters = preferences().filters;
     state.tv.destination = Some(state.shell.destination.clone());
     state.tv.focus = TvFocus::Header(4);
     state
   }
 
-  #[test]
-  fn editor_done_is_not_save_and_failure_and_nested_back_keep_the_draft() {
+  async fn applied_state() -> (State, crate::app::test_support::BrowseFixture) {
     let mut state = state();
+    let mut fixture = crate::app::test_support::BrowseFixture::new();
+    crate::app::test_support::activate_sdk_fixture(&mut state.kernel, &fixture);
+    let session = crate::app::test_support::open_saved_fixture(
+      &mut state.kernel,
+      &mut fixture,
+      jellypilot_sdk::saved_browse::SavedBrowseDraft {
+        name: "Saved 1".into(),
+        library_id: LIBRARY.into(),
+        library_name: "Library".into(),
+        collection_type: VideoLibraryKind::Movies,
+        preferences: preferences(),
+      },
+    )
+    .await;
+    session
+      .set_presentation(jellypilot_sdk::browse::BrowsePresentation::Tv)
+      .unwrap();
+    drop(crate::app::browse::adopt(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      session,
+    ));
+    (state, fixture)
+  }
+
+  #[tokio::test]
+  async fn editor_done_is_not_save_and_failure_and_nested_back_keep_the_draft() {
+    let (mut state, _fixture) = applied_state().await;
     drop(save_current(&mut state));
     drop(reconcile(&mut state));
     let name = state.saved_browse.editor.as_ref().unwrap();
@@ -1242,7 +1256,7 @@ mod tests {
     assert_eq!(
       state.shell.destination,
       Destination::Library {
-        library_id: "library".into(),
+        library_id: LIBRARY.into(),
         collection_type: "movies".into()
       }
     );
@@ -1288,9 +1302,9 @@ mod tests {
       .contains(&super::super::navigation::RailAction::SavedBrowse));
   }
 
-  #[test]
-  fn retired_editor_events_cannot_write_a_reopened_name_or_cross_an_account() {
-    let mut state = state();
+  #[tokio::test]
+  async fn retired_editor_events_cannot_write_a_reopened_name_or_cross_an_account() {
+    let (mut state, _fixture) = applied_state().await;
     drop(save_current(&mut state));
     drop(reconcile(&mut state));
     drop(form(&mut state, FormAction::Name));
@@ -1322,30 +1336,35 @@ mod tests {
     assert!(!overlay_open(&state));
   }
 
-  #[test]
-  fn conditions_remain_complete_and_tv_header_uses_one_geometry_source() {
-    let mut state = state();
-    state.full.as_mut().unwrap().browse.saved = Some(shared::AppliedFilter {
-      filter: saved(1),
-      deleted: false,
-    });
+  #[tokio::test]
+  async fn conditions_remain_complete_and_tv_header_uses_one_geometry_source() {
+    let (mut state, _fixture) = applied_state().await;
     drop(open_conditions(&mut state));
     assert_eq!(
       shared::conditions(&state, &shared::current_preferences(&state).unwrap()).len(),
       7
     );
     assert!(!shared::modified(&state));
-    state.full.as_mut().unwrap().browse.advanced_filters.genre = None;
+    let session = state.full.as_ref().unwrap().browse.session.clone().unwrap();
+    let mut preferences = session.snapshot().unwrap().preferences;
+    preferences.filters.genre = None;
+    session.set_preferences(preferences).unwrap();
+    drop(crate::app::browse::sync_snapshot(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
     assert!(conditions_label(&state).contains(&state.t("saved-filters-modified")));
+    let id = session.snapshot().unwrap().saved.unwrap().filter.id;
     state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .saved
-      .as_mut()
-      .unwrap()
-      .deleted = true;
+      .kernel
+      .sdk
+      .saved_browse_delete(state.kernel.sdk.new_operation_token().unwrap(), id)
+      .await
+      .unwrap();
+    drop(crate::app::browse::sync_snapshot(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+    ));
     assert!(conditions_label(&state)
       .contains(&state.format("saved-filters-detached", &[("name", "Saved 1".into())])));
     close_conditions(&mut state);
@@ -1395,7 +1414,7 @@ mod tests {
         Size::new(1920.0, 320.0),
       ] {
         for keyboard in [false, true] {
-          let mut state = state();
+          let (mut state, _fixture) = applied_state().await;
           state.shell.window_size = size;
           state.kernel.locale = crate::i18n::Localizer::new(language);
           drop(save_current(&mut state));
@@ -1452,7 +1471,7 @@ mod tests {
       .unwrap();
     let size = Size::new(1920.0, 1080.0);
     for editor in [false, true] {
-      let mut state = state();
+      let (mut state, _fixture) = applied_state().await;
       if editor {
         drop(save_current(&mut state));
         drop(reconcile(&mut state));
