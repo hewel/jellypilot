@@ -4,6 +4,22 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-10-22
+
+### Added
+- Added desktop Jellyfin Trickplay seek previews, Linux MPRIS controls, a temporary editable Viewing Queue, secondary text subtitles, and A/B repeat.
+- Added profile-scoped Saved Filters, native TV presentation for living-room PCs, and sticky browse/detail navigation.
+- Added explicit Library Browser play/resume controls and independent removal Undo for Personal Lists, including local Watch History visibility.
+
+### Fixed
+- Fixed Linux Embedded MPV startup failing with `embedded mpv option osc failed: -5` by requiring Lua support and supplying LuaJIT build/runtime dependencies (#234).
+- Allowed compatible 8-bit UNORM SDR presentation surfaces on Linux while retaining 10-bit internal video textures and the HDR10 presentation requirement; corrected the SDR target black level to avoid lifted blacks.
+- Preserved logical scroll offsets across view rebuilds and refined artwork transitions, player focus, narrow controls, action icons, and missing cast portraits.
+- Suppressed global notification toasts during playback and removed progressive video backdrop blur.
+
+### Known limitations
+- HDR10 remains experimental; display-chain, real playback and UI appearance acceptance remain human checks. Windows embedded runtime DLLs remain unsigned. Android is not an artifact in this desktop release.
+
 ## [2.2.2] - 2026-09-20
 
 ### Added
@@ -224,7 +240,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.3...HEAD
+[2.2.3]: https://github.com/hewel/jellypilot/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/hewel/jellypilot/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/hewel/jellypilot/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/hewel/jellypilot/compare/v2.1.2...v2.2.0
