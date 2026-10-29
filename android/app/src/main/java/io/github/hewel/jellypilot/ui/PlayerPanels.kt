@@ -213,10 +213,7 @@ internal fun PlayerPanelContent(
         Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = actions.close),
         contentAlignment = Alignment.Center,
       ) {
-        Box(Modifier.size(44.dp).then(if (phone) Modifier else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))),
-          contentAlignment = Alignment.Center) {
-          PilotIcon(R.drawable.ic_x, stringResource(R.string.close))
-        }
+        PilotIcon(R.drawable.ic_x, stringResource(R.string.close))
       }
     }
     if (panel == PlayerPanel.SubtitleTiming) {

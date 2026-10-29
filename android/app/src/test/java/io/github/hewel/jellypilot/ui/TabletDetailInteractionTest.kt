@@ -134,7 +134,7 @@ class TabletDetailInteractionTest {
     compose.onAllNodesWithText("Play from beginning").assertCountEquals(0)
     compose.onNodeWithText("Continue watching").assertIsNotEnabled()
     compose.onNodeWithText("Mark watched").assertIsNotEnabled()
-    compose.onNodeWithText("Add to watch later").assertIsNotEnabled()
+    compose.onNodeWithContentDescription("Add to watch later").assertIsNotEnabled()
     compose.runOnIdle { current.value = current.value.copy(busy = false, error = "Season failed") }
     compose.onAllNodesWithText("Play from beginning").assertCountEquals(0)
     compose.onNodeWithText("Continue watching").assertIsNotEnabled()
@@ -178,7 +178,7 @@ class TabletDetailInteractionTest {
     compose.onNodeWithText("Play").assertIsNotEnabled()
     compose.onAllNodesWithText("Play from beginning").assertCountEquals(0)
     compose.onNodeWithText("Mark watched").assertIsNotEnabled()
-    compose.onNodeWithText("Add to watch later").assertIsNotEnabled()
+    compose.onNodeWithContentDescription("Add to watch later").assertIsNotEnabled()
     compose.runOnIdle { tablet.value = false }
     compose.onNodeWithText("Compact mark watched").assertIsNotEnabled()
     compose.runOnIdle { assertEquals("episode-8", requested.last()); assertTrue(written.isEmpty()); restored.complete(episodes[7].copy(playable = false)) }
@@ -187,7 +187,7 @@ class TabletDetailInteractionTest {
     compose.onNodeWithText("E08 · Episode 8").assertExists()
     compose.onNodeWithText("Play E08").assertIsNotEnabled()
     compose.onNodeWithText("Mark watched").assertIsEnabled().performClick()
-    compose.onNodeWithText("Add to watch later").assertIsEnabled().performClick()
+    compose.onNodeWithContentDescription("Add to watch later").assertIsEnabled().performClick()
     compose.runOnIdle { assertEquals(listOf("episode-8", "episode-8"), written) }
   }
 }

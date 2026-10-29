@@ -220,10 +220,10 @@ private fun TabletEpisodePreview(item: MediaUi, selectionResolved: Boolean, trac
       PlayAction(item) { actions.play(item.playTargetId ?: item.id, item.played) }
       OutlinedButton(onClick = { actions.remotePlay(item) }, enabled = selectionResolved && item.playable && item.itemType in setOf("Movie", "Episode") && !item.updating,
         modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.play_on_another_device)) }
-      FilledTonalButton(onClick = { actions.watchlist(item.actionItemId, !item.inWatchlist) }, enabled = selectionResolved && !item.updating) {
-        PilotIcon(if (item.inWatchlist) R.drawable.ic_bookmark_filled else R.drawable.ic_bookmark)
-        Spacer(Modifier.width(6.dp))
-        Text(stringResource(if (item.inWatchlist) R.string.remove_watchlist else R.string.add_watchlist))
+      FilledTonalIconButton(onClick = { actions.watchlist(item.actionItemId, !item.inWatchlist) },
+        enabled = selectionResolved && !item.updating, modifier = Modifier.size(48.dp)) {
+        PilotIcon(if (item.inWatchlist) R.drawable.ic_bookmark_filled else R.drawable.ic_bookmark,
+          stringResource(if (item.inWatchlist) R.string.remove_watchlist else R.string.add_watchlist))
       }
       OutlinedButton(onClick = { actions.watched(item.id, !item.played) }, enabled = selectionResolved && !item.updating) { Text(stringResource(if (item.played) R.string.mark_unplayed else R.string.mark_played)) }
     }

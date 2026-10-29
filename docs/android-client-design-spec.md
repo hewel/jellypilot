@@ -43,6 +43,13 @@ The supplied Mobile page contains phone Home, Library, Series detail, landscape 
 
 Phone and tablet layouts adapt to available window size. Navigation, back behavior, touch targets, text input, accessibility, loading/error states, and state restoration use Android-appropriate behavior. Pixel dimensions, hover behavior, desktop navigation stacks, and desktop paging/prefetch constants are not portable product requirements. Kotlin ViewModels may retain presentation state; they do not independently decide paging admission or stale-result validity.
 
+Recognizable secondary Refresh, player Settings and tablet Watchlist actions use 48dp icon
+targets with localized content descriptions and their existing disabled/selected states. Keep
+primary playback, remote-play, watched-state and destructive-action labels. Player-panel Close
+uses one target without a second filled inset. The Connections page has one confirmed Sign out
+action per saved account, including the active one; it does not repeat the active account's
+action in its footer. The overview and unsaved-session Disconnect remain available.
+
 Entering the player requests sensor landscape, allowing either landscape direction; leaving restores
 the Activity's previous orientation policy. Rotation and window-size changes update the Compose
 layout without restarting the Activity or interrupting playback. Actual backgrounding and locking

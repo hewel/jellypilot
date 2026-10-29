@@ -215,6 +215,23 @@ class RemoteControlScreenTest {
     compose.onNodeWithText(context.getString(R.string.remote_volume_percent, 25)).assertExists()
   }
 
+  @Test fun refreshIconKeepsItsAccessibleLabelAndWaitsForRefreshAndPendingCommands() {
+    var refreshes = 0
+    mount(onRefresh = { refreshes++ })
+    val refresh = compose.onNodeWithContentDescription(text(R.string.refresh))
+    refresh.assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
+    compose.runOnIdle {
+      assertEquals(1, refreshes)
+      state.value = state.value.copy(snapshot = snapshot.copy(refreshing = true))
+    }
+    refresh.assertIsNotEnabled()
+    compose.runOnIdle { state.value = state.value.copy(snapshot = snapshot.copy(commandPending = true)) }
+    refresh.assertIsNotEnabled()
+    compose.runOnIdle { state.value = state.value.copy(snapshot = snapshot) }
+    refresh.assertIsEnabled().performClick()
+    compose.runOnIdle { assertEquals(2, refreshes); assertTrue(commands.isEmpty()) }
+  }
+
   @Test fun loadingEmptyAndFailedRefreshRemainDistinctAndFailuresRetireControls() {
     state.value = RemoteControllerUiState(loading = true)
     var refreshes = 0

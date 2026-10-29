@@ -117,11 +117,11 @@ internal fun AccountOverview(state: AppUiState, actions: AccountActions, connect
         AccountDivider()
         AccountLink(stringResource(R.string.account_add_connection), enabled = !state.loginBusy,
           accent = true, chevron = false, open = actions.add)
-        if (current != null) {
+        if (current != null && !connectionsOnly) {
           AccountDivider()
           AccountLink(stringResource(R.string.account_signout, current.name), enabled = !state.loginBusy,
             destructive = true, chevron = false) { remove = current }
-        } else if (state.activeName != null) {
+        } else if (current == null && state.activeName != null) {
           AccountDivider()
           AccountLink(stringResource(R.string.disconnect), enabled = !state.loginBusy,
             destructive = true, chevron = false, open = actions.disconnect)

@@ -196,11 +196,9 @@ internal fun NativePlayerScreen(model: AppViewModel, player: NativePlayback, bac
             dragging = { chrome.dragging = it; chrome.interacted() }, bottomHeight = { bottomHeight = it },
             phone = phone,
             more = {
-              TextButton(onClick = { chrome.open(PlayerPanel.More) },
-                modifier = Modifier.widthIn(min = 48.dp).heightIn(min = 48.dp).focusRequester(panelTriggers.getValue(PlayerPanel.More)),
-                contentPadding = PaddingValues(horizontal = 4.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = PilotPlayerTokens.foreground),
-              ) { Text(stringResource(R.string.player_settings), style = MaterialTheme.typography.titleSmall) }
+              IconButton(onClick = { chrome.open(PlayerPanel.More) },
+                modifier = Modifier.size(48.dp).focusRequester(panelTriggers.getValue(PlayerPanel.More)),
+              ) { PilotIcon(R.drawable.ic_settings, stringResource(R.string.player_settings), tint = PilotPlayerTokens.foreground) }
             },
           ) {
             PanelButton(PlayerPanel.Queue, R.drawable.ic_playlist,

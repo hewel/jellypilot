@@ -124,6 +124,32 @@ class AccountInteractionTest {
     compose.runOnIdle { assertEquals(listOf(active.key to false, active.key to true), requests) }
   }
 
+  @Test fun connectionsKeepOneConfirmedSignOutActionPerAccount() {
+    val active = parent.copy(active = true)
+    val requests = mutableListOf<Pair<String, Boolean>>()
+    compose.setContent {
+      MaterialTheme {
+        AccountOverview(
+          AppUiState(activeName = active.name, activeProfileKey = active.key,
+            profiles = listOf(active, child), connectionHealth = ConnectionHealth.Connected),
+          actions(signOut = { key, delete -> requests += key to delete }), connectionsOnly = true,
+        )
+      }
+    }
+    val signOutAccount = context.getString(R.string.account_signout, active.name)
+    compose.onNodeWithText(signOutAccount).performScrollTo().performClick()
+    compose.runOnIdle { assertEquals(emptyList<Pair<String, Boolean>>(), requests) }
+    compose.onNodeWithText(text(R.string.cancel)).performClick()
+    compose.onNodeWithText(signOutAccount).performClick()
+    compose.onNodeWithText(text(R.string.sign_out)).performClick()
+    compose.runOnIdle { assertEquals(listOf(active.key to false), requests) }
+    compose.onNodeWithText(context.getString(R.string.account_signout, child.name))
+      .performScrollTo().performClick()
+    compose.onNodeWithText(text(R.string.forget_watchlist)).performClick()
+    compose.onNodeWithText(text(R.string.sign_out)).performClick()
+    compose.runOnIdle { assertEquals(listOf(active.key to false, child.key to true), requests) }
+  }
+
   @Test fun shortSettingsWindowWithLargeTextKeepsPlaybackAndSupportDestinationsReachable() {
     val pages = mutableListOf<AccountPage>()
     compose.setContent {

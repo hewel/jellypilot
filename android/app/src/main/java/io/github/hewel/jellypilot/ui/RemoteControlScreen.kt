@@ -63,8 +63,8 @@ internal fun RemoteControlScreen(
           if (state.serverName.isNotBlank()) Text(state.serverName, style = MaterialTheme.typography.bodyMedium,
             color = LocalPilotColors.current.metadata)
         }
-        TextButton(onClick = onRefresh, enabled = !refreshing && !pending, modifier = Modifier.heightIn(min = 48.dp)) {
-          Text(stringResource(R.string.refresh))
+        IconButton(onClick = onRefresh, enabled = !refreshing && !pending, modifier = Modifier.size(48.dp)) {
+          PilotIcon(R.drawable.ic_refresh, stringResource(R.string.refresh))
         }
       }
       Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
