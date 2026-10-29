@@ -573,10 +573,7 @@ pub(super) fn guard_activation<'a>(
       Message::EmbeddedPlayer(embedded_player::Message::PointerMoved {
         position,
         bounds: state.shell.window_size,
-        controls_height: controls_reveal_height(
-          state.shell.window_size.width,
-          crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
-        ),
+        controls_height: controls_reveal_height(state.shell.window_size.width),
       })
     }
     message => message,
@@ -639,14 +636,12 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
       ))
       .boxed(),
     );
-    // The Information popover outlives the top chrome: while its panel is
-    // open the trigger stays mounted (and clickable) even when the rest of
-    // the top bar has auto-hidden.
+    // Live information remains anchored above the video after chrome auto-hides.
     let info_visible = back_visible || embedded_player::information_open(state);
     layers = layers.push(
       (reveal_player_chrome(
         container(observe_chrome_focus(
-          embedded_top_tools(state, bounds.width),
+          super::player_info::layer(state),
           embedded_player::FocusRegion::Tools,
         ))
         .padding(iced::Padding {
@@ -789,10 +784,7 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
           Message::EmbeddedPlayer(embedded_player::Message::PointerMoved {
             position,
             bounds,
-            controls_height: controls_reveal_height(
-              bounds.width,
-              crate::app::playback::series_intro_mode(&state.playback, &state.kernel).is_some(),
-            ),
+            controls_height: controls_reveal_height(bounds.width),
           })
         })
         .on_exit(Message::EmbeddedPlayer(
@@ -840,59 +832,280 @@ fn embedded_volume_icon(muted: bool, volume: f64) -> Icon {
   }
 }
 
-pub(crate) fn embedded_options_available(state: &State, _window_width: f32) -> bool {
-  state.playback.view.now_playing.is_some()
+fn embedded_more(state: &State) -> Element<'_, Message> {
+  let open = embedded_player::options_open(state) || state.playback.audio_menu_open;
+  let trigger = focus_tooltip(
+    control_button(Some(Icon::More), None, ButtonVariant::Tonal)
+      .id("playback-options-trigger")
+      .style(cinema::control)
+      .icon_size(IconSize::Custom(16.0))
+      .padding(0)
+      .width(Length::Fixed(40.0))
+      .min_height(40.0)
+      .content_centered(true)
+      .on_press_maybe(
+        (!state.playback.view.busy).then_some(Message::EmbeddedPlayer(
+          embedded_player::Message::OptionsToggled,
+        )),
+      ),
+    state.t("player-more"),
+    TooltipOptions::default(),
+  );
+  let content = if !open {
+    space().boxed()
+  } else if state.playback.audio_menu_open {
+    audio_content(state, true)
+  } else {
+    embedded_more_content(state)
+  };
+  popover(
+    trigger,
+    content,
+    open,
+    PopoverOptions {
+      placement: Placement::Above,
+      alignment: jellypilot_ui::overlay::Alignment::End,
+      width: Some(300.0_f32.min((state.shell.window_size.width - 24.0).max(1.0))),
+      appearance: PopoverAppearance::PlaybackMenu,
+      consume_outside_press: true,
+      ..PopoverOptions::default()
+    },
+    Message::EmbeddedPlayer(embedded_player::Message::OptionsDismissed),
+  )
 }
 
-fn embedded_top_tools(state: &State, window_width: f32) -> Element<'_, Message> {
-  let mut tools = iced::widget::Row::<Element<'_, Message>>::new()
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center);
-  if embedded_options_available(state, window_width) {
-    let open = embedded_player::options_open(state);
-    let trigger = focus_tooltip(
-      control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
-        .id("playback-options-trigger")
-        .style(cinema::top_control)
-        .icon_size(IconSize::Custom(16.0))
-        .padding(0)
-        .width(Length::Fixed(40.0))
-        .min_height(40.0)
-        .content_centered(true)
-        .on_press_maybe(
-          (!state.playback.view.busy).then_some(Message::EmbeddedPlayer(
-            embedded_player::Message::OptionsToggled,
-          )),
+fn embedded_menu_row<'a>(
+  state: &State,
+  id: &'static str,
+  icon: Icon,
+  label: &'static str,
+  status: String,
+  action: Option<Message>,
+) -> Element<'a, Message> {
+  let label = state.t(label);
+  control_button_content(
+    move |control| {
+      let color = if control == jellypilot_ui::icons::IconControlState::Disabled {
+        DARK_PALETTE.text.muted
+      } else {
+        DARK_PALETTE.text.heading
+      };
+      row![
+        icon_with_color(icon, IconSize::Custom(16.0), color),
+        container(ellipsis_text(label.clone()).size(14).color(color)).width(Fill),
+        container(
+          ellipsis_text(status.clone())
+            .size(12)
+            .color(DARK_PALETTE.text.metadata)
+        )
+        .width(Length::Fit.max(100.0)),
+      ]
+      .spacing(12)
+      .align_y(Alignment::Center)
+      .boxed()
+    },
+    ButtonVariant::Text,
+  )
+  .id(id)
+  .style(cinema::control)
+  .radius(8.0)
+  .padding([0, 12])
+  .min_height(44.0)
+  .width(Fill)
+  .on_press_maybe(action)
+  .boxed()
+}
+
+fn embedded_more_content(state: &State) -> Element<'_, Message> {
+  use jellypilot_mpv::playback::tools::ToolState;
+  let ready = !state.playback.view.busy && !state.playback.view.lifecycle.replacing;
+  let (audio, audio_available) = match &state.playback.view.tracks {
+    TracksView::Ready { tracks, audio, .. } => {
+      let mut available = false;
+      let mut selected = None;
+      for track in tracks.iter().filter(|track| track.track_type == "audio") {
+        available = true;
+        if Some(track.id) == *audio {
+          selected = Some(track);
+        }
+      }
+      (
+        selected.map_or_else(
+          || state.t("common-unavailable"),
+          |track| track_label(state.kernel.locale, track),
         ),
-      state.t("player-options"),
-      TooltipOptions::default(),
-    );
-    let mut content =
-      iced::widget::Column::<Element<'_, Message>>::new().spacing(TOKENS.spacing.s2);
-    if let Some(mode) = crate::app::playback::series_intro_mode(&state.playback, &state.kernel) {
-      content = content.push((embedded_skip_toggle(state, mode)).boxed());
+        available,
+      )
     }
-    content = content.push((super::playback_tools::loop_entry(state)).boxed());
-    tools = tools.push(
-      (popover(
-        trigger,
-        content,
-        open,
-        PopoverOptions {
-          width: Some(260.0_f32.min((window_width - 24.0).max(1.0))),
-          alignment: jellypilot_ui::overlay::Alignment::End,
-          appearance: PopoverAppearance::PlaybackInformation,
-          consume_outside_press: true,
-          ..PopoverOptions::default()
-        },
-        Message::EmbeddedPlayer(embedded_player::Message::OptionsDismissed),
+    TracksView::Loading => (state.t("common-loading"), false),
+    TracksView::Unavailable => (state.t("common-unavailable"), false),
+  };
+  let looping = match &state.playback.view.tools.ab_loop {
+    ToolState::Loading => state.t("common-loading"),
+    ToolState::Unavailable | ToolState::Failed => state.t("common-unavailable"),
+    ToolState::Ready(looping) if looping.enabled => state.t("ab-loop-configured"),
+    ToolState::Ready(looping) if looping.a_seconds.is_some() || looping.b_seconds.is_some() => {
+      state.t("ab-loop-disabled")
+    }
+    ToolState::Ready(_) => state.t("player-loop-unset"),
+  };
+  let mut content = column![
+    embedded_menu_row(
+      state,
+      "player-more-audio",
+      Icon::AudioTrack,
+      "player-audio",
+      audio,
+      (ready && audio_available).then_some(Message::Playback(PlaybackMessage::AudioMenuToggled))
+    ),
+    embedded_menu_row(
+      state,
+      "player-more-queue",
+      Icon::Playlist,
+      "viewing-queue-title",
+      state.playback.view.upcoming.entries.len().to_string(),
+      ready.then_some(Message::Playback(PlaybackMessage::ViewingQueue(
+        crate::app::playback::viewing_queue::Message::Open
+      )))
+    ),
+    embedded_menu_row(
+      state,
+      "player-more-loop",
+      Icon::Repeat,
+      "ab-loop-title",
+      looping,
+      ready.then_some(Message::Playback(PlaybackMessage::Tools(
+        crate::app::playback::tools::Message::OpenLoop
+      )))
+    ),
+    embedded_menu_row(
+      state,
+      "player-more-information",
+      Icon::Info,
+      "player-information",
+      String::new(),
+      ready.then_some(Message::EmbeddedPlayer(
+        embedded_player::Message::InformationToggled
       ))
-      .boxed(),
-    );
+    ),
+  ]
+  .spacing(4);
+  if let Some(mode) = crate::app::playback::series_intro_mode(&state.playback, &state.kernel) {
+    content = content
+      .push(
+        container(
+          container(space::horizontal())
+            .width(Fill)
+            .height(1)
+            .style(cinema::separator),
+        )
+        .padding([0, 12])
+        .boxed(),
+      )
+      .push(embedded_skip_toggle(state, mode));
   }
-  tools
-    .push((super::player_info::button(state)).boxed())
-    .boxed()
+  container(
+    scrollable(content)
+      .smooth_scroll(false)
+      .style(jellypilot_ui::theme::scrollable),
+  )
+  .height(Length::Fit.max((state.shell.window_size.height - 120.0).max(40.0)))
+  .boxed()
+}
+
+fn embedded_volume<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
+  let ready = !state.playback.view.busy;
+  let intent =
+    |intent| ready.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(intent))));
+  let volume: Element<'_, Message> = tracked_slider(
+    slider(
+      0.0..=100.0,
+      state
+        .playback
+        .adjustments
+        .view()
+        .volume_preview
+        .unwrap_or(now_playing.volume),
+      SliderEvent::Changed,
+    )
+    .step(1.0)
+    .on_release(SliderEvent::DragEnded)
+    .height(40)
+    .width(84.0)
+    .style(if ready {
+      cinema::volume
+    } else {
+      cinema::unavailable_slider
+    }),
+    embedded_player::is_volume_dragging(state),
+    |event| {
+      Message::Playback(match event {
+        SliderEvent::DragStarted => PlaybackMessage::VolumeDragStarted,
+        SliderEvent::Changed(value) => PlaybackMessage::VolumeChanged(value),
+        SliderEvent::DragEnded => PlaybackMessage::VolumeReleased,
+        SliderEvent::Adjusted(value) => PlaybackMessage::VolumeAdjusted(value),
+      })
+    },
+  );
+  let volume = if ready || embedded_player::is_volume_dragging(state) {
+    volume
+  } else {
+    inert(volume)
+  };
+  let output = row![
+    embedded_action(
+      embedded_volume_icon(
+        now_playing.muted,
+        state
+          .playback
+          .adjustments
+          .view()
+          .volume_preview
+          .unwrap_or(now_playing.volume),
+      ),
+      state.t(if now_playing.muted {
+        "player-unmute"
+      } else {
+        "player-mute"
+      }),
+      ButtonVariant::Tonal,
+      intent(PlaybackIntent::SetMuted(!now_playing.muted)),
+    ),
+    volume,
+  ]
+  .align_y(Alignment::Center);
+  let trigger = focus_tooltip(
+    control_button(
+      Some(embedded_volume_icon(now_playing.muted, now_playing.volume)),
+      None,
+      ButtonVariant::Tonal,
+    )
+    .id("player-volume-trigger")
+    .style(cinema::control)
+    .icon_size(IconSize::Custom(16.0))
+    .padding(0)
+    .width(Length::Fixed(40.0))
+    .min_height(40.0)
+    .content_centered(true)
+    .on_press_maybe(ready.then_some(Message::EmbeddedPlayer(
+      embedded_player::Message::VolumeToggled,
+    ))),
+    state.t("player-volume"),
+    TooltipOptions::default(),
+  );
+  popover(
+    trigger,
+    output,
+    embedded_player::volume_open(state),
+    PopoverOptions {
+      placement: Placement::Above,
+      appearance: PopoverAppearance::PlaybackMenu,
+      width: Some(144.0),
+      consume_outside_press: true,
+      ..PopoverOptions::default()
+    },
+    Message::EmbeddedPlayer(embedded_player::Message::VolumeDismissed),
+  )
 }
 
 fn embedded_action<'a>(
@@ -914,7 +1127,6 @@ fn embedded_action<'a>(
     control_button(Some(icon), None, variant)
       .style(match icon {
         Icon::ChevronLeft => cinema::top_control,
-        Icon::ArrowsMaximize | Icon::ArrowsMinimize => cinema::framed_control,
         _ if volume_icon => cinema::volume_control,
         _ => cinema::control,
       })
@@ -978,91 +1190,12 @@ fn embedded_bar<'a>(
     ),
     adjacent(AdjacentDirection::Next, Icon::Next, "common-next"),
   ]
-  .spacing(TOKENS.spacing.s2)
+  .spacing(TOKENS.spacing.s4)
   .align_y(Alignment::Center);
-  let tracks = row![
-    super::viewing_queue::trigger(state, true),
-    audio_popover(state, true, true),
-    subtitle_popover(state, true, true)
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .align_y(Alignment::Center);
-  // The per-series skip-mode pill exists only for eligible episodes; the
-  // resolved mode comes from the preference owner, never inferred here.
-  let intro_mode = crate::app::playback::series_intro_mode(&state.playback, &state.kernel);
-  let tools_width = embedded_tools_width(width, intro_mode.is_some());
-  let skip_toggle = intro_mode
-    .filter(|_| embedded_skip_fits_inline(width))
-    .map(|mode| embedded_skip_toggle(state, mode));
-  let volume: Element<'_, Message> = tracked_slider(
-    slider(
-      0.0..=100.0,
-      state
-        .playback
-        .adjustments
-        .view()
-        .volume_preview
-        .unwrap_or(now_playing.volume),
-      SliderEvent::Changed,
-    )
-    .step(1.0)
-    .on_release(SliderEvent::DragEnded)
-    .height(40)
-    .width(84.0)
-    .style(if ready {
-      cinema::volume
-    } else {
-      cinema::unavailable_slider
-    }),
-    embedded_player::is_volume_dragging(state),
-    |event| {
-      Message::Playback(match event {
-        SliderEvent::DragStarted => PlaybackMessage::VolumeDragStarted,
-        SliderEvent::Changed(value) => PlaybackMessage::VolumeChanged(value),
-        SliderEvent::DragEnded => PlaybackMessage::VolumeReleased,
-        SliderEvent::Adjusted(value) => PlaybackMessage::VolumeAdjusted(value),
-      })
-    },
-  );
-  let volume = if ready || embedded_player::is_volume_dragging(state) {
-    volume
-  } else {
-    inert(volume)
-  };
-  let output = row![
-    embedded_action(
-      embedded_volume_icon(
-        now_playing.muted,
-        state
-          .playback
-          .adjustments
-          .view()
-          .volume_preview
-          .unwrap_or(now_playing.volume),
-      ),
-      state.t(if now_playing.muted {
-        "player-unmute"
-      } else {
-        "player-mute"
-      }),
-      ButtonVariant::Tonal,
-      intent(PlaybackIntent::SetMuted(!now_playing.muted)),
-    ),
-    volume,
-  ]
-  .align_y(Alignment::Center);
-  let mut track_output = row![tracks]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center);
-  if let Some(skip_toggle) = skip_toggle {
-    track_output = track_output.push((skip_toggle).boxed());
-  }
   let tools = row![
-    track_output.push((output).boxed()),
-    container(space::horizontal())
-      .width(1)
-      .height(18)
-      .style(cinema::separator),
+    subtitle_popover(state, true, true),
+    embedded_volume(state, now_playing),
+    embedded_more(state),
     embedded_action(
       if state.shell.player_fullscreen {
         Icon::ArrowsMinimize
@@ -1077,7 +1210,13 @@ fn embedded_bar<'a>(
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
   .boxed();
-  let controls = embedded_controls(identity, transport.boxed(), tools, width, tools_width);
+  let controls = embedded_controls(
+    identity,
+    transport.boxed(),
+    tools,
+    width,
+    EMBEDDED_TOOLS_WIDTH,
+  );
   // The controls float on the scrim without a card; `opaque` keeps the strip
   // from leaking presses into the pause-toggle surface behind it.
   let panel = opaque(
@@ -1093,25 +1232,8 @@ fn embedded_bar<'a>(
   content.push((panel).boxed()).boxed()
 }
 
-const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
-/// Upper bound for the tools cluster without the skip-mode pill:
-/// five 40px controls, the 84px slider, a 1px separator, and five gaps.
-const EMBEDDED_TOOLS_WIDTH: f32 = 5.0 * 40.0 + 84.0 + 1.0 + 5.0 * TOKENS.spacing.s2;
-/// Includes the localized skip-mode pill. Below this side-slot budget the
-/// pill moves to Playback options, preserving the reference's transport row.
-const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 528.0;
-
-fn embedded_skip_fits_inline(width: f32) -> bool {
-  width >= EMBEDDED_TRANSPORT_WIDTH + 2.0 * EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
-}
-
-fn embedded_tools_width(width: f32, has_skip_toggle: bool) -> f32 {
-  if has_skip_toggle && embedded_skip_fits_inline(width) {
-    EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE
-  } else {
-    EMBEDDED_TOOLS_WIDTH
-  }
-}
+const EMBEDDED_TRANSPORT_WIDTH: f32 = 156.0;
+const EMBEDDED_TOOLS_WIDTH: f32 = 4.0 * 40.0 + 3.0 * TOKENS.spacing.s2;
 
 fn embedded_inset(width: f32) -> f32 {
   if width < 600.0 {
@@ -1131,9 +1253,9 @@ fn embedded_controls_height(width: f32, tools_width: f32) -> f32 {
   }
 }
 
-fn controls_reveal_height(width: f32, has_skip_toggle: bool) -> f32 {
+fn controls_reveal_height(width: f32) -> f32 {
   let inset = embedded_inset(width);
-  let tools_width = embedded_tools_width(width - 2.0 * inset, has_skip_toggle);
+  let tools_width = EMBEDDED_TOOLS_WIDTH;
   // Timeline, inner padding, controls, bottom inset, and the prompt allowance.
   40.0
     + 2.0 * TOKENS.spacing.s3
@@ -1195,7 +1317,7 @@ fn embedded_identity<'a>(
   let has_queue = !matches!(state.playback.queue, QueueState::Unavailable);
   let title = control_button_content(
     move |_| {
-      let mut content = row![ellipsis_text(title)
+      let content = row![ellipsis_text(title)
         .font(iced::Font {
           weight: iced::font::Weight::Semibold,
           ..HEADING_FONT
@@ -1203,16 +1325,6 @@ fn embedded_identity<'a>(
         .size(14)
         .line_height(iced::Pixels(20.0))
         .color(palette.text.heading),];
-      if has_queue {
-        content = content.push(
-          (icon_with_color(
-            Icon::ChevronUp,
-            IconSize::Custom(14.0),
-            palette.text.metadata,
-          ))
-          .boxed(),
-        );
-      }
       content
         .spacing(TOKENS.spacing.s1_5)
         .align_y(Alignment::Center)
@@ -1377,9 +1489,7 @@ fn embedded_intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   )
 }
 
-/// The per-series Automatic/Manual pill (ADR 0045). `true` on the switch is
-/// Automatic; the whole pill is one >=40px native target and is disabled
-/// while playback is busy or input is blocked.
+/// Per-series Automatic/Manual preference (ADR 0045), independent of global settings.
 fn embedded_skip_toggle<'a>(
   state: &'a State,
   mode: jellypilot_core::config::IntroMode,
@@ -1390,23 +1500,17 @@ fn embedded_skip_toggle<'a>(
   focus_tooltip(
     control_button_content(
       move |control_state| {
-        container(
-          row![
-            text(label.clone())
-              .size(12)
-              .line_height(iced::Pixels(14.0))
-              .color(if enabled {
-                DARK_PALETTE.text.heading
-              } else {
-                DARK_PALETTE.text.muted
-              }),
-            cinema::mini_switch(automatic, control_state),
-          ]
-          .spacing(TOKENS.spacing.s2)
-          .align_y(Alignment::Center),
-        )
-        .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s3])
-        .style(move |_| cinema::skip_toggle_pill(control_state))
+        row![
+          container(ellipsis_text(label.clone()).size(14).color(if enabled {
+            DARK_PALETTE.text.heading
+          } else {
+            DARK_PALETTE.text.muted
+          }))
+          .width(Fill),
+          cinema::mini_switch(automatic, control_state),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
         .boxed()
       },
       ButtonVariant::Text,
@@ -1416,13 +1520,100 @@ fn embedded_skip_toggle<'a>(
         !automatic,
       ))),
     )
-    .style(cinema::invisible)
-    .padding(0)
-    .min_height(40.0)
-    .content_centered(true),
+    .id("player-more-auto-skip")
+    .style(cinema::control)
+    .radius(8.0)
+    .padding([0, 12])
+    .min_height(48.0)
+    .width(Fill),
     state.t("player-auto-skip-intro-credits"),
     TooltipOptions::default(),
   )
+}
+
+fn embedded_seek_rail<'a>(
+  state: &'a State,
+  position: f64,
+  duration: f64,
+  preview: Element<'a, Message>,
+) -> Element<'a, Message> {
+  let enabled = !state.playback.view.busy || embedded_player::is_seek_dragging(state);
+  let generation = embedded_player::timeline_generation(state);
+  let rail = iced::widget::timeline(
+    0.0..=duration,
+    position.clamp(0.0, duration),
+    move |action| {
+      Message::EmbeddedPlayer(embedded_player::Message::Timeline { generation, action })
+    },
+  )
+  .generation(generation)
+  .step(1.0)
+  .shift_step(10.0)
+  .height(40)
+  .width(Fill)
+  .enabled(enabled)
+  .style(cinema::timeline_input)
+  .track(cinema::timeline_track(
+    position.clamp(0.0, duration),
+    duration,
+    embedded_player::buffered_ranges(state),
+    embedded_player::chapter_times(state),
+    embedded_player::intro_ranges(state),
+    embedded_player::seek_hover(state),
+    enabled && state.playback.view.tools.seekable,
+  ));
+  // The shared widget measures from the 40px hit region's top, 20px above
+  // the visible rail center. Paper's 24px offset from the 4px rail's bottom
+  // therefore leaves a 22px center gap, or 2px above the hit region.
+  rail.preview(preview).preview_gap(2.0).boxed()
+}
+
+fn embedded_seek_preview<'a>(
+  frame: Option<embedded_player::ImagePreview<'_>>,
+  tooltip_text: String,
+  available_width: f32,
+) -> Element<'a, Message> {
+  let label = container(
+    ellipsis_text(tooltip_text)
+      .font(iced::Font {
+        weight: iced::font::Weight::Bold,
+        ..MONO_FONT
+      })
+      .size(14)
+      .line_height(iced::Pixels(20.0))
+      .color(DARK_PALETTE.text.heading),
+  )
+  .height(20)
+  .center_x(Fill)
+  .padding([0, 4]);
+  let preview: Element<'_, Message> = if let Some(frame) = frame {
+    let width = (available_width - 16.0).clamp(1.0, 240.0);
+    let height = width * 9.0 / 16.0;
+    let mut image = rounded_image(frame.image.clone(), full_radius(8.0))
+      .content_fit(ContentFit::Contain)
+      .width(width)
+      .height(height);
+    if let Some(tile) = frame.crop {
+      image = image.crop(iced::Rectangle {
+        x: tile.x,
+        y: tile.y,
+        width: tile.width,
+        height: tile.height,
+      });
+    }
+    column![image, label]
+      .spacing(TOKENS.spacing.s2)
+      .width(width)
+      .boxed()
+  } else {
+    container(label)
+      .width(Length::Fit.max(available_width.clamp(1.0, 280.0)))
+      .boxed()
+  };
+  container(preview)
+    .padding(TOKENS.spacing.s2)
+    .style(cinema::seek_preview)
+    .boxed()
 }
 
 fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
@@ -1451,31 +1642,6 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
       .seek_preview
       .or(embedded_player::seek_hover(state))
       .unwrap_or(position);
-    let enabled = !state.playback.view.busy || embedded_player::is_seek_dragging(state);
-    let generation = embedded_player::timeline_generation(state);
-    let rail = iced::widget::timeline(
-      0.0..=duration,
-      position.clamp(0.0, duration),
-      move |action| {
-        Message::EmbeddedPlayer(embedded_player::Message::Timeline { generation, action })
-      },
-    )
-    .generation(generation)
-    .step(1.0)
-    .shift_step(10.0)
-    .height(40)
-    .width(Fill)
-    .enabled(enabled)
-    .style(cinema::timeline_input)
-    .track(cinema::timeline_track(
-      position.clamp(0.0, duration),
-      duration,
-      embedded_player::buffered_ranges(state),
-      embedded_player::chapter_times(state),
-      embedded_player::intro_ranges(state),
-      embedded_player::seek_hover(state),
-      enabled && state.playback.view.tools.seekable,
-    ));
     let chapter_label = embedded_player::chapters(state).and_then(|chapters| {
       chapters
         .iter()
@@ -1501,43 +1667,16 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
         IntroSkipKind::Credits => "player-range-credits",
       }));
     }
-    let label = text(tooltip_text).font(MONO_FONT).size(12);
-    let preview: Element<'_, Message> =
-      if let Some(frame) = embedded_player::seek_preview_frame(state) {
-        let width = bounds.width.clamp(1.0, 240.0);
-        let height = (width * frame.height as f32 / frame.width as f32).min(135.0);
-        let mut image = rounded_image(
-          frame.image.clone(),
-          full_radius((TOKENS.radii.xl - TOKENS.spacing.s2).max(0.0)),
-        )
-        .content_fit(ContentFit::Contain)
-        .width(width)
-        .height(height);
-        if let Some(tile) = frame.crop {
-          image = image.crop(iced::Rectangle {
-            x: tile.x,
-            y: tile.y,
-            width: tile.width,
-            height: tile.height,
-          });
-        }
-        column![image, label,]
-          .spacing(TOKENS.spacing.s2)
-          .width(width)
-          .boxed()
-      } else {
-        container(label)
-          .width(Length::Fit.max(bounds.width.clamp(1.0, 280.0)))
-          .boxed()
-      };
-    rail
-      .preview(
-        container(preview)
-          .padding(TOKENS.spacing.s2)
-          .style(cinema::popover),
-      )
-      .preview_gap(TOKENS.spacing.s3)
-      .boxed()
+    embedded_seek_rail(
+      state,
+      position.clamp(0.0, duration),
+      duration,
+      embedded_seek_preview(
+        embedded_player::seek_preview_frame(state),
+        tooltip_text,
+        bounds.width,
+      ),
+    )
   })
   .height(40);
   let remaining = (duration - position).max(0.0);
@@ -1662,7 +1801,6 @@ fn adjacent_button<'a>(
 }
 
 fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, Message> {
-  let palette = playback_palette(state);
   let has_audio_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "audio"),
     TracksView::Loading | TracksView::Unavailable => false,
@@ -1703,6 +1841,27 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
     trigger
   };
   let trigger = menu_hint(trigger.boxed(), state.t("player-audio"), icon_only);
+
+  popover(
+    trigger,
+    audio_content(state, embedded),
+    state.playback.audio_menu_open,
+    PopoverOptions {
+      placement: Placement::Above,
+      width: Some(240.0),
+      appearance: if embedded {
+        PopoverAppearance::EmbeddedPlayer
+      } else {
+        PopoverAppearance::Default
+      },
+      ..PopoverOptions::default()
+    },
+    Message::Playback(PlaybackMessage::AudioMenuDismissed),
+  )
+}
+
+fn audio_content(state: &State, embedded: bool) -> Element<'_, Message> {
+  let palette = playback_palette(state);
   let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(state.kernel.locale, tracks, "audio", false);
@@ -1801,23 +1960,7 @@ fn audio_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, 
   } else {
     menu.boxed()
   };
-
-  popover(
-    trigger,
-    menu,
-    state.playback.audio_menu_open,
-    PopoverOptions {
-      placement: Placement::Above,
-      width: Some(240.0),
-      appearance: if embedded {
-        PopoverAppearance::EmbeddedPlayer
-      } else {
-        PopoverAppearance::Default
-      },
-      ..PopoverOptions::default()
-    },
-    Message::Playback(PlaybackMessage::AudioMenuDismissed),
-  )
+  menu
 }
 
 fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'_, Message> {
@@ -1832,7 +1975,7 @@ fn subtitle_popover(state: &State, icon_only: bool, embedded: bool) -> Element<'
     sub_btn_variant,
   )
   .style(if embedded {
-    cinema::framed_control
+    cinema::control
   } else {
     jellypilot_ui::widgets::button::style
   })
@@ -3350,42 +3493,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn embedded_queue_chevron_is_absent_for_movies_and_retained_for_episodes() {
-    use iced::advanced::{layout, renderer::Headless, widget::Tree};
-    use iced::Size;
-
-    fn has_chevron(tree: &Tree) -> bool {
-      tree.size == Size::new(14.0, 14.0) || tree.children.iter().any(has_chevron)
-    }
-
-    let renderer = iced::Renderer::new(
-      iced::advanced::renderer::Settings::default(),
-      Some("tiny-skia"),
-    )
-    .await
-    .expect("software renderer");
-    let mut state = State::boot(true);
-    let mut playing = test_now_playing();
-    for (item_type, queue, visible) in [
-      ("Movie", QueueState::Unavailable, false),
-      ("Episode", QueueState::Ready(Vec::new()), true),
-    ] {
-      playing.item.item_type = item_type.to_owned();
-      state.playback.queue = queue;
-      let mut identity = embedded_identity(&state, &playing, false);
-      let mut tree = Tree::new(&identity);
-      tree.diff(&mut identity);
-      crate::app::test_support::layout_widget(
-        &mut identity,
-        &mut tree,
-        &renderer,
-        &layout::Limits::new(Size::ZERO, Size::new(500.0, 100.0)),
-      );
-      assert_eq!(has_chevron(&tree), visible, "{item_type}");
-    }
-  }
-
-  #[tokio::test]
   async fn queue_trigger_includes_padding_but_excludes_caption_and_unused_width() {
     use iced::advanced::renderer::Headless;
     use iced::{mouse, Event, Point};
@@ -3441,7 +3548,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn mute_target_captures_its_padding_but_not_subtitles_or_volume_slider() {
+  async fn volume_entry_captures_padding_without_muting_or_activating_neighbors() {
     use iced::advanced::renderer::Headless;
     use iced::{mouse, Event, Point};
     use iced_runtime::user_interface::{Cache, UserInterface};
@@ -3505,8 +3612,7 @@ mod tests {
           .filter(|(message, _)| {
             matches!(
               message,
-              Message::Playback(PlaybackMessage::Intent(intent))
-                if matches!(**intent, PlaybackIntent::SetMuted(target) if target != playing.muted)
+              Message::EmbeddedPlayer(embedded_player::Message::VolumeToggled)
             )
           })
           .count()
@@ -3515,7 +3621,7 @@ mod tests {
         .0
         .into_iter()
         .find(|bounds| click(bounds.center()) == 1)
-        .expect("mute exposes an interactive target");
+        .expect("volume exposes an interactive target");
       assert!(target.width >= 40.0 && target.height >= 40.0);
       for (x, mutes) in [
         (target.x + 1.0, true),
@@ -3570,27 +3676,9 @@ mod tests {
     ] {
       state.kernel.locale = Localizer::new(language);
       state.kernel.client = has_skip_toggle.then(|| client.clone());
-      for (window_width, expected_height) in [
-        (1920.0, 136.0),
-        (1600.0, 136.0),
-        (1440.0, 136.0),
-        (1280.0, 136.0),
-        (1172.0, 136.0),
-        (1171.0, 136.0),
-        (1099.0, 136.0),
-        (1024.0, 136.0),
-        (901.0, 136.0),
-        (900.0, 136.0),
-        (862.0, 136.0),
-        (860.0, 192.0),
-        (850.0, 192.0),
-        (768.0, 192.0),
-        (750.0, 192.0),
-        (700.0, 192.0),
-        (600.0, 192.0),
-        (599.0, 192.0),
-        (480.0, 244.0),
-        (400.0, 244.0),
+      for window_width in [
+        1920.0, 1600.0, 1440.0, 1280.0, 1172.0, 1024.0, 901.0, 900.0, 768.0, 600.0, 599.0, 548.0,
+        547.0, 480.0, 400.0,
       ] {
         let card_width = window_width - 2.0 * embedded_inset(window_width);
         let mut content = embedded_bar(&state, &now_playing, card_width);
@@ -3601,11 +3689,6 @@ mod tests {
           &mut tree,
           &renderer,
           &layout::Limits::new(Size::new(card_width, 0.0), Size::new(card_width, 900.0)),
-        );
-        assert_eq!(
-          node.size().height,
-          expected_height,
-          "window width {window_width}, {language:?}, skip toggle: {has_skip_toggle}"
         );
         let measured = node.absolute_bounds();
         assert!(
@@ -3618,15 +3701,14 @@ mod tests {
           .iter()
           .find(|bounds| bounds.size() == Size::new(44.0, 44.0))
           .expect("primary play control remains full size");
-        if expected_height == 136.0 || expected_height == 244.0 {
+        if window_width >= 600.0 {
           assert!(
             (primary.center().x - Point::new(card_width / 2.0, 0.0).x).abs() < 0.5,
             "play must stay centered despite long metadata at {window_width}: {primary:?}"
           );
         }
         assert!(
-          controls_reveal_height(window_width, has_skip_toggle)
-            >= expected_height + embedded_inset(window_width),
+          controls_reveal_height(window_width) >= node.size().height + embedded_inset(window_width),
           "pointer reveal region must contain the entire responsive controls"
         );
         assert_eq!(
@@ -3728,6 +3810,171 @@ mod tests {
       duration_seconds: Some(2_400.0),
       volume: 85.0,
       muted: false,
+    }
+  }
+
+  #[tokio::test]
+  async fn preview_overlay_keeps_its_vertical_anchor_across_pointer_motion_and_frames() {
+    use iced::advanced::{layout, renderer, renderer::Headless, widget, Layout, Shell, Widget};
+    use iced::{mouse, Event, Point, Rectangle, Size, Vector};
+    use std::cell::Cell;
+
+    // Record the actual overlay draw position, not the card's unpositioned layout.
+    // The shared timeline overlay deliberately does not expose a widget operation.
+    struct Probe<'a> {
+      content: Element<'a, Message>,
+      drawn: &'a Cell<Option<Rectangle>>,
+    }
+    impl widget::Meta for Probe<'_> {}
+    impl Widget<Message, iced::Theme, iced::Renderer> for Probe<'_> {
+      fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [&mut self.content]);
+      }
+      fn size(&self) -> Size<Length> {
+        self.content.size()
+      }
+      fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+      ) {
+        self.content.layout(&mut tree.children[0], renderer, limits);
+        tree.size = tree.children[0].size;
+        tree.children[0].translation = Vector::ZERO;
+      }
+      fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: Layout,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+      ) {
+        self.drawn.set(Some(layout.bounds()));
+        self.content.draw(
+          &tree.children[0],
+          renderer,
+          theme,
+          style,
+          layout,
+          cursor,
+          viewport,
+        );
+      }
+    }
+    let state = State::boot(false);
+    let mut renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("software renderer");
+    for window in [
+      Size::new(1440.0, 900.0),
+      Size::new(480.0, 760.0),
+      Size::new(1920.0, 1080.0),
+    ] {
+      let viewport = Rectangle::with_size(window);
+      let drawn = Cell::new(None);
+      let mut tree = None;
+      let mut frames = Vec::new();
+      for (width, height) in [(480, 270), (480, 180), (270, 480), (640, 480)] {
+        let image = iced::widget::image::Handle::from_rgba(
+          width,
+          height,
+          vec![255; (width * height * 4) as usize],
+        );
+        let preview = embedded_seek_preview(
+          Some(embedded_player::ImagePreview {
+            image: &image,
+            crop: None,
+          }),
+          "34:20".into(),
+          window.width - 100.0,
+        );
+        let mut rail = embedded_seek_rail(
+          &state,
+          120.0,
+          2400.0,
+          Probe {
+            content: preview,
+            drawn: &drawn,
+          }
+          .boxed(),
+        );
+        let tree = tree.get_or_insert_with(|| widget::Tree::new(&rail));
+        tree.diff(&mut rail);
+        rail.layout(
+          tree,
+          &renderer,
+          &layout::Limits::new(Size::ZERO, Size::new(window.width - 100.0, 40.0)),
+        );
+        let layout = Layout::new(tree.size).move_to(Point::new(50.0, window.height - 160.0));
+        let mut positions = Vec::new();
+        for anchor in [0.0, 0.5, 1.0] {
+          for dy in [1.0, 20.0, 39.0] {
+            let cursor = Point::new(
+              layout.bounds().x + 0.5 + (tree.size.width - 1.0) * anchor,
+              layout.bounds().y + dy,
+            );
+            let mut bus = iced::advanced::shell::Bus::new();
+            rail.update(
+              tree,
+              &Event::Mouse(mouse::Event::CursorMoved { position: cursor }),
+              layout,
+              mouse::Cursor::Available(cursor),
+              &renderer,
+              &mut Shell::new(
+                &iced::window::Headless,
+                iced::advanced::shell::Waker::noop(),
+                &mut bus,
+              ),
+              &viewport,
+            );
+            assert!(
+              bus.drain().all(|(message, _)| matches!(
+                message,
+                Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+                  action: iced::widget::timeline::Action::Hover(_),
+                  ..
+                })
+              )),
+              "hover must not seek"
+            );
+            drawn.set(None);
+            for mut overlay in
+              rail.overlay(tree, layout, &renderer, &viewport, Vector::ZERO, window)
+            {
+              overlay.as_overlay_mut().draw(
+                &mut renderer,
+                &cinema::theme(),
+                &renderer::Style {
+                  text_color: iced::Color::WHITE,
+                },
+                mouse::Cursor::Unavailable,
+              );
+            }
+            let bounds = drawn.get().expect("a real preview overlay is drawn");
+            assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= window.width);
+            positions.push(bounds);
+          }
+        }
+        frames.push(positions);
+      }
+      let first = frames[0][0];
+      assert!(
+        frames
+          .iter()
+          .flatten()
+          .all(|bounds| bounds.y == first.y && bounds.height == first.height),
+        "pointer Y and newly decoded aspect ratios must not move the card vertically: {frames:?}"
+      );
+      assert_eq!(first.size(), Size::new(256.0, 179.0));
+      assert!(
+        (first.y + first.height - (window.height - 140.0 - 22.0)).abs() < 0.01,
+        "the card bottom is 22px above the visual rail center"
+      );
+      assert!(frames[0][0].x < frames[0][3].x && frames[0][3].x < frames[0][6].x);
     }
   }
 

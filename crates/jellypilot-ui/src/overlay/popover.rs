@@ -20,6 +20,7 @@ pub enum PopoverAppearance {
     EmbeddedPlayer,
     EmbeddedQueue,
     PlaybackInformation,
+    PlaybackMenu,
     /// Read-only track list anchored to a Media Specifications chip.
     TrackList,
 }
@@ -84,6 +85,7 @@ where
                 .padding(match options.appearance {
                     PopoverAppearance::Default => TOKENS.spacing.s3,
                     PopoverAppearance::Account => TOKENS.spacing.s2_5,
+                    PopoverAppearance::PlaybackMenu => TOKENS.spacing.s2_5,
                     PopoverAppearance::EmbeddedPlayer => TOKENS.spacing.s3,
                     PopoverAppearance::EmbeddedQueue | PopoverAppearance::PlaybackInformation => {
                         TOKENS.spacing.s2
@@ -101,6 +103,7 @@ where
                     PopoverAppearance::PlaybackInformation => {
                         crate::widgets::embedded_player::information_panel
                     }
+                    PopoverAppearance::PlaybackMenu => crate::widgets::embedded_player::menu_panel,
                     PopoverAppearance::TrackList => style::track_list_surface,
                 }),
         )

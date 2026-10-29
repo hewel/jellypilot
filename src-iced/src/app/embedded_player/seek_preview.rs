@@ -100,8 +100,6 @@ pub(super) struct Surface {
 pub(crate) struct ImagePreview<'a> {
   pub image: &'a Handle,
   pub crop: Option<PreviewTile>,
-  pub width: u32,
-  pub height: u32,
 }
 
 #[derive(Clone)]
@@ -327,8 +325,6 @@ impl Surface {
           return Some(ImagePreview {
             image,
             crop: Some(tile),
-            width: tile.width,
-            height: tile.height,
           });
         }
       }
@@ -337,8 +333,6 @@ impl Surface {
     (self.needs_decoder() && self.decode_target == Some(frame.requested)).then_some(ImagePreview {
       image: &frame.image,
       crop: None,
-      width: iced_mpv_preview::WIDTH,
-      height: iced_mpv_preview::HEIGHT,
     })
   }
 }

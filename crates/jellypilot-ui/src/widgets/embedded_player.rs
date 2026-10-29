@@ -35,10 +35,9 @@ const PROGRESS_END: Color = Color::from_rgb8(0x81, 0x8c, 0xf8);
 const VOLUME_KNOB_RADIUS: f32 = 4.0;
 /// Paused minimal indicator: 72px framed circle centered on the picture.
 const PAUSE_CHIP: f32 = 72.0;
-/// Skip-mode pill geometry: 32px visual inside a 40px hit target.
-const PILL_HEIGHT: f32 = 32.0;
-const MINI_TRACK: Size = Size::new(26.0, 15.0);
-const MINI_KNOB: f32 = 11.0;
+/// Switch geometry within the 48px More-menu preference row.
+const MINI_TRACK: Size = Size::new(34.0, 20.0);
+const MINI_KNOB: f32 = 16.0;
 const MINI_KNOB_INSET: f32 = 2.0;
 
 /// The actual play method, using the information panel's compact status pill.
@@ -100,6 +99,42 @@ pub fn popover(_theme: &Theme) -> container::Style {
             width: 1.0,
         },
         shadow: DARK_PALETTE.shadows.raised_high.iced(),
+        ..container::Style::default()
+    }
+}
+
+/// Secondary playback actions share a quiet, raised cinema menu.
+pub fn menu_panel(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(DARK_PALETTE.colors.surfaceContainer)),
+        text_color: Some(DARK_PALETTE.text.body),
+        border: Border {
+            radius: PANEL_RADIUS.into(),
+            ..Border::default()
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 16.0),
+            blur_radius: 40.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Fixed preview surface; its opaque fill does not sample or blur the video.
+pub fn seek_preview(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::from_rgb8(0x19, 0x1a, 0x21))),
+        text_color: Some(Color::WHITE),
+        border: Border {
+            radius: 12.0.into(),
+            ..Border::default()
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 24.0,
+        },
         ..container::Style::default()
     }
 }
@@ -379,39 +414,7 @@ pub fn pause_chip(_theme: &Theme) -> container::Style {
     }
 }
 
-/// The skip-mode pill's translucent fill; hover lifts it like other quiet
-/// cinema controls, disabled keeps the resting fill.
-pub fn skip_toggle_pill(state: crate::icons::IconControlState) -> container::Style {
-    let fill = match state {
-        crate::icons::IconControlState::Hovered => DARK_PALETTE.colors.controlHover,
-        crate::icons::IconControlState::Rest | crate::icons::IconControlState::Disabled => {
-            Color::WHITE.scale_alpha(0.06)
-        }
-    };
-    container::Style {
-        background: Some(Background::Color(fill)),
-        border: Border {
-            radius: (PILL_HEIGHT / 2.0).into(),
-            smoothing: 0.0,
-            color: Color::TRANSPARENT,
-            width: 0.0,
-        },
-        ..container::Style::default()
-    }
-}
-
-/// Invisible button chrome for content that paints its own surface (the
-/// skip-mode pill); the keyboard focus ring still draws around the hit area.
-pub fn invisible(
-    _theme: &Theme,
-    _variant: ButtonVariant,
-    _status: button::Status,
-) -> button::Style {
-    button::Style::default()
-}
-
-/// The compact 26×15 switch inside the skip-mode pill. Interaction stays on
-/// the enclosing control; this leaf only paints the resolved state.
+/// The compact 34×20 switch. Interaction belongs to the enclosing menu row.
 pub fn mini_switch<'a, Message: 'a>(
     on: bool,
     state: crate::icons::IconControlState,
@@ -787,46 +790,5 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for TimelineTrack<'_> {
                 );
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod contour_tests {
-    use super::*;
-    use iced::advanced::graphics::shape::RoundedRectangle;
-    use iced::Point;
-
-    #[test]
-    fn pause_indicator_and_skip_pill_have_circular_caps() {
-        let pause = pause_chip(&theme()).border;
-        let mut surfaces = vec![(Size::new(PAUSE_CHIP, PAUSE_CHIP), pause)];
-        for state in [
-            crate::icons::IconControlState::Rest,
-            crate::icons::IconControlState::Hovered,
-            crate::icons::IconControlState::Disabled,
-        ] {
-            surfaces.push((
-                Size::new(140.0, PILL_HEIGHT),
-                skip_toggle_pill(state).border,
-            ));
-        }
-        for (size, border) in surfaces {
-            let bounds = Rectangle::new(Point::ORIGIN, size);
-            let radius = size.height / 2.0;
-            let cap_center = Point::new(size.width - radius, radius);
-            let contour = RoundedRectangle::new(bounds, border.radius, border.smoothing)
-                .expect("valid cinema control contour");
-            for angle in [
-                0.0,
-                std::f32::consts::FRAC_PI_4,
-                std::f32::consts::FRAC_PI_2,
-            ] {
-                let point = cap_center + Vector::new(radius * angle.cos(), radius * angle.sin());
-                assert!(
-                    contour.distance(point).abs() < 0.001,
-                    "cinema control cap must stay circular: {size:?}, angle={angle}"
-                );
-            }
-        }
     }
 }

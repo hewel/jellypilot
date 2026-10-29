@@ -2,6 +2,8 @@
 
 mod seek_preview;
 
+pub(crate) use seek_preview::ImagePreview;
+
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,6 +49,8 @@ pub enum Message {
   Wake(Instant),
   OptionsToggled,
   OptionsDismissed,
+  VolumeToggled,
+  VolumeDismissed,
   InformationToggled,
   InformationDismissed,
   InformationSampled {
@@ -85,6 +89,8 @@ impl std::fmt::Debug for Message {
       Self::Wake(_) => "Wake",
       Self::OptionsToggled => "OptionsToggled",
       Self::OptionsDismissed => "OptionsDismissed",
+      Self::VolumeToggled => "VolumeToggled",
+      Self::VolumeDismissed => "VolumeDismissed",
       Self::InformationToggled => "InformationToggled",
       Self::InformationDismissed => "InformationDismissed",
       Self::InformationSampled { .. } => "InformationSampled([redacted])",
@@ -115,6 +121,7 @@ pub struct Surface {
   replacement_generation: u64,
   was_active: bool,
   options_open: bool,
+  volume_open: bool,
   information_open: bool,
   information: Option<Box<PlaybackStatistics>>,
   information_failed: bool,
@@ -249,6 +256,10 @@ pub(super) fn options_open(state: &State) -> bool {
   state.shell.embedded_player.options_open
 }
 
+pub(super) fn volume_open(state: &State) -> bool {
+  state.shell.embedded_player.volume_open
+}
+
 pub(super) fn information(state: &State) -> Option<&PlaybackStatistics> {
   state.shell.embedded_player.information.as_deref()
 }
@@ -290,7 +301,7 @@ fn menu_open(state: &State) -> bool {
 }
 
 pub(super) fn input_blocked(state: &State) -> bool {
-  controls_blocked(state) || options_open(state)
+  controls_blocked(state) || options_open(state) || volume_open(state)
 }
 
 /// Options may operate their own controls while blocking picture shortcuts.
@@ -339,7 +350,7 @@ pub(super) fn seek_hover(state: &State) -> Option<f64> {
   state.shell.embedded_player.seek_hover
 }
 
-pub(super) fn seek_preview_frame(state: &State) -> Option<seek_preview::ImagePreview<'_>> {
+pub(super) fn seek_preview_frame(state: &State) -> Option<ImagePreview<'_>> {
   state.shell.embedded_player.seek_preview.frame()
 }
 
@@ -387,11 +398,9 @@ pub(super) fn reconcile(state: &mut State) {
     state.playback.view.lifecycle.replacement_generation,
   );
   let active = presentation_active(state);
-  if !active
-    || controls_blocked(state)
-    || !super::view::player::embedded_options_available(state, state.shell.window_size.width)
-  {
+  if !active || controls_blocked(state) || state.playback.view.now_playing.is_none() {
     state.shell.embedded_player.options_open = false;
+    close_volume(state);
   }
   let settled = state.playback.view.lifecycle.settled;
   // The core adjustment state owns drag flags and desired targets; embedded
@@ -418,7 +427,7 @@ pub(super) fn reconcile(state: &mut State) {
     || state.shell.account_popover_open
     || super::accounts::blocking_modal(&state.accounts)
     || state.shell.quit_requested;
-  if blocked || menu_open(state) || options_open(state) {
+  if blocked || menu_open(state) || options_open(state) || volume_open(state) {
     state.shell.embedded_player.information_open = false;
     state.shell.embedded_player.information = None;
   }
@@ -474,6 +483,7 @@ fn observe_replacement(surface: &mut Surface, generation: u64) {
     surface.returning = false;
     surface.feedback = None;
     surface.options_open = false;
+    surface.volume_open = false;
     surface.information = None;
     surface.information_failed = false;
     surface.buffered_ranges.clear();
@@ -774,6 +784,18 @@ pub(super) fn keyboard(event: Event, status: event::Status) -> Option<AppMessage
   Some(AppMessage::EmbeddedPlayer(message))
 }
 
+fn close_volume(state: &mut State) {
+  if state.shell.embedded_player.volume_open {
+    state.shell.embedded_player.volume_open = false;
+    // A hidden popup cannot deliver the pointer release for its staged drag.
+    // Preserve independent seeks and volume commands already sent to MPV.
+    let _ = super::playback::adjust(
+      &mut state.playback,
+      AdjustmentInput::Cancel(Control::Volume),
+    );
+  }
+}
+
 pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
   if !presentation_active(state) && !matches!(message, Message::InformationDismissed) {
     return Task::none();
@@ -810,19 +832,36 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       if state.playback.view.busy
         || controls_blocked(state)
         || state.shell.quit_requested
-        || !super::view::player::embedded_options_available(state, state.shell.window_size.width)
+        || state.playback.view.now_playing.is_none()
       {
         return Task::none();
       }
       state.shell.embedded_player.options_open = !options_open(state);
+      close_volume(state);
     }
     Message::OptionsDismissed => {
       state.shell.embedded_player.options_open = false;
+      state.playback.audio_menu_open = false;
+    }
+    Message::VolumeToggled => {
+      if state.playback.view.busy || controls_blocked(state) || state.shell.quit_requested {
+        return Task::none();
+      }
+      if volume_open(state) {
+        close_volume(state);
+      } else {
+        state.shell.embedded_player.volume_open = true;
+      }
+      state.shell.embedded_player.options_open = false;
+    }
+    Message::VolumeDismissed => {
+      close_volume(state);
     }
     Message::InformationToggled => {
       if state.playback.view.lifecycle.replacing || state.shell.quit_requested {
         return Task::none();
       }
+      close_volume(state);
       let surface = &mut state.shell.embedded_player;
       surface.options_open = false;
       surface.information_open = !surface.information_open;
@@ -1146,18 +1185,18 @@ mod tests {
     use iced_runtime::user_interface::{Cache, UserInterface};
 
     #[derive(Default)]
-    struct Targets(Vec<Rectangle>);
+    struct Targets(Vec<(Option<widget::Id>, Rectangle)>);
     impl widget::Operation for Targets {
       fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
         visit(self);
       }
       fn focusable(
         &mut self,
-        _: Option<&widget::Id>,
+        id: Option<&widget::Id>,
         bounds: Rectangle,
         _: &mut dyn widget::operation::Focusable,
       ) {
-        self.0.push(bounds);
+        self.0.push((id.cloned(), bounds));
       }
     }
 
@@ -1198,101 +1237,224 @@ mod tests {
     )
     .await
     .expect("software renderer");
-    let bounds = Size::new(768.0, 576.0);
-    state.shell.window_size = bounds;
-    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
-    let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
-
-    let mut ui = UserInterface::build(
-      crate::app::view::player::embedded(&state),
-      bounds,
-      Cache::new(),
-      &mut renderer,
-    );
-    let mut targets = Targets::default();
-    ui.operate(&renderer, &mut targets);
-    let trigger = targets
-      .0
-      .iter()
-      .find(|target| target.x > 600.0 && target.x < 680.0 && target.y == 24.0)
-      .expect("options trigger beside Information");
-    let mut bus = iced::advanced::shell::Bus::new();
-    let _ = ui.update(
-      &iced::window::Headless,
-      &iced::advanced::shell::Waker::noop(),
-      &[press.clone(), release.clone()],
-      mouse::Cursor::Available(trigger.center()),
-      &mut renderer,
-      &mut bus,
-    );
-    assert!(bus
-      .drain()
-      .any(|(message, _)| matches!(message, AppMessage::EmbeddedPlayer(Message::OptionsToggled))));
-    let cache = ui.into_cache();
-
-    state.shell.embedded_player.options_open = true;
-    assert!(
-      input_blocked(&state),
-      "the open menu blocks picture shortcuts"
-    );
-    assert!(
-      !controls_blocked(&state),
-      "the menu's own toggle remains usable"
-    );
-    assert!(
-      held(&state),
-      "menu interaction holds chrome and cursor visible"
-    );
-    let mut ui = UserInterface::build(
-      crate::app::view::player::embedded(&state),
-      bounds,
-      cache,
-      &mut renderer,
-    );
-    let mut targets = Targets::default();
-    ui.operate(&renderer, &mut targets);
-    let toggle = targets
-      .0
-      .iter()
-      .find(|target| target.width > 100.0 && target.y >= 72.0 && target.y < 150.0)
-      .expect("skip toggle inside the options menu");
-    let mut bus = iced::advanced::shell::Bus::new();
-    let _ = ui.update(
-      &iced::window::Headless,
-      &iced::advanced::shell::Waker::noop(),
-      &[press.clone(), release],
-      mouse::Cursor::Available(toggle.center()),
-      &mut renderer,
-      &mut bus,
-    );
-    assert!(bus.drain().any(|(message, _)| matches!(
-      message,
-      AppMessage::Playback(PlaybackMessage::IntroModeChanged(false))
-    )));
-
-    for event in [
-      key(keyboard::Key::Named(keyboard::key::Named::Escape), false),
-      press,
+    for bounds in [
+      Size::new(1440.0, 900.0),
+      Size::new(768.0, 576.0),
+      Size::new(480.0, 480.0),
     ] {
+      state.shell.window_size = bounds;
+      let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+      let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+
+      let mut ui = UserInterface::build(
+        crate::app::view::player::embedded(&state),
+        bounds,
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut targets = Targets::default();
+      ui.operate(&renderer, &mut targets);
+      let trigger = targets
+        .0
+        .iter()
+        .find(|(id, _)| *id == Some(widget::Id::new("playback-options-trigger")))
+        .map(|(_, bounds)| bounds)
+        .expect("More trigger in the control row");
       let mut bus = iced::advanced::shell::Bus::new();
-      let (_, statuses) = ui.update(
+      let _ = ui.update(
         &iced::window::Headless,
         &iced::advanced::shell::Waker::noop(),
-        &[event],
-        mouse::Cursor::Available(Point::new(384.0, 288.0)),
+        &[press.clone(), release.clone()],
+        mouse::Cursor::Available(trigger.center()),
         &mut renderer,
         &mut bus,
       );
-      assert_eq!(statuses, [event::Status::Captured]);
+      assert!(bus.drain().any(|(message, _)| matches!(
+        message,
+        AppMessage::EmbeddedPlayer(Message::OptionsToggled)
+      )));
+      let cache = ui.into_cache();
+
+      state.shell.embedded_player.options_open = true;
+      assert!(
+        input_blocked(&state),
+        "the open menu blocks picture shortcuts"
+      );
+      assert!(
+        !controls_blocked(&state),
+        "the menu's own toggle remains usable"
+      );
+      assert!(
+        held(&state),
+        "menu interaction holds chrome and cursor visible"
+      );
+      let mut ui = UserInterface::build(
+        crate::app::view::player::embedded(&state),
+        bounds,
+        cache,
+        &mut renderer,
+      );
+      let mut targets = Targets::default();
+      ui.operate(&renderer, &mut targets);
+      let toggle = targets
+        .0
+        .iter()
+        .find(|(id, _)| *id == Some(widget::Id::new("player-more-auto-skip")))
+        .map(|(_, bounds)| bounds)
+        .expect("skip toggle inside More");
+      for (_, target) in &targets.0 {
+        assert!(target.x >= 0.0 && target.y >= 0.0, "{bounds:?}: {target:?}");
+        assert!(
+          target.x + target.width <= bounds.width + 0.1
+            && target.y + target.height <= bounds.height + 0.1,
+          "{bounds:?}: {target:?}"
+        );
+      }
+      let mut bus = iced::advanced::shell::Bus::new();
+      let _ = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[press.clone(), release],
+        mouse::Cursor::Available(toggle.center()),
+        &mut renderer,
+        &mut bus,
+      );
+      assert!(bus.drain().any(|(message, _)| matches!(
+        message,
+        AppMessage::Playback(PlaybackMessage::IntroModeChanged(false))
+      )));
+
+      for event in [
+        key(keyboard::Key::Named(keyboard::key::Named::Escape), false),
+        press,
+      ] {
+        let mut bus = iced::advanced::shell::Bus::new();
+        let (_, statuses) = ui.update(
+          &iced::window::Headless,
+          &iced::advanced::shell::Waker::noop(),
+          &[event],
+          mouse::Cursor::Available(Point::new(100.0, 100.0)),
+          &mut renderer,
+          &mut bus,
+        );
+        assert_eq!(statuses, [event::Status::Captured]);
+        let messages: Vec<_> = bus.drain().map(|(message, _)| message).collect();
+        assert!(messages.iter().any(|message| matches!(
+          message,
+          AppMessage::EmbeddedPlayer(Message::OptionsDismissed)
+        )));
+        assert!(!messages
+          .iter()
+          .any(|message| matches!(message, AppMessage::Playback(PlaybackMessage::Intent(_)))));
+      }
+      drop(ui);
+      state.shell.embedded_player.options_open = false;
+      state.shell.embedded_player.volume_open = true;
+      assert!(input_blocked(&state) && held(&state));
+      let mut ui = UserInterface::build(
+        crate::app::view::player::embedded(&state),
+        bounds,
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut targets = Targets::default();
+      ui.operate(&renderer, &mut targets);
+      let trigger = targets
+        .0
+        .iter()
+        .find(|(id, _)| *id == Some(widget::Id::new("player-volume-trigger")))
+        .map(|(_, bounds)| *bounds)
+        .expect("volume trigger");
+      let mute = targets
+        .0
+        .iter()
+        .find(|(id, target)| {
+          id.is_none()
+            && target.width == 40.0
+            && target.y < trigger.y
+            && target.x >= trigger.x - 60.0
+            && target.x <= trigger.x + 40.0
+        })
+        .map(|(_, bounds)| *bounds)
+        .expect("mute inside the volume overlay");
+      assert!(mute.y >= 0.0 && mute.x >= 0.0 && mute.x + 124.0 <= bounds.width);
+      let mut bus = iced::advanced::shell::Bus::new();
+      let _ = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        mouse::Cursor::Available(mute.center()),
+        &mut renderer,
+        &mut bus,
+      );
+      assert!(bus.drain().any(|(message, _)| matches!(
+        message, AppMessage::Playback(PlaybackMessage::Intent(intent))
+          if matches!(*intent, PlaybackIntent::SetMuted(true))
+      )));
+      let _ = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        mouse::Cursor::Available(Point::new(mute.x + 82.0, mute.center_y())),
+        &mut renderer,
+        &mut bus,
+      );
       let messages: Vec<_> = bus.drain().map(|(message, _)| message).collect();
       assert!(messages.iter().any(|message| matches!(
-        message,
-        AppMessage::EmbeddedPlayer(Message::OptionsDismissed)
+        message, AppMessage::Playback(PlaybackMessage::VolumeChanged(value))
+          if *value > 40.0 && *value < 60.0
       )));
       assert!(!messages
         .iter()
         .any(|message| matches!(message, AppMessage::Playback(PlaybackMessage::Intent(_)))));
+      let (_, statuses) = ui.update(
+        &iced::window::Headless,
+        &iced::advanced::shell::Waker::noop(),
+        &[key(
+          keyboard::Key::Named(keyboard::key::Named::Escape),
+          false,
+        )],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut bus,
+      );
+      assert_eq!(statuses, [event::Status::Captured]);
+      assert!(bus.drain().any(|(message, _)| matches!(
+        message,
+        AppMessage::EmbeddedPlayer(Message::VolumeDismissed)
+      )));
+      drop(ui);
+      state.shell.embedded_player.volume_open = false;
     }
+    // Closing the popup mid-drag must discard only its unsubmitted gesture.
+    state.shell.embedded_player.volume_open = true;
+    for input in [
+      AdjustmentInput::Adjust(Control::Volume, 40.0),
+      AdjustmentInput::DragStarted(Control::Seek),
+      AdjustmentInput::Preview(Control::Seek, 30.0),
+      AdjustmentInput::DragStarted(Control::Volume),
+      AdjustmentInput::Preview(Control::Volume, 50.0),
+    ] {
+      let _ = super::super::playback::adjust(&mut state.playback, input);
+    }
+    close_volume(&mut state);
+    assert!(!is_volume_dragging(&state));
+    assert_eq!(state.playback.adjustments.view().volume_preview, None);
+    assert!(state.playback.adjustments.view().seek_dragging);
+    assert_eq!(state.playback.adjustments.view().seek_preview, Some(30.0));
+    assert!(matches!(
+      super::super::playback::adjust(
+        &mut state.playback,
+        AdjustmentInput::Step(Control::Volume, 5.0),
+      ),
+      Some(PlaybackIntent::SetVolume(45.0))
+    ));
   }
 
   fn key(key: keyboard::Key, repeat: bool) -> Event {

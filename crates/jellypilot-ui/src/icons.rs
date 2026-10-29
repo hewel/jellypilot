@@ -115,6 +115,8 @@ pub enum Icon {
     Subtitles,
     IntroSkip,
     Playlist,
+    More,
+    Repeat,
 
     // Navigation & library types
     Home,
@@ -200,6 +202,8 @@ impl Icon {
             Self::Subtitles => include_bytes!("../assets/icons/subtitles.svg"),
             Self::IntroSkip => include_bytes!("../assets/icons/sparkles.svg"),
             Self::Playlist => include_bytes!("../assets/icons/playlist.svg"),
+            Self::More => include_bytes!("../assets/icons/dots.svg"),
+            Self::Repeat => include_bytes!("../assets/icons/repeat.svg"),
 
             Self::Home => include_bytes!("../assets/icons/home.svg"),
             Self::Movie => include_bytes!("../assets/icons/movie.svg"),
@@ -303,6 +307,8 @@ impl Icon {
             Self::Subtitles,
             Self::IntroSkip,
             Self::Playlist,
+            Self::More,
+            Self::Repeat,
             Self::Home,
             Self::Movie,
             Self::Tv,

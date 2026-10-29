@@ -21,31 +21,10 @@ use crate::app::message::Message;
 use crate::app::state::State;
 use jellypilot_ui::fonts::MONO_FONT;
 
-pub(super) fn button(state: &State) -> Element<'_, Message> {
+pub(super) fn layer(state: &State) -> Element<'_, Message> {
   let open = embedded_player::information_open(state);
-  let trigger =
-    focus_tooltip(
-      control_button(
-        Some(Icon::Info),
-        None,
-        if open {
-          ButtonVariant::TonalActive
-        } else {
-          ButtonVariant::Tonal
-        },
-      )
-      .style(cinema::top_control)
-      .icon_size(IconSize::Custom(16.0))
-      .padding(0)
-      .width(Length::Fixed(40.0))
-      .min_height(40.0)
-      .content_centered(true)
-      .on_press_maybe((!state.playback.view.lifecycle.replacing).then_some(
-        Message::EmbeddedPlayer(embedded_player::Message::InformationToggled),
-      )),
-      state.t("player-information"),
-      TooltipOptions::default(),
-    );
+  // An inert top-right anchor keeps live information independent of auto-hidden chrome.
+  let trigger = iced::widget::space().width(40).height(40);
   // Closed popovers retain their widget tree, but do not format unseen statistics.
   let content = if open {
     panel(state)

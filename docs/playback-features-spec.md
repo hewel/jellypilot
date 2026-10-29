@@ -128,14 +128,20 @@ generation or keyboard focus. Window exit retires the decoder binding before
 discarding its presentation state; reopening cannot reuse an old timeline generation.
 Neither preview identities, diagnostics nor rendered content expose credentials.
 
-Images fit within 240×135 logical pixels and the measured timeline width, preserving
-aspect ratio. The tooltip has a 12px outer radius and 8px padding; its inset image
-uses the concentric 4px radius. An 8px image-to-text gap retains the 12px monospace
-time and real chapter/range labels. Wrapping may increase tooltip height; the
-shared widget places the overlay above or below the target and clamps it to the
-viewport. No stale image substitutes for a pending or failed current target.
-Existing cinema rails, genuine buffer/chapter/intro markers and the independent
-volume slider remain unchanged.
+Images preserve aspect ratio inside a fixed 240×135 logical-pixel slot, shrinking
+proportionally only when the measured timeline is narrower. The normal card is
+256×179: 8px padding, an 8px image-to-text gap and a fixed 20px line with bold
+14px monospace time and real chapter/range labels. Long labels truncate rather
+than changing height. The explicit Paper contours are 12px outside and 8px on
+the image; they do not change shared radius tokens. The opaque `#191A21` surface
+has a black 45% shadow at y=8px with 24px blur; no video blur is sampled.
+The shared widget anchors above the visual rail, not pointer Y, and clamps to
+the viewport. Card bottom clearance is 22px from the 4px rail's center (24px
+from its bottom edge), implemented as 2px above the 40px input region. New image
+aspect ratios cannot move the card top. No stale image substitutes for a pending
+or failed target; absent images keep time/real-label hints. Genuine buffer,
+chapter and intro markers retain their existing data sources. Volume remains
+an independent slider, now opened from the compact control row.
 
 Hover never seeks. Pointer/touch drag release commits one seek only when MPV
 reports `seekable=true` and `partially-seekable=false`. Focused timeline arrows
@@ -238,6 +244,6 @@ regression. Final review has no remaining findings.
 The first-batch Paper handoff is `/tmp/media-streamer-player-features-handoff.md`:
 nine new Desktop boards, 39 total, finish returned OK with token hash `28f17849`.
 Its [contract board](https://app.paper.design/file/01M1XG9QCM2M58ENY2ZVA2YTWA/1-0/QMK-0)
-records the adaptive preview and provisional blur material. The preview contract
-remains current; the player blur material is superseded by the removal above.
-Paper completion is separate from native human acceptance.
+records the earlier adaptive preview and provisional blur material. The fixed-slot
+preview contract above supersedes its variable-height geometry; the player blur
+material remains removed. Paper completion is separate from native human acceptance.
