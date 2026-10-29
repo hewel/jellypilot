@@ -5,7 +5,7 @@ import { runCheck } from './task/check';
 import { crateWorkspace } from './task/crates';
 import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
-import { buildIced, runHot, runIced } from './task/iced';
+import { buildIced, runDanmaku, runHot, runIced } from './task/iced';
 import { prepareIced } from './task/iced-source';
 import { buildLinuxMpvRuntime } from './task/linux-mpv-runtime';
 import { runApi } from './task/misc';
@@ -29,6 +29,7 @@ const program = Effect.try({
     task._tag === 'iced' ||
     task._tag === 'icedHot' ||
     task._tag === 'icedBuild' ||
+    task._tag === 'icedDanmaku' ||
     // The iced vendor tree is only needed when a Cargo command can touch the
     // desktop workspace: unqualified gates cover both workspaces, and any
     // explicitly selected desktop crate resolves the iced path dependency.
@@ -56,6 +57,7 @@ const program = Effect.try({
       ),
       Match.when({ _tag: 'icedHot' }, () => runHot(process.env)),
       Match.when({ _tag: 'icedBuild' }, ({ release }) => buildIced(release)),
+      Match.when({ _tag: 'icedDanmaku' }, ({ smoke }) => runDanmaku(smoke)),
       Match.when({ _tag: 'icedPrepare' }, ({ source }) => prepareIced(source)),
       Match.when({ _tag: 'icedRegress' }, (task) => runNativeRegression(task, process.env)),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),

@@ -11,6 +11,7 @@ workspace = "../../src-iced"
 
 [dependencies]
 iced = { workspace = true }
+jellypilot-core = { path = "../jellypilot-core", default-features = false }
 unicode-script = "0.5"
 
 [dev-dependencies]

@@ -16,6 +16,7 @@ pub mod cards;
 pub mod collections;
 #[cfg(feature = "portable")]
 pub mod config;
+pub mod danmaku;
 #[cfg(feature = "portable")]
 pub mod detail;
 pub mod diagnostics;

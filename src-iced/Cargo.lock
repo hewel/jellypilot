@@ -3083,6 +3083,7 @@ version = "2.2.3"
 dependencies = [
  "iced",
  "iced_runtime",
+ "jellypilot-core",
  "roxmltree 0.20.0",
  "unicode-script",
  "usvg 0.45.1",

@@ -32,6 +32,7 @@ export type TaskCommand =
   | { readonly _tag: 'icedHot' }
   | { readonly _tag: 'icedPrepare'; readonly source: string | null }
   | { readonly _tag: 'icedBuild'; readonly release: boolean }
+  | { readonly _tag: 'icedDanmaku'; readonly smoke: boolean }
   | {
       readonly _tag: 'icedRegress';
       readonly scenario: 'tray' | 'external' | 'gpu' | 'all';
@@ -245,6 +246,12 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === 'iced') {
     const [action, ...rest] = args;
     if (action === 'regress') return parseRegression(rest);
+    if (action === 'danmaku') {
+      for (const argument of rest) {
+        if (argument !== '--smoke') unknownOption('iced danmaku', argument);
+      }
+      return { _tag: 'icedDanmaku', smoke: rest.includes('--smoke') };
+    }
     if (action === 'prepare') {
       return { _tag: 'icedPrepare', source: parseSourceOptions('iced prepare', rest) };
     }

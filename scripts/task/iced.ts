@@ -97,3 +97,19 @@ export const runHot = Effect.fn('task.hot')(
   (environment: Readonly<Record<string, string | undefined>>) =>
     runCommand({ ...icedHotCommand(), env: embeddedMpvPaths(environment) }).pipe(Effect.asVoid),
 );
+
+/** Runs the isolated synthetic scene, never the player's saved session. */
+export const runDanmaku = Effect.fn('task.iced.danmaku')((smoke: boolean) =>
+  runCommand(
+    command('cargo', [
+      'run',
+      '--manifest-path',
+      DESKTOP_MANIFEST,
+      '--package',
+      'jellypilot-ui',
+      '--example',
+      'danmaku',
+      ...(smoke ? ['--', '--smoke'] : []),
+    ]),
+  ).pipe(Effect.asVoid),
+);

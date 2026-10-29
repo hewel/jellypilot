@@ -28,6 +28,13 @@ describe('parseCli', () => {
     expect(parseCli(['iced', 'hot'])).toEqual({ _tag: 'icedHot' });
   });
 
+  test('keeps the isolated danmaku scene separate from player and backend options', () => {
+    for (const option of ['--embedded', '--tv', '--file', '--release', '--smoke=false']) {
+      expect(() => parseCli(['iced', 'danmaku', option])).toThrow();
+    }
+    expect(() => parseCli(['iced', 'danmaku', '--smoke', 'false'])).toThrow();
+  });
+
   test('parses android commands and release flags', () => {
     expect(parseCli(['android', 'doctor'])).toEqual({ _tag: 'androidDoctor' });
     expect(parseCli(['android', 'bindings'])).toEqual({ _tag: 'androidBindings' });

@@ -7,6 +7,7 @@ pub mod badge;
 pub mod button;
 pub mod container;
 pub mod control_button;
+pub mod danmaku;
 pub mod ellipsis_text;
 pub mod embedded_player;
 pub mod escape_input;
