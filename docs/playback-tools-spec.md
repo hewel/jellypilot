@@ -89,12 +89,13 @@ touching MPV; late results cannot update another media's UI. A/B writes are
 ordered, and no second polling loop, playback state machine or host ABI is
 introduced. Missing properties disable only the affected feature.
 
-Desktop uses existing independent Floating Popovers, reachable Close controls,
-40px minimum targets, bounded scrolling and narrow-window wrapping. Subtitle
-menus retain their 240px width and existing track-list scrolling. A/B uses
-min(320px, viewport width minus 32px), with no forced minimum; the complete
-panel including padding is height-constrained, with Close outside the scrolling
-body. These Desktop tools render above an inert background: Subtitles is
+Desktop uses existing independent Floating Popovers, localized hover/focus hints for icon-only
+Close and Refresh, 40px minimum targets, bounded scrolling and narrow-window wrapping. A/B
+operations and observed point values remain labeled. Subtitle menus retain their 240px width
+and existing track-list scrolling. A/B uses min(320px, viewport width minus 32px), with no forced
+minimum. The complete panel follows actual content up to its window-height cap instead of
+reserving a full-height sheet; Close stays outside the scrolling body. These Desktop tools
+render above an inert background: Subtitles is
 anchored at the surface's lower-right 16px safe margin and opens upward; A/B is
 anchored at its upper-right 16px margin and opens downward. They do not track
 the triggering button's exact horizontal position. TV panels retain 744px times

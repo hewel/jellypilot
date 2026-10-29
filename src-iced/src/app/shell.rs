@@ -112,7 +112,28 @@ fn active_browse_refreshing(state: &State) -> bool {
 }
 
 pub(crate) fn refresh_busy(state: &State) -> bool {
-  state.shell.refresh.is_some() || active_browse_refreshing(state)
+  state.shell.refresh.is_some()
+    || active_browse_refreshing(state)
+    || (state.shell.destination == Destination::SavedBrowse && state.saved_browse.pending.is_some())
+}
+
+fn is_refresh_failure(message: &UiText) -> bool {
+  matches!(
+    message.id(),
+    "shell-library-refresh-failed"
+      | "browse-refresh-failed"
+      | "home-refresh-failed"
+      | "detail-refresh-error"
+  )
+}
+
+/// Reuse the existing persistent notice; the footer owns no extra error lifetime.
+pub(crate) fn refresh_failure(state: &State) -> Option<&UiText> {
+  state
+    .kernel
+    .notice
+    .as_ref()
+    .filter(|notice| is_refresh_failure(notice))
 }
 
 /// Browse settlements can spawn more required work; task-stream exhaustion
@@ -979,11 +1000,22 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
       Task::done(Message::Account(message))
     }
     ShellMessage::RefreshCurrent => {
-      if state.shell.destination == Destination::SavedBrowse {
-        return super::saved_browse::open(state);
-      }
       if refresh_busy(state) || state.full.is_none() {
         return Task::none();
+      }
+      if refresh_failure(state).is_some() {
+        state.kernel.notice = None;
+      }
+      if state
+        .kernel
+        .active_toast
+        .as_ref()
+        .is_some_and(|toast| is_refresh_failure(&toast.message))
+      {
+        state.kernel.active_toast = None;
+      }
+      if state.shell.destination == Destination::SavedBrowse {
+        return super::saved_browse::open(state);
       }
       let Some(client) = state.kernel.client.clone() else {
         return Task::none();
@@ -1547,6 +1579,11 @@ mod tests {
       },
     ));
     assert!(refresh_busy(&state));
+    assert!(
+      iced_runtime::task::into_stream(update_shell(&mut state, ShellMessage::RefreshCurrent))
+        .is_none(),
+      "a held page refresh must not admit another directory or page request",
+    );
     request.reply(FixtureReply::Failure);
     let snapshot = fixture
       .settle_session(&owner, |_| FixtureReply::Failure)
@@ -1563,6 +1600,12 @@ mod tests {
       state.full.as_ref().unwrap().browse.view,
       LibraryBrowseView::Empty
     ));
+    assert!(refresh_failure(&state).is_some());
+    let retry = update_shell(&mut state, ShellMessage::RefreshCurrent);
+    assert!(refresh_busy(&state));
+    assert!(refresh_failure(&state).is_none());
+    assert!(state.kernel.active_toast.is_none());
+    assert!(iced_runtime::task::into_stream(retry).is_some());
   }
 
   fn test_fixture() -> (Surface, Kernel) {

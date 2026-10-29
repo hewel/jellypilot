@@ -13,8 +13,8 @@ use jellypilot_ui::fonts::{FONT_ATTRIBUTIONS, FONT_LICENSES, HEADING_FONT, MONO_
 use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
-use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
-use jellypilot_ui::tokens::{palette, ThemePalette, TOKENS};
+use jellypilot_ui::overlay::{focus_tooltip, popover, PopoverOptions, TooltipOptions};
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant};
 use jellypilot_ui::widgets::badge::status_tag;
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
@@ -154,37 +154,18 @@ fn navigation_items(
 }
 
 fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
-  let close = control_button_content(
-    move |_| {
-      row![
-        text(locale.text("common-close"))
-          .size(TOKENS.font_sizes.s12)
-          .style(|theme| text::Style {
-            color: Some(palette(theme).text.metadata),
-            ..text::Style::default()
-          }),
-        container(
-          text("esc")
-            .size(TOKENS.font_sizes.s10)
-            .font(MONO_FONT)
-            .style(|theme| text::Style {
-              color: Some(palette(theme).text.metadata),
-              ..text::Style::default()
-            }),
-        )
-        .padding([TOKENS.spacing.s0_5, TOKENS.spacing.s1_5])
-        .style(settings_style::keycap),
-      ]
-      .spacing(TOKENS.spacing.s1_5)
-      .align_y(Alignment::Center)
-      .boxed()
-    },
-    ButtonVariant::Text,
-  )
-  .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
-  .min_height(40.0)
-  .id("settings-close")
-  .on_press(Message::Settings(SettingsMessage::Close));
+  let close = focus_tooltip(
+    control_button(Some(Icon::Close), None, ButtonVariant::Icon)
+      .icon_size(IconSize::Sm)
+      .padding(TOKENS.spacing.s2)
+      .width(Length::Fixed(40.0))
+      .min_height(40.0)
+      .content_centered(true)
+      .id("settings-close")
+      .on_press(Message::Settings(SettingsMessage::Close)),
+    format!("{} · Esc", locale.text("common-close")),
+    TooltipOptions::default(),
+  );
   container(close)
     .padding(TOKENS.spacing.s2)
     .width(Fill)
@@ -1302,7 +1283,7 @@ fn compact_icon_button<'a>(
     .width(Length::Fixed(40.0))
     .content_centered(true)
     .on_press_maybe(enabled.then_some(Message::Settings(message)));
-  tooltip(trigger, label, TooltipOptions::default())
+  focus_tooltip(trigger, label, TooltipOptions::default())
 }
 
 fn intro_mode_label(locale: Localizer, mode: IntroMode) -> String {
@@ -1466,7 +1447,7 @@ mod tests {
         let mut close = CloseBounds::default();
         ui.operate(&renderer, &mut close);
         let bounds = close.0.expect("visible Close action");
-        assert!(bounds.width >= 64.0 && bounds.height >= 40.0, "{bounds:?}");
+        assert!(bounds.height >= 40.0, "{bounds:?}");
         assert!(
           bounds.y >= 0.0 && bounds.y + bounds.height <= height,
           "{bounds:?}"

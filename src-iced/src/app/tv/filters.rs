@@ -598,22 +598,21 @@ pub fn view(state: &State) -> Element<'_, AppMessage> {
     return space().boxed();
   };
   let scale = style::scale(state.shell.window_size.width);
-  let mut content = column![column![
-    text(state.t("tv-filter-title"))
-      .size(style::SECTION * scale)
-      .line_height(iced::Pixels(40.0 * scale))
-      .font(HEADING_FONT),
-    text(state.t(if panel.draft != panel.applied {
-      "tv-filter-pending"
-    } else {
-      "tv-filter-instructions"
-    }))
-    .size(style::META * scale)
-    .line_height(iced::Pixels(28.0 * scale))
-    .color(style::PALETTE.text.metadata)
-  ]
-  .spacing(8.0 * scale)]
-  .spacing(24.0 * scale);
+  let mut header = column![text(state.t("tv-filter-title"))
+    .size(style::SECTION * scale)
+    .line_height(iced::Pixels(40.0 * scale))
+    .font(HEADING_FONT)]
+  .spacing(8.0 * scale);
+  if panel.draft != panel.applied {
+    header = header.push(
+      (text(state.t("tv-filter-pending"))
+        .size(style::META * scale)
+        .line_height(iced::Pixels(28.0 * scale))
+        .color(style::PALETTE.text.metadata))
+      .boxed(),
+    );
+  }
+  let mut content = column![header].spacing(24.0 * scale);
   match &panel.options {
     Options::Loading => {
       content = content.push((text(state.t("tv-loading")).size(style::BODY * scale)).boxed());
@@ -1159,7 +1158,6 @@ mod tests {
         assert!(surface.y + surface.height <= size.height - style::SAFE_Y * scale + 0.1);
         let (viewport, content, translation) = bounds.scroll.expect("filter viewport");
         if size.height >= 720.0 {
-          assert!((surface.height - 652.0 * scale).abs() < 0.5);
           assert!((viewport.height - content.height).abs() < 0.1);
         } else {
           assert!(content.height > viewport.height);

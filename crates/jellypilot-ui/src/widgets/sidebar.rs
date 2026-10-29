@@ -84,17 +84,21 @@ pub fn library(theme: &Theme, variant: ButtonVariant, status: button::Status) ->
     style
 }
 
-/// Neutral account anchor; opening the menu does not alter the structural outline.
-pub fn identity(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
-    let mut style = personal(theme, variant, status);
+/// Full identity disclosure uses the existing theme surface and quiet edge.
+pub fn identity_hint(theme: &Theme) -> container::Style {
     let colors = palette(theme).colors;
-    style.background = Some(Background::Color(match status {
-        button::Status::Hovered | button::Status::Pressed => colors.control,
-        _ if colors.background == LIGHT_PALETTE.colors.background => colors.surface,
-        _ => colors.surfaceContainerLow,
-    }));
-    style.border.color = colors.outlineVariant;
-    style.border.width = 1.0;
+    let fill = if colors.background == LIGHT_PALETTE.colors.background {
+        colors.surface
+    } else {
+        colors.surfaceContainer
+    };
+    surface(theme, fill, TOKENS.radii.lg, true)
+}
+
+/// The avatar is an independent, transparent footer target.
+pub fn identity(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
+    let mut style = footer_action(theme, variant, status);
+    style.border.radius = SIDEBAR_CONTROL_RADIUS.into();
     style
 }
 
@@ -102,6 +106,39 @@ pub fn identity(theme: &Theme, variant: ButtonVariant, status: button::Status) -
 pub fn action(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let mut style = super::button::style(theme, variant, status);
     style.border.radius = TOKENS.radii.lg.into();
+    style
+}
+
+/// Flat footer shortcuts retain independent hover, press and disabled feedback.
+pub fn footer_action(
+    theme: &Theme,
+    variant: ButtonVariant,
+    status: button::Status,
+) -> button::Style {
+    let mut style = action(theme, variant, status);
+    let colors = palette(theme).colors;
+    style.background = match status {
+        button::Status::Active => None,
+        button::Status::Hovered => Some(colors.controlHover.into()),
+        button::Status::Pressed => Some(colors.surfaceContainer.into()),
+        button::Status::Disabled => Some(colors.control.into()),
+    };
+    style.border.width = 0.0;
+    style.border.color = Color::TRANSPARENT;
+    style
+}
+
+/// A contextual retry stays distinct from the always-visible shortcut row.
+pub fn footer_retry(
+    theme: &Theme,
+    variant: ButtonVariant,
+    status: button::Status,
+) -> button::Style {
+    let mut style = footer_action(theme, variant, status);
+    if status == button::Status::Active {
+        style.background = Some(palette(theme).colors.control.into());
+    }
+    style.border.radius = TOKENS.radii.xl.into();
     style
 }
 

@@ -154,21 +154,38 @@ pub(super) fn page(state: &State) -> Element<'_, Message> {
 
 fn record_row<'a>(state: &'a State, record: &'a SavedBrowseFilter) -> Element<'a, Message> {
   let action = |action, key, variant| {
-    guard_scope(
-      (saved_browse::target(state), record.id, key),
-      control_button(None, Some(state.t(key)), variant)
-        .id(record_id(record.id, action))
-        .min_height(40.0)
-        .on_press_maybe(interactive(state).then(|| {
-          saved_browse::message(
-            state,
-            Action::Record {
-              id: record.id,
-              action,
-            },
-          )
-        })),
-    )
+    guard_scope((saved_browse::target(state), record.id, key), {
+      let delete = action == RecordAction::Delete;
+      let control = control_button(
+        delete.then_some(Icon::Trash),
+        (!delete).then(|| state.t(key)),
+        variant,
+      )
+      .id(record_id(record.id, action))
+      .min_height(40.0)
+      .on_press_maybe(interactive(state).then(|| {
+        saved_browse::message(
+          state,
+          Action::Record {
+            id: record.id,
+            action,
+          },
+        )
+      }));
+      if delete {
+        focus_tooltip(
+          control
+            .icon_size(IconSize::Sm)
+            .width(iced::Length::Fixed(40.0))
+            .padding(TOKENS.spacing.s2)
+            .content_centered(true),
+          state.t(key),
+          TooltipOptions::default(),
+        )
+      } else {
+        control.boxed()
+      }
+    })
   };
   column![
     text(&record.name)
@@ -199,7 +216,7 @@ fn record_row<'a>(state: &'a State, record: &'a SavedBrowseFilter) -> Element<'a
       action(
         RecordAction::Delete,
         "saved-filters-delete",
-        ButtonVariant::Text
+        ButtonVariant::Icon
       ),
     ]
     .spacing(TOKENS.spacing.s2)

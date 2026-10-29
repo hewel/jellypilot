@@ -26,6 +26,7 @@ use iced::widget::{button, container, row, stack, text};
 use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
+use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::control_button::control_button_content;
@@ -161,8 +162,10 @@ fn toast_view<'a>(
     move |_| icon_with_color(Icon::Close, IconSize::Xs, text_color).boxed(),
     ButtonVariant::Text,
   )
-  .padding([3, 5])
-  .min_height(0.0)
+  .padding(TOKENS.spacing.s2)
+  .width(Length::Fixed(40.0))
+  .min_height(40.0)
+  .content_centered(true)
   .on_press(Message::DismissNotice(close_id))
   .style(|_theme, _variant, status| {
     let bg = match status {
@@ -185,6 +188,11 @@ fn toast_view<'a>(
       ..button::Style::default()
     }
   });
+  let dismiss_button = focus_tooltip(
+    dismiss_button,
+    locale.text("common-dismiss"),
+    TooltipOptions::default(),
+  );
 
   let toast_content = row![
     icon_with_color(icon, IconSize::Sm, icon_color),

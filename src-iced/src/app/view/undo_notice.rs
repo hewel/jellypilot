@@ -2,7 +2,7 @@ use iced::widget::Widget as _;
 use iced::widget::{column, container, keyed, row, text};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_ui::icons::{Icon, IconSize};
-use jellypilot_ui::overlay::{tooltip, TooltipOptions};
+use jellypilot_ui::overlay::{focus_tooltip, tooltip, TooltipOptions};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
@@ -43,11 +43,13 @@ pub(super) fn view(state: &State) -> Element<'_, Message> {
     .min_height(40.0)
     .id(iced::widget::Id::from(format!("undo-restore-{id}")))
     .on_press_maybe((!blocked).then_some(Message::Undo(undo::Message::Restore(id))));
-    let dismiss = tooltip(
-      control_button(Some(Icon::Close), None, ButtonVariant::Tonal)
+    let dismiss = focus_tooltip(
+      control_button(Some(Icon::Close), None, ButtonVariant::Icon)
         .icon_size(IconSize::Sm)
         .width(Length::Fixed(40.0))
         .min_height(40.0)
+        .padding(8)
+        .content_centered(true)
         .id(iced::widget::Id::from(format!("undo-dismiss-{id}")))
         .on_press_maybe((!notice.pending).then_some(Message::Undo(undo::Message::Dismiss(id)))),
       state.t("common-dismiss"),

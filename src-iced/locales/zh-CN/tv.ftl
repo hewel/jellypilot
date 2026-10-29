@@ -12,7 +12,6 @@ tv-more = 更多
 tv-filter-title = 筛选
 tv-filter-active = 筛选 · { $count }
 tv-filter-pending = 更改尚未应用
-tv-filter-instructions = 选择后应用筛选
 tv-filter-quality = 画质
 tv-filter-country = 地区
 tv-filter-genre = 类型

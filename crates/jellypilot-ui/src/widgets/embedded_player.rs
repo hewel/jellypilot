@@ -104,7 +104,7 @@ pub fn popover(_theme: &Theme) -> container::Style {
     }
 }
 
-/// Playback-information panel: the Paper floating surface over the video.
+/// A single rounded edge defines the translucent information surface over video.
 pub fn information_panel(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(PANEL_FILL)),
@@ -114,11 +114,6 @@ pub fn information_panel(_theme: &Theme) -> container::Style {
             smoothing: super::container::SURFACE_SMOOTHING,
             color: DARK_PALETTE.colors.borderSubtle,
             width: 1.0,
-        },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-            offset: Vector::new(0.0, 12.0),
-            blur_radius: 32.0,
         },
         ..container::Style::default()
     }

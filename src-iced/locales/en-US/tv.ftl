@@ -12,7 +12,6 @@ tv-more = More
 tv-filter-title = Filter
 tv-filter-active = Filter · { $count }
 tv-filter-pending = Changes not yet applied
-tv-filter-instructions = Choose options, then apply
 tv-filter-quality = Quality
 tv-filter-country = Country
 tv-filter-genre = Genre

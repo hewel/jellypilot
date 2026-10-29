@@ -4,6 +4,7 @@ shell-libraries-unavailable = Libraries unavailable
 shell-search-placeholder = Search movies and shows…
 shell-clear-search = Clear search
 shell-refreshing = Refreshing…
+shell-refresh-failed = Refresh failed
 shell-control-mode = Control mode
 shell-library-refresh-failed = Could not refresh libraries: { $details }
 shell-library-unavailable = The selected library changed or is no longer accessible. Returned to home.

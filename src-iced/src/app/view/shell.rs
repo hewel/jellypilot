@@ -18,7 +18,7 @@ use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::overlay::{focus_tooltip, popover, tooltip, PopoverOptions, TooltipOptions};
+use jellypilot_ui::overlay::{focus_tooltip, popover, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{SETTINGS_MODAL_HEIGHT, SETTINGS_MODAL_WIDTH, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
@@ -41,14 +41,12 @@ fn platform_search_hint() -> &'static str {
   }
 }
 
-/// Returns the sidebar width corresponding to the given window-width [`SizeClass`].
-///
-/// Compact windows collapse the sidebar to a 72px icon rail to maximize screen
-/// real estate for media content, while Standard and Wide windows use the full 220px panel.
+/// Content width before the shell hairline. The expanded sidebar is 220px
+/// including that edge; the compact rail retains its existing content width.
 pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
   match class {
     SizeClass::Compact => SIDEBAR_RAIL_WIDTH,
-    SizeClass::Standard | SizeClass::Wide => SIDEBAR_WIDTH,
+    SizeClass::Standard | SizeClass::Wide => SIDEBAR_WIDTH - HAIRLINE_WIDTH,
   }
 }
 
@@ -317,15 +315,7 @@ fn sidebar_full(
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable);
-  let bottom = column![
-    container(space::horizontal())
-      .width(Fill)
-      .height(HAIRLINE_WIDTH)
-      .style(sidebar::divider),
-    account::sidebar_popover(state, false),
-    footer_toolbar(state),
-  ]
-  .spacing(TOKENS.spacing.s2);
+  let bottom = sidebar_footer(state, false);
   let content = column![main, libraries, bottom]
     .spacing(TOKENS.spacing.s2)
     .width(Fill)
@@ -382,7 +372,7 @@ fn unified_search_field<'a>(
   let trailing: Element<'_, Message> = if search_draft.is_empty() {
     keycap.boxed()
   } else {
-    tooltip(
+    focus_tooltip(
       control_button(Some(Icon::Close), None, ButtonVariant::Text)
         .style(sidebar::search_action)
         .icon_size(IconSize::Sm)
@@ -400,7 +390,7 @@ fn unified_search_field<'a>(
 }
 
 fn sidebar_compact(state: &State) -> container::Container<'_, Element<'_, Message>> {
-  let search_trigger = tooltip(
+  let search_trigger = focus_tooltip(
     control_button(Some(Icon::Search), None, ButtonVariant::Tonal)
       .style(sidebar::personal)
       .id(SEARCH_TRIGGER_ID)
@@ -513,46 +503,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Element<'_, Messag
       ))
       .boxed(),
     );
-  let refreshing = crate::app::shell::refresh_busy(state);
-  let refresh = tooltip(
-    control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)
-      .style(sidebar::action)
-      .icon_size(IconSize::Sm)
-      .min_height(40.0)
-      .padding([7, 0])
-      .width(Fill)
-      .content_centered(true)
-      .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
-    if refreshing {
-      state.t("shell-refreshing")
-    } else {
-      state.t("common-refresh")
-    },
-    TooltipOptions::default(),
-  );
-
-  let bottom = column![
-    account::sidebar_popover(state, true),
-    compact_settings_button(state.kernel.locale),
-    refresh,
-    tooltip(
-      control_button(Some(Icon::ControlMode), None, ButtonVariant::Tonal)
-        .style(sidebar::action)
-        .icon_size(IconSize::Sm)
-        .min_height(40.0)
-        .padding([TOKENS.spacing.s2, 0.0])
-        .width(Fill)
-        .content_centered(true)
-        .on_press(Message::Settings(SettingsMessage::AppModeSelected(
-          AppMode::ControlOnly,
-        ))),
-      state.t("shell-control-mode"),
-      TooltipOptions::default(),
-    ),
-  ]
-  .spacing(TOKENS.spacing.s3)
-  .align_x(Alignment::Center)
-  .width(Fill);
+  let bottom = sidebar_footer(state, true);
 
   let content = column![
     compact_search,
@@ -604,52 +555,96 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   }
 }
 
-fn compact_settings_button<'a>(locale: Localizer) -> Element<'a, Message> {
-  // Action, not navigation — neutral Tonal, never the ghost vocabulary.
-  let btn = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
-    .style(sidebar::action)
-    .id(SETTINGS_TRIGGER_ID)
-    .icon_size(IconSize::Sm)
-    .min_height(40.0)
-    .padding([7, 0])
-    .width(Fill)
-    .content_centered(true)
-    .on_press(Message::Settings(SettingsMessage::Open));
-
-  tooltip(
-    btn,
-    locale.text("common-settings"),
-    TooltipOptions::default(),
-  )
+fn sidebar_footer(state: &State, compact: bool) -> Element<'_, Message> {
+  let account = account::sidebar_popover(state);
+  let tools = footer_toolbar(state, compact);
+  let main = if compact {
+    column![account, tools]
+      .spacing(TOKENS.spacing.s1)
+      .width(Fill)
+      .boxed()
+  } else {
+    row![account, tools]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center)
+      .width(Fill)
+      .boxed()
+  };
+  let mut content = column![main].spacing(TOKENS.spacing.s2).width(Fill);
+  if !crate::app::shell::refresh_busy(state) {
+    if let Some(failure) = crate::app::shell::refresh_failure(state) {
+      let detail = state.kernel.locale.message(failure);
+      let feedback: Element<'_, Message> = if compact {
+        focus_tooltip(
+          control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
+            .id("shell.refresh-retry")
+            .style(sidebar::footer_retry)
+            .icon_size(IconSize::Sm)
+            .padding(0)
+            .min_height(40.0)
+            .width(Fill)
+            .content_centered(true)
+            .on_press(Message::Shell(ShellMessage::RefreshCurrent)),
+          format!("{} · {detail}", state.t("common-retry")),
+          TooltipOptions::default(),
+        )
+      } else {
+        container(
+          row![
+            text(state.t("shell-refresh-failed"))
+              .size(12)
+              .line_height(iced::Pixels(16.0))
+              .color(state.palette().colors.error)
+              .width(Fill),
+            focus_tooltip(
+              control_button(None, Some(state.t("common-retry")), ButtonVariant::Tonal)
+                .id("shell.refresh-retry")
+                .style(sidebar::footer_retry)
+                .label_size(12.0)
+                .padding(TOKENS.spacing.s2)
+                .width(Length::Fixed(56.0))
+                .min_height(40.0)
+                .content_centered(true)
+                .on_press(Message::Shell(ShellMessage::RefreshCurrent)),
+              detail,
+              TooltipOptions::default(),
+            ),
+          ]
+          .spacing(TOKENS.spacing.s2)
+          .align_y(Alignment::Center),
+        )
+        .padding([0.0, TOKENS.spacing.s2])
+        .boxed()
+      };
+      content = content.push(feedback);
+    }
+  }
+  container(content).id("shell.footer").boxed()
 }
 
-fn footer_toolbar(state: &State) -> Element<'_, Message> {
-  let settings = tooltip(
-    control_button(
-      Some(Icon::Settings),
-      Some(state.t("common-settings")),
-      ButtonVariant::Text,
-    )
-    .style(sidebar::action)
-    .id(SETTINGS_TRIGGER_ID)
-    .icon_size(IconSize::Sm)
-    .label_size(TOKENS.font_sizes.s12)
-    .spacing(TOKENS.spacing.s2)
-    .padding(TOKENS.spacing.s2)
-    .min_height(40.0)
-    .width(Fill)
-    .on_press(Message::Settings(SettingsMessage::Open)),
+fn footer_toolbar(state: &State, compact: bool) -> Element<'_, Message> {
+  let settings = focus_tooltip(
+    control_button(Some(Icon::Settings), None, ButtonVariant::Text)
+      .icon_size(IconSize::Sm)
+      .content_centered(true)
+      .style(sidebar::footer_action)
+      .id(SETTINGS_TRIGGER_ID)
+      .padding(0)
+      .min_height(40.0)
+      .width(Fill)
+      .on_press(Message::Settings(SettingsMessage::Open)),
     state.t("common-settings"),
     TooltipOptions::default(),
   );
   let refreshing = crate::app::shell::refresh_busy(state);
-  let refresh = tooltip(
+  let refresh = focus_tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
-      .style(sidebar::action)
+      .id("shell.refresh")
+      .style(sidebar::footer_action)
       .icon_size(IconSize::Sm)
-      .padding(TOKENS.spacing.s2)
+      .padding(0)
       .min_height(40.0)
-      .width(Length::Fixed(40.0))
+      .width(Fill)
       .content_centered(true)
       .on_press_maybe((!refreshing).then_some(Message::Shell(ShellMessage::RefreshCurrent))),
     if refreshing {
@@ -659,13 +654,14 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     },
     TooltipOptions::default(),
   );
-  let control = tooltip(
+  let control = focus_tooltip(
     control_button(Some(Icon::ControlMode), None, ButtonVariant::Text)
-      .style(sidebar::action)
+      .id("shell.control-mode")
+      .style(sidebar::footer_action)
       .icon_size(IconSize::Sm)
-      .padding(TOKENS.spacing.s2)
+      .padding(0)
       .min_height(40.0)
-      .width(Length::Fixed(40.0))
+      .width(Fill)
       .content_centered(true)
       .on_press(Message::Settings(SettingsMessage::AppModeSelected(
         AppMode::ControlOnly,
@@ -673,11 +669,30 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
     state.t("shell-control-mode"),
     TooltipOptions::default(),
   );
-
-  row![container(settings).width(Fill), refresh, control]
-    .spacing(TOKENS.spacing.s1)
-    .align_y(Alignment::Center)
-    .width(Fill)
+  let tools = if compact {
+    column![settings, refresh, control]
+      .spacing(TOKENS.spacing.s1)
+      .align_x(Alignment::Center)
+      .width(Fill)
+      .boxed()
+  } else {
+    row![settings, refresh, control]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center)
+      .width(Fill)
+      .boxed()
+  };
+  container(tools)
+    .width(if compact {
+      Fill
+    } else {
+      Length::Fill.min(144.0)
+    })
+    .padding(iced::Padding {
+      left: if compact { 0.0 } else { TOKENS.spacing.s2 },
+      right: if compact { 0.0 } else { TOKENS.spacing.s2 },
+      ..iced::Padding::ZERO
+    })
     .boxed()
 }
 
@@ -800,5 +815,254 @@ mod tests {
       tree.size
     });
     assert_eq!(sizes[0], sizes[1], "loading must not shift library rows");
+  }
+
+  #[tokio::test]
+  async fn identity_disclosure_wraps_without_resizing_and_menu_tracks_feedback_anchor() {
+    use crate::app::shell::ACCOUNT_TRIGGER_ID;
+    use iced::advanced::widget::operation::focusable;
+    use iced::{Point, Rectangle, Vector};
+
+    #[derive(Default)]
+    struct Panels(Vec<(Option<widget::Id>, Rectangle)>);
+    impl widget::Operation for Panels {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle, _: &Rectangle) {
+        self.0.push((id.cloned(), bounds));
+      }
+    }
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    state.kernel.connected_identity = Some(crate::app::state::ConnectedIdentity {
+      user_name: "LongAccountNameWithoutSpaces".repeat(3),
+      provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.test/long-server-address".into(),
+      server_name: None,
+    });
+    let viewport = Rectangle::with_size(Size::new(800.0, 700.0));
+    for menu_open in [false, true] {
+      state.shell.account_popover_open = menu_open;
+      for failed in [false, true] {
+        state.kernel.notice = failed.then(|| crate::i18n::UiText::new("home-refresh-failed"));
+        let mut footer = sidebar_footer(&state, false);
+        let mut tree = widget::Tree::new(&footer);
+        tree.diff(&mut footer);
+        footer.layout(
+          &mut tree,
+          &renderer,
+          &layout::Limits::new(Size::ZERO, Size::new(195.0, 650.0)),
+        );
+        let size = tree.size;
+        let anchor_top = viewport.height - 16.0 - size.height;
+        let layout = iced::advanced::Layout::new(size).move_to(Point::new(12.0, anchor_top));
+        footer.operate(
+          &mut tree,
+          layout,
+          &viewport,
+          &renderer,
+          &mut focusable::focus::<()>(widget::Id::new(ACCOUNT_TRIGGER_ID)),
+        );
+        let mut overlays = footer.overlay(
+          &mut tree,
+          layout,
+          &renderer,
+          &viewport,
+          Vector::ZERO,
+          viewport.size(),
+        );
+        assert_eq!(
+          overlays.len(),
+          1,
+          "the menu and identity hint must never overlap"
+        );
+        let mut panels = Panels::default();
+        overlays[0].as_overlay_mut().operate(&renderer, &mut panels);
+        let hint = panels
+          .0
+          .iter()
+          .find(|(id, _)| id.as_ref() == Some(&widget::Id::new("account-identity-hint")));
+        if menu_open {
+          assert!(hint.is_none());
+          assert!(panels
+            .0
+            .iter()
+            .any(|(id, _)| id.as_ref() == Some(&widget::Id::new("account-settings"))));
+          let panel = panels
+            .0
+            .iter()
+            .map(|(_, bounds)| bounds)
+            .filter(|bounds| (bounds.width - 340.0).abs() < 0.01)
+            .max_by(|a, b| a.height.total_cmp(&b.height))
+            .expect("account menu frame");
+          assert!((panel.y + panel.height - (anchor_top - 8.0)).abs() < 0.01);
+        } else {
+          let (_, hint) = hint.expect("focused avatar exposes full identity");
+          assert_eq!(hint.width, 195.0);
+          assert!(
+            hint.height > 54.0,
+            "long names and addresses wrap instead of truncating"
+          );
+          assert!((hint.y + hint.height - (anchor_top - 8.0)).abs() < 0.01);
+        }
+        overlays[0].as_overlay_mut().draw(
+          &mut renderer,
+          &iced::Theme::Dark,
+          &iced::advanced::renderer::Style {
+            text_color: state.palette().text.body,
+          },
+          iced::mouse::Cursor::Unavailable,
+        );
+        drop(overlays);
+        assert_eq!(tree.size, size, "disclosure must not enlarge the footer");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn footer_keeps_long_identity_bounded_and_shortcuts_reachable_in_tab_order() {
+    use crate::app::shell::ACCOUNT_TRIGGER_ID;
+    use crate::app::view::viewing_queue::tests::{click, Bounds};
+    use iced::advanced::widget::operation::focusable;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use jellypilot_core::locale::UiLanguage;
+
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    state.kernel.connected_identity = Some(crate::app::state::ConnectedIdentity {
+      user_name: "A very long account name 用户名称".repeat(8),
+      provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.test".into(),
+      server_name: Some("A very long server name 服务器名称".repeat(8)),
+    });
+    for language in [UiLanguage::English, UiLanguage::SimplifiedChinese] {
+      state.kernel.locale = Localizer::new(language);
+      for compact in [false, true] {
+        let width = if compact { 40.0 } else { 195.0 };
+        let size = Size::new(width, 400.0);
+        let mut cache = Cache::new();
+        for expected in [
+          ACCOUNT_TRIGGER_ID,
+          SETTINGS_TRIGGER_ID,
+          "shell.refresh",
+          "shell.control-mode",
+        ] {
+          let mut ui =
+            UserInterface::build(sidebar_footer(&state, compact), size, cache, &mut renderer);
+          let mut operation: Box<dyn widget::Operation> = Box::new(focusable::focus_next());
+          loop {
+            ui.operate(&renderer, operation.as_mut());
+            if let widget::operation::Outcome::Chain(next) = operation.finish() {
+              operation = next;
+            } else {
+              break;
+            }
+          }
+          let mut bounds = Bounds::default();
+          ui.operate(&renderer, &mut bounds);
+          assert_eq!(bounds.1, Some(widget::Id::new(expected)));
+          let account = bounds.get(ACCOUNT_TRIGGER_ID);
+          let settings = bounds.get(SETTINGS_TRIGGER_ID);
+          let refresh = bounds.get("shell.refresh");
+          let control = bounds.get("shell.control-mode");
+          assert_eq!(account.size(), Size::new(40.0, 40.0));
+          if compact {
+            assert_eq!(settings.y - account.y - account.height, 4.0);
+          } else {
+            assert_eq!(settings.y, account.y);
+          }
+          for target in [settings, refresh, control] {
+            assert_eq!(target.height, 40.0);
+            assert!(target.x >= 0.0 && target.x + target.width <= width);
+          }
+          if !compact {
+            assert_eq!(bounds.get("shell.footer").height, 40.0);
+            assert_eq!(settings.width, refresh.width);
+            assert_eq!(refresh.width, control.width);
+            assert!(settings.width >= 40.0);
+            assert_eq!(settings.x - account.x - account.width, 12.0);
+            assert!((control.x + control.width - (width - 8.0)).abs() < 0.01);
+            assert!((refresh.x - settings.x - settings.width - 4.0).abs() < 0.01);
+            assert!((control.x - refresh.x - refresh.width - 4.0).abs() < 0.01);
+          }
+          let messages = click(&mut ui, &mut renderer, bounds.get(expected));
+          assert!(
+            match expected {
+              ACCOUNT_TRIGGER_ID => matches!(
+                messages.as_slice(),
+                [Message::Shell(ShellMessage::ToggleAccountPopover)]
+              ),
+              SETTINGS_TRIGGER_ID => matches!(
+                messages.as_slice(),
+                [Message::Settings(SettingsMessage::Open)]
+              ),
+              "shell.refresh" => matches!(
+                messages.as_slice(),
+                [Message::Shell(ShellMessage::RefreshCurrent)]
+              ),
+              _ => matches!(
+                messages.as_slice(),
+                [Message::Settings(SettingsMessage::AppModeSelected(
+                  AppMode::ControlOnly
+                ))]
+              ),
+            },
+            "each footer hit must emit only its own action: {messages:?}"
+          );
+          // Clicking retires keyboard focus; restore the current stop before
+          // carrying this widget tree into the next traversal.
+          ui.operate(
+            &renderer,
+            &mut focusable::focus::<()>(widget::Id::new(expected)),
+          );
+          cache = ui.into_cache();
+        }
+      }
+    }
+
+    state.shell.destination = Destination::SavedBrowse;
+    state.saved_browse.pending = Some(crate::app::saved_browse::PendingAction::Load);
+    let mut ui = UserInterface::build(
+      sidebar_footer(&state, false),
+      Size::new(195.0, 400.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut bounds = Bounds::default();
+    ui.operate(&renderer, &mut bounds);
+    assert!(click(&mut ui, &mut renderer, bounds.get("shell.refresh")).is_empty());
+    drop(ui);
+    state.saved_browse.pending = None;
+    state.kernel.notice = Some(crate::i18n::UiText::new("home-refresh-failed"));
+    let mut ui = UserInterface::build(
+      sidebar_footer(&state, false),
+      Size::new(195.0, 400.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut bounds = Bounds::default();
+    ui.operate(&renderer, &mut bounds);
+    let retry = bounds.get("shell.refresh-retry");
+    let tools = bounds.get("shell.refresh");
+    assert_eq!(retry.y - tools.y - tools.height, 8.0);
+    assert!(matches!(
+      click(&mut ui, &mut renderer, retry).as_slice(),
+      [Message::Shell(ShellMessage::RefreshCurrent)]
+    ));
   }
 }

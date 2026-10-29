@@ -35,6 +35,7 @@ use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
+use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::artwork_progress::ArtworkProgress;
@@ -611,32 +612,21 @@ fn detail_actions<'a>(
       move |status| {
         let palette = state.palette();
         let disabled = matches!(status, IconControlState::Disabled);
-        row![
-          icon_with_color(
-            Icon::HeartFilled,
-            IconSize::Custom(15.0),
-            if disabled {
-              palette.text.muted
-            } else {
-              palette.colors.favorite
-            }
-          ),
-          text(state.t("detail-favorited"))
-            .size(14)
-            .line_height(Pixels(18.0))
-            .color(if disabled {
-              palette.text.muted
-            } else {
-              palette.colors.onControlHover
-            }),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
+        icon_with_color(
+          Icon::HeartFilled,
+          IconSize::Sm,
+          if disabled {
+            palette.text.muted
+          } else {
+            palette.colors.favorite
+          },
+        )
         .boxed()
       },
       ButtonVariant::TonalActive,
     )
-    .padding([9, 16])
+    .padding(TOKENS.spacing.s3)
+    .width(Length::Fixed(40.0))
     .min_height(40.0)
     .on_press_maybe(
       (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
@@ -645,22 +635,18 @@ fn detail_actions<'a>(
     )
     .boxed()
   } else {
-    control_button(
-      Some(Icon::Heart),
-      Some(state.t("detail-favorite")),
-      ButtonVariant::Tonal,
-    )
-    .icon_size(IconSize::Custom(15.0))
-    .label_size(14.0)
-    .min_height(40.0)
-    .spacing(8.0)
-    .padding([8, 16])
-    .on_press_maybe(
-      (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
-        UserDataActionKind::Favorite,
-      ))),
-    )
-    .boxed()
+    control_button(Some(Icon::Heart), None, ButtonVariant::Tonal)
+      .icon_size(IconSize::Sm)
+      .min_height(40.0)
+      .width(Length::Fixed(40.0))
+      .content_centered(true)
+      .padding(TOKENS.spacing.s2)
+      .on_press_maybe(
+        (!busy).then_some(Message::ItemActions(ItemActionsMessage::Detail(
+          UserDataActionKind::Favorite,
+        ))),
+      )
+      .boxed()
   };
   let watchlist = &state.full.as_ref().expect("FullUi required").personal_lists;
   let watchlisted = watchlist.watchlist_ids.contains(item_id);
@@ -670,22 +656,18 @@ fn detail_actions<'a>(
     } else {
       Icon::Bookmark
     }),
-    Some(if watchlisted {
-      state.t("detail-watchlisted")
-    } else {
-      state.t("detail-watchlist-add")
-    }),
+    None,
     if watchlisted {
       ButtonVariant::TonalActive
     } else {
       ButtonVariant::Tonal
     },
   )
-  .icon_size(IconSize::Custom(15.0))
-  .label_size(14.0)
+  .icon_size(IconSize::Sm)
   .min_height(40.0)
-  .spacing(8.0)
-  .padding([8, 16])
+  .width(Length::Fixed(40.0))
+  .content_centered(true)
+  .padding(TOKENS.spacing.s2)
   .on_press_maybe((!busy).then_some(Message::ItemActions(ItemActionsMessage::DetailWatchlist)));
   let (played_icon, played_label, played_variant) = if played {
     (
@@ -715,8 +697,24 @@ fn detail_actions<'a>(
     .spacing(10)
     .align_y(Alignment::Center)
     .push((playback).boxed())
-    .push((favorite_button).boxed())
-    .push((watchlist_button).boxed())
+    .push(focus_tooltip(
+      favorite_button,
+      state.t(if favorite {
+        "detail-favorited"
+      } else {
+        "detail-favorite"
+      }),
+      TooltipOptions::default(),
+    ))
+    .push(focus_tooltip(
+      watchlist_button,
+      state.t(if watchlisted {
+        "detail-watchlisted"
+      } else {
+        "detail-watchlist-add"
+      }),
+      TooltipOptions::default(),
+    ))
     .push((played_button).boxed());
   if let Some((item, position)) = queue_target {
     for (placement, label) in [

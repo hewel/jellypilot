@@ -8,7 +8,7 @@ use jellypilot_core::viewing_queue::{
 };
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_ui::icons::{Icon, IconSize};
-use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
+use jellypilot_ui::overlay::{focus_tooltip, popover, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::control_button::control_button;
@@ -100,7 +100,7 @@ pub(super) fn trigger(state: &State, icon_only: bool) -> Element<'_, Message> {
     QueueMessage::Open,
   )));
   if icon_only {
-    tooltip(
+    focus_tooltip(
       button.width(Length::Fixed(40.0)),
       state.t("viewing-queue-open"),
       TooltipOptions::default(),
@@ -142,16 +142,20 @@ fn content(state: &State) -> Element<'_, Message> {
   let upcoming = &view.upcoming;
   let busy = upcoming.pending.is_some() || view.lifecycle.replacing;
   let controls_enabled = !busy && !state.kernel.sdk.content_mutations_blocked();
-  let close = control_button(
-    Some(Icon::Close),
-    Some(state.t("viewing-queue-close")),
-    ButtonVariant::Text,
-  )
-  .id("viewing-queue-close")
-  .min_height(40.0)
-  .on_press(Message::Playback(PlaybackMessage::ViewingQueue(
-    QueueMessage::Close,
-  )));
+  let close = focus_tooltip(
+    control_button(Some(Icon::Close), None, ButtonVariant::Icon)
+      .id("viewing-queue-close")
+      .icon_size(IconSize::Sm)
+      .width(Length::Fixed(40.0))
+      .min_height(40.0)
+      .padding(8)
+      .content_centered(true)
+      .on_press(Message::Playback(PlaybackMessage::ViewingQueue(
+        QueueMessage::Close,
+      ))),
+    state.t("viewing-queue-close"),
+    TooltipOptions::default(),
+  );
   let heading = row![
     text(state.t("viewing-queue-title")).size(20).width(Fill),
     close
@@ -216,11 +220,27 @@ fn content(state: &State) -> Element<'_, Message> {
       ),
     };
     let action = |icon, key, action, enabled: bool| {
-      control_button(Some(icon), Some(state.t(key)), ButtonVariant::Text)
-        .id(entry_id(entry.id, key))
-        .min_height(40.0)
-        .padding([8, 10])
-        .on_press_maybe(enabled.then(|| edit(state, action)))
+      let play = matches!(action, Action::PlayNow(_));
+      let control = control_button(
+        Some(icon),
+        play.then(|| state.t(key)),
+        if play {
+          ButtonVariant::Tonal
+        } else {
+          ButtonVariant::Icon
+        },
+      )
+      .id(entry_id(entry.id, key))
+      .icon_size(IconSize::Sm)
+      .min_height(40.0)
+      .padding([8, 10])
+      .on_press_maybe(enabled.then(|| edit(state, action)));
+      let control = if play {
+        control
+      } else {
+        control.width(Length::Fixed(40.0)).content_centered(true)
+      };
+      focus_tooltip(control, state.t(key), TooltipOptions::default())
     };
     let buttons = row![
       action(

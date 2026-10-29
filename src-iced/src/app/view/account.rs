@@ -11,8 +11,8 @@ use jellypilot_session::RemoteControlState;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT, MONO_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{
-  focus_tooltip, popover, Alignment as PopoverAlignment, Placement, PopoverAppearance,
-  PopoverOptions, TooltipOptions,
+  focus_tooltip, focus_tooltip_content, popover, Alignment as PopoverAlignment, Placement,
+  PopoverAppearance, PopoverOptions, TooltipOptions,
 };
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
@@ -96,10 +96,10 @@ fn account_tooltip<'a>(
   }
 }
 
-/// The sidebar identity card and its account-scoped, anchored popover.
-pub fn sidebar_popover(state: &State, compact: bool) -> Element<'_, Message> {
+/// The sidebar avatar and its account-scoped menu, anchored to the actual hitbox.
+pub fn sidebar_popover(state: &State) -> Element<'_, Message> {
   let account = accounts::view(state);
-  let trigger = identity_card(state, &account, compact);
+  let trigger = identity_trigger(state, &account);
   let content = quick_menu(state, &account);
   popover(
     trigger,
@@ -107,6 +107,7 @@ pub fn sidebar_popover(state: &State, compact: bool) -> Element<'_, Message> {
     state.shell.account_popover_open,
     PopoverOptions {
       placement: Placement::Above,
+      gap: TOKENS.spacing.s2,
       alignment: PopoverAlignment::Start,
       width: Some(POPOVER_WIDTH),
       appearance: PopoverAppearance::Account,
@@ -225,11 +226,7 @@ pub fn modal_layer(state: &State) -> Element<'_, Message> {
   super::motion::reveal(content, modal_open(state))
 }
 
-fn identity_card<'a>(
-  state: &'a State,
-  account: &AccountView<'a>,
-  compact: bool,
-) -> Element<'a, Message> {
+fn identity_trigger<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Message> {
   let (name, server, provider) = account.current.as_ref().map_or_else(
     || {
       (
@@ -259,64 +256,50 @@ fn identity_card<'a>(
     || server.clone(),
     |provider| format!("{provider} · {server}"),
   );
-  let full_identity = format!("{name} · {subtitle}");
-  if compact {
-    return focus_tooltip(
-      control_button_content(
-        move |_| {
-          container(avatar(
-            &identity,
-            photo.clone(),
-            28.0,
-            TOKENS.radii.lg,
-            false,
-          ))
-          .center_x(Fill)
-          .boxed()
-        },
-        ButtonVariant::Text,
-      )
-      .style(sidebar::identity)
-      .id(ACCOUNT_TRIGGER_ID)
-      .padding([8, 0])
-      .width(Fill)
-      .min_height(44.0)
-      .on_press(Message::Shell(ShellMessage::ToggleAccountPopover)),
-      full_identity,
-      TooltipOptions::default(),
-    );
-  }
-
-  let metadata = state.palette().text.metadata;
-  focus_tooltip(
-    control_button_content(
-      move |_| {
-        let subtitle_line =
-          container(ellipsis_text(subtitle.clone()).size(10).color(metadata)).width(Fill);
-        row![
-          avatar(&identity, photo.clone(), 36.0, TOKENS.radii.lg, false),
-          column![
-            container(ellipsis_text(name.clone()).font(HEADING_FONT).size(12)).width(Fill),
-            subtitle_line,
-          ]
-          .spacing(TOKENS.spacing.s0_5)
-          .width(Fill),
-          icon_with_color(Icon::ChevronUp, IconSize::Xs, metadata),
-        ]
-        .spacing(TOKENS.spacing.s2_5)
-        .align_y(Alignment::Center)
-        .boxed()
-      },
-      ButtonVariant::Text,
-    )
-    .style(sidebar::identity)
-    .id(ACCOUNT_TRIGGER_ID)
-    .padding([8, 10])
-    .width(Fill)
-    .min_height(56.0)
-    .on_press(Message::Shell(ShellMessage::ToggleAccountPopover)),
-    full_identity,
-    TooltipOptions::default(),
+  let trigger = control_button_content(
+    move |_| avatar(&identity, photo.clone(), 32.0, TOKENS.radii.lg, false),
+    ButtonVariant::Text,
+  )
+  .style(sidebar::identity)
+  .id(ACCOUNT_TRIGGER_ID)
+  .padding(TOKENS.spacing.s1)
+  .width(Length::Fixed(40.0))
+  .min_height(40.0)
+  .on_press(Message::Shell(ShellMessage::ToggleAccountPopover));
+  let hint = container(
+    column![
+      text(name)
+        .font(iced::Font {
+          weight: iced::font::Weight::Semibold,
+          ..HEADING_FONT
+        })
+        .size(14)
+        .line_height(iced::Pixels(20.0))
+        .wrapping(text::Wrapping::WordOrGlyph)
+        .width(Fill)
+        .color(state.palette().text.heading),
+      text(subtitle)
+        .size(12)
+        .line_height(iced::Pixels(16.0))
+        .wrapping(text::Wrapping::WordOrGlyph)
+        .width(Fill)
+        .color(state.palette().text.metadata),
+    ]
+    .spacing(TOKENS.spacing.s0_5)
+    .width(Fill),
+  )
+  .id("account-identity-hint")
+  .width(195)
+  .padding(TOKENS.spacing.s2)
+  .style(sidebar::identity_hint);
+  focus_tooltip_content(
+    trigger,
+    hint,
+    TooltipOptions {
+      enabled: !state.shell.account_popover_open,
+      max_width: 195.0,
+      ..TooltipOptions::default()
+    },
   )
 }
 
@@ -471,12 +454,18 @@ fn account_feedback<'a>(
           .color(state.palette().colors.error)
           .width(Fill)
           .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
-        control_button(Some(Icon::Close), None, ButtonVariant::Icon)
-          .style(presentation.action_style())
-          .width(Length::Fixed(40.0))
-          .min_height(40.0)
-          .content_centered(true)
-          .on_press(Message::Account(accounts::Message::DismissError)),
+        focus_tooltip(
+          control_button(Some(Icon::Close), None, ButtonVariant::Icon)
+            .style(presentation.action_style())
+            .icon_size(IconSize::Sm)
+            .width(Length::Fixed(40.0))
+            .min_height(40.0)
+            .padding(TOKENS.spacing.s2)
+            .content_centered(true)
+            .on_press(Message::Account(accounts::Message::DismissError)),
+          state.t("common-dismiss"),
+          TooltipOptions::default(),
+        ),
       ]
       .align_y(Alignment::Center))
       .boxed(),
@@ -597,17 +586,18 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
             Some(MONO_FONT),
             Fill,
           ),
-          account_tooltip(
-            control_button(Some(copy_icon), Some(copy_label), ButtonVariant::Tonal)
+          focus_tooltip(
+            control_button(Some(copy_icon), None, ButtonVariant::Icon)
               .style(presentation.action_style())
-              .icon_size(IconSize::Xs)
-              .label_size(TOKENS.font_sizes.s12)
-              .spacing(TOKENS.spacing.s1_5)
-              .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+              .icon_size(IconSize::Sm)
+              .width(Length::Fixed(40.0))
+              .min_height(40.0)
+              .content_centered(true)
+              .padding(TOKENS.spacing.s2)
               .radius(TOKENS.radii.lg)
               .on_press(Message::Account(accounts::Message::CopyServerAddress)),
-            format!("{} · {server} · {}", current.user_name, current.server_url),
-            presentation,
+            copy_label,
+            TooltipOptions::default(),
           ),
         ]
         .spacing(TOKENS.spacing.s2_5)
@@ -1365,11 +1355,19 @@ fn add_account_modal<'a>(state: &'a State, view: AddAccountView<'a>) -> Element<
       ]
       .spacing(TOKENS.spacing.s0_5)
       .width(Fill),
-      control_button(Some(Icon::Close), None, ButtonVariant::Tonal)
-        .padding([5, 8])
-        .on_press_maybe(
-          interactive.then_some(Message::Account(accounts::Message::CloseAddAccount))
-        ),
+      focus_tooltip(
+        control_button(Some(Icon::Close), None, ButtonVariant::Icon)
+          .icon_size(IconSize::Sm)
+          .width(Length::Fixed(40.0))
+          .min_height(40.0)
+          .content_centered(true)
+          .padding(TOKENS.spacing.s2)
+          .on_press_maybe(
+            interactive.then_some(Message::Account(accounts::Message::CloseAddAccount))
+          ),
+        state.t("common-close"),
+        TooltipOptions::default(),
+      ),
     ]
     .align_y(Alignment::Center),
     provider,

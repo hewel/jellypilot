@@ -108,20 +108,6 @@ pub fn avatar_outline(theme: &Theme, radius: f32) -> container::Style {
     }
 }
 
-/// Keyboard hint inset in the section navigation footer.
-pub fn keycap(theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(palette(theme).colors.surfaceContainerHigh.into()),
-        border: Border {
-            radius: TOKENS.radii.md.into(),
-            color: palette(theme).colors.borderSubtle,
-            width: 1.0,
-            ..Border::default()
-        },
-        ..container::Style::default()
-    }
-}
-
 /// Neutral separator for the fixed compact header and About group.
 pub fn divider(theme: &Theme) -> container::Style {
     container::Style::default().background(palette(theme).colors.borderSubtle)

@@ -4,6 +4,7 @@ shell-libraries-unavailable = 媒体库暂不可用
 shell-search-placeholder = 搜索电影和剧集…
 shell-clear-search = 清空搜索
 shell-refreshing = 正在刷新…
+shell-refresh-failed = 刷新失败
 shell-control-mode = 控制模式
 shell-library-refresh-failed = 无法刷新媒体库：{ $details }
 shell-library-unavailable = 所选媒体库已更改或不再可访问，已返回首页。

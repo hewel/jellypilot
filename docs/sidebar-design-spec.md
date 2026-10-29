@@ -42,7 +42,7 @@ Only authenticated Full mode shows the Sidebar. Control-Only retains its existin
 | Personal navigation | Fixed | Home, Personal Lists |
 | Library heading | Fixed | Libraries and their actual count |
 | Video libraries | Independent vertical scrolling, filling the remaining height | Video libraries browsable by the current account, with actual names and types |
-| Account and tools | Fixed at the bottom | Clickable identity card; Settings, Refresh, Control mode |
+| Account and tools | Fixed at the bottom | Avatar account trigger; Settings, Refresh, Control mode |
 
 - At window widths of 1280 and above, the Sidebar is 220 wide; below 1280, retain the 72-wide icon-only Sidebar. Full mode retains its existing minimum window size.
 - Full mode opens at 1760×900 logical pixels, with the existing 1024×640 minimum. Control-Only remains 480×760; returning to Full mode restores its previous in-session size when available.
@@ -61,7 +61,7 @@ The subsequent Account Popover simplification makes it a quick menu rather than 
 
 Light mode uses a white opaque Account Popover and pale neutral hover surfaces, with pale indigo selection reserved for Sidebar navigation. Dark mode preserves the same hierarchy with appropriate Charcoal surfaces and contrast, rather than mechanically inverting colors. No glass blur, avatar gradients, or continuous breathing effects are required.
 
-Allow low-contrast structural outlines on the Account Popover, bottom identity card, and necessary inset controls. Do not outline every navigation row or button. The Paper Home toolbar uses separate flat tools rather than the preceding segmented container. A soft floating shadow separates the Account Popover from the shell; search and docked tools must not acquire the same elevation.
+Allow low-contrast structural outlines on the Account Popover, identity hint, and necessary inset controls. Do not outline every navigation row or button. The footer is a transparent single row without a shared card, divider, or shadow. A soft floating shadow separates the Account Popover from the shell; search and docked tools must not acquire the same elevation.
 
 These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, as scoped by the [design system's Sidebar surface revision](design-system.md#sidebar-surface-revision). Do not enlarge global 6/8 radius tokens, recolor shared default surfaces, or add view-local hardcoded styling to approximate the reference. Other screens keep their current defaults.
 
@@ -73,15 +73,16 @@ These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, a
 | Personal navigation | Minimum row height 38, radius 12; pale indigo selected fill and clear accent icon/text, without a heavy outline |
 | Library heading | Libraries label on the left, actual count in a separate right-aligned neutral badge; do not use the inline `Libraries · N` treatment |
 | Library rows | Minimum height 38, radius 8; aligned typed icons and names, with independent scrolling |
-| Bottom identity card | Minimum height 56, radius 12; 36-pixel rounded-square avatar, username first and provider/server identity second |
-| Bottom toolbar | Shared top divider above the account and tools; text Settings entry followed by independent 40×40 Refresh and Control mode buttons, with 16px icons. The compact Sidebar retains icon-only tools with 40px hit height |
+| Footer account trigger | Independent 40×40 target with 4px padding and a 32px, radius-8 avatar; no permanent username, server line, or chevron |
+| Footer tools | One 40px-high row: account, gap 4, then a flexible tool group with 8px horizontal padding and 4px gaps. Settings, Refresh and Control mode are equal-width icon-only targets, at least 40px wide, with 16px icons and radius 8. Tab follows visual order. The 72px compact rail retains a vertical arrangement because its 40px content width cannot fit four horizontal targets |
+| Identity hint | On avatar hover or keyboard focus, start-align 8px above the target and clamp/flip within the window. Width 195, padding 8, gap 2, radius 8 and a quiet 1px edge; name 14/20 semibold and provider/server 12/16 regular. Complete values wrap, including unbroken names; no ellipsis. Use dark `surfaceContainer` / light `surface`, and suppress the hint while the menu is open |
 | Account Popover | Target width 340, constrained by available window width rather than a forced minimum; outer radius 16 and padding 10; white opaque light-mode surface, semantic dark-mode surface, restrained outline and soft shadow |
 | Saved profile row | Show other accounts only, with a fixed-size rounded-square monogram and aligned username/provider/server identity; the current account appears once in the header |
 | Address and copy | Unframed, single-line address with an icon-only 40×40 copy target; full-value and copy-state hints remain available by keyboard and pointer |
 | Quick actions | Quiet full-width Add account, Manage accounts, and connected-only Disconnect rows; minimum height 40, label size 14, transparent resting backgrounds |
 | Account preferences and removal | Startup Auto Login, remote-control details, and Sign Out remain in Settings, reached directly through Manage accounts |
 
-The Sidebar's horizontal padding remains 12; the Paper Home revision updates expanded/icon-only widths to 220/72. Three real libraries naturally leave more middle space than the reference's fifteen; do not fill that space with dummy entries or move the bottom anchor upward.
+The expanded Sidebar is 220px including its 1px right divider; horizontal padding remains 12, leaving 195px for content. Expanded/icon-only widths are 220/72. The default footer is 40px high, with 16px sidebar bottom clearance; identity disclosure does not increase its height. Refresh failure adds a separate 40px feedback/retry row 8px below the main row, with 8px horizontal padding. Three real libraries naturally leave more middle space than the reference's fifteen; do not fill that space with dummy entries or move the bottom anchor upward.
 
 Home/personal-navigation controls, library rows, and bottom toolbar controls keep their visible icons and labels vertically centered within their hit areas, including selected and hovered states.
 
@@ -89,11 +90,11 @@ Popover height follows its actual content. With one or two saved profiles, there
 
 Keep usernames visually primary and provider/server identity secondary. In the quick menu, combine provider and server into one metadata line instead of separate provider badges. Long names and addresses must not stretch avatars or displace status/actions; truncate where necessary while keeping the full value available by keyboard and pointer. Copy always uses the complete Server URL.
 
-Selection, focus, hover, and unavailability are distinct states. The current account appears in the quick-menu header rather than as a redundant no-op selection; Settings retains its current-profile indication. Opening the Account Popover is not a reason to add a strong purple outline to the identity card; actual keyboard focus must retain a separate visible indication.
+Selection, focus, hover, and unavailability are distinct states. The current account appears in the quick-menu header rather than as a redundant no-op selection; Settings retains its current-profile indication. Opening the Account Popover is not a reason to add a strong purple outline to the avatar; actual keyboard focus must retain a separate visible indication.
 
-Button focus rings and focus-triggered hints are keyboard-only. Pointer presses clear button focus even when a modal or popover consumes the event. Pointer-origin dismissal does not re-focus the identity card; Esc restores it for keyboard use. Text inputs retain their native editing focus and caret behavior.
+Button focus rings and focus-triggered hints are keyboard-only. Pointer presses clear button focus even when a modal or popover consumes the event. Pointer-origin dismissal does not re-focus the avatar; Esc restores it for keyboard use. Text inputs retain their native editing focus and caret behavior.
 
-While the Account Popover is open, suppress both hover and focus hints belonging to its identity-card trigger. Hints inside the popover remain available.
+While the Account Popover is open, suppress both hover and focus hints belonging to its avatar trigger. Hints inside the popover remain available.
 
 Favorites and Watchlist retain distinguishable heart and bookmark icons with text. Do not replace Personal Lists with Watchlist or invent a combined list count to match the reference. Status is not communicated through color alone; do not import sample KIDS/PRO/NAS roles or unmeasured network telemetry.
 Verify actual color pairings against design-system contrast requirements rather than inheriting the external document's claim of "above 5.5:1".
@@ -166,11 +167,11 @@ A network failure does not mean an item was deleted and must not cause bulk mark
 
 ### Presentation and Entry Points
 
-The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. The expanded Sidebar groups the account and tools below one top divider. Settings retains its text label, followed by separate Refresh and Control mode actions. Control mode uses the Paper window-with-inward-arrow glyph (`Icon::ControlMode`) in both expanded and compact Sidebars, with the Control mode tooltip. It opens the existing fixed-size Control-Only composition; the glyph does not introduce picture-in-picture. Refresh retains the native current-context scope, pending guard and error feedback.
+The avatar alone opens the account menu. Its hover/focus hint and the menu retain the real username and provider/server identity, falling back to the server address when the name is missing. The outer footer is not clickable. Settings, Refresh and Control mode remain separate, directly reachable icon actions; none folds into a menu. Control mode uses `Icon::ControlMode` and opens the existing fixed-size Control-Only composition, not picture-in-picture or fullscreen. Refresh preserves its current-context scope, in-flight guard, and retryable failure feedback. The footer introduces no custom titlebar or window behavior: native decoration defaults, controller settings/return actions, close/tray handling, playback backend and session continuity remain unchanged.
 The Playback Target's device identity must not masquerade as a server node code. The quick menu shows one connection-state badge without repeating it as avatar dots; Settings separately describes existing remote-control connection status.
 "Signed in" does not mean continuously reachable; do not display unmeasured Mbps or latency.
 
-The Account Popover is anchored above the identity card by default, start-aligned, with a target width of 340 as reconciled with Paper on 2026-10-04. It may extend into the main content area, but the available window width still constrains it; 340 is not a minimum. Preserve long-address truncation and the full-value hint alongside the independent 40px copy target. Its position and maximum height are constrained by the entire window; flip placement when space is insufficient. Size short lists to content and constrain/scroll long lists independently. Only use broader content scrolling when window height requires it to keep all actions reachable.
+The Account Popover anchors 8px above the actual 40×40 avatar hitbox, start-aligned, with a target width of 340. With the default footer its bottom is 64px above the window bottom; this is a consequence of layout, not a fixed offset. Feedback below the footer raises the avatar and menu together. The menu may extend into the main content area, but available window width constrains it; 340 is not a minimum. Preserve long-address truncation and the full-value hint alongside the independent 40px copy target. Its position and maximum height are constrained by the entire window; flip placement when space is insufficient. Size short lists to content and constrain/scroll long lists independently. Only use broader content scrolling when window height requires it to keep all actions reachable.
 Outside click or Esc closes it. Closing a busy menu does not itself cancel background operations.
 
 Order the quick menu as current identity/address, other saved accounts when present, then Add account, Manage accounts, and connected-only Disconnect. Errors and cleanup-retry actions remain visible when relevant. Do not reserve empty space for absent feedback or account rows.
@@ -287,14 +288,16 @@ The checkboxes below track end-to-end acceptance with representative accounts an
 #### 2026-09-06 Visual Revision — Human Acceptance Pending
 
 - [ ] In Light mode, the Sidebar uses pale neutral controls and a white opaque Account Popover with a soft shadow; in Dark mode the same hierarchy remains distinguishable and readable.
-- [ ] Search, navigation, identity card, and toolbar follow the agreed geometry; only authorized structural boundaries are outlined. Unrelated screens retain their previous default appearance.
+- [ ] Search, navigation and the transparent single-row footer follow the agreed geometry. Avatar, Settings, Refresh and Control mode each retain a separate target and visible keyboard focus; no old identity card, divider or permanent label remains. Unrelated screens retain their previous default appearance.
 - [ ] Libraries and its actual count align at opposite sides of the heading; 3 libraries leave natural middle space, while 15 and 50 libraries scroll without moving the fixed anchors.
-- [ ] With 1 or 2 saved profiles, the 368-wide Account Popover shrinks to content without an empty list reservation. With many alternatives the list scrolls; at short window heights copy, error/retry feedback, and all quick actions remain reachable.
+- [ ] With 1 or 2 saved profiles, the 340-wide Account Popover shrinks to content without an empty list reservation. With many alternatives the list scrolls; at short window heights copy, error/retry feedback, and all quick actions remain reachable.
 - [ ] The current identity appears only once, above other accounts, without a redundant selected row or avatar status dot. All avatars remain fixed-size with long usernames/server names/URLs; provider/server metadata stays secondary.
 - [ ] The unframed address row keeps its 40×40 copy target stable through idle, success, and failure states and copies the complete URL. Full truncated values and copy-state hints remain available through keyboard and pointer interaction.
 - [ ] Add account, Manage accounts, and Disconnect read as quiet menu rows, not competing filled buttons. Manage accounts opens Accounts and connection; startup preference, remote-control details, and Sign Out remain usable there. Closing restores the correct originating trigger, including after Ctrl/Cmd+, refocuses the open modal.
-- [ ] Mouse opening/closing of the identity card and clicks elsewhere, including non-interactive popover content, leave no stale focus ring or focus hint. Tab/Shift+Tab reveal keyboard focus; Esc closes the popover and restores trigger focus. Reduced-motion preferences remain respected.
+- [ ] Mouse opening/closing of the avatar menu and clicks elsewhere, including non-interactive popover content, leave no stale focus ring or focus hint. Tab/Shift+Tab reveal keyboard focus; Esc closes the popover and restores avatar focus. Reduced-motion preferences remain respected.
 - [ ] An open Account Popover never shares the screen with its trigger's tooltip. Content hints remain readable, and ordinary trigger hover hints resume after closing.
+- [ ] Long account/server values wrap fully in the avatar hint in both themes without resizing the footer. Refresh pending prevents duplicate activation; failure shows Retry below the row and moves the avatar/menu anchor together.
+- [ ] Continue Watching keeps its 48px circular play control and 40px corner actions icon-only. Dynamic action hints, episode/remaining-time metadata, confirmation dialogs and TV text actions remain; play/removal must not open card details.
 
 ### Validation Tiers
 

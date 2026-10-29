@@ -11,7 +11,7 @@ use jellypilot_mpv::playback::tools::{PlaybackFileToken, PlaybackToolAction, Too
 use jellypilot_mpv::playback::TrackInfo;
 use jellypilot_mpv::playback_session::TracksView;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
-use jellypilot_ui::overlay::{popover, Placement, PopoverOptions};
+use jellypilot_ui::overlay::{focus_tooltip, popover, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
@@ -130,18 +130,22 @@ fn panel<'a>(
   state: &State,
   title: &str,
   body: Element<'a, Message>,
-  subtitles: bool,
+  compact: bool,
 ) -> Element<'a, Message> {
   let heading = row![
     text(state.t(title)).size(TOKENS.font_sizes.s16).width(Fill),
-    control_button(
-      Some(Icon::Close),
-      Some(state.t("common-close")),
-      ButtonVariant::Text
-    )
-    .id("playback-tools-close")
-    .min_height(40.0)
-    .on_press(close()),
+    focus_tooltip(
+      control_button(Some(Icon::Close), None, ButtonVariant::Icon)
+        .id("playback-tools-close")
+        .icon_size(IconSize::Sm)
+        .padding(TOKENS.spacing.s2)
+        .width(Length::Fixed(40.0))
+        .min_height(40.0)
+        .content_centered(true)
+        .on_press(close()),
+      state.t("common-close"),
+      TooltipOptions::default(),
+    ),
   ]
   .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center);
@@ -152,21 +156,13 @@ fn panel<'a>(
     .smooth_scroll(false)
     .id("playback-tools-scroll")
     .style(jellypilot_ui::theme::scrollable)
-    .height(if subtitles {
-      Length::Fit.max(280.0)
-    } else {
-      Length::Fill
-    });
+    .height(Length::Fit.max(if compact { height.min(280.0) } else { height }));
   guard(
     state,
     container(
       column![heading, body]
         .spacing(TOKENS.spacing.s2)
-        .height(if subtitles {
-          Length::Fit.max(height)
-        } else {
-          Length::Fixed(height)
-        })
+        .height(Length::Fit.max(height))
         .width(Fill),
     )
     .id("playback-tools-content"),
@@ -213,12 +209,28 @@ fn feedback<'a>(
     );
   }
   body.push(
-    (action(
-      state,
-      "playback-tools-refresh",
-      PlaybackToolAction::Refresh,
-      available(state),
-    ))
+    (row![
+      space::horizontal(),
+      focus_tooltip(
+        guard_scope(
+          (scope(state), "playback-tools-refresh"),
+          control_button(Some(Icon::Refresh), None, ButtonVariant::Icon)
+            .id("playback-tools-refresh")
+            .icon_size(IconSize::Sm)
+            .padding(TOKENS.spacing.s2)
+            .width(Length::Fixed(40.0))
+            .min_height(40.0)
+            .content_centered(true)
+            .on_press_maybe(
+              available(state)
+                .then(|| execute(state, PlaybackToolAction::Refresh))
+                .flatten(),
+            ),
+        ),
+        state.t("playback-tools-refresh"),
+        TooltipOptions::default(),
+      ),
+    ])
     .boxed(),
   )
 }
@@ -909,6 +921,9 @@ mod tests {
             content.height + 2.0 * TOKENS.spacing.s3 <= (viewport.height - 64.0).min(640.0) + 0.1
           );
           assert!(content.width + 2.0 * TOKENS.spacing.s3 <= if subtitles { 240.1 } else { 320.1 });
+          // Short tool content must not reserve an empty full-height sheet over the video.
+          let refresh = bounds.get("playback-tools-refresh");
+          assert!(content.y + content.height <= refresh.y + refresh.height + 0.1);
           assert!(close.height >= 40.0 && close.width >= 40.0);
           assert!(close.y >= 16.0 && close.y + close.height <= viewport.height - 16.0);
           for (_, control) in &bounds.0 {

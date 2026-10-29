@@ -2,6 +2,7 @@
 
 use iced::advanced::Renderer as _;
 use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
+use iced::time::Instant;
 use iced::widget::{container, text};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
@@ -37,6 +38,24 @@ pub fn focus_tooltip<'a, Message: 'a>(
         .style(super::style::tooltip_surface)
         ._boxed(),
         options,
+        rich: false,
+    }
+    ._boxed()
+}
+
+/// Shows caller-styled, wrapping content above the trigger on hover or keyboard
+/// focus. Rich hints start-align with an 8px gap and share one overlay in both
+/// input modes. Disabling disclosure preserves the trigger's widget identity.
+pub fn focus_tooltip_content<'a, Message: 'a>(
+    trigger: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    hint: impl Widget<Message, Theme, iced::Renderer> + 'a,
+    options: TooltipOptions,
+) -> Element<'a, Message> {
+    FocusTooltip {
+        trigger: trigger._boxed(),
+        hint: hint._boxed(),
+        options,
+        rich: true,
     }
     ._boxed()
 }
@@ -45,6 +64,12 @@ struct FocusTooltip<'a, Message> {
     trigger: Element<'a, Message>,
     hint: Element<'a, Message>,
     options: TooltipOptions,
+    rich: bool,
+}
+
+#[derive(Default)]
+struct HoverState {
+    since: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -79,8 +104,27 @@ impl widget::Operation for FocusProbe {
 impl<Message> widget::Meta for FocusTooltip<'_, Message> {}
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Message> {
+    fn tag(&self) -> widget::tree::Tag {
+        if self.rich {
+            widget::tree::Tag::of::<HoverState>()
+        } else {
+            widget::tree::Tag::stateless()
+        }
+    }
+
+    fn state(&self) -> widget::tree::State {
+        if self.rich {
+            widget::tree::State::new(HoverState::default())
+        } else {
+            widget::tree::State::None
+        }
+    }
+
     fn diff(&mut self, tree: &mut widget::Tree) {
         tree.diff_children(&mut [&mut self.trigger, &mut self.hint]);
+        if self.rich && !self.options.enabled {
+            tree.state.downcast_mut::<HoverState>().since = None;
+        }
     }
 
     fn size(&self) -> Size<Length> {
@@ -117,6 +161,24 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
             shell,
             viewport,
         );
+        if self.rich {
+            let state = tree.state.downcast_mut::<HoverState>();
+            let hovered = self.options.enabled
+                && cursor.is_over(layout.bounds())
+                && !matches!(
+                    event,
+                    Event::Window(iced::window::Event::Unfocused)
+                        | Event::Mouse(mouse::Event::CursorLeft | mouse::Event::ButtonPressed(_))
+                );
+            if hovered {
+                let since = *state.since.get_or_insert_with(Instant::now);
+                if since.elapsed() < self.options.delay {
+                    shell.request_redraw_at(since + self.options.delay);
+                }
+            } else if state.since.take().is_some() {
+                shell.request_redraw();
+            }
+        }
     }
 
     fn draw(
@@ -173,6 +235,9 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
         translation: Vector,
         window: Size,
     ) -> Vec<overlay::Element<'a, Message, Theme, iced::Renderer>> {
+        if !self.options.enabled {
+            return Vec::new();
+        }
         let mut focus = FocusProbe::default();
         self.trigger.operate(
             &mut tree.children[0],
@@ -181,7 +246,13 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
             renderer,
             &mut focus,
         );
-        if focus.0 {
+        let hovered = self.rich
+            && tree
+                .state
+                .downcast_ref::<HoverState>()
+                .since
+                .is_some_and(|since| since.elapsed() >= self.options.delay);
+        if focus.0 || hovered {
             let hint_tree = &mut tree.children[1];
             let hint_viewport = Rectangle::with_size(window);
             self.hint.layout(
@@ -195,8 +266,16 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
                 hint_viewport,
                 PositioningOptions {
                     preferred: self.options.placement,
-                    gap: TOKENS.spacing.s1_5,
-                    alignment: super::Alignment::Center,
+                    gap: if self.rich {
+                        TOKENS.spacing.s2
+                    } else {
+                        TOKENS.spacing.s1_5
+                    },
+                    alignment: if self.rich {
+                        super::Alignment::Start
+                    } else {
+                        super::Alignment::Center
+                    },
                     clamp_to_viewport: true,
                     flip_when_overflow: true,
                 },
@@ -265,6 +344,119 @@ mod tests {
 
     use super::*;
     use crate::{control_button, fonts::DEFAULT_LINE_HEIGHT, variants::ButtonVariant};
+
+    #[test]
+    fn rich_hover_and_focus_share_one_hint_and_disabling_keeps_focus() {
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            RendererSettings::default(),
+            Some("tiny-skia"),
+        ))
+        .expect("software layout renderer");
+        let build = |enabled| {
+            focus_tooltip_content(
+                control_button::<()>(None, Some("Account".into()), ButtonVariant::Text)
+                    .id("avatar")
+                    .width(Length::Fixed(40.0))
+                    .min_height(40.0),
+                container(text("Full account and server")).width(195),
+                TooltipOptions {
+                    enabled,
+                    delay: std::time::Duration::ZERO,
+                    ..TooltipOptions::default()
+                },
+            )
+        };
+        let mut control = build(true);
+        let mut tree = widget::Tree::new(&control);
+        tree.diff(&mut control);
+        let viewport = Rectangle::with_size(Size::new(400.0, 400.0));
+        control.layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, viewport.size()),
+        );
+        let layout = Layout::new(tree.size).move_to(Point::new(12.0, 300.0));
+        let mut messages = iced::advanced::shell::Bus::new();
+        let cursor = Point::new(30.0, 320.0);
+        control.update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::CursorMoved { position: cursor }),
+            layout,
+            mouse::Cursor::Available(cursor),
+            &renderer,
+            &mut Shell::new(
+                &iced::window::Headless,
+                iced::advanced::shell::Waker::noop(),
+                &mut messages,
+            ),
+            &viewport,
+        );
+        assert_eq!(
+            control
+                .overlay(
+                    &mut tree,
+                    layout,
+                    &renderer,
+                    &viewport,
+                    Vector::ZERO,
+                    viewport.size()
+                )
+                .len(),
+            1
+        );
+        control.operate(
+            &mut tree,
+            layout,
+            &viewport,
+            &renderer,
+            &mut focusable::focus::<()>(widget::Id::new("avatar")),
+        );
+        assert_eq!(
+            control
+                .overlay(
+                    &mut tree,
+                    layout,
+                    &renderer,
+                    &viewport,
+                    Vector::ZERO,
+                    viewport.size()
+                )
+                .len(),
+            1
+        );
+        control = build(false);
+        tree.diff(&mut control);
+        assert!(control
+            .overlay(
+                &mut tree,
+                layout,
+                &renderer,
+                &viewport,
+                Vector::ZERO,
+                viewport.size()
+            )
+            .is_empty());
+        control = build(true);
+        tree.diff(&mut control);
+        assert_eq!(
+            control
+                .overlay(
+                    &mut tree,
+                    layout,
+                    &renderer,
+                    &viewport,
+                    Vector::ZERO,
+                    viewport.size()
+                )
+                .len(),
+            1,
+            "disabling disclosure must not discard the avatar's keyboard focus"
+        );
+        assert!(
+            messages.into_iter().next().is_none(),
+            "disclosure is not an activation"
+        );
+    }
 
     #[test]
     fn nonclickable_selection_reveals_full_value_only_while_focused() {

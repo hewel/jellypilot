@@ -477,10 +477,17 @@ fn featured_hero<'a>(
       .id(iced::widget::Id::new("home-hero-rail-next"))
       .on_press_maybe(next_id.map(|id| Message::Home(HomeMessage::HeroSelected(id))));
     selection = selection.push((rail).boxed()).push(
-      row![previous, next]
-        .spacing(TOKENS.spacing.s1)
-        .align_y(Alignment::Center)
-        .boxed(),
+      row![
+        focus_tooltip(
+          previous,
+          state.t("common-previous"),
+          TooltipOptions::default()
+        ),
+        focus_tooltip(next, state.t("common-next"), TooltipOptions::default()),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center)
+      .boxed(),
     );
   }
 
@@ -725,15 +732,22 @@ fn video_card<'a>(
     {
       let details = control_button(Some(Icon::Info), None, ButtonVariant::Tonal)
         .icon_size(IconSize::Xs)
-        .padding(7)
+        .padding(TOKENS.spacing.s2)
+        .width(Length::Fixed(40.0))
+        .min_height(40.0)
+        .content_centered(true)
         .on_press(Message::OpenDetail(Box::new(item.clone())));
       artwork_layers = artwork_layers.push(
-        (container(details)
-          .padding(TOKENS.spacing.s2)
-          .width(Fill)
-          .height(Fill)
-          .align_x(Alignment::End)
-          .align_y(Alignment::Start))
+        (container(focus_tooltip(
+          details,
+          state.t("home-details"),
+          TooltipOptions::default(),
+        ))
+        .padding(TOKENS.spacing.s2)
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start))
         .boxed(),
       );
     }

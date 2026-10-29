@@ -298,9 +298,16 @@ design reference, not native visual-acceptance evidence.
 - Subtitle ordering, footer transport/mute/volume and Sidebar tools use independent
   40px hit regions. Correct first/last ordering boundaries and the already-40px
   account-copy/timeline controls remain unchanged.
-- The expanded Sidebar groups its 56px account trigger and tools under one divider,
-  with text Settings and separate Refresh/Control mode actions. Control mode remains
-  the existing App Mode, without a new picture-in-picture capability.
+- The latest footer replaces the prior identity card/divider with one transparent
+  40px row: a 40×40 avatar and Settings, Refresh and Control mode icon-only targets.
+  The 32px avatar reveals complete account/server values in a wrapping hover/focus
+  hint; opening the menu suppresses that hint. Tool targets divide the remaining
+  width with 8px group insets and 4px gaps, never shrinking below 40px.
+  The compact rail retains vertical targets. Refresh failure/retry appears below
+  the row; menu placement follows the avatar's actual hitbox instead of a fixed
+  bottom offset. Control mode remains the existing App Mode, without a new
+  picture-in-picture capability or custom titlebar. Original native decorations,
+  controller return/settings entries, window geometry and close behavior remain.
 - Account Popover targets 340px rather than 320px, retaining the existing viewport
   clamp, address truncation/full-value hint and 40px copy target. This is not a new
   minimum window or popover width.
