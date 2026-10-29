@@ -34,6 +34,8 @@ pub enum Input {
     /// position when nothing is committed. Updates only the committed
     /// target, never the visible draft.
     Step(Control, f64),
+    /// Cancel one gesture without changing the other control or an issued target.
+    Cancel(Control),
     /// Every drag was cancelled; staged drafts drop while committed targets
     /// stay, since commands already sent cannot be unsent.
     CancelDrags,
@@ -146,6 +148,12 @@ impl Adjustments {
                 channel.desired = Some(target);
                 Some(command(control, target))
             }
+            Input::Cancel(control) => {
+                let channel = self.channel_mut(control);
+                channel.dragging = false;
+                channel.preview = None;
+                None
+            }
             Input::CancelDrags => {
                 for channel in [&mut self.seek, &mut self.volume] {
                     channel.dragging = false;
@@ -234,6 +242,36 @@ mod tests {
             duration_seconds,
             volume,
         }
+    }
+
+    #[test]
+    fn cancelling_seek_leaves_volume_gesture_and_issued_targets_intact() {
+        let mut adjustments = Adjustments::default();
+        let playing = Some(values(10.0, Some(100.0), 40.0));
+        let _ = adjustments.handle(Input::Adjust(Control::Seek, 20.0), playing);
+        let _ = adjustments.handle(Input::DragStarted(Control::Volume), playing);
+        let _ = adjustments.handle(Input::Preview(Control::Volume, 65.0), playing);
+        let _ = adjustments.handle(Input::DragStarted(Control::Seek), playing);
+        let _ = adjustments.handle(Input::Preview(Control::Seek, 50.0), playing);
+        assert_eq!(
+            adjustments.handle(Input::Cancel(Control::Seek), playing),
+            None
+        );
+        assert!(!adjustments.view().seek_dragging);
+        assert_eq!(adjustments.view().seek_preview, None);
+        assert!(adjustments.view().volume_dragging);
+        assert_eq!(
+            adjustments.handle(Input::Release(Control::Seek), playing),
+            None
+        );
+        assert_eq!(
+            adjustments.handle(Input::Release(Control::Volume), playing),
+            Some(Command::SetVolume(65.0))
+        );
+        assert_eq!(
+            adjustments.handle(Input::Step(Control::Seek, 5.0), playing),
+            Some(Command::Seek(25.0))
+        );
     }
 
     #[test]

@@ -29,8 +29,9 @@ const buildCommand = Effect.fn('task.mpv.command')(function* (
   executable: string,
   args: readonly string[],
   hint: string,
+  environment: Readonly<Record<string, string>> = {},
 ) {
-  return yield* runCommand({ ...command(executable, args), buffered: true }).pipe(
+  return yield* runCommand({ ...command(executable, args, environment), buffered: true }).pipe(
     Effect.catchTag('TaskProcessError', (error) =>
       Effect.fail(
         new TaskMpvBuildError({
@@ -70,7 +71,10 @@ const verifySource = Effect.fn('task.mpv.verifySource')(function* (source: strin
   }
 });
 
-export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | null) {
+export const buildMpv = Effect.fn('task.mpv.build')(function* (
+  source: string | null,
+  environment: Readonly<Record<string, string>> = {},
+) {
   if (process.platform !== 'linux' && process.platform !== 'win32') {
     return yield* Effect.fail(
       new TaskMpvBuildError({
@@ -133,6 +137,7 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
       'pkg-config',
       ['--modversion', requirement],
       `Install development packages for ${requirement}. Vulkan needs both loader and headers (vulkan-headers and vulkan-loader development packages); a runtime loader alone is insufficient. Use a documented SDK via PKG_CONFIG_PATH if not using system packages.`,
+      environment,
     );
     packages[requirement] = result.stdout.trim();
   }
@@ -141,7 +146,9 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
     ...sourcePin.mesonOptions,
     ...(process.platform === 'win32' ? sourcePin.windowsMesonOptions : []),
   ];
-  yield* runCommand(command('meson', ['setup', build, checkout, ...mesonOptions])).pipe(
+  yield* runCommand(
+    command('meson', ['setup', build, checkout, ...mesonOptions], environment),
+  ).pipe(
     Effect.catchTag('TaskProcessError', (error) =>
       Effect.fail(
         new TaskMpvBuildError({
@@ -164,7 +171,7 @@ export const buildMpv = Effect.fn('task.mpv.build')(function* (source: string | 
       }),
     );
   }
-  yield* runCommand(command('meson', ['compile', '-C', build, 'mpv']));
+  yield* runCommand(command('meson', ['compile', '-C', build, 'mpv'], environment));
   // Recheck after compilation to avoid certifying a checkout edited during the build.
   yield* verifySource(checkout);
   const baseline =

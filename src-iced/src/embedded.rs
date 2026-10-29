@@ -150,6 +150,8 @@ pub(crate) struct Options {
   pub baseline: PathBuf,
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   pub demuxer_cache_dir: PathBuf,
+  #[cfg(any(target_os = "linux", target_os = "windows"))]
+  pub host_abi: jellypilot_mpv_host::HostAbi,
   pub ipc: PathBuf,
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   pub engine_factory: crate::EmbeddedEngineFactory,
@@ -304,6 +306,12 @@ pub(crate) fn initialize(
       root,
       "share/jellypilot/mpv-baseline.conf",
     )?;
+    let host_abi = match std::env::var_os("JELLYPILOT_MPV_HOST_ABI").as_deref() {
+      None => jellypilot_mpv_host::HostAbi::Legacy,
+      Some(value) if value == "legacy" => jellypilot_mpv_host::HostAbi::Legacy,
+      Some(value) if value == "3" => jellypilot_mpv_host::HostAbi::TimelineV3,
+      Some(_) => return Err("JELLYPILOT_MPV_HOST_ABI must be legacy or 3".into()),
+    };
     let demuxer_cache_dir = dirs::cache_dir()
       .ok_or("Application cache directory unavailable for embedded MPV")?
       .join("jellypilot")
@@ -343,6 +351,7 @@ pub(crate) fn initialize(
         libmpv,
         baseline,
         demuxer_cache_dir,
+        host_abi,
         ipc,
         engine_factory: _engine_factory,
       })

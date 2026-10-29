@@ -210,25 +210,30 @@ impl graphics::Compositor for Compositor {
         demuxer_cache_dir: options.demuxer_cache_dir.clone(),
         width: 1,
         height: 1,
+        host_abi: options.host_abi,
         extra_args: crate::regression::host_extra_args(),
       },
       move || wake.request_redraw(),
     )
     .map_err(unavailable)?;
     if crate::regression::active() {
-      crate::regression::host_created(context.adapter().get_info().name);
+      crate::regression::host_created(context.adapter().get_info().name, host.abi_version());
     }
     let binding_layout = context.create_bind_group_layout(&video::layout_descriptor());
     let composite = video::Composite::new(context.device(), surface_format);
     let generation = host.frame_generation();
-    {
+    let binding = host.bind_group(&binding_layout);
+    let retired = {
       let mut frame = FRAME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-      frame.binding = Some(host.bind_group(&binding_layout));
-      frame.layout = Some(binding_layout.clone());
-      frame.shell = Some(shell);
-    }
+      (
+        frame.binding.replace(binding),
+        frame.layout.replace(binding_layout.clone()),
+        frame.shell.replace(shell),
+      )
+    };
+    drop(retired);
     // The display owner is transferred once here; surfaces register per window
     // so a rebound inhibitor always targets a live presentation surface.
     crate::embedded::idle::display_changed(display);
@@ -351,7 +356,8 @@ impl graphics::Compositor for Compositor {
     compositor::Information {
       adapter: self.context.adapter().get_info().name,
       backend: format!(
-        "Vulkan · embedded MPV · {:?} {}",
+        "Vulkan · embedded MPV ABI {} · {:?} {}",
+        self.host.abi_version(),
         self.context.surface_format(),
         match crate::embedded::hdr_state() {
           crate::embedded::HdrState::Active => "HDR10 PQ",
@@ -391,15 +397,24 @@ impl graphics::Compositor for Compositor {
       tracing::error!(%error, "Embedded MPV redraw failed");
       compositor::SurfaceError::Other
     })?;
-    let copied = self.host.copy_ready().is_some();
+    let copied = self
+      .host
+      .copy_ready()
+      .map_err(|error| {
+        tracing::error!(%error, "Embedded MPV frame synchronization failed");
+        compositor::SurfaceError::Other
+      })?
+      .is_some();
     if self.host.frame_generation() != self.generation {
       self.generation = self.host.frame_generation();
-      FRAME
+      let binding = self.host.bind_group(&self.binding_layout);
+      let retired = FRAME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .binding = Some(self.host.bind_group(&self.binding_layout));
+        .binding
+        .replace(binding);
+      drop(retired);
     }
-    self.context.poll();
     let lock = self.context.queue_lock();
     let mut acquired = {
       let _guard = QueueGuard::acquire(lock.as_ref());
@@ -501,12 +516,17 @@ impl graphics::Compositor for Compositor {
 impl Drop for Compositor {
   fn drop(&mut self) {
     crate::embedded::idle::shutdown();
-    let mut frame = FRAME
-      .lock()
-      .unwrap_or_else(std::sync::PoisonError::into_inner);
-    frame.binding = None;
-    frame.layout = None;
-    frame.shell = None;
+    let retired = {
+      let mut frame = FRAME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      (
+        frame.binding.take(),
+        frame.layout.take(),
+        frame.shell.take(),
+      )
+    };
+    drop(retired);
     if crate::regression::active() {
       crate::regression::compositor_dropped();
     }

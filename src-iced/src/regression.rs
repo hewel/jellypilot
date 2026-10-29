@@ -1,13 +1,55 @@
 //! Explicit, bounded native probes. No probe is selected by environment variables.
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::app::message::{Message, WindowMessage};
 use iced::{Subscription, Task};
 use serde_json::json;
 
 static RUN: OnceLock<Mutex<Run>> = OnceLock::new();
+
+struct Sustained {
+  requested: Duration,
+  started: Instant,
+  completed_cycles: u32,
+  finished_at: Option<Instant>,
+}
+
+impl Sustained {
+  fn parse(value: &str) -> Result<Self, String> {
+    let seconds = value
+      .bytes()
+      .all(|byte| byte.is_ascii_digit())
+      .then(|| value.parse::<u64>().ok())
+      .flatten()
+      .filter(|seconds| (1..=3600).contains(seconds))
+      .ok_or("--regression-duration-secs requires an integer from 1 through 3600")?;
+    Ok(Self {
+      requested: Duration::from_secs(seconds),
+      started: Instant::now(),
+      completed_cycles: 0,
+      finished_at: None,
+    })
+  }
+
+  fn complete_cycle(&mut self, now: Instant) -> bool {
+    self.completed_cycles += 1;
+    if now.duration_since(self.started) >= self.requested {
+      self.finished_at = Some(now);
+      true
+    } else {
+      false
+    }
+  }
+
+  fn elapsed(&self) -> Duration {
+    self
+      .finished_at
+      .unwrap_or_else(Instant::now)
+      .duration_since(self.started)
+  }
+}
 
 struct Run {
   scenario: String,
@@ -22,6 +64,8 @@ struct Run {
   decoder_samples: Vec<serde_json::Value>,
   error: Option<String>,
   adapter: Option<String>,
+  requested_host_abi: &'static str,
+  actual_host_abi: Option<u32>,
   action: Action,
   hosts: usize,
   dropped_hosts: usize,
@@ -30,6 +74,16 @@ struct Run {
   closed: bool,
   complete: bool,
   finished: bool,
+  started: Instant,
+  host_started: Option<Instant>,
+  sustained: Option<Sustained>,
+  phase: u8,
+  phase_deadline: Option<Instant>,
+  last_present: Option<Instant>,
+  cycle: u32,
+  phase_history: Vec<serde_json::Value>,
+  presentations: u64,
+  copied_frames: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,9 +105,93 @@ fn with_run<T>(f: impl FnOnce(&mut Run) -> T) -> Option<T> {
 }
 
 impl Run {
+  fn advance_phase(&mut self, phase: u8, now: Instant) {
+    self.phase = phase;
+    self.phase_deadline =
+      if phase == 9 || self.complete || self.finished || self.action == Action::Exit {
+        None
+      } else {
+        let dwell = self
+          .sustained
+          .as_ref()
+          .filter(|_| phase == 4)
+          .map_or(Duration::ZERO, |sustained| {
+            sustained.requested.min(Duration::from_secs(30))
+          });
+        Some(now + Duration::from_secs(20) + dwell)
+      };
+  }
+
+  fn phase_timeout(&self, now: Instant) -> Option<String> {
+    if self.scenario != "gpu" || self.complete || self.finished || self.action == Action::Exit {
+      return None;
+    }
+    self
+      .phase_deadline
+      .filter(|deadline| now > *deadline)
+      .map(|_| format!("GPU phase {} exceeded its bounded deadline", self.phase))
+  }
+
+  fn record_failure(&mut self, error: String, now: Instant) -> bool {
+    if self.finished || (self.action == Action::Exit && self.error.is_some()) {
+      return false;
+    }
+    self.error = Some(if self.scenario == "gpu" {
+      format!(
+        "{error}; GPU progress: phase={} cycle={} last_present_age={:?} presentations={} copies={} live_surfaces={}",
+        self.phase,
+        self.cycle,
+        self.last_present.map(|last| now.saturating_duration_since(last)),
+        self.presentations,
+        self.copied_frames,
+        self.surfaces,
+      )
+    } else {
+      error
+    });
+    self.phase_deadline = None;
+    self.action = Action::Exit;
+    true
+  }
+
+  fn check_phase_deadline(&mut self, now: Instant) -> bool {
+    self
+      .phase_timeout(now)
+      .is_some_and(|error| self.record_failure(error, now))
+  }
+
   fn save(&self, passed: bool) -> Result<(), String> {
     let mut report = json!({"schemaVersion": 1, "scenario": self.scenario, "runId": self.run_id,
       "status": if passed { "pass" } else if self.unavailable { "unavailable" } else { "fail" }, "checks": self.checks});
+    report["requestedHostAbi"] = json!(self.requested_host_abi);
+    report["actualHostAbi"] = json!(self.actual_host_abi);
+    report["processId"] = json!(std::process::id());
+    report["hostsCreated"] = json!(self.hosts);
+    report["hostsDropped"] = json!(self.dropped_hosts);
+    report["hostIdentity"] = json!(format!(
+      "{}:{}:{}",
+      self.run_id,
+      std::process::id(),
+      self.hosts
+    ));
+    report["phase"] = json!(self.phase);
+    report["cycle"] = json!(self.cycle);
+    report["phaseHistory"] = json!(self.phase_history);
+    report["presentations"] = json!(self.presentations);
+    report["copiedFrames"] = json!(self.copied_frames);
+    report["lastPresentElapsedSeconds"] = json!(self
+      .last_present
+      .map(|last| { last.saturating_duration_since(self.started).as_secs_f64() }));
+    report["sustained"] = self
+      .sustained
+      .as_ref()
+      .map_or(serde_json::Value::Null, |sustained| {
+        json!({
+          "requestedSeconds": sustained.requested.as_secs(),
+          "elapsedSeconds": sustained.elapsed().as_secs_f64(),
+          "completedCycles": sustained.completed_cycles
+        })
+      });
     if let Some(error) = &self.error {
       report["error"] = json!(error);
     }
@@ -101,8 +239,14 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
   let media = value("--regression-media")?;
   let run_id = value("--regression-run-id")?;
   let hwdec = value("--regression-hwdec")?;
+  let duration = value("--regression-duration-secs")?;
   let Some(scenario) = scenario else {
-    if report.is_some() || media.is_some() || run_id.is_some() || hwdec.is_some() {
+    if report.is_some()
+      || media.is_some()
+      || run_id.is_some()
+      || hwdec.is_some()
+      || duration.is_some()
+    {
       return Err("Regression arguments require --native-regression".into());
     }
     return Ok(());
@@ -123,6 +267,19 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
   {
     return Err("--regression-run-id must be a UUID".into());
   }
+  let requested_host_abi = match std::env::var("JELLYPILOT_MPV_HOST_ABI") {
+    Err(std::env::VarError::NotPresent) => "legacy",
+    Ok(value) if value == "legacy" => "legacy",
+    Ok(value) if value == "3" => "3",
+    _ => return Err("JELLYPILOT_MPV_HOST_ABI must be legacy or 3".into()),
+  };
+  let sustained = duration.as_deref().map(Sustained::parse).transpose()?;
+  if sustained.is_some() && scenario != "gpu" {
+    return Err("--regression-duration-secs is only valid for gpu".into());
+  }
+  let process_timeout = sustained
+    .as_ref()
+    .map_or(120, |run| run.requested.as_secs() + 120);
   let run = Run {
     scenario,
     run_id,
@@ -136,6 +293,8 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
     decoder_samples: Vec::new(),
     error: Some("Native regression has not completed".into()),
     adapter: None,
+    requested_host_abi,
+    actual_host_abi: None,
     action: Action::None,
     hosts: 0,
     dropped_hosts: 0,
@@ -144,6 +303,16 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
     closed: false,
     complete: false,
     finished: false,
+    started: Instant::now(),
+    host_started: None,
+    sustained,
+    phase: 0,
+    phase_deadline: None,
+    last_present: None,
+    cycle: 1,
+    phase_history: Vec::new(),
+    presentations: 0,
+    copied_frames: 0,
   };
   run.save(false)?;
   RUN
@@ -192,11 +361,13 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
     fail(error.clone());
     return Err(error);
   }
-  std::thread::spawn(|| {
-    std::thread::sleep(Duration::from_secs(120));
+  std::thread::spawn(move || {
+    std::thread::sleep(Duration::from_secs(process_timeout));
     let expired = with_run(|run| !run.finished).unwrap_or(false);
     if expired {
-      fail("Native regression exceeded its 120-second process deadline".into());
+      fail(format!(
+        "Native regression exceeded its {process_timeout}-second process deadline"
+      ));
       std::process::exit(1);
     }
   });
@@ -234,9 +405,9 @@ pub(crate) fn check(check: &str) {
 }
 pub(crate) fn fail(error: String) {
   with_run(|run| {
-    run.error = Some(error);
-    run.action = Action::Exit;
-    let _ = run.save(false);
+    if run.record_failure(error, Instant::now()) {
+      let _ = run.save(false);
+    }
   });
 }
 pub(crate) fn unavailable(error: String) {
@@ -261,6 +432,15 @@ pub(crate) fn finish(
     if run.surfaces != 0 && run.error.is_none() {
       run.error = Some("Daemon returned with live native surfaces".into());
     }
+    if run.sustained.as_ref().is_some_and(|sustained| {
+      sustained.finished_at.is_none()
+        || sustained.elapsed() < sustained.requested
+        || sustained.completed_cycles == 0
+    }) && run.error.is_none()
+    {
+      run.error =
+        Some("Sustained GPU regression exited before its duration and complete cycle".into());
+    }
     if (run.hosts != 1 || run.dropped_hosts != 1) && run.error.is_none() {
       run.error =
         Some("Daemon did not create and release exactly one retained embedded host".into());
@@ -277,6 +457,7 @@ pub(crate) fn finish(
         .push("daemon exited and retained compositor cleanup completed".into());
     }
     run.finished = true;
+    run.phase_deadline = None;
     run.save(run.error.is_none())?;
     run.error.clone().map_or(Ok(()), Err)
   })
@@ -305,8 +486,10 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
         return false;
       }
       if run.surfaces != 0 {
-        run.error = Some("Last-window Closed arrived with a live surface".into());
-        run.action = Action::Exit;
+        run.record_failure(
+          "Last-window Closed arrived with a live surface".into(),
+          Instant::now(),
+        );
         return false;
       }
       run.closed = true;
@@ -331,6 +514,13 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
   if gpu() {
     gpu_probe::drive_idle_session(state);
   }
+  // Presentation may be gated by the compositor; the existing tick must still
+  // enforce the same phase deadline. Keep the idle driver's earlier failure.
+  with_run(|run| {
+    if run.check_phase_deadline(Instant::now()) {
+      let _ = run.save(false);
+    }
+  });
   Some(
     with_run(|run| match run.action {
       Action::Exit => iced::exit(),
@@ -356,10 +546,37 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-pub(crate) fn host_created(adapter: String) {
+pub(crate) fn host_created(adapter: String, host_abi: u32) {
   with_run(|run| {
     run.hosts += 1;
+    run.host_started.get_or_insert_with(Instant::now);
+    if run.hosts != 1 {
+      run.record_failure(
+        "GPU regression replaced its retained embedded host".into(),
+        Instant::now(),
+      );
+    }
     run.adapter = Some(adapter);
+    run.actual_host_abi = Some(host_abi);
+    let matches = if run.requested_host_abi == "3" {
+      host_abi == 3
+    } else {
+      matches!(host_abi, 1 | 2)
+    };
+    if matches {
+      run.checks.push(format!(
+        "requested host ABI {} matched actual ABI {host_abi}",
+        run.requested_host_abi
+      ));
+    } else {
+      run.record_failure(
+        format!(
+          "Requested host ABI {}, but embedded host registered ABI {host_abi}",
+          run.requested_host_abi
+        ),
+        Instant::now(),
+      );
+    }
   });
 }
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -428,6 +645,11 @@ mod gpu_probe {
     request: &mut u64,
     command: serde_json::Value,
   ) -> Result<serde_json::Value, String> {
+    // loadfile success only acknowledges enqueueing. A previous cycle can still
+    // supply a copied frame while the replacement file's properties are absent.
+    let loading = command[0] == "loadfile";
+    let mut loaded = !loading;
+    let mut acknowledged = None;
     *request += 1;
     let bytes = serde_json::to_vec(&json!({"command": command, "request_id": *request}))
       .map_err(|e| e.to_string())?;
@@ -436,7 +658,7 @@ mod gpu_probe {
       .write_all(&bytes)
       .and_then(|()| ipc.get_mut().write_all(b"\n"))
       .map_err(|_| "Native IPC write failed")?;
-    let end = Instant::now() + Duration::from_secs(2);
+    let end = Instant::now() + Duration::from_secs(if loading { 20 } else { 2 });
     loop {
       if Instant::now() >= end {
         return Err("Native IPC acknowledgement deadline exceeded".into());
@@ -451,13 +673,26 @@ mod gpu_probe {
       }
       let value: serde_json::Value =
         serde_json::from_str(&line).map_err(|_| "Invalid native IPC response")?;
-      if value["request_id"].as_u64() != Some(*request) {
-        continue;
+      if loading && value["event"] == "file-loaded" {
+        loaded = true;
       }
-      if value["error"] != "success" {
-        return Err("Native IPC command was rejected".into());
+      if loading && value["event"] == "end-file" && value["reason"] == "error" {
+        return Err("Native regression media failed to load".into());
       }
-      return Ok(value["data"].clone());
+      if value["request_id"].as_u64() == Some(*request) {
+        if value["error"] != "success" {
+          return Err(format!(
+            "Native IPC command was rejected: {}",
+            value["error"]
+          ));
+        }
+        acknowledged = Some(value["data"].clone());
+      }
+      if loaded {
+        if let Some(data) = acknowledged.take() {
+          return Ok(data);
+        }
+      }
     }
   }
 
@@ -465,7 +700,6 @@ mod gpu_probe {
     ipc: BufReader<IpcStream>,
     request: u64,
     phase: u8,
-    deadline: Instant,
     since: Instant,
     clock: f64,
     seek: f64,
@@ -497,7 +731,6 @@ mod gpu_probe {
         ipc,
         request: 0,
         phase: 0,
-        deadline: Instant::now() + Duration::from_secs(20),
         since: Instant::now(),
         clock: 0.0,
         seek: 0.0,
@@ -508,18 +741,77 @@ mod gpu_probe {
         upload: None,
         image: None,
       };
+      with_run(|run| {
+        if let Some(sustained) = &mut run.sustained {
+          sustained.started = Instant::now();
+        }
+      });
+      probe.advance(0);
       probe.command(json!(["set_property", "pause", true]))?;
+      // A rejected input is a recoverable playback error, not evidence of a
+      // failed GPU handoff. Observe the real end-file before loading valid media.
+      let missing = with_run(|run| run.report.with_extension("missing-media"))
+        .ok_or("Regression report unavailable")?;
+      if missing.exists() {
+        return Err("Regression missing-media path already exists".into());
+      }
+      probe.request += 1;
+      let request = probe.request;
+      let bytes =
+        serde_json::to_vec(&json!({"command": ["loadfile", missing], "request_id": request}))
+          .map_err(|error| error.to_string())?;
+      probe
+        .ipc
+        .get_mut()
+        .write_all(&bytes)
+        .and_then(|()| probe.ipc.get_mut().write_all(b"\n"))
+        .map_err(|_| "Native IPC recovery request failed")?;
+      let deadline = Instant::now() + Duration::from_secs(2);
+      let (mut acknowledged, mut rejected) = (false, false);
+      while !acknowledged || !rejected {
+        if Instant::now() >= deadline {
+          return Err("Missing-media rejection deadline exceeded".into());
+        }
+        let mut line = String::new();
+        if probe
+          .ipc
+          .read_line(&mut line)
+          .map_err(|_| "Missing-media rejection response timed out")?
+          == 0
+        {
+          return Err("Native IPC disconnected during recovery probe".into());
+        }
+        let event: serde_json::Value =
+          serde_json::from_str(&line).map_err(|_| "Invalid native recovery response")?;
+        if event["request_id"].as_u64() == Some(request) {
+          if event["error"] != "success" {
+            return Err("Missing-media load command was not acknowledged".into());
+          }
+          acknowledged = true;
+        }
+        if event["event"] == "end-file" {
+          if event["reason"] != "error" {
+            return Err("Missing media ended without a playback error".into());
+          }
+          rejected = true;
+        }
+      }
+      check("missing local media produced an acknowledged playback error");
+      probe.load_media()?;
+      Ok(probe)
+    }
+    fn load_media(&mut self) -> Result<(), String> {
       let media = with_run(|run| run.media.clone())
         .flatten()
         .ok_or("Missing regression media")?;
-      probe.command(json!([
+      self.command(json!([
         "loadfile",
         media,
         "replace",
         -1,
         "cache=yes,cache-on-disk=yes,demuxer-seekable-cache=yes"
       ]))?;
-      Ok(probe)
+      Ok(())
     }
     fn command(&mut self, command: serde_json::Value) -> Result<serde_json::Value, String> {
       ipc_command(&mut self.ipc, &mut self.request, command)
@@ -534,6 +826,17 @@ mod gpu_probe {
     fn sample_decoder(&mut self, stage: &str) -> Result<(), String> {
       let mut sample = json!({ "stage": stage, "copyCount": self.copy_count,
         "copiedSincePhaseStart": self.copied });
+      with_run(|run| {
+        sample["cycle"] = json!(run.cycle);
+        sample["elapsedSeconds"] = json!(run.started.elapsed().as_secs_f64());
+        sample["hostIdentity"] = json!(format!(
+          "{}:{}:{}",
+          run.run_id,
+          std::process::id(),
+          run.hosts
+        ));
+        sample["actualHostAbi"] = json!(run.actual_host_abi);
+      });
       // Query the embedded client's actual decoder at settled lifecycle boundaries;
       // the requested hwdec option alone cannot distinguish direct decoding from copy.
       for property in [
@@ -577,8 +880,33 @@ mod gpu_probe {
     fn advance(&mut self, phase: u8) {
       self.phase = phase;
       self.since = Instant::now();
-      self.deadline = self.since + Duration::from_secs(20);
       self.copied = false;
+      with_run(|run| {
+        run.advance_phase(phase, self.since);
+        run.phase_history.push(json!({
+          "phase": phase,
+          "cycle": run.cycle,
+          "elapsedSeconds": run.started.elapsed().as_secs_f64(),
+          "hostElapsedSeconds": run.host_started.map(|start| start.elapsed().as_secs_f64()),
+          "hostsCreated": run.hosts,
+          "hostsDropped": run.dropped_hosts,
+          "renderersCreated": run.renderers,
+          "liveSurfaces": run.surfaces,
+          "actualHostAbi": run.actual_host_abi
+        }));
+        let _ = run.save(false);
+      });
+    }
+    fn playback_dwell(&self) -> Duration {
+      with_run(|run| {
+        run
+          .sustained
+          .as_ref()
+          .map_or(Duration::from_millis(500), |sustained| {
+            sustained.requested.min(Duration::from_secs(30))
+          })
+      })
+      .unwrap_or(Duration::from_millis(500))
     }
     pub(crate) fn present(
       &mut self,
@@ -591,13 +919,21 @@ mod gpu_probe {
       if self.phase == 9 {
         return Ok(());
       }
-      if Instant::now() > self.deadline {
-        return Err(format!("GPU phase {} exceeded its 20-second deadline; use moving, nonblack media longer than four seconds", self.phase));
-      }
-      self.copied |= copied;
-      self.copy_count += u64::from(copied);
+      let now = Instant::now();
       let size = viewport.physical_size();
-      with_run(|run| run.physical_size = Some((size.width, size.height)));
+      with_run(|run| {
+        if let Some(error) = run.phase_timeout(now) {
+          return Err(error);
+        }
+        self.copied |= copied;
+        self.copy_count += u64::from(copied);
+        run.last_present = Some(now);
+        run.physical_size = Some((size.width, size.height));
+        run.presentations += 1;
+        run.copied_frames = self.copy_count;
+        Ok(())
+      })
+      .unwrap_or(Ok(()))?;
       if size.width > 1024 || size.height > 768 {
         return Err(format!(
           "Regression physical viewport {}x{} exceeds bounded 1024x768 readback limit",
@@ -613,6 +949,11 @@ mod gpu_probe {
             .filter(|value| value.is_finite() && *value > 4.0)
             .ok_or("Regression media must be longer than four seconds")?;
           self.seek = (duration * 0.5).min(10.0);
+          if with_run(|run| run.sustained.is_some()).unwrap_or(false)
+            && duration <= self.seek + self.playback_dwell().as_secs_f64() + 2.0
+          {
+            return Err("Sustained media must extend beyond the seek target plus playback dwell and two seconds for reopen".into());
+          }
           self.command(json!(["seek", 1.0, "absolute+exact"]))?;
           self.advance(8);
         }
@@ -640,6 +981,9 @@ mod gpu_probe {
           }
           check("embedded MPV buffered media in its application disk cache");
           check("media loaded, decoded, copied and rendered through the video shader");
+          if with_run(|run| run.cycle == 1).unwrap_or(false) {
+            check("valid media rendered after a rejected load without recreating the host");
+          }
           self.sample_decoder("loaded-paused")?;
           self.advance(1);
         }
@@ -718,7 +1062,7 @@ mod gpu_probe {
           self.upload = Some(receiver);
           self.advance(4);
         }
-        4 if self.since.elapsed() >= Duration::from_millis(500)
+        4 if self.since.elapsed() >= self.playback_dwell()
           && self.clock()? > self.clock + 0.2
           && self.copied =>
         {
@@ -745,8 +1089,10 @@ mod gpu_probe {
           && generation != self.generation
           && with_run(|run| run.closed && run.action == Action::Reopened).unwrap_or(false) =>
         {
-          if !with_run(|run| run.hosts == 1 && run.renderers == 2 && run.surfaces == 1)
-            .unwrap_or(false)
+          if !with_run(|run| {
+            run.hosts == 1 && run.renderers == run.cycle as usize + 1 && run.surfaces == 1
+          })
+          .unwrap_or(false)
           {
             return Err("Reopen did not retain exactly one host with a new renderer".into());
           }
@@ -771,15 +1117,41 @@ mod gpu_probe {
           if self.command(json!(["get_property", "idle-active"]))? != true {
             return Ok(());
           }
-          check("native stop acknowledged and idle state observed");
+          if !with_run(|run| run.error.is_none()).unwrap_or(false) {
+            return Ok(());
+          }
           #[cfg(target_os = "linux")]
           if !idle_session_done() {
             return Ok(());
           }
-          with_run(|run| {
-            run.complete = true;
-            run.action = Action::Exit;
-          });
+          check("native stop acknowledged and idle state observed");
+          let complete = with_run(|run| {
+            let complete = run
+              .sustained
+              .as_mut()
+              .is_none_or(|sustained| sustained.complete_cycle(Instant::now()));
+            if complete {
+              run.complete = true;
+              run.action = Action::Exit;
+            } else {
+              run.cycle += 1;
+              run.closed = false;
+              run.action = Action::None;
+            }
+            complete
+          })
+          .unwrap_or(true);
+          if !complete {
+            self.command(json!(["set_property", "pause", true]))?;
+            self.pixels.clear();
+            self.image = None;
+            self.upload = None;
+            self.load_media()?;
+            #[cfg(target_os = "linux")]
+            idle_session::restart();
+            self.advance(0);
+            return Ok(());
+          }
           self.advance(9);
         }
         _ => {}
@@ -831,6 +1203,13 @@ mod gpu_probe {
       DONE.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    pub(super) fn restart() {
+      *DRIVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+      DONE.store(false, std::sync::atomic::Ordering::Release);
+    }
+
     /// Polls the session driver once per frame tick. Errors fail the run.
     pub(crate) fn drive(state: &mut State) {
       let mut guard = DRIVER
@@ -872,7 +1251,10 @@ mod gpu_probe {
           ipc: None,
           request: 0,
           step: Step::Begin,
-          deadline: Instant::now() + Duration::from_secs(20),
+          deadline: Instant::now()
+            + Duration::from_secs(
+              with_run(|run| if run.sustained.is_some() { 90 } else { 20 }).unwrap_or(20),
+            ),
           item_id: String::new(),
           title: String::new(),
           runtime: 0.0,
@@ -980,7 +1362,7 @@ mod gpu_probe {
         }
         if Instant::now() > self.deadline {
           return Err(format!(
-            "step {:?} exceeded its 20-second deadline",
+            "step {:?} exceeded its bounded cycle deadline",
             self.step_name()
           ));
         }
@@ -1185,8 +1567,210 @@ mod gpu_probe {
     }
   }
 
+  #[cfg(all(test, unix))]
+  mod ipc_tests {
+    use super::*;
+
+    fn exchange(responses: &[serde_json::Value]) -> (Result<serde_json::Value, String>, String) {
+      let (client, mut peer) = UnixStream::pair().expect("socket pair");
+      client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .expect("read deadline");
+      for response in responses {
+        writeln!(peer, "{response}").expect("write response");
+      }
+      writeln!(peer, "{{\"event\":\"after-load\"}}").expect("write sentinel");
+      let mut reader = BufReader::new(client);
+      let result = ipc_command(&mut reader, &mut 0, json!(["loadfile", "/fixture.mp4"]));
+      let mut next = String::new();
+      reader.read_line(&mut next).expect("read next event");
+      (result, next)
+    }
+
+    #[test]
+    fn load_waits_for_acknowledgement_and_file_loaded_in_either_order() {
+      let ack = json!({"request_id": 1, "error": "success", "data": null});
+      let loaded = json!({"event": "file-loaded"});
+      for responses in [[ack.clone(), loaded.clone()], [loaded, ack]] {
+        let (result, next) = exchange(&responses);
+        assert_eq!(result.expect("settled load"), serde_json::Value::Null);
+        assert_eq!(
+          serde_json::from_str::<serde_json::Value>(&next).expect("next event")["event"],
+          "after-load"
+        );
+      }
+    }
+
+    #[test]
+    fn acknowledged_load_still_fails_when_media_open_fails() {
+      let (result, _) = exchange(&[
+        json!({"request_id": 1, "error": "success"}),
+        json!({"event": "end-file", "reason": "error"}),
+      ]);
+      assert!(result.is_err());
+    }
+  }
+
   #[cfg(target_os = "linux")]
   pub(crate) use idle_session::{done as idle_session_done, drive as drive_idle_session};
 }
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) use gpu_probe::Probe;
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn gpu_run(started: Instant) -> Run {
+    Run {
+      scenario: "gpu".into(),
+      run_id: "deadline-test".into(),
+      unavailable: false,
+      physical_size: None,
+      video_size: iced::Size::new(480.0, 320.0),
+      report: PathBuf::new(),
+      media: None,
+      hwdec: None,
+      checks: Vec::new(),
+      decoder_samples: Vec::new(),
+      error: None,
+      adapter: None,
+      requested_host_abi: "3",
+      actual_host_abi: None,
+      action: Action::None,
+      hosts: 1,
+      dropped_hosts: 0,
+      renderers: 1,
+      surfaces: 1,
+      closed: false,
+      complete: false,
+      finished: false,
+      started,
+      host_started: Some(started),
+      sustained: None,
+      phase: 0,
+      phase_deadline: None,
+      last_present: None,
+      cycle: 1,
+      phase_history: Vec::new(),
+      presentations: 0,
+      copied_frames: 0,
+    }
+  }
+
+  #[test]
+  fn frame_ticks_expire_a_gpu_phase_without_presentations() {
+    let start = Instant::now();
+    let mut run = gpu_run(start);
+    run.advance_phase(8, start);
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(20)));
+    assert!(run.check_phase_deadline(start + Duration::from_millis(20_001)));
+    assert!(run.action == Action::Exit);
+    assert_eq!(run.presentations, 0);
+    assert!(run.error.as_ref().is_some_and(|error| {
+      error.contains("phase=8") && error.contains("last_present_age=None")
+    }));
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(90)));
+  }
+
+  #[test]
+  fn progress_replaces_deadlines_and_completion_disarms_them() {
+    let start = Instant::now();
+    let mut run = gpu_run(start);
+    run.advance_phase(0, start);
+    run.advance_phase(8, start + Duration::from_secs(19));
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(21)));
+
+    run.advance_phase(5, start + Duration::from_secs(22));
+    run.action = Action::Closing;
+    run.surfaces = 0;
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(40)));
+    run.action = Action::Reopened;
+    run.surfaces = 1;
+    run.advance_phase(6, start + Duration::from_secs(41));
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(43)));
+    run.advance_phase(7, start + Duration::from_secs(44));
+    run.complete = true;
+    run.action = Action::Exit;
+    run.advance_phase(9, start + Duration::from_secs(45));
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(200)));
+    assert!(run.phase_deadline.is_none());
+    assert!(run.error.is_none());
+  }
+
+  #[test]
+  fn presentations_do_not_extend_a_phase_budget() {
+    let start = Instant::now();
+    let mut run = gpu_run(start);
+    run.sustained = Some(Sustained::parse("900").expect("bounded duration"));
+    run.advance_phase(4, start);
+    run.last_present = Some(start + Duration::from_secs(49));
+    run.presentations = 100;
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(50)));
+    assert!(run.check_phase_deadline(start + Duration::from_millis(50_001)));
+    assert!(run.action == Action::Exit);
+  }
+
+  #[test]
+  fn earlier_idle_failure_keeps_its_error_and_gpu_progress() {
+    let start = Instant::now();
+    let mut run = gpu_run(start);
+    run.advance_phase(0, start);
+    run.advance_phase(8, start + Duration::from_secs(15));
+    run.last_present = Some(start + Duration::from_secs(16));
+    let original = "Idle session driver: step \"await-resume\" exceeded its bounded cycle deadline";
+    assert!(run.record_failure(original.into(), start + Duration::from_secs(21)));
+    let first_error = run.error.clone().expect("idle failure");
+    assert!(first_error.starts_with(original));
+    assert!(first_error.contains("phase=8"));
+    assert!(first_error.contains("last_present_age=Some(5s)"));
+    assert!(!run.check_phase_deadline(start + Duration::from_secs(36)));
+    assert!(!run.record_failure("later failure".into(), start + Duration::from_secs(40)));
+    assert_eq!(run.error.as_deref(), Some(first_error.as_str()));
+  }
+
+  #[test]
+  fn native_duration_rejects_unbounded_and_malformed_values() {
+    for value in [
+      "",
+      "0",
+      "3601",
+      "-1",
+      "+1",
+      "1.5",
+      "1e3",
+      "NaN",
+      "Infinity",
+      " 1",
+      "1 ",
+      "１",
+      "18446744073709551616",
+    ] {
+      assert!(Sustained::parse(value).is_err(), "accepted {value:?}");
+    }
+    for value in ["1", "900", "3600"] {
+      assert!(Sustained::parse(value).is_ok(), "rejected {value:?}");
+    }
+  }
+
+  #[test]
+  fn sustained_cycles_cannot_finish_before_requested_time() {
+    let mut run = Sustained::parse("900").expect("valid duration");
+    let start = run.started;
+    assert!(!run.complete_cycle(start + Duration::from_secs(30)));
+    assert!(!run.complete_cycle(start + Duration::from_secs(899)));
+    assert!(run.finished_at.is_none());
+    assert!(run.complete_cycle(start + Duration::from_secs(900)));
+    assert_eq!(run.completed_cycles, 3);
+    assert_eq!(run.elapsed(), Duration::from_secs(900));
+  }
+
+  #[test]
+  fn late_cycle_completion_records_observed_time_without_truncation() {
+    let mut run = Sustained::parse("1").expect("valid duration");
+    let finished = run.started + Duration::from_millis(3250);
+    assert!(run.complete_cycle(finished));
+    assert_eq!(run.finished_at, Some(finished));
+    assert_eq!(run.elapsed(), Duration::from_millis(3250));
+  }
+}

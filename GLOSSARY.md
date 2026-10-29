@@ -63,8 +63,8 @@ _Avoid_: Startup Auto Login, automatic playback, Continue Watching
 Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source and does not request a Provider Transcode.
 
 **Seek Preview**:
-A server-provided still for a proposed position in the current media source, shown with the existing time and available chapter label while inspecting the playback timeline. It does not change playback position or generate video frames locally; unavailable images leave the text preview usable.
-_Avoid_: Episode Still, playback seek, client-side video decoding
+A still for a proposed position in the current media source, shown with time and available chapter labels while inspecting the playback timeline without changing playback. Server-provided images take priority; seekable sources may use independent on-demand decoding when those images are unavailable, while nonseekable streams retain time hints.
+_Avoid_: Episode Still, playback seek, Provider Transcode
 
 **Quick Connect**:
 A Jellyfin authentication method where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default Jellyfin login method and authenticates to a known Server URL; it does not discover or choose servers.

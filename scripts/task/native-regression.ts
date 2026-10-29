@@ -20,6 +20,8 @@ interface Result {
   readonly schemaVersion: 1;
   readonly runId: string;
   readonly scenario: Scenario;
+  readonly requestedHostAbi: Request['hostAbi'];
+  readonly actualHostAbi: number | null;
   readonly status: Status;
   readonly checks: readonly string[];
   readonly error?: string;
@@ -44,7 +46,13 @@ const hashFile = async (file: string): Promise<string> => {
   return hash.digest('hex');
 };
 
-function nativeReport(value: unknown, scenario: Scenario, runId: string): Result {
+export function nativeReport(
+  value: unknown,
+  scenario: Scenario,
+  runId: string,
+  hostAbi: Request['hostAbi'],
+  durationSeconds: Request['durationSeconds'] = null,
+): Result {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -58,17 +66,67 @@ function nativeReport(value: unknown, scenario: Scenario, runId: string): Result
     (value.status !== 'pass' && value.status !== 'fail' && value.status !== 'unavailable') ||
     !('checks' in value) ||
     !Array.isArray(value.checks) ||
-    !value.checks.every((check): check is string => typeof check === 'string')
+    !value.checks.every((check): check is string => typeof check === 'string') ||
+    !('requestedHostAbi' in value) ||
+    (value.requestedHostAbi !== 'legacy' && value.requestedHostAbi !== '3') ||
+    !('actualHostAbi' in value) ||
+    (value.actualHostAbi !== null &&
+      (typeof value.actualHostAbi !== 'number' ||
+        !Number.isInteger(value.actualHostAbi) ||
+        value.actualHostAbi < 1 ||
+        value.actualHostAbi > 4_294_967_295))
   ) {
     throw new Error('Native regression report is missing, invalid, or belongs to a different run.');
   }
+  const abiMatches =
+    hostAbi === '3'
+      ? value.actualHostAbi === 3
+      : value.actualHostAbi === 1 || value.actualHostAbi === 2;
+  const abiError =
+    value.requestedHostAbi !== hostAbi
+      ? `Native report requested ABI ${value.requestedHostAbi}, expected ${hostAbi}.`
+      : value.status === 'pass' && !abiMatches
+        ? `Native report claimed pass with actual host ABI ${value.actualHostAbi}, expected ${hostAbi === '3' ? '3' : '1 or 2'}.`
+        : null;
+  const sustained = 'sustained' in value ? value.sustained : null;
+  let sustainedError: string | null = null;
+  if (value.status === 'pass') {
+    if (durationSeconds === null) {
+      if (sustained !== null) {
+        sustainedError = 'Native report claimed sustained success for a default short run.';
+      }
+    } else if (
+      scenario !== 'gpu' ||
+      typeof sustained !== 'object' ||
+      sustained === null ||
+      !('requestedSeconds' in sustained) ||
+      sustained.requestedSeconds !== durationSeconds ||
+      !('elapsedSeconds' in sustained) ||
+      typeof sustained.elapsedSeconds !== 'number' ||
+      !Number.isFinite(sustained.elapsedSeconds) ||
+      sustained.elapsedSeconds < durationSeconds ||
+      !('completedCycles' in sustained) ||
+      typeof sustained.completedCycles !== 'number' ||
+      !Number.isSafeInteger(sustained.completedCycles) ||
+      sustained.completedCycles < 1
+    ) {
+      sustainedError = `Native report claimed pass without completing a GPU cycle after at least ${durationSeconds} seconds.`;
+    }
+  }
+  const reportError = abiError ?? sustainedError;
   return {
     schemaVersion: 1,
     runId,
     scenario,
-    status: value.status,
+    requestedHostAbi: hostAbi,
+    actualHostAbi: value.actualHostAbi,
+    status: reportError === null ? value.status : 'fail',
     checks: value.checks,
-    ...('error' in value && typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(reportError !== null
+      ? { error: reportError }
+      : 'error' in value && typeof value.error === 'string'
+        ? { error: value.error }
+        : {}),
     native: value,
   };
 }
@@ -117,6 +175,8 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
   runId: string,
   media: string | null,
   hwdec: Request['hwdec'],
+  hostAbi: Request['hostAbi'],
+  durationSeconds: Request['durationSeconds'],
   report: string,
   environment: Readonly<Record<string, string | undefined>>,
 ) {
@@ -136,6 +196,7 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
           NO_AT_BRIDGE: '1',
           WINIT_X11_SCALE_FACTOR: '1',
           JELLYPILOT_SMOKE_SIZE: '480x320',
+          JELLYPILOT_MPV_HOST_ABI: hostAbi,
         };
         if (scenario === 'external') {
           const absent = {
@@ -152,6 +213,8 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
               schemaVersion: 1,
               runId,
               scenario,
+              requestedHostAbi: hostAbi,
+              actualHostAbi: null,
               status: 'fail',
               checks: [],
               error:
@@ -168,6 +231,8 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             schemaVersion: 1,
             runId,
             scenario,
+            requestedHostAbi: hostAbi,
+            actualHostAbi: null,
             status: recovered.exitCode === 0 ? 'pass' : 'fail',
             checks: [
               'missing embedded assets rejected without a system libmpv fallback',
@@ -194,6 +259,8 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             schemaVersion: 1,
             runId,
             scenario,
+            requestedHostAbi: hostAbi,
+            actualHostAbi: null,
             status: 'unavailable',
             checks: [],
             error:
@@ -213,6 +280,8 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             schemaVersion: 1,
             runId,
             scenario,
+            requestedHostAbi: hostAbi,
+            actualHostAbi: null,
             status: 'unavailable',
             checks: [],
             error: 'No installed non-C locale; install one before running the tray/GPU regression.',
@@ -230,6 +299,9 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             runId,
             ...(media === null || scenario !== 'gpu' ? [] : ['--regression-media', media]),
             ...(hwdec === null || scenario !== 'gpu' ? [] : ['--regression-hwdec', hwdec]),
+            ...(durationSeconds === null
+              ? []
+              : ['--regression-duration-secs', String(durationSeconds)]),
           ],
           {
             ...isolated,
@@ -238,11 +310,11 @@ const runScenario = Effect.fn('task.nativeRegression.scenario')(function* (
             ...audioSessionEnvironment(environment),
             LC_ALL: numericLocale,
           },
-          '180 seconds',
+          `${(durationSeconds ?? 0) + 180} seconds`,
         );
         const value = yield* io(() => jsonFile(report));
         const decoded = yield* Effect.try({
-          try: () => nativeReport(value, scenario, runId),
+          try: () => nativeReport(value, scenario, runId, hostAbi, durationSeconds),
           catch: (cause) => new TaskNativeRegressionError({ message: String(cause) }),
         });
         if (decoded.status === 'pass' && result.exitCode !== 0) {
@@ -295,6 +367,8 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
     schemaVersion: 1,
     runId,
     scenario,
+    requestedHostAbi: request.hostAbi,
+    actualHostAbi: null,
     status: 'unavailable',
     checks: [],
     error: 'Not executed in this run.',
@@ -307,6 +381,8 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
       schemaVersion: 1,
       runId,
       startedAt,
+      requestedHostAbi: request.hostAbi,
+      requestedDurationSeconds: request.durationSeconds,
       ...(finished ? { finishedAt: new Date().toISOString() } : {}),
       platform: process.platform,
       architecture: process.arch,
@@ -391,6 +467,9 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
       iced: yield* io(() => jsonFile(path.join(REPO_ROOT, 'tools/embedded-mpv/iced-source.json'))),
       mpv: yield* io(() => jsonFile(path.join(REPO_ROOT, 'tools/embedded-mpv/source.json'))),
       cargoLockSha256: yield* io(() => hashFile(path.join(REPO_ROOT, 'Cargo.lock'))),
+      desktopCargoLockSha256: yield* io(() =>
+        hashFile(path.join(REPO_ROOT, 'src-iced/Cargo.lock')),
+      ),
       nativeBuild: yield* io(async () =>
         (await Bun.file(path.join(MPV_ARTIFACT_ROOT, 'manifest.json')).exists())
           ? jsonFile(path.join(MPV_ARTIFACT_ROOT, 'manifest.json'))
@@ -447,6 +526,8 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
         runId,
         media,
         request.hwdec,
+        request.hostAbi,
+        request.durationSeconds,
         report,
         environment,
       ).pipe(
@@ -455,6 +536,8 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
             schemaVersion: 1,
             runId,
             scenario,
+            requestedHostAbi: request.hostAbi,
+            actualHostAbi: null,
             status: 'unavailable',
             checks: [],
             error: error.message,
@@ -465,6 +548,8 @@ export const runNativeRegression = Effect.fn('task.nativeRegression')(function* 
             schemaVersion: 1,
             runId,
             scenario,
+            requestedHostAbi: request.hostAbi,
+            actualHostAbi: null,
             status: 'fail',
             checks: [],
             error: String(error),

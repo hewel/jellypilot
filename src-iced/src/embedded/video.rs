@@ -140,7 +140,7 @@ impl primitive::Primitive for VideoPrimitive {
     let mut frame = FRAME
       .lock()
       .unwrap_or_else(std::sync::PoisonError::into_inner);
-    pipeline.binding = frame.binding.clone();
+    let binding = frame.binding.clone();
     pipeline.is_hdr = frame.hdr;
     pipeline.valid = frame.valid;
     if frame.size != size {
@@ -149,6 +149,8 @@ impl primitive::Primitive for VideoPrimitive {
         shell.request_redraw();
       }
     }
+    drop(frame);
+    pipeline.binding = binding;
   }
 
   fn draw(&self, pipeline: &Pipeline, pass: &mut wgpu::RenderPass<'_>) -> bool {

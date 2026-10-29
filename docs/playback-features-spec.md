@@ -93,30 +93,75 @@ acceptance remain separate from these static design references.
 
 ## Seek Preview
 
-The first implementation targets the Desktop embedded player's interactive
-timeline. Hovering or dragging may display an existing Jellyfin Trickplay image
-for the current item and actual media source. It does not decode video or ask
-the server to generate new images. Missing metadata, unsupported providers,
-loading, and failed requests retain the existing time and real chapter labels.
+The Desktop embedded player's complete timeline uses the shared
+`iced::widget::timeline` widget and the standalone `iced_mpv_preview` decoder.
+Existing server Trickplay metadata and atlases take priority for the current item
+and actual media source. Unavailable metadata or atlas images permit independent,
+on-demand decoding only when the current source is fully seekable and the decoder
+is available. Loading and decoder failure retain time and real chapter/range
+labels. Authentication/session failures block fallback rather than initiating
+another authenticated read. Nonseekable streams use time-only hints; an unknown
+or invalid duration retains the elapsed-time display instead of inventing a range.
+No request asks the server to generate Trickplay images.
 
-Preview work is scoped to the authenticated connection and current playback
-identity. A replaced item, source, or profile must never display an old image.
-Requests, decoded dimensions, response sizes, and memory retention are bounded.
-The preview must not contain or log access credentials.
+The decoder uses the playback controller's already-resolved `AuthenticatedUrl`,
+borrowed only while binding a revocable source capability. It preserves query
+credentials verbatim: no new headers, URL synthesis, playback negotiation, or
+main stream/transcode-session changes occur on hover. Targets and returned frame
+times use the main mpv normalized timeline unchanged, including mpv's default
+HLS/TS start-time rebasing. Do not add raw PTS or infer offsets from URLs.
 
-The image fits within 240×135 logical pixels and the measured timeline width,
-preserving its source aspect ratio. A 12px corner radius, 8px tooltip padding and
-8px image-to-text gap retain the existing 12px monospace time. Real chapter text
-may wrap and increase the tooltip height; 256×179 is only a short-caption 16:9
-Paper reference. The existing viewport clamp remains authoritative. Loading,
-missing-image and failed-image states all use the same time/chapter fallback,
-and an earlier candidate image must not be substituted for the current one.
+Preview work belongs to the authenticated session, actual playback file and source
+lease generation. Source admission, decoder binding and mailbox mutation follow
+that lock order. Revocation immediately invalidates the matching mailbox before
+terminal cleanup awaits; an old source cannot clear a newer binding. Native work
+already admitted into FFI is not interruptible, but revoked work cannot be newly
+admitted or published. Cancellation and source retirement clear the displayed
+image. Callback owners are released outside the source lock, and the runner keeps
+the decoder owner alive until the iced UI runtime has returned.
 
-Hovering never seeks. Drag release retains the existing single committed seek;
-fullscreen transitions and playback replacement continue to cancel stale drafts.
-The tooltip stays within the viewport and its picture does not obscure its time.
-Existing 40px seek targets and 44px main transport controls remain unchanged.
-Android and TV thumbnail interfaces are not included in this first batch.
+Requests, decoded dimensions, response sizes and retained frames are bounded.
+Hover cancellation can retain reusable media/cache state; source replacement
+retires it. A failed decoder generation does not retry on every target change.
+Transient command-busy periods cancel image demand without changing the media
+generation or keyboard focus. Window exit retires the decoder binding before
+discarding its presentation state; reopening cannot reuse an old timeline generation.
+Neither preview identities, diagnostics nor rendered content expose credentials.
+
+Images fit within 240×135 logical pixels and the measured timeline width, preserving
+aspect ratio. The tooltip has a 12px outer radius and 8px padding; its inset image
+uses the concentric 4px radius. An 8px image-to-text gap retains the 12px monospace
+time and real chapter/range labels. Wrapping may increase tooltip height; the
+shared widget places the overlay above or below the target and clamps it to the
+viewport. No stale image substitutes for a pending or failed current target.
+Existing cinema rails, genuine buffer/chapter/intro markers and the independent
+volume slider remain unchanged.
+
+Hover never seeks. Pointer/touch drag release commits one seek only when MPV
+reports `seekable=true` and `partially-seekable=false`. Focused timeline arrows
+commit one-second steps, Shift uses ten seconds, and Home/End select range
+endpoints. A temporarily disabled, already-focused timeline consumes these seek
+keys without commands or global-shortcut fallthrough; enabled increments resume
+after the command settles. Wheel motion does not seek through the timeline.
+Escape/Tab, focus or touch loss, hiding,
+fullscreen transitions and playback replacement cancel unfinished demand without
+undoing an already-submitted seek or an independent volume gesture. Hidden or
+removed widgets cannot publish cancellation themselves, so product lifecycle
+handling retires their demand. The 40px timeline target and 44px main transport
+remain unchanged. Android, TV and external-player thumbnail interfaces are outside
+this integration.
+
+The native decoder adapter is available for Linux/Windows embedded builds when
+their configured libmpv can provide it; this is not a cross-platform runtime
+acceptance claim. The published source pin now includes the shared widget and
+preview package, and all four temporary consumer paths were restored. The complete
+materialized source matched the accepted candidate, so its provider/input/lifecycle
+matrix was reused. The formal-source binary additionally exercised independent
+stream previews while unpaused: the main clock advanced without another main seek,
+PlaybackInfo request or main-stream request, followed by normal Quit and preview
+worker termination. Acceptance used authenticated HTTP fixtures and a GPU-backed
+headless Gamescope/Xwayland compositor on Linux. This does not establish production
+Jellyfin authorization, physical Niri behavior, display color or other platforms.
 
 ## Linux system media controls
 
@@ -156,9 +201,10 @@ removed. The scrim remains below every control, including in short windows.
 Minimal/Full visibility, independent top controls and Floating Popovers,
 focus/drag retention, seek previews and input semantics are unchanged.
 
-The compatible iced revision `3cf722cd8c33ca2afe1ae88cfc8ce20f31fd1a2c` remains
-pinned. Its published `player-progressive-backdrop` branch and prior remote cold
-preparation are historical dependency evidence, not an enabled player effect.
+The `player-progressive-backdrop` branch, revision
+`3cf722cd8c33ca2afe1ae88cfc8ce20f31fd1a2c` and its prior remote cold preparation
+are historical dependency evidence, not the current source pin or an enabled player
+effect. Current published pins are recorded in `tools/embedded-mpv/*source.json`.
 Other accepted image/modal blur treatments remain independent of this removal.
 The earlier Paper blur states are superseded for the native player.
 

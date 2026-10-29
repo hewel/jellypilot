@@ -7,6 +7,7 @@ pkgdesc='Jellyfin and Emby companion app with embedded MPV from the pinned mpv f
 arch=('x86_64')
 url='https://github.com/hewel/jellypilot'
 license=('MIT')
+# The pinned v2.2.3 artifact predates private libplacebo bundling.
 depends=(
   'gtk3'
   'libxkbcommon'

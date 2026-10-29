@@ -27,6 +27,7 @@ export type TaskCommand =
       readonly tv: boolean;
     }
   | { readonly _tag: 'mpvBuild'; readonly source: string | null }
+  | { readonly _tag: 'mpvLinuxRuntime'; readonly source: string | null }
   | { readonly _tag: 'packageWindows'; readonly runtimeDirectory: string }
   | { readonly _tag: 'icedHot' }
   | { readonly _tag: 'icedPrepare'; readonly source: string | null }
@@ -35,6 +36,8 @@ export type TaskCommand =
       readonly _tag: 'icedRegress';
       readonly scenario: 'tray' | 'external' | 'gpu' | 'all';
       readonly hwdec: 'no' | 'vaapi' | 'vaapi-copy' | null;
+      readonly hostAbi: 'legacy' | '3';
+      readonly durationSeconds: number | null;
       readonly file: string | null;
       readonly output: string;
     }
@@ -126,16 +129,24 @@ function parseRegression(args: readonly string[]): TaskCommand {
   const [scenario, ...rest] = args;
   if (scenario !== 'tray' && scenario !== 'external' && scenario !== 'gpu' && scenario !== 'all') {
     throw new Error(
-      'Expected iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>].',
+      'Expected iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>] [--host-abi <legacy|3>] [--duration-secs <1..3600> (gpu only)].',
     );
   }
   let file: string | null = null;
   let output = 'target/native-regression';
   let hwdec: 'no' | 'vaapi' | 'vaapi-copy' | null = null;
+  let hostAbi: 'legacy' | '3' = 'legacy';
+  let durationSeconds: number | null = null;
   const seen = new Set<string>();
   for (let index = 0; index < rest.length; index += 2) {
     const option = rest[index];
-    if (option !== '--file' && option !== '--out' && option !== '--hwdec') {
+    if (
+      option !== '--file' &&
+      option !== '--out' &&
+      option !== '--hwdec' &&
+      option !== '--host-abi' &&
+      option !== '--duration-secs'
+    ) {
       throw new Error(`Unknown iced regress option: ${option}`);
     }
     const value = rest[index + 1];
@@ -149,6 +160,19 @@ function parseRegression(args: readonly string[]): TaskCommand {
         throw new Error('--hwdec requires no, vaapi or vaapi-copy.');
       }
       hwdec = value;
+    } else if (option === '--host-abi') {
+      if (value !== 'legacy' && value !== '3') {
+        throw new Error('--host-abi requires legacy or 3.');
+      }
+      hostAbi = value;
+    } else if (option === '--duration-secs') {
+      const seconds = Number(value);
+      if (/[^0-9]/.test(value) || !Number.isInteger(seconds) || seconds < 1 || seconds > 3600) {
+        throw new Error(
+          '--duration-secs requires ASCII decimal digits for an integer from 1 to 3600.',
+        );
+      }
+      durationSeconds = seconds;
     } else output = value;
   }
   if ((scenario === 'gpu' || scenario === 'all') && file === null) {
@@ -162,7 +186,10 @@ function parseRegression(args: readonly string[]): TaskCommand {
   if (hwdec !== null && scenario !== 'gpu' && scenario !== 'all') {
     throw new Error('--hwdec applies only to iced regress gpu/all.');
   }
-  return { _tag: 'icedRegress', scenario, file, output, hwdec };
+  if (durationSeconds !== null && scenario !== 'gpu') {
+    throw new Error('--duration-secs applies only to iced regress gpu, not tray/external/all.');
+  }
+  return { _tag: 'icedRegress', scenario, file, output, hwdec, hostAbi, durationSeconds };
 }
 
 export function parseCli(argv: readonly string[]): TaskCommand {
@@ -207,8 +234,11 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   }
   if (command === 'mpv') {
     const [action, ...rest] = args;
-    if (action !== 'build') throw new Error('Expected mpv build [--source <checkout>].');
-    return { _tag: 'mpvBuild', source: parseSourceOptions('mpv build', rest) };
+    if (action !== 'build' && action !== 'linux-runtime') {
+      throw new Error('Expected mpv <build|linux-runtime> [--source <checkout>].');
+    }
+    const source = parseSourceOptions(`mpv ${action}`, rest);
+    return action === 'build' ? { _tag: 'mpvBuild', source } : { _tag: 'mpvLinuxRuntime', source };
   }
   if (command === 'android') return parseAndroid(args);
   if (command === 'monitor') return parseMonitor(args);

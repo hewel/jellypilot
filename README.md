@@ -79,7 +79,7 @@ Custom-drawn in safe Rust with [iced](https://iced.rs/): lightweight, cross-plat
 
 ### Playback and browsing tools
 
-- **Desktop seek previews:** the embedded timeline uses existing Jellyfin Trickplay images when available; otherwise it keeps the time and chapter hint. Full controls use a dark scrim without blurring the video.
+- **Desktop embedded seek previews:** prefer existing server Trickplay images; when metadata or an atlas is unavailable, independently decode the current resolved, authenticated seekable source on demand. Nonseekable streams and unavailable decoders retain time and real chapter hints. Authentication/session failures do not trigger decoder fallback. Full controls retain the cinema scrim without video blur. See the [provider and isolation contract](docs/playback-features-spec.md#seek-preview).
 - **Temporary viewing queue:** add movies or episodes from the current account, reorder them, play an entry, or clear upcoming items. This queue is separate from the season episode list and Watchlist. See the [queue contract](docs/viewing-queue-spec.md).
 - **Dual text subtitles and A/B repeat:** open Subtitles for the current file's primary and secondary tracks, or Playback settings for A/B. Marking points does not seek; Restart from A is explicit. See [supported tracks and loop behavior](docs/playback-tools-spec.md).
 - **Saved filters:** save a named library query locally for the current account, then apply, rename or delete it from Saved filters. Desktop and TV retain all applied conditions across presentation changes. See [saved-filter behavior](docs/saved-browse-filters-spec.md).
@@ -187,7 +187,7 @@ Download `jellypilot-*.dmg` from [GitHub Releases](https://github.com/hewel/jell
 - [Rust](https://rustup.rs/) 1.98 or newer
 - [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
 - Linux GUI: GTK 3, `libxkbcommon`, and Wayland development packages (`libgtk-3-dev`, `libxkbcommon-dev`, `libwayland-dev`, `wayland-protocols`)
-- Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader, FFmpeg dev libraries, `libplacebo` >= 7.360.1, `libass`, and Lua or LuaJIT development files (Ubuntu: `libluajit-5.1-dev`; Arch: `luajit`). Lua support is required for the host's `osc=no` option.
+- Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader >= 1.4.309, FFmpeg dev libraries, `libplacebo` >= 7.387.0, `libass`, and Lua or LuaJIT development files (Ubuntu: `libluajit-5.1-dev`; Arch: `luajit`). Lua support is required for the host's `osc=no` option.
 - Windows Embedded MPV: the same native build tools and media libraries in a Windows environment such as MSYS2 UCRT64, plus Lua or LuaJIT development files. The build requires D3D hardware decoding and Lua support; Lua provides the `osc` option even when the host sets `osc=no`.
 
 </details>
@@ -251,25 +251,36 @@ the standalone player; Settings can open over windowed playback.
 The cursor reappears on any pointer movement and hides after three idle seconds while playing,
 independently of the controls. Moving near the bottom control area (including a 48px approach
 band) reveals the bar; movement over the middle of the picture does not reveal or prolong it.
-The top-left Back button has its own reveal region and three-second timeout. Pausing,
-dragging, open menus and an intro prompt keep controls visible. Keyboard seek and volume
-changes show brief feedback. Hovering the timeline previews its time; dragging changes
-the target preview and seeks once on release. Seek availability retains the existing positive,
-finite-duration check, not a separate backend seekability signal. A failed Stop keeps the player
-open so Back can be retried.
+The top corners reveal their controls independently. Dragging, keyboard focus within
+controls and open menus hold complete controls visible; pausing retains the minimal
+progress line and central pause indicator rather than forcing complete controls open.
+Hovering the complete timeline requests a preview without seeking. Pointer/touch
+dragging updates a draft and commits once on release. Timeline commits require a
+finite, positive duration and MPV-reported full seekability; nonseekable streams
+keep time hints without image decoding or timeline seek commits. A failed Stop
+keeps the player open so Back can be retried.
 
-Slider keyboard/wheel adjustments submit immediately rather than waiting for a mouse release.
-Switching fullscreen during a drag cancels its unfinished preview; releasing afterward does not
-submit the cancelled target. Clicking the picture outside an open player menu only dismisses
-that menu and does not pause or resume playback.
+The shared timeline owns its focused keyboard input: Left/Down and Right/Up commit
+−1/+1 second, Shift changes that increment to 10 seconds, and Home/End commit the
+range endpoints. These captured keys do not also run the global player shortcuts.
+Temporary command-busy periods retain timeline focus but consume those seek keys
+without submitting another command; ordinary focused increments resume afterwards.
+Wheel scrolling does not submit a timeline seek. The volume slider retains its
+existing drag, keyboard and wheel behavior.
+
+Escape/Tab, focus loss, lost touch, fullscreen transitions, hidden controls and
+playback/source replacement cancel unfinished timeline demand; a later release
+does not commit the cancelled draft. Cancellation does not cancel an independent
+volume gesture or undo a seek already submitted. Clicking the picture outside an
+open player menu only dismisses that menu and does not pause or resume playback.
 
 The bar uses a translucent background without blur. Its transport stays centered in one row
 down to 768 logical pixels; at 900 pixels and below, the landscape thumbnail is hidden.
 
 ```bash
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
-# Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1, libass, Lua/LuaJIT.
-bun run task mpv build --source /absolute/path/to/mpv
+# Vulkan development headers/loader >=1.4.309, FFmpeg, libplacebo >=7.387.0, libass, Lua/LuaJIT.
+bun run task mpv build
 bun run task iced run
 ```
 
@@ -334,6 +345,45 @@ recorded, **not pinned**, so this is not a bit-reproducible or self-contained di
 Vulkan headers may be supplied explicitly through `CFLAGS=-I/absolute/sdk/include` (and
 dependencies through `PKG_CONFIG_PATH`); neither is silently obtained from another build tree.
 
+When the distribution's libplacebo is older, use a separately installed, trusted
+7.387.0-or-newer prefix rather than replacing system libraries. Select its pkg-config
+directory for the build and its shared-library directory for every run or native regression:
+
+```bash
+LIBPLACEBO_PREFIX=/absolute/path/to/libplacebo-7.387.0/install
+PKG_CONFIG_PATH="$LIBPLACEBO_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+  bun run task mpv build
+LD_LIBRARY_PATH="$LIBPLACEBO_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  bun run task iced run
+```
+
+This local build is not a portable release payload. Keep the prefix available for its
+lifetime; the generated manifest records the selected dependency and link inputs.
+System FFmpeg may additionally load its own older libplacebo SONAME. That is not a
+fallback for the pinned libmpv's direct `libplacebo.so.387` dependency.
+
+Linux release builds use `bun run task mpv linux-runtime` instead of the development
+`mpv build` command. It fetches the libplacebo revision in
+`packaging/linux/libplacebo-source.json`, builds it in a private prefix, builds pinned
+mpv against it, and stages libplacebo's required ELF dependencies beside libmpv.
+The additional prerequisites are glslang, shaderc, lcms2, binutils/readelf, patchelf,
+and dpkg-query or pacman (plus Arch's `licenses` package) for provenance and notices. The resulting
+libraries use `$ORIGIN` lookup; glibc, the system Vulkan loader/drivers and mpv's other
+distribution dependencies remain external. No system library is installed or replaced.
+The generated manifest records bundled origins, normalized system dependency paths
+and post-patch hashes. Packages install it as `share/jellypilot/mpv-manifest.json`.
+The task checks library resolution with `LD_LIBRARY_PATH` removed; it does not make
+host-specific optional dependencies or CPU/glibc requirements portable across distributions.
+
+The Linux release workflow and source Arch PKGBUILD stage this private runtime for
+packaging; they do not assume a distribution already provides libplacebo 7.387.0.
+Ubuntu packages still target the workflow's Ubuntu 26.04 dependency/glibc baseline.
+The prebuilt Arch recipe retains its existing released artifact URL/hash and older
+runtime requirements until a separate release updates them. Windows keeps the MSYS2
+runtime dependency closure and the shared minimum-version check; macOS remains
+External-only. A Linux staging or playback pass is not Windows/macOS/Android device
+acceptance or verification of a generated installer.
+
 Development run/hot commands pass staged asset paths for the Linux Embedded default and for
 saved Embedded settings. Absolute `JELLYPILOT_LIBMPV` and `JELLYPILOT_MPV_BASELINE` overrides are
 supported; only trusted files implementing the pinned host ABI may be loaded. A directly
@@ -343,11 +393,30 @@ Linux packages ship that pinned fork; they do not use system libmpv. Missing Vul
 host assets is an error, not a fallback to system libmpv or External MPV. To start External
 MPV instead, launch `jellypilot --external` or select External in Settings and restart.
 
+Host synchronization defaults to **legacy** (ABI v2, with v1 negotiation for older trusted
+libraries). Explicitly set `JELLYPILOT_MPV_HOST_ABI=3` to require the pinned ABI v3 timeline
+handoff; unset it or select `legacy` for the compatibility path. Invalid values and rejected
+v3 registration fail explicitly, without falling back to legacy or another playback backend.
+
 The host retains the actual enabled Vulkan feature chain and shares its device/queue with
 the official iced renderer. Video reaches a private 10-bit texture through three ordered
 command buffers: tracked `COPY_DST` transition, raw copy, tracked `RESOURCE` transition.
 Queue submissions, acquisition/presentation/discard and image/screenshot submits share a
 gate; device polling and synchronous mpv calls stay outside it. MPV owns playback time.
+In v3, each producer slot owns a separate timeline: mpv waits for `2n` and signals `2n+1`;
+the private copy waits for `2n+1` and signals `2n+2`. Attaching the next-submit wait/signal
+and issuing that copy are one gate transaction, including cleanup on failure. Slots return
+only after their copy submission completes. The completion worker sleeps without submissions;
+mpv notifications and completed work drive wakeups, not a periodic host polling timer.
+Resize retains slot timelines. mpv termination and outstanding host work finish before
+their resources are destroyed outside pool/queue locks.
+
+A fatal acquire, failed release or GPU synchronization error stops that host session.
+An error release promises no producer signal, so the host never waits for it. Ordinary
+stop/file reload does **not** rebuild a failed VO or restore the host; quit and relaunch to
+recreate it. No silent ABI downgrade is attempted. Ordinary file-loading errors remain
+recoverable through the existing playback/IPC path and are not synchronization failures.
+
 The private launcher contains only the two unsafe engine/surface handoffs; Vulkan/libmpv
 FFI lives in `jellypilot-mpv-host`, while `src-iced` retains its unsafe-code prohibition.
 Direct VAAPI hardware decoding is supported via DMA-BUF import extensions on the shared
@@ -375,12 +444,56 @@ screenshots remain clipped SDR previews, not HDR captures. See
 
 ### Fork maintenance and joint acceptance
 
-The locked combination is the **JellyPilot commit and its working-tree state**, `Cargo.lock`,
-`tools/embedded-mpv/iced-source.json`, and `tools/embedded-mpv/source.json`, together with the
-staged `target/embedded-mpv/manifest.json` and the actual library/baseline hashes. The manifests
-and lockfile are the source of truth; this document intentionally has no second version table.
+The locked combination is the **JellyPilot commit and its working-tree state**, root
+`Cargo.lock`, desktop `src-iced/Cargo.lock`, `tools/embedded-mpv/iced-source.json`, and
+`tools/embedded-mpv/source.json`, together with the staged `target/embedded-mpv/manifest.json`
+and actual library/baseline hashes. These manifests and lockfiles are the source of truth;
+this document intentionally has no second version table.
 The native manifest records host tools and dependencies, not a bit-reproducible environment.
 An override library is not attested by the staged manifest: retain its actual hash and origin.
+
+JellyPilot consumes the shared `iced::widget::timeline` and standalone
+`iced_mpv_preview` package, alongside `iced`, `iced_runtime` and `iced_wgpu`.
+Dependency paths resolve under `target/vendor/iced`; the product does not
+depend on `examples/mpv_sdr_gpu` or copy its controls. The shared widget owns timeline
+input and the viewport-clamped preview overlay; the product supplies the existing
+cinema rail, buffering/chapter/intro markers and provider selection. The volume
+slider and compositor handoff contract are unchanged.
+
+The product's seek commands still use its JSON IPC controller, not the example's
+request-correlated `SeekAbsolute` / `SeekFinished` API or timeout/reload state
+machine. `src-iced/src/app/embedded_player/seek_preview.rs` selects Trickplay first
+and independently decoded frames when appropriate. `src-iced/src/preview.rs`
+binds the shared decoder to a revocable resolved-source capability; hover does not
+renegotiate playback or change the main player's pause/clock. The decoder owner
+outlives the iced UI runtime so its final worker join is outside that runtime.
+The desktop dependency graph and `src-iced/Cargo.lock` now include
+`iced_mpv_preview`; the root workspace lockfile is unaffected by this package.
+
+This stream-preview integration consumes the published iced revision recorded in
+`tools/embedded-mpv/iced-source.json`, materialized by `bun run task iced prepare`.
+The four temporary consumer path overrides were restored exactly. All source files
+and executable bits in the published checkout matched the accepted task-only export;
+the unchanged provider and interaction matrix was reused rather than rerun.
+The formal-source binary separately passed playing-hover acceptance: independent
+stream thumbnails appeared while the main player remained unpaused and its clock
+advanced, without another main seek, PlaybackInfo request or main-stream request.
+Normal Quit terminated the product and preview workers.
+
+In an existing build directory, a changed vendor symlink can leave stale iced
+compiler metadata. This sync required isolating the old `iced_widget` Cargo
+fingerprints and rebuilding through the dispatcher; no vendor source was edited.
+Source equivalence alone is not proof that a binary consumes the new implementation.
+
+Acceptance used authenticated localhost fixtures on Linux with a GPU-backed
+headless Gamescope/Xwayland compositor. It does not establish production
+Jellyfin authorization, physical Niri behavior, display color or other platforms.
+
+The shared decoder converts PQ/HLG preview frames to sRGB and requires `zscale`,
+`tonemap` and `format` in libmpv's linked libavfilter. DV8 uses only its
+HDR10-compatible base layer, without RPU/enhancement-layer processing. These are
+decoder capabilities, not JellyPilot HDR/Dolby Vision or display-output acceptance
+claims.
 
 For local direct VAAPI candidates, the product enables supported DMA-BUF import extensions
 on the shared Vulkan device. Direct decoding additionally requires the host-enabled mpv
@@ -403,6 +516,43 @@ set one strict backend in the full candidate baseline (for example `ao=pipewire`
 a fallback comma). GPU samples record `current-ao`, `audio-params` and `audio-out-params`,
 and reject a mismatch with that explicit backend. Report negotiated channels separately
 from physical speakers and human listening acceptance.
+Native regressions select `--host-abi legacy|3` (default `legacy`) independently of hardware
+decoding. Reports retain requested and actual host ABI; a v3 run cannot pass on legacy,
+and a legacy run requires ABI v1 or v2. They also record both Cargo lockfile hashes.
+
+For sustained GPU lifecycle acceptance, use the same entry with an explicit minimum duration:
+
+```bash
+bun run task iced regress gpu --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4 --duration-secs 300 --out target/native-regression-sustained
+```
+
+`--duration-secs N` accepts **ASCII decimal digits only**, with an integer value from **1 to
+3600** inclusive, and may appear only once. It is valid only for `gpu`, not `tray`, `external`
+or `all`. Omitting it keeps the existing short probe and deadlines unchanged.
+The sustained probe repeats the complete GPU lifecycle on the **same embedded host**, with
+an active-playback dwell of `min(N, 30)` seconds per cycle. Duration is a minimum elapsed
+time from probe creation, not an exact stop time: it finishes a complete cycle at or after
+`N` seconds and then performs normal teardown and exit. Keep the fixture long enough for
+the dwell and seek phases; a timeout or interrupted run is not acceptance evidence.
+
+The native process watchdog is `N + 120` seconds and the dispatcher's child-process timeout
+is `N + 180` seconds (short defaults: 120 and 180 seconds). Preparation/build time is not
+part of these child-process deadlines. The idle-inhibitor driver has a per-cycle budget of
+90 seconds in sustained mode (20 seconds by default); each active-playback phase gets its
+dwell plus 20 seconds, and all other phases get 20 seconds.
+Native evidence includes `processId`, `hostsCreated`, `hostsDropped`, `hostIdentity`,
+`phase`, `cycle` and timestamped `phaseHistory`; same-host lifecycle checks must still pass.
+The optional/null `sustained` object records `requestedSeconds`, `elapsedSeconds` finalized
+at cycle completion and `completedCycles`. A sustained pass requires a matching duration,
+finite elapsed time at least that duration, at least one completed cycle, all normal
+assertions and a successful process exit. Aggregate reports retain `requestedDurationSeconds`;
+short or stale reports cannot substitute for a requested sustained run.
+
+Resource collection remains a **separate read-only observer**, for example
+`bun run task monitor --pid <processId> --out target/resources/sustained.ndjson` while the
+probe runs. Correlate observations with the current run, PID and phase/cycle timestamps;
+retain raw samples and unavailable metrics separately from lifecycle status. A sustained
+pass or a resource trend alone makes no leak-free, color, HDR or decoder-acceptance claim.
 
 For an upstream synchronization, work on a disposable sync branch in each affected fork.
 Read the [iced maintenance guide](https://github.com/hewel/iced/blob/main/FORK_MAINTENANCE.md)
@@ -416,10 +566,14 @@ normal owner workflow, update the application manifests as one candidate combina
    exact published commit and all iced packages must resolve under `target/vendor/iced`.
 2. Build the pinned mpv with `bun run task mpv build`, preserving its generated manifest and
    any explicit SDK/dependency inputs. Run the applicable [project gates](docs/agents/validation.md).
-3. Run `bun run task iced regress all --file /absolute/path/to/real-moving-clip.mp4`.
+3. Run `bun run task iced regress all --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4`.
    This is the sole joint-probe entry; [native regression policy](docs/agents/validation.md#opt-in-native-regressions)
    defines prerequisites and evidence. A missing GPU fixture is rejected before preparation,
    build or application startup. Normal run/hot/smoke commands do not enable these probes.
+   Run `bun run task iced regress gpu --host-abi legacy` with the same `--file` and a separate `--out`
+   directory for compatibility evidence. The GPU scenario also checks that a rejected local
+   file can be followed by valid playback without recreating the host; this is not fatal
+   synchronization recovery.
 4. Complete the separate [manual color comparison](#manual-three-way-color-comparison).
    Review the exact candidate combination, current-run automatic report, human record and
    explicitly unavailable coverage before accepting a sync. A passing lifecycle probe alone

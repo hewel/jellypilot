@@ -7,6 +7,7 @@ import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
 import { buildIced, runHot, runIced } from './task/iced';
 import { prepareIced } from './task/iced-source';
+import { buildLinuxMpvRuntime } from './task/linux-mpv-runtime';
 import { runApi } from './task/misc';
 import { runMonitor } from './task/monitor';
 import { buildMpv } from './task/mpv';
@@ -49,6 +50,7 @@ const program = Effect.try({
         runIced(smoke, release, embedded, tv, process.env),
       ),
       Match.when({ _tag: 'mpvBuild' }, ({ source }) => buildMpv(source)),
+      Match.when({ _tag: 'mpvLinuxRuntime' }, ({ source }) => buildLinuxMpvRuntime(source)),
       Match.when({ _tag: 'packageWindows' }, ({ runtimeDirectory }) =>
         packageWindows(runtimeDirectory, process.env),
       ),

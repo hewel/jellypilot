@@ -195,12 +195,12 @@
     },
     {
       "name": "libplacebo",
-      "version": "7.360.1",
+      "version": "7.387.0",
       "source": {
         "type": "git",
         "remote": "https://github.com/haasn/libplacebo.git",
-        "tag": "v7.360.1",
-        "commit": "cee9b076f2c63104ccfd497fa79c39a867293ec4",
+        "tag": "v7.387.0",
+        "commit": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
         "submodules": true
       },
       "patch": {
@@ -227,7 +227,7 @@
     "source": {
       "type": "git",
       "remote": "https://github.com/hewel/mpv.git",
-      "commit": "94527e484a40e2f810f541099ae4ebab787ca30a",
+      "commit": "312a9c753e98167c630238bb64e10e419cd067b0",
       "note": "Same pinned fork revision as tools/embedded-mpv/source.json; keep both in sync when bumping."
     },
     "patch": {

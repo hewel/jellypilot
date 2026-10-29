@@ -160,9 +160,9 @@ jobs:
   linux:
     name: Package linux-x86_64 (deb, appimage)
     needs: metadata
-    # Fedora LAN runner. Build inside Ubuntu 26.04 so libplacebo 7.360
-    # is available for the pinned mpv fork, with an Ubuntu LTS glibc
-    # instead of Fedora 44.
+    # Fedora LAN runner. Build inside Ubuntu 26.04 for an Ubuntu LTS glibc
+    # instead of Fedora 44. The pinned private runtime supplies libplacebo
+    # 7.387.0 because Ubuntu does not publish that version.
     runs-on: jellypilot-lan
     steps:
       - name: Restore leftover workspace ownership
@@ -216,20 +216,12 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 ca-certificates curl build-essential pkg-config git unzip xz-utils \
-                meson ninja-build python3 \
+                meson ninja-build python3 binutils patchelf \
                 libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols \
                 libfuse2t64 file \
                 libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
-                libswresample-dev libswscale-dev libplacebo-dev libass-dev libluajit-5.1-dev \
+                libswresample-dev libswscale-dev libass-dev libluajit-5.1-dev \
                 libvulkan-dev glslang-dev libshaderc-dev liblcms2-dev
-              # Ubuntu 26.04 ships libplacebo 7.360.0; pinned mpv meson wants 7.360.1.
-              curl --retry 8 --retry-all-errors --retry-delay 2 -fL \
-                -o /tmp/libplacebo360.deb \
-                https://archive.ubuntu.com/ubuntu/pool/universe/libp/libplacebo/libplacebo360_7.360.1-1_amd64.deb
-              curl --retry 8 --retry-all-errors --retry-delay 2 -fL \
-                -o /tmp/libplacebo-dev.deb \
-                https://archive.ubuntu.com/ubuntu/pool/universe/libp/libplacebo/libplacebo-dev_7.360.1-1_amd64.deb
-              dpkg -i /tmp/libplacebo360.deb /tmp/libplacebo-dev.deb
               if ! command -v bun >/dev/null; then
                 curl -fsSL https://bun.sh/install | bash
               fi
@@ -241,7 +233,7 @@ jobs:
                 cargo install cargo-packager --version 0.11.8 --locked
               fi
               bun install --frozen-lockfile
-              bun run task mpv build
+              bun run task mpv linux-runtime
               cargo packager --config Packager.toml --formats deb
               cargo packager --config Packager.toml --formats appimage
             '
@@ -295,8 +287,8 @@ jobs:
             bash -lc '
               set -euo pipefail
               pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland \
-                meson ninja pkgconf vulkan-headers vulkan-icd-loader ffmpeg libplacebo libass \
-                shaderc lcms2 luajit
+                meson ninja pkgconf binutils patchelf vulkan-headers vulkan-icd-loader ffmpeg \
+                glslang libass shaderc lcms2 luajit
               useradd --create-home builder
               mkdir -p /work/target/release/bundle
               chown -R builder:builder /work

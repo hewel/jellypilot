@@ -58,6 +58,17 @@ describe('parseCli', () => {
     );
   });
 
+  test('parses private Linux runtime builds with an optional mpv checkout', () => {
+    expect(parseCli(['mpv', 'linux-runtime'])).toEqual({
+      _tag: 'mpvLinuxRuntime',
+      source: null,
+    });
+    expect(parseCli(['mpv', 'linux-runtime', '--source', 'checkout'])).toEqual({
+      _tag: 'mpvLinuxRuntime',
+      source: 'checkout',
+    });
+  });
+
   test('rejects missing, duplicate, option-like and extra mpv source arguments', () => {
     for (const args of [
       ['build', '--source'],
@@ -67,6 +78,10 @@ describe('parseCli', () => {
       ['build', 'checkout'],
       ['build', '--source', 'checkout', '--push'],
       ['build', '--release'],
+      ['linux-runtime', '--source'],
+      ['linux-runtime', '--source', 'checkout', '--source', 'other'],
+      ['linux-runtime', 'checkout'],
+      ['linux-runtime', '--release'],
       ['run'],
     ]) {
       expect(() => parseCli(['mpv', ...args])).toThrow();
@@ -114,6 +129,90 @@ describe('parseCli', () => {
     expect(
       parseCli(['iced', 'regress', 'gpu', '--file', 'clip.mp4', '--hwdec', 'vaapi-copy']),
     ).toMatchObject({ _tag: 'icedRegress', file: 'clip.mp4', hwdec: 'vaapi-copy' });
+  });
+
+  test('bounds sustained GPU duration without changing the default short regression', () => {
+    const gpu = ['iced', 'regress', 'gpu', '--file', 'clip.mp4'];
+    expect(parseCli(gpu)).toMatchObject({ durationSeconds: null });
+    for (const [input, durationSeconds] of [
+      ['1', 1],
+      ['3600', 3600],
+      ['00030', 30],
+    ] as const) {
+      expect(parseCli([...gpu, '--duration-secs', input])).toMatchObject({ durationSeconds });
+    }
+  });
+
+  test('rejects non-decimal, unbounded, missing and duplicate sustained durations', () => {
+    const gpu = ['iced', 'regress', 'gpu', '--file', 'clip.mp4'];
+    for (const value of [
+      '',
+      ' ',
+      '0',
+      '000',
+      '3601',
+      '9007199254740993',
+      '9'.repeat(400),
+      '-1',
+      '+1',
+      '1.0',
+      '1.5',
+      '1e2',
+      '0x10',
+      'Infinity',
+      'NaN',
+      ' 30',
+      '30 ',
+      '30\n',
+      '3\n0',
+      '３０',
+      '٣٠',
+      '--out',
+    ]) {
+      expect(() => parseCli([...gpu, '--duration-secs', value])).toThrow();
+    }
+    expect(() => parseCli([...gpu, '--duration-secs'])).toThrow();
+    for (const repeated of ['30', '60']) {
+      expect(() =>
+        parseCli([...gpu, '--duration-secs', '30', '--duration-secs', repeated]),
+      ).toThrow();
+    }
+  });
+
+  test('does not enable sustained mode for joint or non-GPU regression selections', () => {
+    for (const scenario of ['tray', 'external', 'all']) {
+      const media = scenario === 'all' ? ['--file', 'clip.mp4'] : [];
+      expect(() =>
+        parseCli(['iced', 'regress', scenario, ...media, '--duration-secs', '30']),
+      ).toThrow();
+    }
+    expect(() => parseCli(['iced', 'run', '--duration-secs', '30'])).toThrow();
+  });
+
+  test('selects timeline v3 explicitly without changing the legacy regression baseline', () => {
+    expect(parseCli(['iced', 'regress', 'tray'])).toMatchObject({ hostAbi: 'legacy' });
+    expect(
+      parseCli(['iced', 'regress', 'all', '--file', 'clip.mp4', '--host-abi', '3']),
+    ).toMatchObject({ scenario: 'all', hostAbi: '3' });
+    expect(parseCli(['iced', 'regress', 'external', '--host-abi', 'legacy'])).toMatchObject({
+      scenario: 'external',
+      hostAbi: 'legacy',
+    });
+  });
+
+  test('rejects unsupported, missing and conflicting host ABI selectors', () => {
+    for (const args of [
+      ['--host-abi'],
+      ['--host-abi', ' '],
+      ['--host-abi', '--out', 'target/probe'],
+      ['--host-abi', '1'],
+      ['--host-abi', '2'],
+      ['--host-abi', 'v3'],
+      ['--host-abi', '3', '--host-abi', 'legacy'],
+    ]) {
+      expect(() => parseCli(['iced', 'regress', 'tray', ...args])).toThrow();
+    }
+    expect(() => parseCli(['iced', 'run', '--host-abi', '3'])).toThrow();
   });
 
   test('does not accept embedded selection on unrelated iced commands or as a valued option', () => {

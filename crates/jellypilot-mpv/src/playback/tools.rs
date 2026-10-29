@@ -65,6 +65,8 @@ pub enum PlaybackToolError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlaybackToolsView {
   pub file: Option<PlaybackFileToken>,
+  /// Confirmed full-file seeking, independent of subtitle and loop support.
+  pub seekable: bool,
   pub tracks: Vec<TrackInfo>,
   pub secondary: ToolState<SecondarySubtitleView>,
   pub ab_loop: ToolState<AbLoopView>,
@@ -146,6 +148,7 @@ async fn playing_entry(mpv: &MpvClient) -> Result<i64, PlaybackToolError> {
 
 impl PlaybackController {
   pub(super) fn retire_tools(&mut self) {
+    self.retire_preview_source();
     self.tools = PlaybackToolsView::default();
     self.tools_playlist_entry = None;
   }
@@ -199,6 +202,7 @@ impl PlaybackController {
       }
       Ok(Err(PlaybackToolError::StaleFile)) => self.retire_tools(),
       _ => {
+        self.tools.seekable = false;
         self.tools.secondary = ToolState::Failed;
         self.tools.ab_loop = ToolState::Failed;
         self.tools.error = Some(PlaybackToolError::ReadFailed);
@@ -227,6 +231,8 @@ impl PlaybackController {
     }
     let mut view = PlaybackToolsView {
       file: self.tools.file,
+      seekable: matches!(seekable, Ok(PropertyValue::Bool(true)))
+        && matches!(partial, Ok(PropertyValue::Bool(false))),
       ..Default::default()
     };
     if let Ok(mut tracks) = tracks {
@@ -287,8 +293,7 @@ impl PlaybackController {
             .ok()
             .and_then(number)
             .is_some_and(|value| value > 0.0)
-            && matches!(seekable, Ok(PropertyValue::Bool(true)))
-            && matches!(partial, Ok(PropertyValue::Bool(false))),
+            && view.seekable,
         });
       }
     }

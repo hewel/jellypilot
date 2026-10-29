@@ -31,6 +31,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     // Account operations must finish even while the last window is hidden.
     Subscription::run_with(state.kernel.sdk_handoff.clone(), account_handoff_stream),
   ];
+  if let Some(preview) = &state.preview {
+    subscriptions.push(preview.subscription());
+  }
   if let Some(session) = state
     .full
     .as_ref()

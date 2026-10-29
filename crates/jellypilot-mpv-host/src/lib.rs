@@ -9,7 +9,7 @@
 //! filesystem socket, Windows named pipe).
 //!
 //! The enabled device feature chain is the exact retained creation chain, not
-//! a supported-feature query. Hosts and pending GPU callbacks retain its context.
+//! a supported-feature query. Hosts and the completion worker retain its context.
 //! Three producer images are borrowed until mpv's scheduled release and the
 //! subsequent private GPU copy complete. The copy is three ordered command buffers
 //! (tracked COPY_DST transition, raw copy, tracked RESOURCE transition); no CPU
@@ -20,21 +20,25 @@
 //! `DeviceContext::queue_lock`; never hold it across Host methods or synchronous
 //! mpv calls. Device and queue handles do not escape the closed integration;
 //! the unsafe engine and surface handoffs document that obligation. Load only the
-//! packaged, trusted fork implementing host ABI version 2 and its trusted baseline.
-//! A version 1 build is accepted but keeps the fixed SDR target contract.
-//! Dynamic loading is an executable-code trust boundary, not a sandbox. Playback controls
-//! and errors use the existing JSON IPC client, not a second libmpv event model.
+//! packaged, trusted fork implementing the selected host ABI and its trusted baseline.
+//! Legacy negotiates version 2 then version 1; timeline version 3 is explicit and
+//! never falls back. Dynamic loading is an executable-code trust boundary, not a
+//! sandbox. Playback controls and business events use the existing JSON IPC client;
+//! libmpv wakeups are drained internally for host errors.
 //!
-//! mpv blocks for producer completion; this does not claim full-chain zero-copy,
-//! hardware decoding, or downstream compositor presentation feedback. HDR10
+//! Timeline handoff removes the producer CPU-completion stall, not the private
+//! GPU copy. This does not claim full-chain zero-copy, hardware decoding, or
+//! downstream compositor presentation feedback. HDR10
 //! presentation is available when the negotiated ABI and display chain allow it.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg(any(target_os = "linux", target_os = "windows"))]
 
+mod completion;
 mod gpu;
 #[cfg(target_os = "linux")]
 mod idle;
 mod interop;
+mod pool;
 
 pub use gpu::DeviceContext;
 pub use iced_wgpu::wgpu;
@@ -78,6 +82,16 @@ impl From<libloading::Error> for Error {
     }
 }
 
+/// Selects the synchronization contract, independently of target color.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HostAbi {
+    /// Negotiate version 2, then the fixed-SDR version 1 compatibility contract.
+    #[default]
+    Legacy,
+    /// Require version 3 per-slot GPU timelines; registration errors are fatal.
+    TimelineV3,
+}
+
 /// Explicit assets and IPC endpoint. There is no system libmpv fallback.
 #[derive(Debug, Clone)]
 pub struct HostOptions {
@@ -91,6 +105,8 @@ pub struct HostOptions {
     /// Strict `--name=value` playback options. Device, VO, config, scripts,
     /// profiles, input bindings and IPC overrides are rejected, including aliases.
     pub extra_args: Vec<String>,
+    /// Explicit synchronization selection. Legacy is the compatibility baseline.
+    pub host_abi: HostAbi,
 }
 
 impl HostOptions {

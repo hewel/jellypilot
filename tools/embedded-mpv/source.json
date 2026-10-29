@@ -1,6 +1,6 @@
 {
   "remote": "https://github.com/hewel/mpv.git",
-  "revision": "7248ce7c0114396ae2c19afa4ac12c21b984e39a",
+  "revision": "312a9c753e98167c630238bb64e10e419cd067b0",
   "baseline": "TOOLS/gpu-next-host-baseline.conf",
   "mesonOptions": [
     "--buildtype=debugoptimized",
@@ -16,8 +16,8 @@
     "-Dd3d-hwaccel=enabled"
   ],
   "requiredPackages": [
-    "vulkan >= 1.3.238",
-    "libplacebo >= 7.360.1",
+    "vulkan >= 1.4.309",
+    "libplacebo >= 7.387.0",
     "libass >= 0.12.2",
     "libavcodec >= 60.31.102",
     "libavfilter >= 9.12.100",

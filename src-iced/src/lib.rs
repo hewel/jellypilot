@@ -4,6 +4,7 @@ mod app;
 mod embedded;
 mod i18n;
 mod instance;
+mod preview;
 mod regression;
 mod runner;
 mod tray;
@@ -111,9 +112,16 @@ fn run_application(
   };
   embedded::initialize(smoke, factory)?;
   jellypilot_ui::fonts::initialize()?;
+  // Keep the final decoder owner outside iced: its Drop joins the native worker.
+  let preview_owner = preview::Runtime::start();
+  let preview = preview_owner.clone();
   let instance = RefCell::new(instance);
   let mut daemon = iced::daemon(
-    move || app::boot(smoke, tv, instance.borrow_mut().take()),
+    move || {
+      let (mut state, task) = app::boot(smoke, tv, instance.borrow_mut().take());
+      state.preview = preview.clone();
+      (state, task)
+    },
     app::update,
     app::view,
   )

@@ -38,8 +38,12 @@ pub enum Message {
   Back,
   SeekBy(f64),
   VolumeBy(f64),
-  SeekHovered(Option<f64>),
+  Timeline {
+    generation: u64,
+    action: iced::widget::timeline::Action,
+  },
   SeekPreviewLoaded(seek_preview::Completion),
+  DecodedPreviewReady,
   Wake(Instant),
   OptionsToggled,
   OptionsDismissed,
@@ -75,8 +79,9 @@ impl std::fmt::Debug for Message {
       Self::Back => "Back",
       Self::SeekBy(_) => "SeekBy",
       Self::VolumeBy(_) => "VolumeBy",
-      Self::SeekHovered(_) => "SeekHovered",
+      Self::Timeline { .. } => "Timeline",
       Self::SeekPreviewLoaded(_) => "SeekPreviewLoaded([redacted])",
+      Self::DecodedPreviewReady => "DecodedPreviewReady",
       Self::Wake(_) => "Wake",
       Self::OptionsToggled => "OptionsToggled",
       Self::OptionsDismissed => "OptionsDismissed",
@@ -334,13 +339,16 @@ pub(super) fn seek_hover(state: &State) -> Option<f64> {
   state.shell.embedded_player.seek_hover
 }
 
-pub(super) fn seek_preview_frame(
-  state: &State,
-) -> Option<(
-  &iced::widget::image::Handle,
-  jellypilot_core::seek_preview::PreviewTile,
-)> {
+pub(super) fn seek_preview_frame(state: &State) -> Option<seek_preview::ImagePreview<'_>> {
   state.shell.embedded_player.seek_preview.frame()
+}
+
+pub(super) fn timeline_generation(state: &State) -> u64 {
+  state
+    .shell
+    .embedded_player
+    .seek_preview
+    .interaction_generation
 }
 
 pub(super) fn is_seek_dragging(state: &State) -> bool {
@@ -522,9 +530,12 @@ pub(super) fn intro_ranges(state: &State) -> &[(f64, f64)] {
 
 fn reconcile_surface(surface: &mut Surface, active: bool, held: bool, paused: bool, now: Instant) {
   if !active {
-    // Drop all transient presentation on exit; the view owns the scoped cursor.
+    // Preview reconciliation still owns decoder retirement and the next window's generation.
     if surface.was_active {
-      *surface = Surface::default();
+      *surface = Surface {
+        seek_preview: std::mem::take(&mut surface.seek_preview),
+        ..Surface::default()
+      };
     }
     return;
   }
@@ -770,6 +781,7 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
   let now = Instant::now();
   match message {
     Message::SeekPreviewLoaded(completion) => seek_preview::settle(state, completion),
+    Message::DecodedPreviewReady => seek_preview::decoded_ready(state),
     Message::FocusChanged(region, focused) => {
       state.shell.embedded_player.focused_regions[region as usize] = focused;
     }
@@ -879,11 +891,77 @@ pub(super) fn update(state: &mut State, message: Message) -> Task<AppMessage> {
       );
     }
     Message::PointerLeft => pointer_left(&mut state.shell.embedded_player, now),
-    Message::SeekHovered(position) => {
-      state.shell.embedded_player.seek_hover = position.filter(|v| v.is_finite());
-      if position.is_some() {
-        state.shell.embedded_player.visible = true;
-        state.shell.embedded_player.idle_deadline = Some(now + IDLE);
+    Message::Timeline { generation, action } => {
+      use iced::widget::timeline::Action;
+      seek_preview::reconcile(state);
+      if generation != timeline_generation(state) {
+        return Task::none();
+      }
+      if matches!(action, Action::Cancel) {
+        let _ =
+          super::playback::adjust(&mut state.playback, AdjustmentInput::Cancel(Control::Seek));
+        state.shell.embedded_player.seek_hover = None;
+        return Task::none();
+      }
+      if !active(state)
+        || !controls_visible(state)
+        || input_blocked(state)
+        || state.playback.view.lifecycle.replacing
+      {
+        return Task::none();
+      }
+      match action {
+        Action::Hover(position) => {
+          state.shell.embedded_player.seek_hover = position.filter(|value| value.is_finite());
+          if position.is_some() {
+            state.shell.embedded_player.visible = true;
+            state.shell.embedded_player.idle_deadline = Some(now + IDLE);
+          }
+        }
+        Action::Preview(position) if state.playback.view.tools.seekable => {
+          state.shell.embedded_player.seek_hover = position.is_finite().then_some(position);
+          let task = if !is_seek_dragging(state) {
+            super::playback::update(
+              &mut state.playback,
+              &mut state.kernel,
+              state.shell.quit_requested,
+              PlaybackMessage::SeekDragStarted,
+            )
+            .task
+          } else {
+            Task::none()
+          };
+          let _ = super::playback::adjust(
+            &mut state.playback,
+            AdjustmentInput::Preview(Control::Seek, position),
+          );
+          return task;
+        }
+        Action::Preview(position) => {
+          // A nonseekable stream still previews time under pointer/touch input,
+          // but never creates a seek draft or admits decoder work.
+          state.shell.embedded_player.seek_hover = position.is_finite().then_some(position);
+        }
+        Action::Commit(position) if state.playback.view.tools.seekable => {
+          state.shell.embedded_player.seek_hover = None;
+          let message = if is_seek_dragging(state) {
+            let _ = super::playback::adjust(
+              &mut state.playback,
+              AdjustmentInput::Preview(Control::Seek, position),
+            );
+            PlaybackMessage::SeekReleased
+          } else {
+            PlaybackMessage::SeekAdjusted(position)
+          };
+          return super::playback::update(
+            &mut state.playback,
+            &mut state.kernel,
+            state.shell.quit_requested,
+            message,
+          )
+          .task;
+        }
+        _ => {}
       }
     }
     Message::Wake(deadline) => {

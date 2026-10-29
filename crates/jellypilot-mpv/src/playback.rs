@@ -1,6 +1,9 @@
 //! Framework-independent external MPV playback for the native GTK shell.
 
+mod preview;
+pub use preview::{PlaybackPreviewIdentity, PlaybackPreviewSource};
 pub mod tools;
+use preview::PreviewMedia;
 use tools::{PlaybackToolsView, SubtitleRole};
 
 use std::fmt;
@@ -475,24 +478,6 @@ pub struct PlaybackController {
 }
 
 impl PlaybackController {
-  /// Token-free identity of the media version currently owned by this player.
-  /// Unsettled loads and unloading never expose a preview identity. Callers
-  /// must still correlate asynchronous work with their session generation.
-  pub fn seek_preview_identity(&self) -> Option<(&str, &str)> {
-    if !self.active_transport_matches_mpv
-      || self.unloading
-      || self.load_event_boundary != LoadEventBoundary::Settled
-    {
-      return None;
-    }
-    self.active.as_ref().map(|active| {
-      (
-        active.now_playing.item_id.as_str(),
-        active.media_source_id.as_str(),
-      )
-    })
-  }
-
   /// Discover MPV and create a controller without starting the process.
   ///
   /// # Errors
@@ -1093,6 +1078,9 @@ impl PlaybackController {
     }
 
     let ended = self.take_terminal_end_reason().await;
+    if ended.is_some() {
+      self.retire_preview_source();
+    }
     self.capture_volume().await;
     if let Some(reason) = ended {
       return self.finish_ended_playback(reason).await;
@@ -1131,6 +1119,7 @@ impl PlaybackController {
   /// An MPV cleanup command failure is returned separately so a connection
   /// handoff can retain this controller and retry before adopting a new account.
   pub async fn shutdown(&mut self) -> PlaybackShutdownOutcome {
+    self.retire_preview_source();
     self.take_terminal_end_reason().await;
     self.capture_volume().await;
     self.unload_before_quit().await;
@@ -1340,6 +1329,7 @@ impl PlaybackController {
   /// Returns [`PlaybackError::NoActivePlayback`] when no item is current.
   pub async fn stop(&mut self) -> Result<PlaybackStopOutcome, PlaybackError> {
     self.require_active()?;
+    self.retire_preview_source();
     self.take_terminal_end_reason().await;
     self.capture_volume().await;
     self.unload_before_quit().await;
@@ -1371,6 +1361,10 @@ impl PlaybackController {
     &mut self,
     request: PlayableRequest,
   ) -> Result<PlaybackOutcome, PlaybackError> {
+    // Revoke outgoing preview access before negotiation can suspend. If it
+    // fails, a later capture may lease the still-active file, never revive an
+    // already-issued capability.
+    self.retire_preview_source();
     let resolved = self.resolve(request).await?;
     self.capture_volume().await;
     let mut warnings = self.settle_disconnected_previous().await;
@@ -1662,6 +1656,7 @@ impl PlaybackController {
           original_language: prepared.original_language,
         },
         media_source_id: media_source.id,
+        preview_media: PreviewMedia::new(stream_url),
         play_session_id,
         audio_stream_index: prepared.audio_stream_index,
         subtitle_stream_index: prepared.subtitle_stream_index,
@@ -1670,7 +1665,6 @@ impl PlaybackController {
         last_known_position_seconds: start_position_seconds,
         audio_track_key,
       },
-      stream_url,
       external_subtitles,
       external_subtitle_unavailable: prepared.external_subtitle_unavailable,
       selected_external_subtitle_index: prepared.selected_external_subtitle_index,
@@ -1815,7 +1809,7 @@ impl PlaybackController {
     if self
       .mpv
       .loadfile_with_options(
-        resolved.stream_url.as_str(),
+        resolved.active.preview_media.url.as_str(),
         Some(resolved.active.now_playing.start_position_seconds),
         resolved.mpv_audio_index,
         resolved.mpv_subtitle_index,
@@ -1824,10 +1818,7 @@ impl PlaybackController {
       .await
       .is_err()
     {
-      log::warn!(
-        "MPV rejected the loadfile command for {}",
-        stream_url_head(resolved.stream_url.as_str())
-      );
+      log::warn!("MPV rejected the resolved media loadfile command");
       return false;
     }
 
@@ -1838,10 +1829,7 @@ impl PlaybackController {
         };
         self.handle_unload_hook(&event);
         if let Some(reason) = self.load_event_boundary.observe(&event) {
-          log::warn!(
-            "MPV could not load {}: {reason:?}",
-            stream_url_head(resolved.stream_url.as_str())
-          );
+          log::warn!("MPV could not load the resolved media: {reason:?}");
           return false;
         }
         if self.load_event_boundary == LoadEventBoundary::Settled {
@@ -1857,6 +1845,7 @@ impl PlaybackController {
   }
 
   async fn cleanup_failed_load(&mut self, previous: Option<&ActivePlayback>) {
+    self.retire_preview_source();
     self.reset_volume_session();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
@@ -1881,6 +1870,7 @@ impl PlaybackController {
   }
 
   async fn unload_before_quit(&mut self) {
+    self.retire_preview_source();
     if self.unloading || self.active.is_none() {
       return;
     }
@@ -1913,6 +1903,7 @@ impl PlaybackController {
       return;
     }
     self.unloading = true;
+    self.retire_preview_source();
     let generation = args.get(1).and_then(|value| value.parse::<u64>().ok());
     if generation.is_none() || generation != self.active_volume_generation {
       return;
@@ -1974,6 +1965,7 @@ impl PlaybackController {
         return Vec::new();
       }
     }
+    self.retire_preview_source();
 
     let active = self.active.clone();
     self.pending_fullscreen = self.capture_fullscreen().await;
@@ -2005,6 +1997,7 @@ impl PlaybackController {
   }
 
   async fn finish_ended_playback(&mut self, reason: PlaybackEndReason) -> PlaybackRefreshOutcome {
+    self.retire_preview_source();
     let active = self.active.clone();
     self.pending_fullscreen = self.capture_fullscreen().await;
     if reason != PlaybackEndReason::EndOfFile {
@@ -2110,6 +2103,7 @@ impl PlaybackController {
 struct ActivePlayback {
   now_playing: NowPlayingItem,
   media_source_id: String,
+  preview_media: Arc<PreviewMedia>,
   play_session_id: Option<String>,
   audio_stream_index: Option<i32>,
   subtitle_stream_index: Option<i32>,
@@ -2177,7 +2171,6 @@ impl LoadEventBoundary {
 struct ResolvedPlayback {
   volume_key: Option<SeasonVolumeKey>,
   active: ActivePlayback,
-  stream_url: AuthenticatedUrl,
   external_subtitles: Vec<ExternalSubtitle>,
   external_subtitle_unavailable: bool,
   selected_external_subtitle_index: Option<i32>,
@@ -2454,12 +2447,6 @@ fn provider_index_for_mpv_track(
   loaded_external_subtitle_indexes
     .get(position - internal_count)
     .copied()
-}
-
-/// Stream URL without its query string, where the access token rides. Safe to
-/// log; identifies the server route MPV was asked to open.
-fn stream_url_head(url: &str) -> &str {
-  url.split('?').next().unwrap_or(url)
 }
 
 fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
@@ -2901,6 +2888,7 @@ mod tests {
     fail_command: Arc<Mutex<Option<Vec<serde_json::Value>>>>,
     end_reason: Arc<Mutex<&'static str>>,
     withheld_volume: Arc<Mutex<Option<SubAddResponseGate>>>,
+    withheld_read: Arc<Mutex<Option<(&'static str, SubAddResponseGate)>>>,
     change_file_on_read: Arc<Mutex<Option<&'static str>>>,
   }
 
@@ -2986,6 +2974,8 @@ mod tests {
       let task_end_reason = Arc::clone(&end_reason);
       let withheld_volume = Arc::new(Mutex::new(None::<SubAddResponseGate>));
       let task_withheld_volume = Arc::clone(&withheld_volume);
+      let withheld_read = Arc::new(Mutex::new(None::<(&'static str, SubAddResponseGate)>));
+      let task_withheld_read = Arc::clone(&withheld_read);
       let change_file_on_read = Arc::new(Mutex::new(None::<&'static str>));
       let task_change_file_on_read = Arc::clone(&change_file_on_read);
       let peer = tokio::spawn(async move {
@@ -3031,6 +3021,27 @@ mod tests {
             {
               state.playlist_entry += 1;
               *change = None;
+            }
+          }
+          if name == Some("get_property") {
+            let gate = {
+              let mut held = task_withheld_read.lock().expect("property gate");
+              if held.as_ref().is_some_and(|(property, _)| {
+                command.get(1).and_then(serde_json::Value::as_str) == Some(*property)
+              }) {
+                held.take().map(|(_, gate)| gate)
+              } else {
+                None
+              }
+            };
+            if let Some(gate) = gate {
+              gate.command_received.add_permits(1);
+              gate
+                .release_response
+                .acquire()
+                .await
+                .expect("property release")
+                .forget();
             }
           }
           if name == Some("set_property")
@@ -3180,6 +3191,7 @@ mod tests {
         fail_command,
         end_reason,
         withheld_volume,
+        withheld_read,
         change_file_on_read,
       }
     }
@@ -5135,6 +5147,9 @@ mod tests {
         original_language: None,
       },
       media_source_id: "source-1".to_owned(),
+      preview_media: PreviewMedia::new(AuthenticatedUrl::new(
+        "https://media.example/video?api_key=private-preview-token".to_owned(),
+      )),
       play_session_id: Some("play-1".to_owned()),
       audio_stream_index: None,
       subtitle_stream_index: None,
@@ -5157,28 +5172,98 @@ mod tests {
   }
 
   #[test]
-  fn seek_preview_identity_retires_during_replacement_and_unload() {
+  fn preview_capability_is_settled_revocable_and_redacted() {
     let mut controller = controller_with_active(0.0);
+    controller.tools.file = Some(tools::PlaybackFileToken::default());
+    controller.tools.seekable = true;
+    let capability = controller.seek_preview_source().unwrap();
+    assert_eq!(capability.item_id(), "item-1");
+    assert_eq!(capability.media_source_id(), "source-1");
+    assert!(capability.seekable());
     assert_eq!(
-      controller.seek_preview_identity(),
-      Some(("item-1", "source-1"))
+      capability.bind(|| {}, str::to_owned).unwrap(),
+      "https://media.example/video?api_key=private-preview-token"
     );
+    assert!(!format!("{capability:?}").contains("private-preview-token"));
     controller.load_event_boundary = LoadEventBoundary::Loading;
-    assert_eq!(controller.seek_preview_identity(), None);
+    assert!(controller.seek_preview_source().is_none());
     controller.load_event_boundary = LoadEventBoundary::Settled;
     controller.unloading = true;
-    assert_eq!(controller.seek_preview_identity(), None);
+    assert!(controller.seek_preview_source().is_none());
     controller.unloading = false;
     controller.active_transport_matches_mpv = false;
-    assert_eq!(controller.seek_preview_identity(), None);
+    assert!(controller.seek_preview_source().is_none());
     controller.active_transport_matches_mpv = true;
-    let active = controller.active.as_mut().unwrap();
-    active.now_playing.item_id = "item-2".to_owned();
-    active.media_source_id = "alternate-source".to_owned();
-    assert_eq!(
-      controller.seek_preview_identity(),
-      Some(("item-2", "alternate-source"))
-    );
+    controller.retire_preview_source();
+    assert!(!capability.is_current());
+    assert!(capability.bind(|| {}, str::to_owned).is_none());
+    // Failed negotiation may leave this file active, but only a fresh lease
+    // can access it; an earlier consumer cannot resume its retired demand.
+    let renewed = controller.seek_preview_source().unwrap();
+    assert_eq!(renewed.file(), capability.file());
+    assert!(renewed.is_current());
+    let outgoing_stop_report = controller.active.clone();
+    controller.retire_tools();
+    assert!(!capability.is_current());
+    assert!(!renewed.is_current());
+    assert!(capability.admit(|| ()).is_none());
+    assert!(outgoing_stop_report.is_some());
+    // Same item and URL still get a fresh file capability; the old one stays dead.
+    controller.active = Some(active_playback(0.0));
+    controller.tools.file = Some(tools::PlaybackFileToken::default());
+    let replacement = controller.seek_preview_source().unwrap();
+    assert_ne!(replacement.file(), capability.file());
+    assert!(replacement.is_current());
+    assert!(!capability.is_current());
+    drop(controller);
+    assert!(!replacement.is_current());
+  }
+
+  #[test]
+  fn terminal_cleanup_revokes_preview_before_awaiting_the_first_property() {
+    run_async(async {
+      for ended in [true, false] {
+        let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+        let _ = controller
+          .play(
+            library_item("Episode").into(),
+            PlaybackStartPosition::Beginning,
+          )
+          .await
+          .unwrap();
+        let source = controller
+          .seek_preview_source()
+          .expect("settled preview source");
+        let pending = Arc::new(AtomicBool::new(true));
+        let cancelled = pending.clone();
+        source
+          .bind(move || cancelled.store(false, Ordering::SeqCst), |_| ())
+          .unwrap();
+        let outgoing_report = controller.active.clone();
+        controller.pending_end_reason = Some(PlaybackEndReason::Disconnected);
+        let gate = SubAddResponseGate::new();
+        *mpv.withheld_read.lock().unwrap() = Some(("fullscreen", gate.clone()));
+        let mut cleanup = Box::pin(async {
+          if ended {
+            let _ = controller
+              .finish_ended_playback(PlaybackEndReason::Disconnected)
+              .await;
+          } else {
+            let _ = controller.settle_disconnected_previous().await;
+          }
+        });
+        tokio::select! {
+          () = gate.wait_for_command() => {}
+          () = &mut cleanup => panic!("cleanup bypassed the held fullscreen read"),
+        }
+        assert!(outgoing_report.is_some());
+        assert!(!source.is_current());
+        assert!(!pending.load(Ordering::SeqCst));
+        assert!(source.admit(|| ()).is_none());
+        gate.release_response();
+        cleanup.await;
+      }
+    });
   }
 
   #[test]

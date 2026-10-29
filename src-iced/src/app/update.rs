@@ -1053,6 +1053,7 @@ pub(crate) mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      preview: None,
       saved_browse: Default::default(),
       #[cfg(target_os = "linux")]
       system_media: Default::default(),

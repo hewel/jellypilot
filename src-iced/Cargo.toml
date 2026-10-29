@@ -20,6 +20,7 @@ jellypilot-sdk = { path = "../crates/jellypilot-sdk" }
 jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { workspace = true }
+iced_mpv_preview = { path = "../target/vendor/iced/mpv_preview" }
 async-trait = "0.1.89"
 dirs = "6.0.0"
 fluent-templates = "0.15.1"

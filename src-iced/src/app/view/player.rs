@@ -286,11 +286,11 @@ fn now_playing_metadata<'a>(
   caption_size: f32,
 ) -> Column<Element<'a, Message>> {
   column![
-    text(&now_playing.item.title)
+    ellipsis_text(&now_playing.item.title)
       .font(HEADING_FONT)
       .size(title_size)
       .color(state.palette().text.heading),
-    text(playback_caption(state))
+    ellipsis_text(playback_caption(state))
       .size(caption_size)
       .color(state.palette().text.metadata),
   ]
@@ -353,10 +353,10 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
 /// compact player.
 fn track_selection(state: &State) -> Element<'_, Message> {
   row![
-    super::viewing_queue::trigger(state, false),
-    queue_popover(state, false),
-    audio_popover(state, false, false),
-    subtitle_popover(state, false, false)
+    super::viewing_queue::trigger(state, true),
+    queue_popover(state, true),
+    audio_popover(state, true, false),
+    subtitle_popover(state, true, false)
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center)
@@ -1094,8 +1094,9 @@ fn embedded_bar<'a>(
 }
 
 const EMBEDDED_TRANSPORT_WIDTH: f32 = 140.0;
-/// Upper bound for the tools cluster without the skip-mode pill.
-const EMBEDDED_TOOLS_WIDTH: f32 = 317.0;
+/// Upper bound for the tools cluster without the skip-mode pill:
+/// five 40px controls, the 84px slider, a 1px separator, and five gaps.
+const EMBEDDED_TOOLS_WIDTH: f32 = 5.0 * 40.0 + 84.0 + 1.0 + 5.0 * TOKENS.spacing.s2;
 /// Includes the localized skip-mode pill. Below this side-slot budget the
 /// pill moves to Playback options, preserving the reference's transport row.
 const EMBEDDED_TOOLS_WIDTH_WITH_TOGGLE: f32 = 528.0;
@@ -1450,45 +1451,30 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
       .seek_preview
       .or(embedded_player::seek_hover(state))
       .unwrap_or(position);
-    let rail = mouse_area(stack![
-      cinema::timeline_track(
-        position.clamp(0.0, duration),
-        duration,
-        embedded_player::buffered_ranges(state),
-        embedded_player::chapter_times(state),
-        embedded_player::intro_ranges(state),
-        embedded_player::seek_hover(state),
-        !state.playback.view.busy || embedded_player::is_seek_dragging(state),
-      ),
-      tracked_slider(
-        slider(
-          0.0..=duration,
-          position.clamp(0.0, duration),
-          SliderEvent::Changed,
-        )
-        .step(1.0)
-        .height(40)
-        .width(Fill)
-        .on_release(SliderEvent::DragEnded)
-        .style(cinema::timeline_input),
-        embedded_player::is_seek_dragging(state),
-        |event| {
-          Message::Playback(match event {
-            SliderEvent::DragStarted => PlaybackMessage::SeekDragStarted,
-            SliderEvent::Changed(value) => PlaybackMessage::SeekChanged(value),
-            SliderEvent::DragEnded => PlaybackMessage::SeekReleased,
-            SliderEvent::Adjusted(value) => PlaybackMessage::SeekAdjusted(value),
-          })
-        },
-      ),
-    ])
-    .on_move(move |point| {
-      Message::EmbeddedPlayer(embedded_player::Message::SeekHovered(Some(
-        (f64::from(point.x / bounds.width.max(1.0)) * duration).clamp(0.0, duration),
-      )))
-    })
-    .on_exit(Message::EmbeddedPlayer(
-      embedded_player::Message::SeekHovered(None),
+    let enabled = !state.playback.view.busy || embedded_player::is_seek_dragging(state);
+    let generation = embedded_player::timeline_generation(state);
+    let rail = iced::widget::timeline(
+      0.0..=duration,
+      position.clamp(0.0, duration),
+      move |action| {
+        Message::EmbeddedPlayer(embedded_player::Message::Timeline { generation, action })
+      },
+    )
+    .generation(generation)
+    .step(1.0)
+    .shift_step(10.0)
+    .height(40)
+    .width(Fill)
+    .enabled(enabled)
+    .style(cinema::timeline_input)
+    .track(cinema::timeline_track(
+      position.clamp(0.0, duration),
+      duration,
+      embedded_player::buffered_ranges(state),
+      embedded_player::chapter_times(state),
+      embedded_player::intro_ranges(state),
+      embedded_player::seek_hover(state),
+      enabled && state.playback.view.tools.seekable,
     ));
     let chapter_label = embedded_player::chapters(state).and_then(|chapters| {
       chapters
@@ -1517,45 +1503,41 @@ fn embedded_timeline<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elem
     }
     let label = text(tooltip_text).font(MONO_FONT).size(12);
     let preview: Element<'_, Message> =
-      if let Some((handle, tile)) = embedded_player::seek_preview_frame(state) {
+      if let Some(frame) = embedded_player::seek_preview_frame(state) {
         let width = bounds.width.clamp(1.0, 240.0);
-        let height = (width * tile.height as f32 / tile.width as f32).min(135.0);
-        column![
-          rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
-            .crop(iced::Rectangle {
-              x: tile.x,
-              y: tile.y,
-              width: tile.width,
-              height: tile.height,
-            })
-            .content_fit(ContentFit::Contain)
-            .width(width)
-            .height(height),
-          label,
-        ]
-        .spacing(TOKENS.spacing.s2)
+        let height = (width * frame.height as f32 / frame.width as f32).min(135.0);
+        let mut image = rounded_image(
+          frame.image.clone(),
+          full_radius((TOKENS.radii.xl - TOKENS.spacing.s2).max(0.0)),
+        )
+        .content_fit(ContentFit::Contain)
         .width(width)
-        .boxed()
+        .height(height);
+        if let Some(tile) = frame.crop {
+          image = image.crop(iced::Rectangle {
+            x: tile.x,
+            y: tile.y,
+            width: tile.width,
+            height: tile.height,
+          });
+        }
+        column![image, label,]
+          .spacing(TOKENS.spacing.s2)
+          .width(width)
+          .boxed()
       } else {
         container(label)
           .width(Length::Fit.max(bounds.width.clamp(1.0, 280.0)))
           .boxed()
       };
-    let rail: Element<'_, Message> = iced::widget::tooltip(
-      rail,
-      container(preview).padding(TOKENS.spacing.s2),
-      iced::widget::tooltip::Position::FollowCursor,
-    )
-    .delay(std::time::Duration::ZERO)
-    .gap(TOKENS.spacing.s3)
-    .snap_within_viewport(true)
-    .style(cinema::popover)
-    .boxed();
-    if state.playback.view.busy && !embedded_player::is_seek_dragging(state) {
-      inert(rail)
-    } else {
-      rail
-    }
+    rail
+      .preview(
+        container(preview)
+          .padding(TOKENS.spacing.s2)
+          .style(cinema::popover),
+      )
+      .preview_gap(TOKENS.spacing.s3)
+      .boxed()
   })
   .height(40);
   let remaining = (duration - position).max(0.0);
@@ -3138,16 +3120,17 @@ mod tests {
       Point::new(550.0, 596.0),
     );
     assert_eq!(pause_toggles(&messages), 0);
-    assert!(messages.iter().any(|message| matches!(
-      message,
-      Message::Playback(PlaybackMessage::SeekChanged(position)) if *position > 120.0
-    )));
-    assert_eq!(
-      messages
-        .iter()
-        .filter(|message| matches!(message, Message::Playback(PlaybackMessage::SeekReleased)))
-        .count(),
-      1,
+    let mut commits = messages.iter().filter_map(|message| match message {
+      Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+        action: iced::widget::timeline::Action::Commit(position),
+        ..
+      }) => Some(*position),
+      _ => None,
+    });
+    assert!(commits.next().is_some_and(|position| position > 120.0));
+    assert!(
+      commits.next().is_none(),
+      "one activation click commits once"
     );
     let messages = dispatch_embedded(
       &mut ui,
@@ -3598,6 +3581,9 @@ mod tests {
         (1024.0, 136.0),
         (901.0, 136.0),
         (900.0, 136.0),
+        (862.0, 136.0),
+        (860.0, 192.0),
+        (850.0, 192.0),
         (768.0, 192.0),
         (750.0, 192.0),
         (700.0, 192.0),
@@ -3652,6 +3638,77 @@ mod tests {
         );
       }
     }
+  }
+
+  #[tokio::test]
+  async fn compact_track_tools_fit_the_control_only_window() {
+    use iced::advanced::{layout, renderer::Headless, widget::Tree};
+    use iced::Size;
+
+    let state = State::boot(false);
+    let now_playing = test_now_playing();
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut tools = row![
+      track_selection(&state),
+      volume_controls(&state, &now_playing)
+    ]
+    .spacing(TOKENS.spacing.s3)
+    .align_y(Alignment::Center);
+    let mut tree = Tree::new(&tools);
+    tree.diff(&mut tools);
+    let node = crate::app::test_support::layout_widget(
+      &mut tools,
+      &mut tree,
+      &renderer,
+      &layout::Limits::new(Size::ZERO, Size::new(1000.0, 200.0)),
+    );
+    let available = crate::app::shell::CONTROL_ONLY_WINDOW_SIZE.width - 2.0 * TOKENS.spacing.s3;
+    assert!(
+      node.size().width <= available,
+      "compact track and volume controls exceed the fixed window: {} > {available}",
+      node.size().width
+    );
+  }
+
+  #[tokio::test]
+  async fn compact_metadata_keeps_long_titles_on_one_line() {
+    use iced::advanced::{layout, renderer::Headless, widget::Tree};
+    use iced::Size;
+
+    let state = State::boot(false);
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut now_playing = test_now_playing();
+    let mut heights = Vec::new();
+    for title in [
+      "Episode".to_owned(),
+      "A long episode title that must remain on one line ".repeat(12),
+    ] {
+      now_playing.item.title = title;
+      let mut metadata = now_playing_metadata(&state, &now_playing, 22.0, 13.0).width(Fill);
+      let mut tree = Tree::new(&metadata);
+      tree.diff(&mut metadata);
+      let node = crate::app::test_support::layout_widget(
+        &mut metadata,
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(200.0, 500.0)),
+      );
+      heights.push(node.size().height);
+    }
+    assert!(
+      (heights[0] - heights[1]).abs() < 0.01,
+      "long metadata changed the two-line compact layout: {heights:?}"
+    );
   }
 
   fn test_now_playing() -> NowPlayingView {
@@ -3718,7 +3775,10 @@ mod tests {
       assert_eq!(
         hover_messages.iter().any(|message| matches!(
           message,
-          Message::EmbeddedPlayer(embedded_player::Message::SeekHovered(Some(_)))
+          Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+            action: iced::widget::timeline::Action::Hover(Some(_)),
+            ..
+          })
         )),
         !busy
       );
@@ -3743,14 +3803,18 @@ mod tests {
       }
       let drag_messages: Vec<_> = bus.drain().map(|(message, _)| message).collect();
       assert!(
-        !drag_messages
-          .iter()
-          .any(|message| matches!(message, Message::Playback(PlaybackMessage::SeekReleased))),
+        !drag_messages.iter().any(|message| matches!(
+          message,
+          Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+            action: iced::widget::timeline::Action::Commit(_),
+            ..
+          })
+        )),
         "dragging is a preview, not an immediate seek"
       );
       assert_eq!(
         drag_messages.iter().any(|message| matches!(
-          message, Message::Playback(PlaybackMessage::SeekChanged(value)) if *value > 120.0
+          message, Message::EmbeddedPlayer(embedded_player::Message::Timeline { action: iced::widget::timeline::Action::Preview(value), .. }) if *value > 120.0
         )),
         !busy
       );
@@ -3764,7 +3828,11 @@ mod tests {
           AdjustmentInput::DragStarted(Control::Seek),
         );
         for message in &drag_messages {
-          if let Message::Playback(PlaybackMessage::SeekChanged(position)) = message {
+          if let Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+            action: iced::widget::timeline::Action::Preview(position),
+            ..
+          }) = message
+          {
             let _ = crate::app::playback::adjust(
               &mut state.playback,
               AdjustmentInput::Preview(Control::Seek, *position),
@@ -3795,7 +3863,10 @@ mod tests {
           .drain()
           .filter(|(message, _)| matches!(
             message,
-            Message::Playback(PlaybackMessage::SeekReleased)
+            Message::EmbeddedPlayer(embedded_player::Message::Timeline {
+              action: iced::widget::timeline::Action::Commit(_),
+              ..
+            })
           ))
           .count(),
         usize::from(!busy)

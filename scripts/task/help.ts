@@ -24,17 +24,32 @@ Application:
     --embedded forces the pinned staged libmpv; explicit env overrides must be absolute:
     JELLYPILOT_LIBMPV, JELLYPILOT_MPV_BASELINE. Linux defaults to Embedded MPV Playback.
     --tv starts the TV presentation for this launch without changing the saved preference.
-  iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>]
+  iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>] [--host-abi <legacy|3>] [--duration-secs <N>]
     Linux opt-in native probes; gpu/all requires a real readable local media file before startup.
+    --host-abi defaults to legacy (v2/v1); 3 requires timeline v3 with no fallback.
+    --duration-secs is gpu-only: ASCII decimal integer 1..3600, once; omitted keeps the short probe.
+    Sustained cycles reuse one host, dwell min(N,30)s in active playback and finish a full cycle
+    at/after N seconds before normal exit. Native watchdog N+120s; dispatcher timeout N+180s
+    (short defaults: 120s/180s). Idle-driver per-cycle budget: 90s sustained, 20s short;
+    active-play phase budget: dwell+20s; other phases: 20s.
+    Native reports retain host identity/lifetime counts and timestamped phase/cycle evidence.
+    Resource sampling is a separate read-only observer; no leak or color acceptance is implied.
     Fresh run-identified reports: target/native-regression by default. Color acceptance stays human.
 
 Embedded mpv dependency (Linux/Windows Vulkan):
   mpv build [--source <checkout>]
     Requires pinned clean mpv source, Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
-    Vulkan development headers/loader, FFmpeg, libplacebo >=7.360.1 and libass.
+    Vulkan development headers/loader >=1.4.309, FFmpeg, libplacebo >=7.387.0 and libass.
     Without --source, fetches the pinned revision from https://github.com/hewel/mpv.git.
     Stages target/embedded-mpv/{lib/jellypilot/libmpv.so|libmpv-2.dll,share/jellypilot/mpv-baseline.conf,manifest.json}.
     Source/options pinned; host dependency versions recorded, not bit-reproducible.
+  mpv linux-runtime [--source <checkout>]
+    Linux x86_64 distribution staging: builds pinned private libplacebo >=7.387.0 and mpv.
+    Requires the mpv build tools plus glslang, shaderc, lcms2, readelf, patchelf and dpkg/pacman.
+    Bundles libplacebo's runtime dependencies with package notices and $ORIGIN lookup;
+    keeps glibc, the Vulkan loader/drivers and mpv's other distro dependencies external.
+    Replaces only the generated staged runtime, verifies loading without LD_LIBRARY_PATH,
+    and records post-patch artifact hashes. Does not install system libraries or create packages.
 
 Windows release package:
   package windows --runtime-dir <MSYS2 UCRT64 bin directory>

@@ -625,6 +625,7 @@ pub struct FullUi {
 }
 
 pub struct State {
+  pub(crate) preview: Option<crate::preview::Runtime>,
   pub saved_browse: super::saved_browse::Surface,
   #[cfg(target_os = "linux")]
   pub(crate) system_media: super::system_media::Surface,
@@ -687,6 +688,7 @@ impl State {
     let (sdk, sdk_handoff) = kernel::account_runtime(&auth_store, &watchlist);
 
     let mut state = Self {
+      preview: None,
       saved_browse: Default::default(),
       #[cfg(target_os = "linux")]
       system_media: Default::default(),

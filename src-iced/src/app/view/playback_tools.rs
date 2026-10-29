@@ -818,6 +818,7 @@ mod tests {
     };
     state.playback.view.tools = PlaybackToolsView {
       file: Some(PlaybackFileToken::default()),
+      seekable: true,
       tracks,
       secondary: ToolState::Ready(SecondarySubtitleView {
         selected: None,

@@ -1,0 +1,20 @@
+{
+  "remote": "https://github.com/haasn/libplacebo.git",
+  "tag": "v7.387.0",
+  "revision": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
+  "version": "7.387.0",
+  "soname": "libplacebo.so.387",
+  "mesonOptions": [
+    "--buildtype=debugoptimized",
+    "--wrap-mode=nofallback",
+    "-Ddefault_library=shared",
+    "-Ddemos=false",
+    "-Dtests=false",
+    "-Dvulkan=enabled",
+    "-Dopengl=disabled",
+    "-Dd3d11=disabled",
+    "-Dglslang=enabled",
+    "-Dshaderc=enabled",
+    "-Dlcms=enabled"
+  ]
+}

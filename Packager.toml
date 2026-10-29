@@ -39,15 +39,21 @@ depends = [
   "libavutil60",
   "libswresample6",
   "libswscale9",
-  "libplacebo360",
   "libass9",
   "libluajit-5.1-2",
   "libvulkan1",
 ]
+
+# `mpv linux-runtime` stages libmpv, private libplacebo and its required closure.
+# Directory mappings retain host-specific SONAME filenames and license notices.
 [deb.files]
-"target/embedded-mpv/lib/jellypilot/libmpv.so" = "usr/lib/jellypilot/libmpv.so"
+"target/embedded-mpv/lib/jellypilot" = "usr/lib/jellypilot"
 "target/embedded-mpv/share/jellypilot/mpv-baseline.conf" = "usr/share/jellypilot/mpv-baseline.conf"
+"target/embedded-mpv/manifest.json" = "usr/share/jellypilot/mpv-manifest.json"
+"target/embedded-mpv/share/jellypilot/licenses/linux-runtime" = "usr/share/jellypilot/licenses/linux-runtime"
 
 [appimage.files]
-"target/embedded-mpv/lib/jellypilot/libmpv.so" = "usr/lib/jellypilot/libmpv.so"
+"target/embedded-mpv/lib/jellypilot" = "usr/lib/jellypilot"
 "target/embedded-mpv/share/jellypilot/mpv-baseline.conf" = "usr/share/jellypilot/mpv-baseline.conf"
+"target/embedded-mpv/manifest.json" = "usr/share/jellypilot/mpv-manifest.json"
+"target/embedded-mpv/share/jellypilot/licenses/linux-runtime" = "usr/share/jellypilot/licenses/linux-runtime"

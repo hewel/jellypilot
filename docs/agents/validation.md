@@ -29,11 +29,17 @@ checks; do not add an approval pause solely because the applicable tier is broad
 ## Opt-in native regressions
 
 The sole maintained joint entry is
-`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>]`.
+`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>] [--host-abi <legacy|3>] [--duration-secs <N>]`.
 It is not part of normal startup or a replacement for the applicable project gates.
 See [fork maintenance](../../README.md#fork-maintenance-and-joint-acceptance) for sync and
 rollback, and [manual color comparison](../../README.md#manual-three-way-color-comparison)
 for the separate human acceptance protocol.
+`--host-abi` defaults to `legacy` (actual ABI v1/v2); select `3` explicitly for timeline
+handoff acceptance. An ABI mismatch fails the run rather than counting fallback as success.
+`--duration-secs` is optional and **gpu-only**, not permitted for `tray`, `external` or `all`.
+Supply it once with ASCII decimal digits representing an integer from 1 through 3600;
+signs, whitespace, fractions, exponent notation and non-ASCII digits are rejected.
+Without it, the short regression is unchanged.
 
 Prerequisites: Linux, `dbus-run-session`, the normal launcher build dependencies, and `xvfb-run`
 for the External recovery scenario. Tray/GPU use the **current native display** and require
@@ -46,6 +52,10 @@ fixture is used. Private D-Bus sessions and temporary configuration/runtime dire
 app/IPC state while retaining the display connection. Probes manipulate only their own windows:
 no desktop input injection, other-window control, visual screenshot inspection or display-setting
 changes. If the current display/adapter cannot support the probe, record `unavailable`.
+An isolated compositor must satisfy the same prerequisites: on Wayland, GPU acceptance
+requires `zwp_idle_inhibit_manager_v1`; on X11 it requires XScreenSaver Suspend support.
+A successful EGL connection alone does not establish Vulkan surface compatibility, frame
+callback progress or idle inhibition. Missing protocols/adapters are not passing regressions.
 
 The runner also preserves audio-session socket lookup separately from its private runtime:
 `PIPEWIRE_RUNTIME_DIR` and `PULSE_RUNTIME_PATH` default to the original session locations,
@@ -60,7 +70,10 @@ quality; keep those as separate human acceptance.
   and renders through the actual compositor. Tray-free smoke cannot establish this result.
 - `external`: confirms an explicit missing-embedded-asset rejection, then starts and exits
   External mode successfully with missing libmpv, baseline and Vulkan driver paths.
-- `gpu`: exercises real decoded video, paused clock, seek/frame change, paused video-region
+- `gpu`: first rejects a missing local file and then loads valid media using the same host.
+  This tests ordinary playback-error recovery, not recovery from fatal acquire/error release:
+  those stop the host session and require VO/host recreation, not stop/reload or ABI fallback.
+  It exercises real decoded video, paused clock, seek/frame change, paused video-region
   resize through iced layout and real copy-target replacement (not OS window-resize acceptance),
   resumed playback, image work and in-memory readback through the actual compositor. On
   Linux it also drives a real PlaybackSession through the production projection path:
@@ -76,11 +89,57 @@ quality; keep those as separate human acceptance.
   Samples also include requested/actual AO and `audio-params`/`audio-out-params`; a lifecycle
   pass with automatic backend selection is not evidence of a particular audio backend.
 
+With `gpu --duration-secs N`, repeat that complete lifecycle on the same host, retaining
+all existing assertions and normal teardown. Each cycle dwells in active playback for
+`min(N, 30)` seconds. `N` is a minimum elapsed time from probe creation, not an exact
+deadline for exit: only finish after a complete cycle at or after `N`, with at least one
+completed cycle. Media must extend beyond the seek target (`min(duration / 2, 10)` seconds)
+plus the playback dwell and a two-second reopen margin; short clips are explicitly rejected.
+The native watchdog is `N + 120` seconds and the dispatcher child timeout is `N + 180`
+seconds; the short defaults remain 120/180 seconds. These exclude dependency preparation
+and compilation. The idle-inhibitor driver budget is 90 seconds per sustained cycle
+(20 seconds short); each active-playback phase gets its dwell plus 20 seconds, while all
+other phases get 20 seconds.
+The active GPU phase has one absolute deadline, checked both during presentation and by
+the existing 25ms `FrameTick`; loss of presentation callbacks does not suspend that check.
+Last-window close/reopen remains under phase 5's budget. Completion, failure and final
+teardown disarm the phase deadline. The idle driver still runs first with its original
+budget: if it fails first, its original error is retained, followed by `GPU progress`
+context (`phase`, `cycle`, `last_present_age`, presentation/copy counts and live surfaces).
+Later deadline failures do not overwrite that first failure. These checks are cooperative,
+not preemptive: synchronous work can delay a tick, and the phase budget is not armed before
+the first presentation constructs the GPU probe; the existing idle/process limits still apply.
+This is diagnostic boundedness, not recovery from missing frame callbacks or evidence
+that sustained resource growth is resolved.
+Loading waits for both the command acknowledgment and `file-loaded`; a retained frame from
+the previous cycle is not evidence that replacement-media properties are ready. This wait
+has a 20-second overall budget and retains the two-second IPC socket read/write timeout.
+
 Default reports are `target/native-regression/report.json` and the selected scenario JSON files.
-They include a fresh run identity; aggregate `pass` requires all requested scenarios to pass
-and their processes to exit successfully. Failures, timeouts and unavailable prerequisites
+They include a fresh run identity, requested/actual host ABI and both shared/desktop Cargo
+lockfile hashes; aggregate `pass` requires all requested scenarios to pass and their processes
+to exit successfully. Failures, timeouts and unavailable prerequisites
 must not be interpreted as pass. Check each item's status/reason and matching `runId`;
 unselected files may be from an older run. Keep media/source/artifact metadata with the report.
+Aggregate `requestedDurationSeconds` records the selected minimum or null for a short run.
+Native optional/null `sustained` evidence contains `requestedSeconds`, `elapsedSeconds`
+finalized at cycle completion and `completedCycles`. A sustained `pass` additionally
+requires matching requested seconds, finite elapsed seconds at least the minimum and
+at least one completed cycle; a default/short or stale report cannot satisfy it.
+Native reports also retain `processId`, `hostsCreated`, `hostsDropped`, `hostIdentity`,
+`phase`, `cycle`, timestamped `phaseHistory`, and cumulative probe `presentations`/`copiedFrames`
+for same-host assertions and progress diagnosis. These counters do not include presentations
+after the probe completes.
+`lastPresentElapsedSeconds` records the last presentation accepted by the probe relative
+to run startup, or null before one is observed; it remains available in failure/exit reports.
+Phase codes are 0 load, 8 settle paused frame, 1 paused hold, 2 paused seek, 3 paused resize,
+4 active playback, 5 close/reopen, 6 advancing reopened playback, 7 stop/idle and 9 complete.
+Phase history records transitions; resource samples correlated to it are not atomic phase
+measurements and can miss short stages.
+Resource metrics remain a separate read-only observer, not a new acceptance framework:
+for example, attach `bun run task monitor --pid <processId> --out target/resources/sustained.ndjson`
+while the process runs, and retain raw metrics/unavailability alongside run/PID/phase/cycle
+evidence. Neither a lifecycle pass nor resource trends establish absence of leaks.
 Human-authored `color-comparison.json` is separate and is never written or accepted by the
 automatic entry. SDR, HDR10 and metadata-confirmed Profile 5 comparisons remain unavailable
 until a human actually performs and records them.

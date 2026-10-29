@@ -123,11 +123,6 @@ impl DeviceContext {
         &self.queue
     }
 
-    /// Polls GPU completion outside the queue gate; callbacks may run here.
-    pub fn poll(&self) {
-        let _ = self.device.poll(wgpu::PollType::Poll);
-    }
-
     /// Serializes compositor queue operations with all mpv hosts on this device.
     /// Do not hold this guard across Host methods or synchronous mpv IPC calls.
     pub fn queue_lock(&self) -> Arc<QueueLock> {
@@ -218,7 +213,7 @@ impl DeviceContext {
             let queue_family = queue_family
                 .ok_or("no graphics/compute queue family can present to this surface")?;
 
-            // libplacebo 7 / API 360, src/vulkan/context.c:
+            // libplacebo 7 / API 387, src/vulkan/context.c:
             // pl_vulkan_required_features requires exactly hostQueryReset and
             // timelineSemaphore. Extension-specific structs avoid forbidden
             // duplication with HAL's Vulkan-1.2-promoted feature structs.

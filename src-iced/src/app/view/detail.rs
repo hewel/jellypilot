@@ -37,8 +37,10 @@ use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::artwork_progress::ArtworkProgress;
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
+use jellypilot_ui::widgets::library;
 use jellypilot_ui::widgets::skeleton::{
   skeleton_block, skeleton_block_with_radius, skeleton_panel,
 };
@@ -763,7 +765,7 @@ fn detail_actions<'a>(
   }
   let mut content = Column::<Element<'_, Message>>::new()
     .spacing(TOKENS.spacing.s2)
-    .push((actions.wrap()).boxed());
+    .push((actions.wrap().vertical_spacing(TOKENS.spacing.s2_5)).boxed());
   if let Some(error) = &state
     .full
     .as_ref()
@@ -775,6 +777,8 @@ fn detail_actions<'a>(
     content = content.push(
       (text(state.kernel.locale.message(error))
         .size(13)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(state.palette().colors.error))
       .boxed(),
     );
@@ -783,6 +787,8 @@ fn detail_actions<'a>(
     content = content.push(
       (text(state.kernel.locale.message(error))
         .size(13)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(state.palette().colors.error))
       .boxed(),
     );
@@ -1651,10 +1657,18 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
           phase,
           reduced_motion,
         ),
-        skeleton_block(SIMILAR_CARD_WIDTH - 20.0, 18.0, phase, reduced_motion),
-        skeleton_block(54.0, 14.0, phase, reduced_motion),
-      ]
-      .spacing(TOKENS.spacing.s1))
+        column![
+          skeleton_block(SIMILAR_CARD_WIDTH - 20.0, 16.0, phase, reduced_motion),
+          skeleton_block(54.0, 14.0, phase, reduced_motion),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .padding(iced::Padding {
+          top: TOKENS.spacing.s2,
+          right: 0.0,
+          bottom: 0.0,
+          left: 0.0,
+        }),
+      ])
       .boxed(),
     );
   }
@@ -1717,16 +1731,17 @@ fn episode_card<'a>(
     let mut art = stack![art].width(art_width).height(art_height);
     if let Some(progress) = playback_progress(episode) {
       art = art.push(
-        (container(progress_bar(palette, progress))
-          .padding(iced::Padding {
-            top: 0.0,
-            right: 1.0,
-            bottom: 1.0,
-            left: 1.0,
-          })
-          .width(Fill)
-          .height(Fill)
-          .align_y(Alignment::End))
+        (container(ArtworkProgress::new(
+          progress,
+          art_height,
+          4.0,
+          full_radius(TOKENS.radii.xl),
+          None,
+          library::artwork_progress_style(&state.native_theme(), false),
+        ))
+        .width(Fill)
+        .height(Fill)
+        .align_y(Alignment::End))
         .boxed(),
       );
     }
@@ -2179,13 +2194,14 @@ fn detail_skeleton(
     .width(Fill)
     .height(HERO_HEIGHT);
     let actions = row![
-      skeleton_block(120, 36, skeleton_phase, reduced_motion),
-      skeleton_block(100, 36, skeleton_phase, reduced_motion),
-      skeleton_block(130, 36, skeleton_phase, reduced_motion),
-      skeleton_block(140, 36, skeleton_phase, reduced_motion),
+      skeleton_block(120, 40, skeleton_phase, reduced_motion),
+      skeleton_block(100, 40, skeleton_phase, reduced_motion),
+      skeleton_block(130, 40, skeleton_phase, reduced_motion),
+      skeleton_block(140, 40, skeleton_phase, reduced_motion),
     ]
     .spacing(10)
-    .wrap();
+    .wrap()
+    .vertical_spacing(TOKENS.spacing.s2_5);
     let intro = column![
       skeleton_block(content_width.min(500.0), 18, skeleton_phase, reduced_motion),
       skeleton_block(Fill, 48, skeleton_phase, reduced_motion),
@@ -2280,6 +2296,8 @@ fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> 
         .color(state.palette().text.heading),
       text(state.kernel.locale.message(error))
         .size(14)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(state.palette().colors.error),
       retry,
     ]
@@ -2301,6 +2319,7 @@ fn retryable_surface<'a>(
     row![
       text(locale.message(error))
         .size(13)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
         .width(Fill)
         .color(palette.colors.error),
       control_button(
@@ -2338,9 +2357,10 @@ fn episode_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
       .width(Fill);
     for _ in 0..3 {
       let art_width = EPISODE_ART_WIDTH.min(bounds.width);
-      let art = skeleton_block(
+      let art = skeleton_block_with_radius(
         art_width,
         art_width * EPISODE_ART_HEIGHT / EPISODE_ART_WIDTH,
+        full_radius(TOKENS.radii.xl),
         phase,
         reduced_motion,
       );
@@ -2351,15 +2371,21 @@ fn episode_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
       ]
       .spacing(8)
       .width(Fill);
-      let play = skeleton_block(78, 32, phase, reduced_motion);
+      let play = skeleton_block(78, 40, phase, reduced_motion);
       let item: Element<'_, Message> = if bounds.width < 720.0 {
         column![art, copy, play].spacing(14).width(Fill).boxed()
       } else {
-        row![art, copy, play]
-          .spacing(20)
-          .width(Fill)
-          .align_y(Alignment::Center)
-          .boxed()
+        row![
+          art,
+          copy,
+          container(play)
+            .width(EPISODE_ACTION_WIDTH)
+            .align_x(Alignment::End)
+        ]
+        .spacing(20)
+        .width(Fill)
+        .align_y(Alignment::Center)
+        .boxed()
       };
       rows = rows.push((item).boxed());
     }
@@ -2367,46 +2393,6 @@ fn episode_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
   })
   .height(Length::Fit)
   .boxed()
-}
-
-fn progress_bar<'a>(palette: &'static ThemePalette, progress: f64) -> Element<'a, Message> {
-  let filled = (progress.round() as u16).min(100);
-  let remaining = 100_u16.saturating_sub(filled);
-  let mut bar = Row::<Element<'_, Message>>::new().width(Fill).height(4);
-  if filled > 0 {
-    bar = bar.push(
-      (container(space::horizontal())
-        .width(Length::FillPortion(filled))
-        .height(4)
-        .style(|_| container::Style {
-          background: Some(palette.colors.primary.into()),
-          border: iced::Border {
-            radius: iced::border::Radius {
-              top_left: 0.0,
-              top_right: TOKENS.radii.full,
-              bottom_right: TOKENS.radii.full,
-              bottom_left: 0.0,
-            },
-            ..iced::Border::default()
-          },
-          ..container::Style::default()
-        }))
-      .boxed(),
-    );
-  }
-  if remaining > 0 {
-    bar = bar.push(
-      (container(space::horizontal())
-        .width(Length::FillPortion(remaining))
-        .height(4)
-        .style(|_| {
-          iced::widget::container::Style::default()
-            .background(palette.text.heading.scale_alpha(0.18))
-        }))
-      .boxed(),
-    );
-  }
-  bar.boxed()
 }
 
 fn playback_progress(item: &VideoLibraryItem) -> Option<f64> {
@@ -2582,6 +2568,7 @@ mod tests {
     let auth_store = crate::app::kernel::test_auth_store();
     let (sdk, sdk_handoff) = crate::app::kernel::test_account_runtime(&auth_store);
     State {
+      preview: None,
       saved_browse: Default::default(),
       #[cfg(target_os = "linux")]
       system_media: Default::default(),
