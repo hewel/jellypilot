@@ -10,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.hewel.jellypilot.AppViewModel
 import io.github.hewel.jellypilot.R
@@ -50,7 +51,8 @@ internal fun BrowserGrid(browser: BrowserUi, model: AppViewModel, gridState: Laz
   when {
     browser.status == BrowseUiStatus.Failed && !browser.hasContent -> {
       Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(browser.error ?: stringResource(R.string.sdk_request_failed), color = LocalPilotColors.current.body)
+        Text(browser.error ?: stringResource(R.string.sdk_request_failed), Modifier.fillMaxWidth(),
+          color = LocalPilotColors.current.body, textAlign = TextAlign.Center)
         if (browser.retryable) {
           Spacer(Modifier.height(16.dp))
           FilledTonalButton(onClick = model::retryBrowser, enabled = !browser.retryBusy) { Text(stringResource(R.string.retry)) }

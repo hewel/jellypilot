@@ -32,8 +32,11 @@ The source canvas is 1920×1080, with a 96px horizontal / 60px vertical safe ins
 288px navigation region, content beginning at x336, and a five-column library grid.
 Typography and controls scale together from this composition. The current focus
 revision replaces universal rings with light filled controls and dark foregrounds.
-Posters grow 3% from the bottom center with a 2px light edge, without moving their slots
-or labels. Main transport grows from 80px to 84px; seek grows from a 6px to 8px track and
+Posters grow 3% from the bottom center with a constant 2px light edge, without moving their
+slots or labels. Artwork is inset by that same 2px at both 1080p and 720p scales, with
+concentric 12px outer / 10px inner corners; loaded images and placeholders share the mask.
+Missing Home/Detail backdrops remain square like ready backdrops.
+Main transport grows from 80px to 84px; seek grows from a 6px to 8px track and
 16px to 24px thumb. Transitions take 175ms and are interruptible; reduced motion applies
 the final state immediately. Indigo and checked indicators retain selection independently.
 Runtime metadata and

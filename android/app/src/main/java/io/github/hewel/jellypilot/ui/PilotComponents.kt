@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -122,8 +123,9 @@ internal fun PlayAction(item: MediaUi, modifier: Modifier = Modifier, progressEd
 internal fun EmptyState(title: String, hint: String? = null, action: String? = null, modifier: Modifier = Modifier, @DrawableRes icon: Int = R.drawable.ic_movie, onAction: () -> Unit = {}) {
   Column(modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
     PilotIcon(icon, modifier = Modifier.size(40.dp), tint = LocalPilotColors.current.metadata)
-    Text(title, style = MaterialTheme.typography.titleMedium)
-    hint?.let { Text(it, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodyMedium) }
+    Text(title, Modifier.fillMaxWidth(), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+    hint?.let { Text(it, Modifier.fillMaxWidth(), color = LocalPilotColors.current.metadata,
+      style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center) }
     action?.let { FilledTonalButton(onClick = onAction, modifier = Modifier.heightIn(min = 48.dp)) { Text(it) } }
   }
 }

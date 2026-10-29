@@ -342,7 +342,8 @@ where
         let height = if row_count == 0 {
             0.0
         } else {
-            row_count as f32 * self.metrics.row_height - ROW_GAP
+            let row_gap = finite_non_negative(self.metrics.row_height - self.metrics.cell_height);
+            (row_count as f32 * self.metrics.row_height - row_gap).max(0.0)
         };
         tree.size = limits.resolve(
             Length::Fill,
@@ -561,8 +562,6 @@ struct RowWindow {
     visible_end: usize,
     start: usize,
     end: usize,
-    top_spacer: f32,
-    bottom_spacer: f32,
 }
 
 fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height: f32) -> RowWindow {
@@ -572,8 +571,6 @@ fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height:
             visible_end: 0,
             start: 0,
             end: 0,
-            top_spacer: 0.0,
-            bottom_spacer: 0.0,
         };
     }
 
@@ -597,23 +594,11 @@ fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height:
         )
     };
 
-    let remaining_rows = row_count.saturating_sub(end);
-
     RowWindow {
         visible_start,
         visible_end,
         start,
         end,
-        top_spacer: if start == row_count {
-            (start as f32 * row_height - ROW_GAP).max(0.0)
-        } else {
-            start as f32 * row_height
-        },
-        bottom_spacer: if remaining_rows == 0 {
-            0.0
-        } else {
-            (remaining_rows as f32 * row_height - ROW_GAP).max(0.0)
-        },
     }
 }
 
@@ -658,8 +643,6 @@ mod tests {
         let bottom = row_window(100, 9_700.0, 300.0, ROW_HEIGHT);
         assert_eq!((top.start, top.end), (0, 6));
         assert_eq!((bottom.start, bottom.end), (94, 100));
-        assert_eq!(top.top_spacer, 0.0);
-        assert_eq!(bottom.bottom_spacer, 0.0);
     }
 
     #[test]
@@ -694,7 +677,6 @@ mod tests {
 
         assert_eq!((window.visible_start, window.visible_end), (0, 4));
         assert_eq!((window.start, window.end), (0, 4));
-        assert_eq!((window.top_spacer, window.bottom_spacer), (0.0, 0.0));
     }
 
     #[test]
@@ -814,26 +796,37 @@ mod tests {
     }
 
     #[test]
-    fn every_window_preserves_content_extent_without_a_trailing_gap() {
-        let row_count = 100;
-        let expected_extent = row_count as f32 * ROW_HEIGHT - ROW_GAP;
+    fn layout_uses_each_grid_row_gap_for_its_total_content_extent() {
+        use iced::advanced::{layout, widget::Tree};
 
-        for window in [
-            row_window(row_count, 0.0, 300.0, ROW_HEIGHT),
-            row_window(row_count, 2_000.0, 300.0, ROW_HEIGHT),
-            row_window(row_count, 9_700.0, 300.0, ROW_HEIGHT),
-            row_window(row_count, 20_000.0, 300.0, ROW_HEIGHT),
-            row_window(row_count, 250.0, 0.0, ROW_HEIGHT),
-        ] {
-            let mut rendered_extent = window.end.saturating_sub(window.start) as f32 * ROW_HEIGHT;
-            if window.end == row_count && window.start < window.end {
-                rendered_extent -= ROW_GAP;
-            }
-
-            assert_eq!(
-                window.top_spacer + rendered_extent + window.bottom_spacer,
-                expected_extent
+        for (cell_height, row_height) in [(81.0, 81.0), (100.0, 124.0)] {
+            let row_count = 3;
+            let metrics = ArtworkGridMetrics {
+                columns: 1,
+                cell_width: 160.0,
+                cell_height,
+                row_height,
+            };
+            let mut grid = super::ArtworkGrid::<'static, (), ()> {
+                cells: (0..row_count)
+                    .map(|_| iced::widget::Space::new()._boxed())
+                    .collect(),
+                first_item: 0,
+                item_count: row_count,
+                metrics,
+                column_gap: 0.0,
+                visual_overflow: iced::Padding::ZERO,
+            };
+            let mut tree = Tree::new(&grid);
+            grid.diff(&mut tree);
+            grid.layout(
+                &mut tree,
+                &(),
+                &layout::Limits::new(iced::Size::ZERO, iced::Size::new(160.0, 1_000.0)),
             );
+
+            let expected = cell_height + (row_count - 1) as f32 * row_height;
+            assert!((tree.size.height - expected).abs() < 0.001);
         }
     }
 
@@ -846,8 +839,6 @@ mod tests {
                 visible_end: 0,
                 start: 0,
                 end: 0,
-                top_spacer: 0.0,
-                bottom_spacer: 0.0,
             }
         );
     }

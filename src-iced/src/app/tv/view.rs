@@ -472,10 +472,10 @@ fn art<'a>(
   collection: &'a ImageCollection,
   surface: ArtworkSurface,
   spec: Option<ImageSpec>,
-  width: f32,
-  height: f32,
+  Size { width, height }: Size,
   backdrop: bool,
   axis: ImageAxis,
+  corner_radius: f32,
 ) -> Element<'a, AppMessage> {
   let handle = spec
     .as_ref()
@@ -486,16 +486,16 @@ fn art<'a>(
       .width(width)
       .height(height)
       .content_fit(ContentFit::Cover)
-      .border_radius(if backdrop {
-        0.0
-      } else {
-        jellypilot_ui::tokens::TOKENS.radii.xl
-      })
+      .border_radius(corner_radius)
       .boxed(),
     None => container(space())
       .width(width)
       .height(height)
-      .style(style::panel)
+      .style(move |theme| {
+        let mut panel = style::panel(theme);
+        panel.border.radius = corner_radius.into();
+        panel
+      })
       .boxed(),
   };
   let image = if backdrop {
@@ -573,15 +573,17 @@ pub(super) fn media_card<'a>(
     };
     let expanded_width = width * factor;
     let expanded_height = image_height * factor;
-    let edge = style::FOCUS_WIDTH * scale;
+    // `style::poster` paints a constant 2px edge; inset the artwork by the
+    // same amount and keep the two rounded contours concentric.
+    let edge = style::FOCUS_WIDTH;
     let image = art(
       collection,
       surface,
       spec.clone(),
-      expanded_width - edge * 2.0,
-      expanded_height - edge * 2.0,
+      Size::new(expanded_width - edge * 2.0, expanded_height - edge * 2.0),
       false,
       axis,
+      (jellypilot_ui::tokens::TOKENS.radii.xl - edge).max(0.0),
     );
     button(
       container(image)
@@ -643,10 +645,10 @@ fn home(state: &State, scale: f32) -> Element<'_, AppMessage> {
       &full.home.artwork,
       ArtworkSurface::Home,
       ArtworkPlacement::HeroBackdrop.spec(item),
-      width,
-      hero_height,
+      Size::new(width, hero_height),
       true,
       ImageAxis::Vertical,
+      0.0,
     );
     let collections =
       crate::app::collections::controls(state, crate::app::collections::Source::Hero);
@@ -1056,10 +1058,10 @@ fn detail(state: &State, scale: f32) -> Element<'_, AppMessage> {
     &full.detail.artwork,
     ArtworkSurface::Detail,
     crate::app::detail::hero_image_spec(content, crate::app::detail::DETAIL_BACKDROP_KEY),
-    width,
-    550.0 * scale,
+    Size::new(width, 550.0 * scale),
     true,
     ImageAxis::Vertical,
+    0.0,
   );
   let mut hero = column![
     row![back, space().width(Fill), clock(scale)]
@@ -1567,6 +1569,80 @@ pub(super) mod tests {
         &layout::Limits::new(iced::Size::ZERO, bounds),
       );
       assert_eq!(node.size(), bounds);
+    }
+  }
+
+  #[tokio::test]
+  async fn focused_poster_artwork_matches_the_two_pixel_frame() {
+    let renderer = iced::Renderer::new(
+      renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("headless layout renderer");
+    let mut state = State::boot(true);
+    state.full = Some(crate::app::state::FullUi::default());
+    state.shell.ui_mode = jellypilot_core::config::UiMode::Tv;
+    state.kernel.connection = jellypilot_auth::login::ConnectionPhase::Connected;
+    state.shell.destination = Destination::Library {
+      library_id: "library".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    state.tv.focus = Focus::Grid(0);
+    let media = item("focused");
+    for bounds in [Size::new(1920.0, 1080.0), Size::new(1280.0, 720.0)] {
+      state.shell.window_size = bounds;
+      let metrics = navigation::metrics(&state);
+      let scale = style::scale(bounds.width);
+      let collection = &state.full.as_ref().expect("full").browse.artwork;
+      let mut cell = motion::scope(
+        media_card(
+          &state,
+          &media,
+          Focus::Grid(0),
+          (collection, ArtworkSurface::Browse),
+          None,
+          (metrics.cell_width, false),
+          scale,
+        ),
+        true,
+      );
+      let mut tree = Tree::new(&cell);
+      tree.diff(&mut cell);
+      let node = crate::app::test_support::layout_widget(
+        &mut cell,
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(metrics.cell_width, 1000.0)),
+      );
+      let outer = Size::new(
+        metrics.cell_width * style::POSTER_SCALE,
+        metrics.cell_width * 1.5 * style::POSTER_SCALE,
+      );
+      let inner = Size::new(
+        outer.width - 2.0 * style::FOCUS_WIDTH,
+        outer.height - 2.0 * style::FOCUS_WIDTH,
+      );
+      let measured = node.absolute_bounds();
+      let contains = |expected: Size| {
+        measured.iter().any(|bounds| {
+          (bounds.width - expected.width).abs() < 0.05
+            && (bounds.height - expected.height).abs() < 0.05
+        })
+      };
+      assert!(
+        contains(outer),
+        "missing focused poster frame at {bounds:?}"
+      );
+      assert!(
+        contains(inner),
+        "artwork inset does not match the 2px frame at {bounds:?}: {measured:?}"
+      );
     }
   }
 

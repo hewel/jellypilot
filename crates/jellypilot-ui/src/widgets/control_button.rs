@@ -722,6 +722,7 @@ where
     let label = label.map(|label| {
         let mut label = text(label.to_owned())
             .size(label_size)
+            .wrapping(text::Wrapping::WordOrGlyph)
             .style(move |theme: &Theme| text::Style {
                 color: Some(content_color.load_or(|| style(theme, variant, status).text_color)),
                 ..text::Style::default()
@@ -1278,10 +1279,13 @@ mod tests {
             Some("tiny-skia"),
         ))
         .expect("software layout renderer");
-        let label = "The full server-provided audio track name must stay readable and clickable when it wraps.";
+        let label = "English_DTS-HD_Master_Audio_7.1_Original_Uncut_Extended_Commentary_Track";
         let limits = layout::Limits::new(Size::ZERO, Size::new(120.0, 500.0));
-        let mut expected: Element<'_, TestMessage> =
-            text(label).size(14).width(Length::Fill)._boxed();
+        let mut expected: Element<'_, TestMessage> = text(label)
+            .size(14)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .width(Length::Fill)
+            ._boxed();
         let mut expected_tree = Tree::new(&expected);
         expected.layout(
             &mut expected_tree,
@@ -1299,7 +1303,13 @@ mod tests {
                 .label_size(14.0)
                 .label_fill(true),
             super::control_button_content(
-                move |_| text(label).size(14).width(Length::Fill)._boxed(),
+                move |_| {
+                    text(label)
+                        .size(14)
+                        .wrapping(text::Wrapping::WordOrGlyph)
+                        .width(Length::Fill)
+                        ._boxed()
+                },
                 ButtonVariant::Tonal,
             ),
         ] {

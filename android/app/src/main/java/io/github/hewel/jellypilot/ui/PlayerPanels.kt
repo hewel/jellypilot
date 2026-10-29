@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -405,6 +406,7 @@ internal fun PlayerPanelContent(
     }
     if (trackKind != null && remainingTracks > 0) {
       Text(pluralStringResource(R.plurals.player_tracks_remaining, remainingTracks, remainingTracks),
+        Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
         color = LocalPilotColors.current.metadata)
     }

@@ -139,6 +139,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .font(DISPLAY_FONT)
         .size(36)
         .line_height(iced::widget::text::LineHeight::Absolute(40.0.into()))
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(state.palette().text.heading))
       .boxed(),
     );
@@ -409,6 +411,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s2_5)
   .align_y(Alignment::Center)
   .wrap()
+  .vertical_spacing(TOKENS.spacing.s2_5)
   .boxed()
 }
 
@@ -501,6 +504,8 @@ fn presentation_bar(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s3)
     .align_y(Alignment::Center)
     .width(Fill)
+    .wrap()
+    .vertical_spacing(TOKENS.spacing.s3)
     .boxed()
 }
 
@@ -1522,6 +1527,7 @@ fn failure_surface<'a>(
   .icon_size(IconSize::Sm)
   .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
+  .min_height(40.0)
   .on_press_maybe(retry_action(retryable, retry_busy));
   container(
     column![
@@ -1535,6 +1541,8 @@ fn failure_surface<'a>(
       .color(palette.text.heading),
       text(sanitize_message(message))
         .size(14)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(palette.colors.error),
       retry,
     ]
@@ -1569,6 +1577,7 @@ fn failure_banner<'a>(
   .icon_size(IconSize::Xs)
   .spacing(TOKENS.spacing.s1)
   .padding([6, 10])
+  .min_height(40.0)
   .on_press_maybe(retry_action(failure.retryable, retry_busy));
 
   let banner = container(
@@ -1577,11 +1586,14 @@ fn failure_banner<'a>(
         "browse-load-more-failed",
         &[("details", sanitize_message(&failure.message).into())]
       ))
-      .size(13),
+      .size(13)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
       retry,
     ]
     .spacing(TOKENS.spacing.s3)
-    .align_y(Alignment::Center),
+    .align_y(Alignment::Center)
+    .wrap()
+    .vertical_spacing(TOKENS.spacing.s3),
   )
   .padding(TOKENS.spacing.s4)
   .style(move |_theme| container::Style {
@@ -1619,11 +1631,17 @@ fn empty_surface(
   message: String,
   padding: f32,
 ) -> Element<'static, Message> {
-  container(text(message).size(16).color(palette.text.metadata))
-    .padding(padding)
-    .width(Fill)
-    .height(Fill)
-    .boxed()
+  container(
+    text(message)
+      .size(16)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .width(Fill)
+      .color(palette.text.metadata),
+  )
+  .padding(padding)
+  .width(Fill)
+  .height(Fill)
+  .boxed()
 }
 
 fn sort_label(locale: Localizer, sort: VideoLibrarySort) -> String {

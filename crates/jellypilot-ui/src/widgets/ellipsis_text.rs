@@ -21,20 +21,22 @@ const ELLIPSIS: &str = "…";
 /// char-boundary prefix that fits with an ellipsis appended.
 ///
 /// `measure` reports the single-line width of a candidate string. Trailing
-/// whitespace is trimmed before the ellipsis. When not even the ellipsis fits,
-/// the ellipsis alone is returned — a degenerate bound, but still bounded.
+/// whitespace is trimmed before the ellipsis. Bounds with no usable width,
+/// including those too narrow for the ellipsis, return an empty string.
 #[must_use]
 pub fn truncate_to_fit<'a>(
     content: &'a str,
     max_width: f32,
     mut measure: impl FnMut(&str) -> f32,
 ) -> Cow<'a, str> {
-    if content.is_empty()
-        || !max_width.is_finite()
-        || max_width <= 0.0
-        || measure(content) <= max_width
-    {
+    if max_width.is_nan() || max_width <= 0.0 {
+        return Cow::Borrowed("");
+    }
+    if content.is_empty() || measure(content) <= max_width {
         return Cow::Borrowed(content);
+    }
+    if measure(ELLIPSIS) > max_width {
+        return Cow::Borrowed("");
     }
 
     // Start byte of each char; `boundaries[k]` ends a prefix of exactly k chars.
@@ -348,16 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_bound_still_returns_just_the_ellipsis() {
-        let result = truncate_to_fit("does not matter", 5.0, measure);
-        assert_eq!(result, ELLIPSIS);
+    fn collapsed_and_sub_glyph_bounds_never_paint_over_neighboring_controls() {
+        for width in [f32::NEG_INFINITY, -1.0, 0.0, 5.0, f32::NAN] {
+            assert_eq!(truncate_to_fit("long media title", width, measure), "");
+        }
+        assert_eq!(truncate_to_fit("long media title", 10.0, measure), ELLIPSIS);
     }
 
     #[test]
-    fn empty_and_non_finite_inputs_are_passed_through() {
+    fn empty_content_and_unbounded_layout_remain_unchanged() {
         assert_eq!(truncate_to_fit("", 100.0, measure), "");
         assert_eq!(truncate_to_fit("abc", f32::INFINITY, measure), "abc");
-        assert_eq!(truncate_to_fit("abc", f32::NAN, measure), "abc");
-        assert_eq!(truncate_to_fit("abc", 0.0, measure), "abc");
     }
 }

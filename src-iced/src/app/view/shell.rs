@@ -351,8 +351,8 @@ fn unified_search_field<'a>(
   let leading = control_button(Some(Icon::Search), None, ButtonVariant::Text)
     .style(sidebar::search_action)
     .icon_size(IconSize::Sm)
-    .min_height(26.0)
-    .padding([5, 8])
+    .min_height(30.0)
+    .padding([7, 8])
     .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
   let leading = match trigger_id {
     Some(id) => leading.id(id),
@@ -378,7 +378,7 @@ fn unified_search_field<'a>(
       }),
   )
   .center_x(Length::Fixed(44.0))
-  .center_y(Length::Fixed(26.0));
+  .center_y(Length::Fixed(30.0));
   let trailing: Element<'_, Message> = if search_draft.is_empty() {
     keycap.boxed()
   } else {
@@ -386,8 +386,8 @@ fn unified_search_field<'a>(
       control_button(Some(Icon::Close), None, ButtonVariant::Text)
         .style(sidebar::search_action)
         .icon_size(IconSize::Sm)
-        .min_height(26.0)
-        .padding([5, 8])
+        .min_height(30.0)
+        .padding([7, 8])
         .width(Length::Fixed(44.0))
         .content_centered(true)
         .on_press(Message::Shell(ShellMessage::ClearSearch)),
@@ -756,11 +756,49 @@ fn compact_destination_button<'a>(
     } else {
       sidebar::personal
     })
-    .min_height(if is_library { 32.0 } else { 38.0 })
-    .padding(if is_library { [4, 0] } else { [7, 0] })
+    .min_height(38.0)
+    .padding([7, 0])
     .width(Fill)
     .content_centered(true)
     .on_press(Message::Home(HomeMessage::Navigate(destination)));
 
   focus_tooltip(btn, label, TooltipOptions::default())
+}
+
+#[cfg(test)]
+mod tests {
+  use iced::advanced::{layout, renderer::Headless, widget, Widget as _};
+  use iced::Size;
+
+  use super::*;
+
+  #[tokio::test]
+  async fn compact_library_loading_preserves_ready_row_geometry() {
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let limits = layout::Limits::new(Size::ZERO, Size::new(40.0, 400.0));
+    let sizes = [
+      shortcut_skeleton(0.0, true),
+      compact_destination_button(
+        Icon::Home,
+        "Library",
+        Destination::Library {
+          library_id: "library".into(),
+          collection_type: "movies".into(),
+        },
+        false,
+      ),
+    ]
+    .map(|mut element| {
+      let mut tree = widget::Tree::new(&element);
+      tree.diff(&mut element);
+      element.layout(&mut tree, &renderer, &limits);
+      tree.size
+    });
+    assert_eq!(sizes[0], sizes[1], "loading must not shift library rows");
+  }
 }

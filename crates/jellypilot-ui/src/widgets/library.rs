@@ -16,6 +16,8 @@ pub fn card_play(theme: &Theme, variant: ButtonVariant, status: button::Status) 
     style
 }
 
+/// Inset option for [`segments`]: the track's 2px padding makes `md`
+/// concentric with its `lg` outer radius.
 pub fn segment(theme: &Theme, status: button::Status, selected: bool) -> button::Style {
     let colors = palette(theme).colors;
     let background = if selected {
@@ -32,7 +34,7 @@ pub fn segment(theme: &Theme, status: button::Status, selected: bool) -> button:
         } else {
             palette(theme).text.metadata
         },
-        border: Border::default().rounded(TOKENS.radii.lg),
+        border: Border::default().rounded(TOKENS.radii.md),
         ..button::Style::default()
     }
 }

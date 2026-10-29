@@ -9,10 +9,12 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
-use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
+use jellypilot_ui::icons::{
+  icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
+};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
-use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
@@ -29,7 +31,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     provider_button("Jellyfin", MediaServerProvider::Jellyfin, state),
     provider_button("Emby", MediaServerProvider::Emby, state),
   ]
-  .spacing(10);
+  .spacing(10)
+  .wrap();
 
   let server_field = text_input("https://media.example.com", &login.server_url)
     .on_input(|value| Message::Login(LoginMessage::ServerUrlChanged(value)))
@@ -58,9 +61,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
       method_button(state.t("login-password"), LoginMethod::Password, state),
     ]
     .spacing(10)
+    .wrap()
     .boxed()
   } else {
     text(state.t("login-emby-password"))
+      .size(14)
       .color(palette.text.body)
       .boxed()
   };
@@ -90,7 +95,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     form = form.push(
       (text(state.kernel.locale.message(error))
         .size(15)
-        .color(palette.colors.error))
+        .color(palette.colors.error)
+        .width(Fill)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph))
       .boxed(),
     );
   }
@@ -101,7 +108,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   }
 
   let card = container(form)
-    .width(Length::Fixed(640.0))
+    .width(Length::Fill.max(640.0))
     .padding(28)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised));
   container(
@@ -136,9 +143,9 @@ fn provider_button<'a>(
 ) -> Element<'a, Message> {
   let selected = state.login.flow.provider == provider;
   let variant = if selected {
-    ButtonVariant::Primary
+    ButtonVariant::Secondary
   } else {
-    ButtonVariant::Tonal
+    ButtonVariant::Text
   };
   control_button(Some(Icon::Server), Some(label.to_owned()), variant)
     .spacing(TOKENS.spacing.s2)
@@ -223,7 +230,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
 fn quick_connect_progress<'a>(state: &State, label: String) -> Element<'a, Message> {
   let palette = state.palette();
   column![
-    container(text(label).color(palette.colors.onSurface))
+    container(text(label).color(palette.colors.warning))
       .padding([8, 12])
       .style(|theme| jellypilot_ui::theme::badge_variant(theme, BadgeVariant::Warning)),
     cancel_button(state),
@@ -272,9 +279,17 @@ fn password(state: &State) -> Element<'_, Message> {
   } else {
     state.t("login-remember-off")
   };
-  let remember = control_button(None, Some(remember_label), ButtonVariant::Text)
-    .padding([6, 12])
-    .on_press(Message::Login(LoginMessage::RememberToggled));
+  let remember = control_button(
+    None,
+    Some(remember_label),
+    if login.remember {
+      ButtonVariant::TonalActive
+    } else {
+      ButtonVariant::Tonal
+    },
+  )
+  .padding([6, 12])
+  .on_press(Message::Login(LoginMessage::RememberToggled));
   let can_login = can_start_authentication(&state.login, &state.kernel);
   let submit = control_button(
     Some(Icon::UserCheck),
@@ -297,7 +312,10 @@ fn password(state: &State) -> Element<'_, Message> {
 fn saved_profiles(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let can_login = can_start_authentication(&state.login, &state.kernel);
-  let mut profiles = Column::<Element<'_, Message>>::new().spacing(12).push(
+  let mut profiles = Column::<Element<'_, Message>>::new()
+    .spacing(12)
+    .width(Fill);
+  profiles = profiles.push(
     (row![
       icon_with_color(Icon::User, IconSize::Lg, palette.colors.primary),
       text(state.t("login-saved"))
@@ -316,22 +334,58 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     } else {
       profile.title()
     };
-    let restore = control_button(Some(Icon::User), Some(restore_label), ButtonVariant::Tonal)
-      .icon_size(IconSize::Sm)
-      .id(profile_action_id(index, "switch"))
-      .spacing(TOKENS.spacing.s2)
-      .padding([6, 12])
-      .on_press_maybe(
-        can_login.then_some(Message::Login(LoginMessage::RestoreProfile(key.clone()))),
-      );
-    let sign_out = control_button(
-      Some(Icon::Trash),
-      Some(state.t("account-sign-out")),
+    let restore = control_button_content(
+      move |status| {
+        let button_status = match status {
+          IconControlState::Rest => iced::widget::button::Status::Active,
+          IconControlState::Hovered => iced::widget::button::Status::Hovered,
+          IconControlState::Disabled => iced::widget::button::Status::Disabled,
+        };
+        row![
+          icon_for_control_state(Icon::User, IconSize::Sm, ButtonVariant::Tonal, status),
+          text(restore_label.clone())
+            .size(TOKENS.font_sizes.s16)
+            .width(Fill)
+            .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+            .style(move |theme| text::Style {
+              color: Some(
+                jellypilot_ui::theme::button_variant(theme, button_status, ButtonVariant::Tonal,)
+                  .text_color,
+              ),
+              ..text::Style::default()
+            }),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .align_y(Alignment::Center)
+        .boxed()
+      },
+      ButtonVariant::Tonal,
+    )
+    .id(profile_action_id(index, "switch"))
+    .padding([6, 12])
+    .width(Fill)
+    .on_press_maybe(can_login.then_some(Message::Login(LoginMessage::RestoreProfile(key.clone()))));
+    let sign_out_label = state.t("account-sign-out");
+    let sign_out = control_button_content(
+      move |status| {
+        let color = if status == IconControlState::Disabled {
+          palette.text.muted
+        } else {
+          palette.colors.error
+        };
+        row![
+          icon_with_color(Icon::Trash, IconSize::Xs, color),
+          text(sign_out_label.clone())
+            .size(TOKENS.font_sizes.s16)
+            .color(color),
+        ]
+        .spacing(TOKENS.spacing.s1)
+        .align_y(Alignment::Center)
+        .boxed()
+      },
       ButtonVariant::Text,
     )
-    .icon_size(IconSize::Xs)
     .id(profile_action_id(index, "signout"))
-    .spacing(TOKENS.spacing.s1)
     .padding([6, 12])
     .on_press_maybe(can_login.then_some(Message::Account(
       crate::app::accounts::Message::AskSignOut(key.clone()),
@@ -339,12 +393,17 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     let profile_content = column![
       row![restore, sign_out]
         .spacing(10)
-        .align_y(Alignment::Center),
-      text(profile.subtitle()).color(palette.text.metadata),
+        .align_y(Alignment::Center)
+        .wrap(),
+      text(profile.subtitle())
+        .color(palette.text.metadata)
+        .width(Fill),
     ]
-    .spacing(8);
+    .spacing(8)
+    .width(Fill);
     profiles = profiles.push(
       (container(profile_content)
+        .width(Fill)
         .padding(16)
         .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)))
       .boxed(),
@@ -383,7 +442,67 @@ fn language_selector(state: &State) -> Element<'_, Message> {
       .boxed(),
     );
   }
-  column![text(state.t("language-label")).size(12), choices]
+  column![text(state.t("language-label")).size(12), choices.wrap()]
     .spacing(TOKENS.spacing.s1)
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+  use iced::advanced::{layout, renderer::Headless, widget};
+  use iced::Size;
+
+  use super::*;
+
+  fn assert_fits(node: &crate::app::test_support::LayoutGeometry, parent_x: f32, width: f32) {
+    let bounds = node.bounds();
+    let x = parent_x + bounds.x;
+    assert!(
+      x >= -0.5 && x + bounds.width <= width + 0.5,
+      "content at x={x} with width={} extends beyond viewport {width}",
+      bounds.width
+    );
+    for child in node.children() {
+      assert_fits(child, x, width);
+    }
+  }
+
+  #[tokio::test]
+  async fn login_forms_fit_narrow_and_wide_windows_without_horizontal_overflow() {
+    let mut state = State::boot(true);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    let renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings::default(),
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+
+    for language in [UiLanguage::English, UiLanguage::SimplifiedChinese] {
+      state.kernel.locale = crate::i18n::Localizer::new(language);
+      for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+        state.login.flow.select_provider(provider);
+        let methods: &[LoginMethod] = match provider {
+          MediaServerProvider::Jellyfin => &[LoginMethod::QuickConnect, LoginMethod::Password],
+          MediaServerProvider::Emby => &[LoginMethod::Password],
+        };
+        for &method in methods {
+          state.login.flow.method = method;
+          for width in [320.0, 480.0, 800.0] {
+            state.shell.window_size = Size::new(width, 760.0);
+            let mut element = view(&state);
+            let mut tree = widget::Tree::new(&element);
+            tree.diff(&mut element);
+            let node = crate::app::test_support::layout_widget(
+              &mut element,
+              &mut tree,
+              &renderer,
+              &layout::Limits::new(Size::ZERO, Size::new(width, 760.0)),
+            );
+            assert_fits(&node, 0.0, width);
+          }
+        }
+      }
+    }
+  }
 }

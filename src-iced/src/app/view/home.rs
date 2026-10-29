@@ -328,6 +328,7 @@ fn featured_hero<'a>(
             text(label.clone())
               .size(14)
               .font(HEADING_FONT)
+              .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
               .style(move |theme| text::Style {
                 color: Some(style(theme, variant, status).text_color),
                 ..text::Style::default()
@@ -408,7 +409,9 @@ fn featured_hero<'a>(
       ),
     ]
     .spacing(TOKENS.spacing.s2_5)
-    .align_y(Alignment::Center))
+    .align_y(Alignment::Center)
+    .wrap()
+    .vertical_spacing(TOKENS.spacing.s2_5))
     .boxed(),
   );
 
@@ -615,6 +618,8 @@ fn section_row<'a>(
     text(state.kernel.locale.message(&home_row.title))
       .font(HEADING_FONT)
       .size(SECTION_TITLE_SIZE)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .width(Fill)
       .color(state.palette().text.heading),
     cards,
   ]
@@ -1426,11 +1431,25 @@ fn render_card_artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ImageStatus::Ready {
       if let Some(handle) = cell.handle() {
-        return rounded_image(handle.clone(), radius)
-          .content_fit(ContentFit::Cover)
-          .width(width)
-          .height(height)
-          .boxed();
+        return stack![
+          rounded_image(handle.clone(), radius)
+            .content_fit(ContentFit::Cover)
+            .width(width)
+            .height(height),
+          container(space::horizontal())
+            .width(width)
+            .height(height)
+            .style(move |_| container::Style {
+              border: iced::Border {
+                color: palette.colors.imageOutline,
+                width: 1.0,
+                radius,
+                smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
+              },
+              ..container::Style::default()
+            }),
+        ]
+        .boxed();
       }
     }
   }
@@ -1574,6 +1593,8 @@ fn section_skeleton<'a>(
     text(locale.message(&row.title))
       .font(HEADING_FONT)
       .size(SECTION_TITLE_SIZE)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .width(Fill)
       .color(palette.text.heading),
     scrollable(cards)
       .smooth_scroll(false)
@@ -1593,15 +1614,20 @@ fn section_error<'a>(
 ) -> Element<'a, Message> {
   let retry = control_button(None, Some(locale.text("home-retry")), ButtonVariant::Tonal)
     .padding([6, 12])
+    .min_height(40.0)
     .on_press(Message::Home(HomeMessage::Retry));
   container(
     column![
       text(locale.message(title))
         .font(HEADING_FONT)
         .size(SECTION_TITLE_SIZE)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(palette.text.heading),
       text(locale.message(error))
         .size(13)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        .width(Fill)
         .color(palette.colors.error),
       retry,
     ]

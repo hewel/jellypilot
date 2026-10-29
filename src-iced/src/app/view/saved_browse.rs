@@ -203,7 +203,8 @@ fn record_row<'a>(state: &'a State, record: &'a SavedBrowseFilter) -> Element<'a
       ),
     ]
     .spacing(TOKENS.spacing.s2)
-    .wrap(),
+    .wrap()
+    .vertical_spacing(TOKENS.spacing.s2),
   ]
   .spacing(TOKENS.spacing.s2)
   .width(Fill)

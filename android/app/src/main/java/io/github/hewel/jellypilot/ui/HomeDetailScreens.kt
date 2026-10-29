@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.hewel.jellypilot.remotePlayItem
@@ -232,8 +233,10 @@ internal fun PhoneDetailScreen(state: AppUiState, model: AppViewModel, itemActio
         items(detail.cast, key = { it.id }) { cast ->
           Column(Modifier.width(104.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Artwork(cast.artwork, null, Modifier.size(72.dp).clip(CircleShape))
-            Text(cast.name, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
-            Text(cast.role, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall)
+            Text(cast.name, Modifier.fillMaxWidth(), minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis,
+              style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
+            Text(cast.role, Modifier.fillMaxWidth(), minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis,
+              color = LocalPilotColors.current.metadata, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
           }
         }
       }

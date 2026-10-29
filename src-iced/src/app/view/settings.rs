@@ -145,9 +145,9 @@ fn navigation_items(
     .label_fill(true)
     .on_press(Message::Settings(SettingsMessage::SectionSelected(section)));
     items = items.push(if selected {
-      button.id(SETTINGS_INITIAL_FOCUS_ID)
+      button.id(SETTINGS_INITIAL_FOCUS_ID).into()
     } else {
-      button
+      button.into()
     });
   }
   items
@@ -159,7 +159,6 @@ fn navigation_footer(locale: Localizer) -> Element<'static, Message> {
       row![
         text(locale.text("common-close"))
           .size(TOKENS.font_sizes.s12)
-          .font(MONO_FONT)
           .style(|theme| text::Style {
             color: Some(palette(theme).text.metadata),
             ..text::Style::default()
@@ -211,6 +210,8 @@ fn feedback(state: &State) -> Element<'_, Message> {
     return text(state.kernel.locale.message(error))
       .size(TOKENS.font_sizes.s13)
       .color(state.palette().colors.error)
+      .width(Fill)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
       .boxed();
   }
   if let Some(saved) = &state.settings.view.saved {
@@ -344,7 +345,6 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::PlaybackTargetNameChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SavePlaybackTargetName))
-  .font(MONO_FONT)
   .size(TOKENS.font_sizes.s12)
   .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
   .width(Fill)
@@ -961,10 +961,13 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
               .color(palette.text.metadata),
           ]
           .spacing(TOKENS.spacing.s2)
-          .align_y(Alignment::Center),
+          .align_y(Alignment::Center)
+          .wrap(),
           text(diagnostic.message)
             .size(TOKENS.font_sizes.s12)
-            .color(palette.text.secondary),
+            .color(palette.text.secondary)
+            .width(Fill)
+            .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
         ]
         .spacing(TOKENS.spacing.s2),
       )
@@ -1026,7 +1029,9 @@ fn about_block(state: &State) -> Element<'_, Message> {
     .color(palette.text.muted),
     text(FONT_ATTRIBUTIONS)
       .size(TOKENS.font_sizes.s12)
-      .color(palette.text.body),
+      .color(palette.text.body)
+      .width(Fill)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
     row![control_button(
       None,
       Some(state.t(if expanded {
@@ -1052,7 +1057,8 @@ fn about_block(state: &State) -> Element<'_, Message> {
       (text(FONT_LICENSES)
         .size(TOKENS.font_sizes.s12)
         .color(palette.text.body)
-        .width(Fill))
+        .width(Fill)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph))
       .boxed(),
     );
   }

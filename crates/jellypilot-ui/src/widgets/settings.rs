@@ -64,7 +64,7 @@ pub fn segmented_button(
     status: button::Status,
 ) -> button::Style {
     let mut style = navigation_button(theme, variant, status);
-    style.border.radius = TOKENS.radii.lg.into();
+    style.border.radius = (TOKENS.radii.lg - TOKENS.spacing.s0_5).into();
     style
 }
 

@@ -21,6 +21,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -134,7 +135,11 @@ private fun PhonePlayerFullControls(
       }
     }
     val bottom: @Composable () -> Unit = {
-      Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+      Column(
+        Modifier.testTag("phone-player-bottom-chrome").fillMaxWidth()
+          .onSizeChanged { with(density) { bottomHeight(it.height.toDp()) } }
+          .padding(bottom = 20.dp),
+      ) {
         val identity: @Composable (Modifier) -> Unit = { modifier ->
           Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(playback?.title ?: stringResource(R.string.player),
@@ -165,8 +170,7 @@ private fun PhonePlayerFullControls(
     } else {
       Box(Modifier.align(Alignment.TopCenter).padding(horizontal = 24.dp, vertical = 16.dp)) { top() }
       Box(Modifier.align(Alignment.Center).offset(y = (-12).dp)) { PhoneTransport(snapshot, ready, playPause, seek) }
-      Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 24.dp)
-        .onSizeChanged { with(density) { bottomHeight(it.height.toDp()) } }) { bottom() }
+      Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 24.dp)) { bottom() }
     }
   }
 }

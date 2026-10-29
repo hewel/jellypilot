@@ -52,7 +52,7 @@ pub fn address(theme: &Theme) -> container::Style {
     surface(
         theme,
         palette(theme).colors.surfaceContainerHigh,
-        TOKENS.radii.lg,
+        (ACCOUNT_POPOVER_RADIUS - TOKENS.spacing.s2_5).max(0.0),
         false,
     )
 }
@@ -77,9 +77,11 @@ pub fn personal(theme: &Theme, variant: ButtonVariant, status: button::Status) -
     style
 }
 
-/// Library destinations share the personal-navigation geometry.
+/// Library destinations retain their smaller inset radius.
 pub fn library(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
-    personal(theme, variant, status)
+    let mut style = personal(theme, variant, status);
+    style.border.radius = TOKENS.radii.lg.into();
+    style
 }
 
 /// Neutral account anchor; opening the menu does not alter the structural outline.
@@ -118,6 +120,9 @@ pub fn search_action(
 /// Quiet account-menu rows: hover and press provide the surface, not resting actions.
 pub fn menu_action(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
     let mut style = action(theme, variant, status);
+    style.border.radius = (ACCOUNT_POPOVER_RADIUS - TOKENS.spacing.s2_5)
+        .max(0.0)
+        .into();
     if matches!(status, button::Status::Active | button::Status::Disabled) {
         style.background = None;
         style.border.width = 0.0;

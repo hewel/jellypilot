@@ -12,6 +12,7 @@ use jellypilot_core::tv_navigation::Input;
 use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tv as style;
+use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::tv_focus::focus;
 
 use crate::app::accounts;
@@ -1305,9 +1306,12 @@ fn setting_row(
     let foreground = style::foreground(style::PALETTE, progress, false);
     let trailing: Element<'_, AppMessage> = if let Some(enabled) = item.toggle {
       row![
-        text(item.value.clone())
-          .size(style::META * scale)
-          .color(style::secondary_foreground(style::PALETTE, progress)),
+        container(
+          ellipsis_text(item.value.clone())
+            .size(style::META * scale)
+            .color(style::secondary_foreground(style::PALETTE, progress))
+        )
+        .width(iced::Length::Shrink.max(320.0 * scale)),
         icon_with_color(
           if enabled {
             Icon::CircleCheck
@@ -1326,9 +1330,12 @@ fn setting_row(
       .align_y(Alignment::Center)
       .boxed()
     } else {
-      let mut content = row![text(item.value.clone())
-        .size(style::META * scale)
-        .color(style::secondary_foreground(style::PALETTE, progress))]
+      let mut content = row![container(
+        ellipsis_text(item.value.clone())
+          .size(style::META * scale)
+          .color(style::secondary_foreground(style::PALETTE, progress))
+      )
+      .width(iced::Length::Shrink.max(324.0 * scale))]
       .spacing(12.0 * scale)
       .align_y(Alignment::Center);
       if !matches!(item.action, Action::Unavailable) {
@@ -1345,10 +1352,12 @@ fn setting_row(
     };
     let control = button(
       row![
-        text(item.label.clone())
-          .size(style::BODY * scale)
-          .color(foreground)
-          .width(Fill),
+        container(
+          ellipsis_text(item.label.clone())
+            .size(style::BODY * scale)
+            .color(foreground)
+        )
+        .width(Fill),
         container(trailing).width(iced::Length::Shrink.max(360.0 * scale))
       ]
       .spacing(16.0 * scale)
@@ -1773,6 +1782,48 @@ mod tests {
     assert!(state.tv.settings.open);
     let _ = input(&mut state, Input::Back);
     assert!(!state.tv.settings.open);
+  }
+
+  #[tokio::test]
+  async fn long_setting_values_preserve_row_icons_and_height() {
+    use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
+    use iced::Size;
+
+    let renderer = iced::Renderer::new(renderer::Settings::default(), Some("tiny-skia"))
+      .await
+      .expect("headless layout renderer");
+    let state = state("long-rows");
+    for (toggle, icon_size) in [(Some(true), 28.0), (None, 24.0)] {
+      let item = SettingRow {
+        label: "A setting label that must truncate ".repeat(12),
+        value: format!("https://{}.example.com", "long-server-".repeat(20)),
+        help: String::new(),
+        action: if toggle.is_some() {
+          Action::Unavailable
+        } else {
+          Action::Close
+        },
+        toggle,
+        group: None,
+      };
+      let mut row = setting_row(&state, 0, item, true, 1.0);
+      let mut tree = Tree::new(&row);
+      tree.diff(&mut row);
+      let node = crate::app::test_support::layout_widget(
+        &mut row,
+        &mut tree,
+        &renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(600.0, 200.0)),
+      );
+      let measured = node.absolute_bounds();
+      assert!(
+        measured.iter().any(|bounds| {
+          (bounds.width - icon_size).abs() < 0.05 && (bounds.height - icon_size).abs() < 0.05
+        }),
+        "long value squeezed the row icon out of its slot: {measured:?}"
+      );
+      assert_eq!(node.size().height, 80.0);
+    }
   }
 
   #[tokio::test]

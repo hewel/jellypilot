@@ -58,6 +58,10 @@ episode, queue/audio/subtitle entries, timeline and elapsed/remaining time. The 
 4 dp rail and 12 dp thumb. Android targets remain at least 48 dp; large text and narrow windows
 adapt without removing actions. Previous/next episode actions remain available in the queue.
 The prior tablet transport layout remains separate from this phone revision.
+The bottom block reports its complete laid-out height, including bottom padding, in both
+ordinary and narrow/short/large-text reflow layouts. The player scrim and skip/Undo offsets
+use that measurement; viewport-clipped bounds are not the full block height. This boundary
+is covered by the compact-phone chrome regression, not by visual acceptance.
 
 Phone Minimal is a clean picture, with no progress line or pause badge. Tapping empty picture
 toggles controls without changing playback. Pausing reveals Full; explicit dismissal can hide it

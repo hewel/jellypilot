@@ -190,6 +190,7 @@ fn toast_view<'a>(
     icon_with_color(icon, IconSize::Sm, icon_color),
     text(locale.message(&toast.message))
       .size(13)
+      .wrapping(text::Wrapping::WordOrGlyph)
       .color(text_color)
       .width(Fill),
     dismiss_button,

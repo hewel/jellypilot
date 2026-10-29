@@ -41,7 +41,9 @@ pub fn tooltip<'a, Message: 'a>(
 ) -> Element<'a, Message> {
     tooltip_element(
         trigger,
-        text(content.into()).size(TOKENS.font_sizes.s12),
+        text(content.into())
+            .size(TOKENS.font_sizes.s12)
+            .wrapping(text::Wrapping::WordOrGlyph),
         options,
     )
 }

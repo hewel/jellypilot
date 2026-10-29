@@ -451,17 +451,22 @@ pub(crate) fn view(state: &State) -> Element<'_, AppMessage> {
   }
   let mut entries = Vec::new();
   for entry in state.playback.view.upcoming.entries.iter() {
+    let position = match entry.position {
+      PlaybackStartPosition::Resume => state.t("viewing-queue-resume"),
+      PlaybackStartPosition::Beginning => state.t("viewing-queue-beginning"),
+      PlaybackStartPosition::At(seconds) => format!(
+        "{} · {}",
+        state.t("viewing-queue-resume"),
+        state.kernel.locale.duration(seconds)
+      ),
+    };
     let identity = column![
       ellipsis_text(&entry.title)
         .font(HEADING_FONT)
         .size(style::BODY * scale),
-      text(state.t(if entry.position == PlaybackStartPosition::Resume {
-        "viewing-queue-resume"
-      } else {
-        "viewing-queue-beginning"
-      }))
-      .size(style::META * scale)
-      .color(style::PALETTE.text.metadata)
+      ellipsis_text(position)
+        .size(style::META * scale)
+        .color(style::PALETTE.text.metadata)
     ]
     .spacing(8.0 * scale)
     .width(Fill);

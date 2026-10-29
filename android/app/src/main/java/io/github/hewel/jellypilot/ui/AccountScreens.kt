@@ -45,9 +45,11 @@ internal fun AccountScreen(state: AppUiState, model: AppViewModel) {
 
 @Composable
 private fun AppearanceSettings(preferences: PreferencesUi, change: (PreferencesUi) -> Unit) {
-  Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-    ChoiceSetting(stringResource(R.string.theme), ThemePreference.entries, preferences.theme, { stringResource(it.title) }) { change(preferences.copy(theme = it)) }
-    ChoiceSetting(stringResource(R.string.language), LanguagePreference.entries, preferences.language, { stringResource(it.title) }) { change(preferences.copy(language = it)) }
+  Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    ChoiceSetting(stringResource(R.string.theme), ThemePreference.entries, preferences.theme, { stringResource(it.title) },
+      Modifier.padding(horizontal = 16.dp)) { change(preferences.copy(theme = it)) }
+    ChoiceSetting(stringResource(R.string.language), LanguagePreference.entries, preferences.language, { stringResource(it.title) },
+      Modifier.padding(horizontal = 16.dp)) { change(preferences.copy(language = it)) }
     SettingToggle(stringResource(R.string.reduced_motion), preferences.reducedMotion, stringResource(R.string.reduced_motion_hint)) { change(preferences.copy(reducedMotion = it)) }
   }
 }
@@ -110,8 +112,9 @@ internal fun SettingToggle(title: String, checked: Boolean, hint: String? = null
 }
 
 @Composable
-private fun <T> ChoiceSetting(title: String, choices: List<T>, selected: T, label: @Composable (T) -> String, select: (T) -> Unit) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun <T> ChoiceSetting(title: String, choices: List<T>, selected: T, label: @Composable (T) -> String,
+  modifier: Modifier = Modifier, select: (T) -> Unit) {
+  Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Text(title, style = MaterialTheme.typography.titleMedium)
     choices.forEach { choice ->
       Row(Modifier.fillMaxWidth().selectable(selected == choice, role = Role.RadioButton, onClick = { select(choice) }).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {

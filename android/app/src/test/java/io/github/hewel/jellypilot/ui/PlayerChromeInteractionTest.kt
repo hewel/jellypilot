@@ -1,12 +1,20 @@
 package io.github.hewel.jellypilot.ui
 
 import android.app.Application
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.unit.dp
+import io.github.hewel.jellypilot.player.PlayerSnapshot
+import io.github.hewel.jellypilot.player.PlayerStatus
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -140,5 +148,41 @@ class PlayerChromeInteractionTest {
     compose.onNodeWithText("Picture").performClick()
     settle(); timeout()
     compose.onNodeWithText("Play control").assertDoesNotExist()
+  }
+
+  @Test fun compactPhoneControlsMeasureEntireBottomChromeForOverlayPlacement() {
+    var reportedHeightPx = 0f
+    compose.setContent {
+      val density = LocalDensity.current
+      MaterialTheme {
+        Box(Modifier.size(500.dp, 280.dp)) {
+          PlayerFullControls(
+            snapshot = PlayerSnapshot(status = PlayerStatus.READY, paused = true, seekable = true,
+              durationSeconds = 120.0, positionSeconds = 10.0),
+            playback = PlaybackUi(title = "Series", episodeLabel = "Compact episode controls"),
+            ready = true,
+            back = {},
+            playPause = {},
+            seek = {},
+            volume = {},
+            autoSkip = {},
+            dragging = {},
+            bottomHeight = { reportedHeightPx = with(density) { it.toPx() } },
+            phone = true,
+            more = { Text("Settings") },
+          ) {
+            Text("Queue")
+            Text("Audio")
+            Text("Subtitles")
+          }
+        }
+      }
+    }
+    val actualHeightPx = compose.onNodeWithTag("phone-player-bottom-chrome")
+      .fetchSemanticsNode().size.height.toFloat()
+    compose.runOnIdle {
+      assertEquals("Reported height must include all bottom chrome and its padding",
+        actualHeightPx, reportedHeightPx, 0.5f)
+    }
   }
 }

@@ -764,6 +764,8 @@ fn failure_surface<'a>(
       .color(palette.text.heading),
     text(locale.message(error))
       .size(13)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+      .width(Fill)
       .color(palette.colors.error),
     retry,
   ]

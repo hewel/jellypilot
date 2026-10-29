@@ -469,7 +469,8 @@ fn account_feedback<'a>(
         text(state.kernel.locale.message(error))
           .size(12)
           .color(state.palette().colors.error)
-          .width(Fill),
+          .width(Fill)
+          .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
         control_button(Some(Icon::Close), None, ButtonVariant::Icon)
           .style(presentation.action_style())
           .width(Length::Fixed(40.0))
@@ -562,10 +563,12 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
       remote_status(state.kernel.locale, account.remote_control),
     ]
     .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center);
+    .align_y(Alignment::Center)
+    .wrap();
     let card = row![tile, name_column, badges]
       .spacing(TOKENS.spacing.s3)
-      .align_y(Alignment::Center);
+      .align_y(Alignment::Center)
+      .wrap();
     content = content.push(
       (container(card)
         .width(Fill)
@@ -679,7 +682,8 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
   .on_press_maybe(active_sign_out);
   let footer = row![add, space::horizontal(), disconnect, sign_out]
     .spacing(TOKENS.spacing.s1)
-    .align_y(Alignment::Center);
+    .align_y(Alignment::Center)
+    .wrap();
   content.push((footer).boxed()).boxed()
 }
 
@@ -1193,7 +1197,11 @@ fn confirmation_modal<'a>(
       .font(DISPLAY_FONT)
       .size(24)
       .color(palette.text.heading),
-    text(detail).size(14).color(palette.text.body),
+    text(detail)
+      .size(14)
+      .color(palette.text.body)
+      .width(Fill)
+      .wrapping(iced::widget::text::Wrapping::WordOrGlyph),
   ]
   .spacing(TOKENS.spacing.s3);
   if confirmation.kind == ConfirmationKind::SignOut {
@@ -1232,7 +1240,8 @@ fn confirmation_modal<'a>(
       .padding([7, 12])
       .on_press(Message::Account(accounts::Message::Confirm)),
     ]
-    .align_y(Alignment::Center))
+    .align_y(Alignment::Center)
+    .wrap())
     .boxed(),
   );
   body.boxed()
@@ -1307,12 +1316,14 @@ fn add_account_modal<'a>(state: &'a State, view: AddAccountView<'a>) -> Element<
       interactive
     ),
   ]
-  .spacing(TOKENS.spacing.s2);
+  .spacing(TOKENS.spacing.s2)
+  .wrap();
   let server = text_input("https://media.example.com", view.server_url)
     .on_input_maybe(
       interactive.then_some(|value| account_message(CandidateMessage::ServerUrlChanged(value))),
     )
     .padding([8, 12])
+    .size(14)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
@@ -1332,9 +1343,13 @@ fn add_account_modal<'a>(state: &'a State, view: AddAccountView<'a>) -> Element<
       ),
     ]
     .spacing(TOKENS.spacing.s2)
+    .wrap()
     .boxed()
   } else {
-    text(state.t("login-emby-password")).size(13).boxed()
+    text(state.t("login-emby-password"))
+      .size(14)
+      .color(palette.text.body)
+      .boxed()
   };
   let sign_in = candidate_sign_in(state.kernel.locale, &view);
   let mut form = column![
@@ -1370,7 +1385,9 @@ fn add_account_modal<'a>(state: &'a State, view: AddAccountView<'a>) -> Element<
     form = form.push(
       (text(state.kernel.locale.message(error))
         .size(13)
-        .color(palette.colors.error))
+        .color(palette.colors.error)
+        .width(Fill)
+        .wrapping(iced::widget::text::Wrapping::WordOrGlyph))
       .boxed(),
     );
   }
@@ -1393,7 +1410,7 @@ fn candidate_button<'a>(
     if selected == provider {
       ButtonVariant::Secondary
     } else {
-      ButtonVariant::Tonal
+      ButtonVariant::Text
     },
   )
   .icon_size(IconSize::Sm)
@@ -1475,6 +1492,7 @@ fn candidate_sign_in<'a>(locale: Localizer, view: &AddAccountView<'a>) -> Elemen
           interactive.then_some(|value| account_message(CandidateMessage::UsernameChanged(value))),
         )
         .padding([8, 12])
+        .size(14)
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
@@ -1487,6 +1505,7 @@ fn candidate_sign_in<'a>(locale: Localizer, view: &AddAccountView<'a>) -> Elemen
           interactive.then_some(account_message(CandidateMessage::PasswordSubmitted)),
         )
         .padding([8, 12])
+        .size(14)
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
