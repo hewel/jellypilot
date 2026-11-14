@@ -56,6 +56,8 @@ pub mod viewing_queue;
 pub mod volume_memory;
 #[cfg(feature = "portable")]
 pub mod watchlist;
+#[cfg(feature = "portable")]
+pub mod window_geometry;
 
 mod model;
 mod reducer;

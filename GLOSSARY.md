@@ -131,7 +131,7 @@ The persisted top-level desktop operating mode of JellyPilot: Full or Control-On
 _Avoid_: View preference, layout setting, window profile
 
 **Control-Only Mode**:
-The lowest-idle-overhead media-controller App Mode: a fixed-size 480x760 window centered on Now Playing, with every Login Method and the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; closing its window leaves the tray and Playback Target available, and entering the mode drops Library Browser state.
+The lowest-idle-overhead media-controller App Mode: a fixed-size window, preferring 480x760 but constrained to fit the current display, centered on Now Playing, with every Login Method and the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; closing its window leaves the tray and Playback Target available, and entering the mode drops Library Browser state.
 _Avoid_: Mini player, compact view, floating widget
 
 **Background Residency**:

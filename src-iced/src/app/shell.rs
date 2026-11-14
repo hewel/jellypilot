@@ -11,6 +11,7 @@ use iced::Task;
 use jellypilot_core::browse_model::BrowseSource;
 use jellypilot_core::config::{AppMode, UiMode};
 use jellypilot_core::skeleton::skeleton_phase_at;
+use jellypilot_core::window_geometry::{WindowGeometry, FULL_DEFAULT_SIZE};
 use jellypilot_media_server::VideoLibraryItem;
 
 use super::browse;
@@ -232,7 +233,7 @@ impl Surface {
       close_generation: 0,
       suppressed_window_id: None,
       images_visible: true,
-      window_size: FULL_DEFAULT_WINDOW_SIZE,
+      window_size: FULL_DEFAULT_SIZE.into(),
       full_window_size: None,
       player_fullscreen: false,
       embedded_player: super::embedded_player::Surface::default(),
@@ -317,14 +318,6 @@ impl Surface {
     self.settings_open = false;
   }
 }
-/// Fixed logical window size in Control-Only mode. `set_min_size ==
-/// set_max_size` plus `set_resizable(false)` is the float hint tiling WMs
-/// (i3/Sway) recognize; there is no standard float API.
-pub const CONTROL_ONLY_WINDOW_SIZE: iced::Size = iced::Size::new(480.0, 760.0);
-/// Minimum logical window size in Full mode.
-pub const FULL_MIN_WINDOW_SIZE: iced::Size = iced::Size::new(1024.0, 640.0);
-/// Full-mode window size applied when no stashed size exists.
-pub const FULL_DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1760.0, 900.0);
 /// How long a window opened for an explicit play command may take before the
 /// command fails instead of waiting on a wedged window system forever.
 pub(crate) const WINDOW_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -352,33 +345,6 @@ pub(super) fn cancel_pending_open(surface: &mut Surface, id: iced::window::Id) -
   iced::window::close(id)
 }
 
-/// Window geometry decision for one app mode. Pure so the fixed/restore
-/// policy is testable without executing window tasks.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ModeGeometry {
-  pub size: iced::Size,
-  pub min_size: Option<iced::Size>,
-  pub max_size: Option<iced::Size>,
-  pub resizable: bool,
-}
-
-pub(crate) fn mode_geometry(mode: AppMode, restore_size: Option<iced::Size>) -> ModeGeometry {
-  match mode {
-    AppMode::ControlOnly => ModeGeometry {
-      size: CONTROL_ONLY_WINDOW_SIZE,
-      min_size: Some(CONTROL_ONLY_WINDOW_SIZE),
-      max_size: Some(CONTROL_ONLY_WINDOW_SIZE),
-      resizable: false,
-    },
-    AppMode::Full => ModeGeometry {
-      size: restore_size.unwrap_or(FULL_DEFAULT_WINDOW_SIZE),
-      min_size: Some(FULL_MIN_WINDOW_SIZE),
-      max_size: None,
-      resizable: true,
-    },
-  }
-}
-
 /// Whether a destination is reachable in the given app mode. Control-Only has
 /// no Library Browser, so the router rejects Home/Library/Search/Detail
 /// navigation before the shell touches its stack.
@@ -386,15 +352,29 @@ pub(crate) fn destination_allowed(mode: AppMode, destination: &Destination) -> b
   mode == AppMode::Full || matches!(destination, Destination::NowPlaying)
 }
 
-/// Applies the window geometry decision to the live window.
-fn window_geometry_task(id: Option<iced::window::Id>, geometry: ModeGeometry) -> Task<Message> {
+/// Fits to the window's current monitor on every open/restore or App Mode switch.
+pub(super) fn window_geometry_task<T: Send + 'static>(
+  id: Option<iced::window::Id>,
+  geometry: WindowGeometry,
+) -> Task<T> {
   id.map_or_else(Task::none, |id| {
-    Task::batch([
-      iced::window::set_resizable(id, geometry.resizable),
-      iced::window::set_min_size(id, geometry.min_size),
-      iced::window::set_max_size(id, geometry.max_size),
-      iced::window::resize(id, geometry.size),
-    ])
+    iced::window::monitor_size(id).then(move |monitor| {
+      let geometry = geometry.fit_to_monitor(monitor.map(|size| (size.width, size.height)));
+      tracing::debug!(?monitor, ?geometry, "Applying logical window geometry");
+      // Clear the old minimum before shrinking a fixed-size controller's maximum.
+      // Sequential effects also prevent resize from racing the new constraints.
+      iced::window::set_min_size(id, None)
+        .chain(iced::window::set_max_size(
+          id,
+          geometry.max_size.map(Into::into),
+        ))
+        .chain(iced::window::set_min_size(
+          id,
+          geometry.min_size.map(Into::into),
+        ))
+        .chain(iced::window::set_resizable(id, geometry.resizable))
+        .chain(iced::window::resize(id, geometry.size.into()))
+    })
   })
 }
 
@@ -478,7 +458,14 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
           jellypilot_sdk::browse::BrowsePresentation::Desktop,
         ));
       }
-      let geometry = mode_geometry(state.app_mode(), state.shell.desktop_window_size.take());
+      let geometry = WindowGeometry::for_mode(
+        state.app_mode(),
+        state
+          .shell
+          .desktop_window_size
+          .take()
+          .map(|size| (size.width, size.height)),
+      );
       if let Some(id) = state.shell.window_id {
         tasks.push(
           iced::window::set_mode(id, iced::window::Mode::Windowed)
@@ -522,7 +509,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       state.shell.full_window_size = Some(state.shell.window_size);
       state.shell.clear_history();
       state.shell.destination = Destination::NowPlaying;
-      window_geometry_task(state.shell.window_id, mode_geometry(mode, None))
+      window_geometry_task(state.shell.window_id, WindowGeometry::for_mode(mode, None))
     }
     AppMode::Full => {
       let restore_size = if state.shell.window_id.is_some() {
@@ -530,7 +517,8 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       } else {
         state.shell.full_window_size
       };
-      let geometry = mode_geometry(mode, restore_size);
+      let geometry =
+        WindowGeometry::for_mode(mode, restore_size.map(|size| (size.width, size.height)));
       state.full = Some(crate::app::state::FullUi::default());
       let previous = std::mem::replace(&mut state.shell.destination, Destination::Home);
       state.shell.clear_history();
@@ -740,15 +728,15 @@ pub fn update(
             // Restore the last live size: `window_size` tracks every resize,
             // while `full_window_size` is only stashed across an App Mode
             // switch and would reset a resized Full window to the default.
-            let geometry = mode_geometry(
+            let geometry = WindowGeometry::for_mode(
               if surface.ui_mode == UiMode::Tv {
                 AppMode::Full
               } else {
                 kernel.settings.snapshot().app_mode()
               },
-              Some(surface.window_size),
+              Some((surface.window_size.width, surface.window_size.height)),
             );
-            let (id, open) = iced::window::open(crate::app::window_settings(geometry));
+            let (id, open) = crate::app::open_window(geometry);
             surface.pending_window_id = Some(id);
             Task::batch([
               open.map(|id| Message::Window(WindowMessage::ShowRequested(Some(id)))),
@@ -830,8 +818,8 @@ pub fn update(
       Task::none()
     }
     WindowMessage::FrameTick(now) => {
-      // Smoke runs only need proof that the first frame rendered.
-      if surface.smoke {
+      // Hidden monitor selection is not proof of an admitted startup frame.
+      if surface.smoke && surface.window_id.is_some() {
         surface.smoke = false;
         return iced::exit();
       }
@@ -1803,32 +1791,6 @@ mod tests {
     ));
 
     assert_eq!(surface.window_size, size);
-  }
-  #[test]
-  fn control_only_geometry_pins_the_window_to_a_fixed_size() {
-    let geometry = mode_geometry(AppMode::ControlOnly, Some(iced::Size::new(1440.0, 810.0)));
-
-    assert_eq!(geometry.size, CONTROL_ONLY_WINDOW_SIZE);
-    assert_eq!(geometry.min_size, Some(CONTROL_ONLY_WINDOW_SIZE));
-    assert_eq!(geometry.max_size, Some(CONTROL_ONLY_WINDOW_SIZE));
-    assert!(!geometry.resizable);
-  }
-
-  #[test]
-  fn full_geometry_restores_the_stashed_size_or_the_default() {
-    let stashed = iced::Size::new(1280.0, 800.0);
-
-    let restored = mode_geometry(AppMode::Full, Some(stashed));
-    assert_eq!(restored.size, stashed);
-    assert_eq!(restored.min_size, Some(FULL_MIN_WINDOW_SIZE));
-    assert_eq!(restored.max_size, None);
-    assert!(restored.resizable);
-
-    let fresh = mode_geometry(AppMode::Full, None);
-    assert_eq!(fresh.size, FULL_DEFAULT_WINDOW_SIZE);
-    assert_eq!(fresh.min_size, Some(FULL_MIN_WINDOW_SIZE));
-    assert_eq!(fresh.max_size, None);
-    assert!(fresh.resizable);
   }
 
   #[test]

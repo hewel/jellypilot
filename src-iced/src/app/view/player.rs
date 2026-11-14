@@ -3774,7 +3774,7 @@ mod tests {
       &renderer,
       &layout::Limits::new(Size::ZERO, Size::new(1000.0, 200.0)),
     );
-    let available = crate::app::shell::CONTROL_ONLY_WINDOW_SIZE.width - 2.0 * TOKENS.spacing.s3;
+    let available = jellypilot_core::window_geometry::CONTROL_ONLY_SIZE.0 - 2.0 * TOKENS.spacing.s3;
     assert!(
       node.size().width <= available,
       "compact track and volume controls exceed the fixed window: {} > {available}",

@@ -33,6 +33,7 @@ use iced::widget::Widget as _;
 use iced::{Subscription, Task, Theme};
 use jellypilot_core::config::{AppMode, UiMode};
 use jellypilot_core::startup_capture::emit_startup_stage;
+use jellypilot_core::window_geometry::{WindowGeometry, MONITOR_EDGE_FRACTION};
 
 pub use message::Message;
 pub use state::State;
@@ -96,7 +97,7 @@ pub fn boot(
     iced::system::theme().map(Message::SystemThemeDiscovered),
   ];
   if !start_hidden {
-    let mut geometry = shell::mode_geometry(
+    let mut geometry = WindowGeometry::for_mode(
       if smoke {
         AppMode::Full
       } else {
@@ -107,14 +108,15 @@ pub fn boot(
     if smoke {
       geometry.size = if crate::regression::active() {
         geometry.min_size = None;
-        iced::Size::new(480.0, 320.0)
+        (480.0, 320.0)
       } else {
-        crate::smoke_window_size()
+        let size = crate::smoke_window_size();
+        (size.width, size.height)
       };
     }
-    state.shell.window_size = geometry.size;
+    state.shell.window_size = geometry.size.into();
     emit_startup_stage("window-open-requested");
-    let (id, open) = iced::window::open(window_settings(geometry));
+    let (id, open) = open_window(geometry);
     state.shell.pending_window_id = Some(id);
     tasks.push(open.map(|id| {
       emit_startup_stage("window-opened");
@@ -126,27 +128,41 @@ pub fn boot(
   (state, Task::batch(tasks))
 }
 
-fn window_settings(geometry: shell::ModeGeometry) -> iced::window::Settings {
-  // Fixed probe windows use the same floating hint as Control-Only mode;
-  // changing compositor settings or accepting a tiled desktop-sized readback is not a probe.
-  iced::window::Settings {
-    size: geometry.size,
-    min_size: if crate::regression::active() {
-      Some(geometry.size)
+fn open_window(geometry: WindowGeometry) -> (iced::window::Id, Task<iced::window::Id>) {
+  let probe = crate::regression::active();
+  // Select the native monitor with a small, initially hidden window. Apply its
+  // logical-pixel constraints before ShowRequested makes the main window visible.
+  let (id, open) = iced::window::open(iced::window::Settings {
+    size: if probe {
+      geometry.size.into()
     } else {
-      geometry.min_size
+      iced::Size::new(480.0, 320.0)
     },
-    max_size: if crate::regression::active() {
-      Some(geometry.size)
+    min_size: probe.then_some(geometry.size.into()),
+    max_size: probe.then_some(geometry.size.into()),
+    resizable: !probe && geometry.resizable,
+    visible: probe,
+    position: if probe {
+      iced::window::Position::Default
     } else {
-      geometry.max_size
+      iced::window::Position::SpecificWith(|_, monitor| {
+        iced::Point::new(
+          monitor.width * MONITOR_EDGE_FRACTION,
+          monitor.height * MONITOR_EDGE_FRACTION,
+        )
+      })
     },
-    resizable: !crate::regression::active() && geometry.resizable,
     icon: crate::window_icon(),
     // Both App Modes close the window while the tray/runtime remain available.
     exit_on_close_request: false,
     ..iced::window::Settings::default()
-  }
+  });
+  let open = if probe {
+    open
+  } else {
+    open.then(move |id| shell::window_geometry_task(Some(id), geometry).chain(Task::done(id)))
+  };
+  (id, open)
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {

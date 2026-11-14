@@ -15,7 +15,10 @@ use iced::{window, Size};
 use jellypilot_core::startup_capture::emit_startup_stage;
 
 /// Default logical window size at startup.
-const DEFAULT_WINDOW_SIZE: Size = app::shell::FULL_DEFAULT_WINDOW_SIZE;
+const DEFAULT_WINDOW_SIZE: Size = Size::new(
+  jellypilot_core::window_geometry::FULL_DEFAULT_SIZE.0,
+  jellypilot_core::window_geometry::FULL_DEFAULT_SIZE.1,
+);
 /// Bundled 256×256 application icon shown in the window decorations and taskbar.
 const WINDOW_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/128x128@2x.png");
 

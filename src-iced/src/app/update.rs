@@ -4026,7 +4026,7 @@ pub(crate) mod tests {
       state.kernel.settings = settings;
       state.kernel.connection = ConnectionPhase::Connected;
       let bounds = if kind == "control-only-settings" {
-        crate::app::shell::CONTROL_ONLY_WINDOW_SIZE
+        jellypilot_core::window_geometry::CONTROL_ONLY_SIZE.into()
       } else if kind == "compact-settings" {
         Size::new(600.0, 600.0)
       } else {
