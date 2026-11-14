@@ -13,6 +13,7 @@ All notable changes to JellyPilot are documented in this file.
 - Migrated both Rust workspaces to Rust 1.100 and pinned local, CI, and release toolchains to 1.100.0; replaced deprecated atomic update calls without weakening warning checks.
 
 ### Fixed
+- Fixed Linux runtime license collection for Debian packages whose documentation directories are symlinks, including `libstdc++6`; standard copyright paths are checked while missing notices still fail packaging.
 - Fit startup, restored, and App Mode window sizes and minimums to the current monitor's logical dimensions, preventing oversized windows on high-DPI displays such as the 1920×1080 / 150% setup in [#236](https://github.com/hewel/jellypilot/issues/236). This addresses window sizing, not the separately reported graphics initialization failure.
 
 ## [2.2.3] - 2026-10-22

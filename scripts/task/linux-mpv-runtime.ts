@@ -315,27 +315,45 @@ const copyPackageNotices = Effect.fn('task.mpv.linuxRuntime.packageNotices')(fun
       );
     }
   }
-  const notices: string[] = [];
-  for (const source of [...new Set(candidates)].toSorted()) {
-    if (!(yield* io('license collection', () => fileExists(source)))) continue;
-    const relative = path.join(origin.manager, origin.packageName, source.slice(prefix.length));
-    const destination = path.join(noticeRoot, relative);
-    yield* io('license collection', async () => {
-      await mkdir(path.dirname(destination), { recursive: true });
-      await copyFile(source, destination);
-    });
-    notices.push(relative.split(path.sep).join('/'));
-  }
-  if (notices.length === 0) {
-    return yield* Effect.fail(
-      runtimeError(
-        'license collection',
-        `No ${origin.manager} license notice found for ${origin.packageName}.`,
-      ),
-    );
-  }
-  return notices;
+  return yield* copyPackageNoticeFiles(origin, candidates, prefix, noticeRoot);
 });
+
+export const copyPackageNoticeFiles = Effect.fn('task.mpv.linuxRuntime.packageNoticeFiles')(
+  function* (
+    origin: PackageOrigin,
+    listedCandidates: readonly string[],
+    prefix: string,
+    noticeRoot: string,
+  ) {
+    const candidates = new Set(listedCandidates);
+    if (origin.manager === 'dpkg') {
+      // dpkg lists documentation directory symlinks without their contents; stat/copyFile follow them.
+      const documentation = path.join(prefix, origin.packageName);
+      candidates.add(path.join(documentation, 'copyright'));
+      candidates.add(path.join(documentation, 'copyright.gz'));
+    }
+    const notices: string[] = [];
+    for (const source of [...candidates].toSorted()) {
+      if (!(yield* io('license collection', () => fileExists(source)))) continue;
+      const relative = path.join(origin.manager, origin.packageName, path.relative(prefix, source));
+      const destination = path.join(noticeRoot, relative);
+      yield* io('license collection', async () => {
+        await mkdir(path.dirname(destination), { recursive: true });
+        await copyFile(source, destination);
+      });
+      notices.push(relative.split(path.sep).join('/'));
+    }
+    if (notices.length === 0) {
+      return yield* Effect.fail(
+        runtimeError(
+          'license collection',
+          `No ${origin.manager} license notice found for ${origin.packageName}.`,
+        ),
+      );
+    }
+    return notices;
+  },
+);
 
 const copyLibplaceboNotices = Effect.fn('task.mpv.linuxRuntime.sourceNotices')(function* (
   checkout: string,
