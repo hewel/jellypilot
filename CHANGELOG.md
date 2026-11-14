@@ -9,6 +9,9 @@ All notable changes to JellyPilot are documented in this file.
 - Added opt-in startup reproduction capture with real application stdout/stderr, startup phases, exit codes/signals and bounded timeouts; sanitized reports preserve actionable failures without writing raw logs to disk.
 - Added manually triggered Windows, macOS, and Linux test builds in GitHub Actions, with traceable artifacts and checksums, without publishing a release or requiring a tag.
 
+### Changed
+- Migrated both Rust workspaces to Rust 1.100 and pinned local, CI, and release toolchains to 1.100.0; replaced deprecated atomic update calls without weakening warning checks.
+
 ### Fixed
 - Fit startup, restored, and App Mode window sizes and minimums to the current monitor's logical dimensions, preventing oversized windows on high-DPI displays such as the 1920×1080 / 150% setup in [#236](https://github.com/hewel/jellypilot/issues/236). This addresses window sizing, not the separately reported graphics initialization failure.
 

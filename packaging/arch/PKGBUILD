@@ -28,7 +28,7 @@ optdepends=(
 )
 makedepends=(
   'git'
-  'rust'
+  'rust>=1.100'
   'bun'
   'meson'
   'ninja'

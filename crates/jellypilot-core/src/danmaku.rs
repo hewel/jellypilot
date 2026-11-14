@@ -160,7 +160,7 @@ impl Track {
 
         comments.sort_by(|left, right| left.at_seconds.total_cmp(&right.at_seconds));
         let id = NEXT_TRACK_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| Error::TrackIdentityExhausted)?;
         Ok(Self { id, comments })
     }

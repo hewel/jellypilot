@@ -5,7 +5,7 @@
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.100.0-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/iced-pinned_fork-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -239,7 +239,7 @@ Arch 包仍仅随 tag 发布构建。Linux 任务需要项目的 `jellypilot-lan
 <details>
 <summary>开发编译依赖</summary>
 
-- [Rust](https://rustup.rs/) 1.98 或更高版本
+- [Rust](https://rustup.rs/) 1.100.0（由 `rust-toolchain.toml` 选择；CI 和发布构建使用相同版本，包含 rustfmt 和 Clippy）
 - [Bun](https://bun.sh/) 1.3.14 或更高版本（仅用于任务调度器，本项目无 JavaScript 前端）
 - Linux 原生图形依赖：GTK 3、`libxkbcommon` 与 Wayland 开发包（`libgtk-3-dev`、`libxkbcommon-dev`、`libwayland-dev`、`wayland-protocols`）
 - Linux 内嵌 MPV 构建依赖（若仅使用外部 MPV 则可跳过）：Meson >= 1.3、Ninja、C/C++ 编译器、pkg-config、Vulkan 开发头文件与加载器、FFmpeg 开发库、`libplacebo` >= 7.360.1、`libass`。

@@ -5,7 +5,7 @@
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.100.0-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/iced-pinned_fork-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -288,7 +288,7 @@ channel. Back up your JellyPilot configuration before testing.
 <details>
 <summary>Development prerequisites</summary>
 
-- [Rust](https://rustup.rs/) 1.98 or newer
+- [Rust](https://rustup.rs/) 1.100.0 (selected by `rust-toolchain.toml`; CI and release builds use the same version, with rustfmt and Clippy)
 - [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
 - Linux GUI: GTK 3, `libxkbcommon`, and Wayland development packages (`libgtk-3-dev`, `libxkbcommon-dev`, `libwayland-dev`, `wayland-protocols`)
 - Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader >= 1.4.309, FFmpeg dev libraries, `libplacebo` >= 7.387.0, `libass`, and Lua or LuaJIT development files (Ubuntu: `libluajit-5.1-dev`; Arch: `luajit`). Lua support is required for the host's `osc=no` option.

@@ -10,7 +10,7 @@ publish = false
 workspace = "../../src-iced"
 
 # Intentionally not inheriting workspace unsafe_code=forbid: this crate is the
-# audited Vulkan/libmpv boundary. lib.rs denies unsafe_op_in_unsafe_fn instead.
+# audited Vulkan/libmpv boundary, with its own explicit safety/lint policy.
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 iced_wgpu = { workspace = true, features = ["web-colors"] }
 wgpu = { version = "30", features = ["vulkan"] }
@@ -27,3 +27,9 @@ raw-window-handle = "0.6"
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 x11rb = { version = "0.13", features = ["screensaver"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"

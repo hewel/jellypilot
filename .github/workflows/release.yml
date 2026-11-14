@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
@@ -343,7 +343,7 @@ jobs:
               fi
               if ! command -v rustc >/dev/null; then
                 curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
-                  -y --default-toolchain stable --profile minimal --no-modify-path
+                  -y --default-toolchain 1.100.0 --profile minimal --no-modify-path
               fi
               if ! command -v cargo-packager >/dev/null; then
                 cargo install cargo-packager --version 0.11.8 --locked
@@ -467,14 +467,20 @@ jobs:
             docker.io/library/archlinux:base-devel \
             bash -lc '
               set -euo pipefail
-              pacman -Syu --noconfirm --needed git rust bun gtk3 mpv libxkbcommon wayland \
+              pacman -Syu --noconfirm --needed git curl rust bun gtk3 mpv libxkbcommon wayland \
                 meson ninja pkgconf binutils patchelf vulkan-headers vulkan-icd-loader ffmpeg \
                 glslang libass shaderc lcms2 luajit
               useradd --create-home builder
               mkdir -p /work/target/release/bundle
               chown -R builder:builder /work
-              runuser -u builder -- bash -c "cd \"\$1\" && PKGDEST=\"\$2\" makepkg --noconfirm --cleanbuild" _ \
-                /work/packaging/arch /work/target/release/bundle
+              runuser -u builder -- env RUSTUP_INIT_SKIP_PATH_CHECK=yes bash -c "
+                set -euo pipefail
+                curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+                  -y --default-toolchain 1.100.0 --profile minimal --no-modify-path
+                export PATH=\"\$HOME/.cargo/bin:\$PATH\"
+                cd \"\$1\"
+                PKGDEST=\"\$2\" makepkg --noconfirm --cleanbuild
+              " _ /work/packaging/arch /work/target/release/bundle
               chown -R root:root /work/target/release/bundle
             '
       - name: Upload Arch package
