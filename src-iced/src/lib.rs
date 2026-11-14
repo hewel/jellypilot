@@ -131,7 +131,13 @@ fn run_application(
     metrics_hinting: false,
     ..iced::Settings::default()
   })
-  .title("JellyPilot")
+  .title(|state: &app::State, id| {
+    if app::pip::window_id(state) == Some(id) {
+      "JellyPilot — Picture-in-Picture".to_owned()
+    } else {
+      "JellyPilot".to_owned()
+    }
+  })
   .subscription(app::subscription)
   .theme(app::theme)
   .default_font(jellypilot_ui::fonts::BODY_FONT);

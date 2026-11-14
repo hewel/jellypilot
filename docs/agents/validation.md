@@ -75,8 +75,13 @@ quality; keep those as separate human acceptance.
   those stop the host session and require VO/host recreation, not stop/reload or ABI fallback.
   It exercises real decoded video, paused clock, seek/frame change, paused video-region
   resize through iced layout and real copy-target replacement (not OS window-resize acceptance),
-  resumed playback, image work and in-memory readback through the actual compositor. On
-  Linux it also drives a real PlaybackSession through the production projection path:
+  resumed playback, image work and in-memory readback through the actual compositor.
+  It opens a second native surface, transfers the same host's decoded picture to it,
+  returns to main, and closes the auxiliary surface. Readiness, advancing clock and
+  nonuniform readback are required in both directions, with one host and two live
+  surfaces during transfer. This probes the presentation API, not the production PiP
+  coordinator, its controls, or window-manager placement.
+  On Linux it also drives a real PlaybackSession through the production projection path:
   the session idle inhibitor binds on the live presentation surface when playback
   resumes, releases on pause, rebinds after last-window close/reopen, and releases on
   stop. It closes the last window, reopens through the shell/tray show route, checks
@@ -133,7 +138,8 @@ after the probe completes.
 `lastPresentElapsedSeconds` records the last presentation accepted by the probe relative
 to run startup, or null before one is observed; it remains available in failure/exit reports.
 Phase codes are 0 load, 8 settle paused frame, 1 paused hold, 2 paused seek, 3 paused resize,
-4 active playback, 5 close/reopen, 6 advancing reopened playback, 7 stop/idle and 9 complete.
+4 active playback, 10 auxiliary video, 11 return to main, 12 auxiliary close,
+5 close/reopen, 6 advancing reopened playback, 7 stop/idle and 9 complete.
 Phase history records transitions; resource samples correlated to it are not atomic phase
 measurements and can miss short stages.
 Resource metrics remain a separate read-only observer, not a new acceptance framework:

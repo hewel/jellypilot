@@ -8,19 +8,42 @@ use iced_wgpu::{primitive, wgpu};
 pub(super) static FRAME: Mutex<Frame> = Mutex::new(Frame {
   binding: None,
   layout: None,
-  size: (1, 1),
+  size: None,
   shell: None,
   hdr: false,
   valid: false,
+  epoch: 0,
+  presenting: false,
 });
 
+#[derive(Default)]
 pub(super) struct Frame {
   pub binding: Option<wgpu::BindGroup>,
   pub layout: Option<wgpu::BindGroupLayout>,
-  pub size: (u32, u32),
+  pub size: Option<(u32, u32)>,
   pub shell: Option<Shell>,
   pub hdr: bool,
   pub valid: bool,
+  epoch: u64,
+  pub presenting: bool,
+}
+
+impl Frame {
+  pub fn select(&mut self, epoch: u64) {
+    if self.epoch != epoch {
+      self.epoch = epoch;
+      self.size = None;
+      self.valid = false;
+      self.presenting = false;
+      if let Some(shell) = &self.shell {
+        shell.request_redraw();
+      }
+    }
+  }
+
+  fn accepts(&self, epoch: u64) -> bool {
+    self.presenting && self.epoch == epoch
+  }
 }
 
 pub(super) fn layout_descriptor() -> wgpu::BindGroupLayoutDescriptor<'static> {
@@ -54,12 +77,19 @@ impl<Message> shader::Program<Message> for Video {
   type Primitive = VideoPrimitive;
 
   fn draw(&self, _state: &(), _cursor: mouse::Cursor, _bounds: Rectangle) -> VideoPrimitive {
-    VideoPrimitive
+    VideoPrimitive {
+      epoch: FRAME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .epoch,
+    }
   }
 }
 
 #[derive(Debug)]
-pub(crate) struct VideoPrimitive;
+pub(crate) struct VideoPrimitive {
+  epoch: u64,
+}
 
 pub(crate) struct Pipeline {
   sdr: wgpu::RenderPipeline,
@@ -140,11 +170,15 @@ impl primitive::Primitive for VideoPrimitive {
     let mut frame = FRAME
       .lock()
       .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !frame.accepts(self.epoch) {
+      pipeline.valid = false;
+      return;
+    }
     let binding = frame.binding.clone();
     pipeline.is_hdr = frame.hdr;
     pipeline.valid = frame.valid;
-    if frame.size != size {
-      frame.size = size;
+    if frame.size != Some(size) {
+      frame.size = Some(size);
       if let Some(shell) = &frame.shell {
         shell.request_redraw();
       }
@@ -288,5 +322,32 @@ impl Composite {
       pass.draw(0..3, 0..1);
     }
     context.queue().submit([encoder.finish()]);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::Frame;
+
+  #[test]
+  fn handoff_rejects_old_primitives_and_forgets_their_size() {
+    let mut frame = Frame {
+      size: Some((1920, 1080)),
+      presenting: true,
+      valid: true,
+      ..Frame::default()
+    };
+    frame.select(1);
+    frame.presenting = true;
+    assert!(!frame.accepts(0));
+    assert!(frame.accepts(1));
+    assert_eq!(frame.size, None);
+    assert!(!frame.valid);
+  }
+
+  #[test]
+  fn browse_surface_cannot_publish_video_bounds_even_in_current_epoch() {
+    let frame = Frame::default();
+    assert!(!frame.accepts(0));
   }
 }

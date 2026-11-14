@@ -13,6 +13,7 @@ pub mod login;
 pub mod message;
 pub(crate) mod motion;
 pub mod personal_lists;
+pub mod pip;
 pub mod playback;
 pub(crate) mod saved_browse;
 pub mod settings;
@@ -176,8 +177,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   task
 }
 
-pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Message> {
-  if let Some(size) = crate::regression::gpu_size() {
+pub fn view(state: &State, window_id: iced::window::Id) -> iced::Element<'_, Message> {
+  if pip::window_id(state) == Some(window_id) {
+    let generation = pip::generation(state);
+    return view::pip::view(state)
+      .map(move |message| pip::bind(window_id, generation, message))
+      .boxed();
+  }
+  if let Some(size) = crate::regression::gpu_size_for(window_id) {
     return iced::widget::container(crate::embedded::view())
       .width(size.width)
       .height(size.height)
@@ -195,13 +202,17 @@ pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Me
   } else {
     content
   };
-  jellypilot_ui::widgets::motion::scope(
+  iced::widget::container(jellypilot_ui::widgets::motion::scope(
     jellypilot_ui::widgets::focus_scope::focus_scope(
       view::image_observer::observe_images(content),
       state.shell.focus_visibility.clone(),
     ),
     enabled,
-  )
+  ))
+  .id("main-root")
+  .width(iced::Fill)
+  .height(iced::Fill)
+  .boxed()
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {

@@ -582,6 +582,9 @@ pub(super) fn guard_activation<'a>(
 
 /// Shared embedded composition for normal, fullscreen, and Control-Only playback.
 pub fn embedded(state: &State) -> Element<'_, Message> {
+  if crate::app::pip::active(state) {
+    return super::pip::placeholder(state);
+  }
   responsive(move |bounds| -> Element<'_, Message> {
     let visible = embedded_player::controls_visible(state);
     let back_visible = embedded_player::back_visible(state);
@@ -774,6 +777,18 @@ pub fn embedded(state: &State) -> Element<'_, Message> {
             .style(cinema::popover),
         )
         .center(Fill))
+        .boxed(),
+      );
+    }
+    if let Some(notice) = crate::app::pip::notice(state) {
+      layers = layers.push(
+        container(
+          container(text(state.kernel.locale.message(notice)).size(14))
+            .padding(TOKENS.spacing.s3)
+            .style(cinema::prompt),
+        )
+        .padding(TOKENS.spacing.s4)
+        .center(Fill)
         .boxed(),
       );
     }
@@ -990,6 +1005,16 @@ fn embedded_more_content(state: &State) -> Element<'_, Message> {
     ),
   ]
   .spacing(4);
+  if crate::app::pip::available(state) {
+    content = content.push(embedded_menu_row(
+      state,
+      "player-more-pip",
+      Icon::PictureInPicture,
+      "player-pip",
+      String::new(),
+      ready.then_some(Message::Pip(crate::app::pip::Message::Enter)),
+    ));
+  }
   if let Some(mode) = crate::app::playback::series_intro_mode(&state.playback, &state.kernel) {
     content = content
       .push(

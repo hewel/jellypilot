@@ -661,3 +661,30 @@ frame changes during hover/drag and time-only fallback; exercise More, audio sel
 both subtitle roles, Viewing Queue, A/B Repeat, automatic skip and independent Information;
 confirm native close/hide, return-to-Full and fullscreen behavior. No desktop capture/input
 automation or Windows/macOS visual acceptance was performed.
+
+## Native picture-in-picture
+
+PiP is a separate video-first window, not a compact variant of the main application shell.
+Its dark cinema surface reuses the player's existing scrims and control styles; there is
+no new blur, palette or main-window decoration change. The header truncates the real media
+title and provides Return and Close; the footer centers Play/Pause and the current time.
+These controls use 40px targets and localized labels/tooltips.
+
+The video background initiates native window dragging. Six-pixel edge zones and twelve-pixel
+corner zones initiate native resizing; control presses do not also drag the window.
+Controls hide after idle, reveal on pointer movement or keyboard interaction, and remain
+available while focused or reporting a transition failure. Hidden controls release their
+hit targets. Keyboard traversal is scoped to the window's own controls.
+
+The main player becomes a truthful “Playing in picture-in-picture” placeholder with Return
+and, in Full mode, Back to library. Its menus and playback tools are not duplicated in
+the small window. Session and close behavior are defined in the
+[playback feature contract](playback-features-spec.md#native-picture-in-picture).
+
+Headless interaction coverage exercises English and Chinese at 280×158, 480×270 and
+280×480, including control hit isolation, dragging, corners and hidden hit targets.
+Human acceptance remains required: inspect long titles and subtitles over bright/dark
+footage, keyboard focus and idle controls, native dragging/resizing, return from fullscreen,
+main-window close while playing, and repeated return/re-entry. Check niri floating placement
+and workspace behavior separately; an application topmost request is not a Wayland guarantee.
+Windows native playback and desktop appearance were not exercised by the Linux checks.

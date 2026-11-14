@@ -280,6 +280,7 @@ pub(super) fn buffered_ranges(state: &State) -> &[(f64, f64)] {
 
 pub(super) fn active(state: &State) -> bool {
   crate::embedded::enabled()
+    && !super::pip::active(state)
     && state.shell.images_visible
     && state.shell.window_id.is_some()
     && state.playback.view.lifecycle.playback_active

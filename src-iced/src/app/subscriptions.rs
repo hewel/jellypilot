@@ -22,7 +22,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     // The compositor can constrain the requested startup size before a resize
     // subscription exists. Opened carries the actual logical layout size.
     Event::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
-      Some(Message::Window(WindowMessage::Resized(size)))
+      Some(Message::Window(WindowMessage::Resized(window_id, size)))
     }
     _ => None,
   });
@@ -45,6 +45,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     ));
   }
   subscriptions.push(super::embedded_player::subscription(state));
+  subscriptions.push(super::pip::subscription(state));
   if state.tv_mode() {
     subscriptions.push(super::tv::subscription(state));
   }
@@ -69,29 +70,42 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         .map(|_| Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)))),
     );
   }
-  if state.shell.window_id.is_some() && state.shell.pending_close.is_none() {
+  if let Some(main) = state
+    .shell
+    .window_id
+    .filter(|_| state.shell.pending_close.is_none())
+  {
     if state.tv_mode() {
-      subscriptions.push(event::listen_with(|event, status, _| {
-        super::tv::keyboard(event, status)
-      }));
+      subscriptions.push(
+        main_events(main).filter_map(|(event, status, _)| super::tv::keyboard(event, status)),
+      );
     } else if state.saved_browse.editor.is_some() {
       subscriptions.push(
-        event::listen_with(|event, status, window| Some((event, status, window)))
+        main_events(main)
           .with(super::saved_browse::target(state))
           .filter_map(saved_editor_keyboard),
       );
     } else if super::playback::tools::is_open(state) {
-      subscriptions.push(event::listen_with(playback_tools_keyboard));
+      subscriptions.push(
+        main_events(main)
+          .filter_map(|(event, status, id)| playback_tools_keyboard(event, status, id)),
+      );
     } else if state.playback.viewing_queue.open {
-      subscriptions.push(event::listen_with(viewing_queue_keyboard));
+      subscriptions.push(
+        main_events(main)
+          .filter_map(|(event, status, id)| viewing_queue_keyboard(event, status, id)),
+      );
     } else if state.settings.view.shortcut_capture.is_some() {
-      subscriptions.push(event::listen_with(shortcut_capture));
+      subscriptions.push(
+        main_events(main).filter_map(|(event, status, id)| shortcut_capture(event, status, id)),
+      );
     } else {
       if state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
         || super::accounts::blocking_modal(&state.accounts)
       {
         subscriptions.push(
-          event::listen_with(|event, status, _| Some((event, status)))
+          main_events(main)
+            .map(|(event, status, _)| (event, status))
             .with((
               state.full.is_some(),
               state.shell.settings_open,
@@ -106,17 +120,22 @@ pub fn subscription(state: &State) -> Subscription<Message> {
             .filter_map(visible_application_shortcut),
         );
       } else if state.shell.settings_open {
-        subscriptions.push(event::listen_with(settings_modal_events));
+        subscriptions.push(
+          main_events(main)
+            .filter_map(|(event, status, id)| settings_modal_events(event, status, id)),
+        );
       }
       if !state.shell.settings_open
         && !state.shell.account_popover_open
         && !state.shell.compact_search_open
+        && !super::pip::active(state)
         && !super::accounts::blocking_modal(&state.accounts)
         && !state.kernel.sdk.content_mutations_blocked()
         && state.playback.view.now_playing.is_some()
       {
         subscriptions.push(
-          event::listen_with(|event, status, _| Some((event, status)))
+          main_events(main)
+            .map(|(event, status, _)| (event, status))
             .with((
               playback_shortcuts(state.kernel.settings.snapshot()),
               super::embedded_player::active(state),
@@ -164,6 +183,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
   }
   Subscription::batch(subscriptions)
+}
+
+fn main_events(id: window::Id) -> Subscription<(Event, event::Status, window::Id)> {
+  event::listen_with(|event, status, source| Some((event, status, source)))
+    .with(id)
+    .filter_map(|(id, event)| (id == event.2).then_some(event))
 }
 
 #[derive(Clone)]

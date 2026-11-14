@@ -6,6 +6,7 @@ use iced::{Color, Renderer};
 use iced_wgpu::{wgpu, Engine, QueueGuard};
 use jellypilot_mpv_host::{DeviceContext, Host, HostOptions, TargetColor};
 
+use super::presentation::{self, PresentationStatus};
 use super::video::{self, FRAME};
 
 // Field order destroys mpv before its borrowed device and retained feature chain.
@@ -39,6 +40,7 @@ pub(crate) struct Surface {
 
 impl Drop for Surface {
   fn drop(&mut self) {
+    presentation::dropped(self.idle_token);
     crate::embedded::idle::surface_dropped(self.idle_token);
     let _guard = QueueGuard::acquire(self.synchronization.as_ref());
     drop(self.native.take());
@@ -140,22 +142,25 @@ impl Compositor {
 
   /// Syncs HDR presentation with the setting and surface capabilities.
   /// Updates the observed status even when no surface transition is needed.
-  fn sync_hdr(&mut self, surface: &mut Surface) {
+  fn sync_hdr(&mut self, surface: &mut Surface, selected: bool) {
     if surface.size.0 == 0 || surface.size.1 == 0 {
       return;
     }
-    let desired = surface
-      .native
-      .as_ref()
-      .is_some_and(|native| self.hdr_target(native));
-    crate::embedded::set_hdr_state(if desired {
-      crate::embedded::HdrState::Active
-    } else if crate::embedded::hdr_output().active(true, crate::embedded::hdr_content()) {
-      // Both manual and content-driven requests report an unsupported chain.
-      crate::embedded::HdrState::Unavailable
-    } else {
-      crate::embedded::HdrState::Sdr
-    });
+    let desired = selected
+      && surface
+        .native
+        .as_ref()
+        .is_some_and(|native| self.hdr_target(native));
+    if selected {
+      crate::embedded::set_hdr_state(if desired {
+        crate::embedded::HdrState::Active
+      } else if crate::embedded::hdr_output().active(true, crate::embedded::hdr_content()) {
+        // Both manual and content-driven requests report an unsupported chain.
+        crate::embedded::HdrState::Unavailable
+      } else {
+        crate::embedded::HdrState::Sdr
+      });
+    }
     if desired != surface.hdr {
       graphics::Compositor::configure_surface(self, surface, surface.size.0, surface.size.1);
     }
@@ -289,11 +294,13 @@ impl graphics::Compositor for Compositor {
         None
       }
     };
+    let idle_token = crate::embedded::idle::register_surface(window.clone());
+    presentation::register(&window, idle_token, native.is_some());
     let mut surface = Surface {
       native,
       synchronization: self.context.queue_lock(),
       regression: crate::regression::active(),
-      idle_token: crate::embedded::idle::surface_changed(window),
+      idle_token,
       hdr: false,
       size: (width, height),
       ui_target: None,
@@ -315,7 +322,7 @@ impl graphics::Compositor for Compositor {
       return;
     }
     surface.size = (width, height);
-    let hdr = self.hdr_target(native);
+    let hdr = presentation::selection(surface.idle_token).0 && self.hdr_target(native);
     (self.integration.configure_surface)(
       &self.context,
       native,
@@ -335,20 +342,6 @@ impl graphics::Compositor for Compositor {
         desired_maximum_frame_latency: 1,
       },
     );
-    // The retained host outlives surfaces (background residency): compare
-    // against the last target applied to the host, not the surface's.
-    if self.target_hdr != hdr {
-      self.target_hdr = hdr;
-      self.host.set_target_color(if hdr {
-        TargetColor::HDR10
-      } else {
-        TargetColor::SDR
-      });
-      // Paused or idle playback schedules no frame; force one so the new
-      // target takes effect immediately.
-      let _ = self.host.request_redraw();
-      tracing::info!(hdr, "Embedded MPV presentation color space switched");
-    }
     surface.hdr = hdr;
   }
 
@@ -381,39 +374,73 @@ impl graphics::Compositor for Compositor {
       return Err(compositor::SurfaceError::Other);
     };
     if surface.native.is_none() {
+      presentation::status(surface.idle_token, PresentationStatus::Failed);
       return Err(compositor::SurfaceError::Other);
     }
-    self.sync_hdr(surface);
-    let size = FRAME
-      .lock()
-      .unwrap_or_else(std::sync::PoisonError::into_inner)
-      .size;
-    // mpv API calls and fence polling must never run under the native queue gate.
-    self.host.resize(size.0, size.1).map_err(|error| {
-      tracing::error!(%error, "Embedded MPV resize failed");
-      compositor::SurfaceError::Other
-    })?;
-    self.host.retry_if_capacity().map_err(|error| {
-      tracing::error!(%error, "Embedded MPV redraw failed");
-      compositor::SurfaceError::Other
-    })?;
-    let copied = self
-      .host
-      .copy_ready()
-      .map_err(|error| {
-        tracing::error!(%error, "Embedded MPV frame synchronization failed");
-        compositor::SurfaceError::Other
-      })?
-      .is_some();
-    if self.host.frame_generation() != self.generation {
-      self.generation = self.host.frame_generation();
-      let binding = self.host.bind_group(&self.binding_layout);
-      let retired = FRAME
+    let (selected, epoch) = presentation::selection(surface.idle_token);
+    self.sync_hdr(surface, selected);
+    let size = {
+      let mut frame = FRAME
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .binding
-        .replace(binding);
-      drop(retired);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      frame.select(epoch);
+      frame.presenting = selected;
+      frame.size
+    };
+    let mut copied = false;
+    if selected {
+      // Only the selected surface can change the retained host's target.
+      // Surface configuration alone (including a browse-window resize) cannot.
+      if self.target_hdr != surface.hdr {
+        self.target_hdr = surface.hdr;
+        self.host.set_target_color(if surface.hdr {
+          TargetColor::HDR10
+        } else {
+          TargetColor::SDR
+        });
+        self.host.request_redraw().map_err(|error| {
+          presentation::status(surface.idle_token, PresentationStatus::Failed);
+          tracing::error!(%error, "Embedded MPV target redraw failed");
+          compositor::SurfaceError::Other
+        })?;
+        tracing::info!(
+          hdr = surface.hdr,
+          "Embedded MPV presentation color space switched"
+        );
+      }
+      // Bounds are published only by a current-epoch video widget on this
+      // surface; stale main-window primitives cannot resize the PiP host.
+      if let Some(size) = size {
+        self.host.resize(size.0, size.1).map_err(|error| {
+          presentation::status(surface.idle_token, PresentationStatus::Failed);
+          tracing::error!(%error, "Embedded MPV resize failed");
+          compositor::SurfaceError::Other
+        })?;
+      }
+      self.host.retry_if_capacity().map_err(|error| {
+        presentation::status(surface.idle_token, PresentationStatus::Failed);
+        tracing::error!(%error, "Embedded MPV redraw failed");
+        compositor::SurfaceError::Other
+      })?;
+      copied = self
+        .host
+        .copy_ready()
+        .map_err(|error| {
+          presentation::status(surface.idle_token, PresentationStatus::Failed);
+          tracing::error!(%error, "Embedded MPV frame synchronization failed");
+          compositor::SurfaceError::Other
+        })?
+        .is_some();
+      if self.host.frame_generation() != self.generation {
+        self.generation = self.host.frame_generation();
+        let binding = self.host.bind_group(&self.binding_layout);
+        let retired = FRAME
+          .lock()
+          .unwrap_or_else(std::sync::PoisonError::into_inner)
+          .binding
+          .replace(binding);
+        drop(retired);
+      }
     }
     let lock = self.context.queue_lock();
     let mut acquired = {
@@ -432,11 +459,17 @@ impl graphics::Compositor for Compositor {
         wgpu::CurrentSurfaceTexture::Outdated => return Err(compositor::SurfaceError::Outdated),
         wgpu::CurrentSurfaceTexture::Timeout => return Err(compositor::SurfaceError::Timeout),
         wgpu::CurrentSurfaceTexture::Occluded => return Err(compositor::SurfaceError::Occluded),
-        wgpu::CurrentSurfaceTexture::Lost => return Err(compositor::SurfaceError::Lost),
-        wgpu::CurrentSurfaceTexture::Validation => return Err(compositor::SurfaceError::Other),
+        wgpu::CurrentSurfaceTexture::Lost => {
+          presentation::status(surface.idle_token, PresentationStatus::Preparing);
+          return Err(compositor::SurfaceError::Lost);
+        }
+        wgpu::CurrentSurfaceTexture::Validation => {
+          presentation::status(surface.idle_token, PresentationStatus::Failed);
+          return Err(compositor::SurfaceError::Other);
+        }
       }
     };
-    {
+    if selected {
       let mut shared = FRAME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -480,9 +513,19 @@ impl graphics::Compositor for Compositor {
         self.context.present_frame(frame);
       }
     }
+    if selected {
+      presentation::status(
+        surface.idle_token,
+        if size.is_some() && self.host.has_current_frame() {
+          PresentationStatus::Ready
+        } else {
+          PresentationStatus::Preparing
+        },
+      );
+    }
     if crate::regression::active() {
       crate::regression::tray_presented();
-      if crate::regression::gpu() {
+      if selected && crate::regression::gpu() {
         if self.probe.is_none() {
           match crate::regression::Probe::new() {
             Ok(probe) => self.probe = Some(probe),
@@ -515,6 +558,7 @@ impl graphics::Compositor for Compositor {
 
 impl Drop for Compositor {
   fn drop(&mut self) {
+    presentation::shutdown();
     crate::embedded::idle::shutdown();
     let retired = {
       let mut frame = FRAME

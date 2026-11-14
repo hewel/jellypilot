@@ -484,7 +484,7 @@ fn route(state: &mut State, request: &Request) -> fdo::Result<Task<AppMessage>> 
     _ => return Err(unsupported()),
   };
   let scope = snapshot.scope.ok_or_else(unavailable)?;
-  let visible = super::embedded_player::active(state);
+  let visible = super::embedded_player::active(state) || super::pip::active(state);
   Ok(super::playback::update_system_media(
     &mut state.playback,
     &mut state.kernel,

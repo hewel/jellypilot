@@ -6,11 +6,10 @@
 //! [`jellypilot_mpv_host::IdleInhibit`] keeps the session from auto-locking.
 //! External MPV Playback inhibits itself and never registers a surface here.
 //!
-//! The compositor registers its display once and each surface as it is
-//! created; [`set_desired`] follows the projected Now Playing state. With no
-//! registered surface (window closed to the tray) nothing is bound — Wayland
-//! idle inhibition is defined on a presentation surface, and reopening the
-//! window rebinds automatically.
+//! The compositor registers its display once and each live surface separately;
+//! only the selected video surface is bound. [`set_desired`] follows the
+//! projected Now Playing state. Closing all windows releases inhibition, while
+//! returning from PiP can rebind the older main surface.
 
 use jellypilot_mpv::playback_session::NowPlayingView;
 
@@ -39,8 +38,12 @@ mod imp {
     lock().display_changed(display);
   }
 
-  pub(crate) fn surface_changed(window: impl compositor::Window + Clone) -> u64 {
-    lock().surface_changed(window)
+  pub(crate) fn register_surface(window: impl compositor::Window + Clone) -> u64 {
+    lock().register_surface(window)
+  }
+
+  pub(crate) fn select_surface(token: Option<u64>) {
+    lock().select_surface(token);
   }
 
   pub(crate) fn surface_dropped(token: u64) {
@@ -77,9 +80,13 @@ mod imp {
 
     pub(crate) fn display_changed(_display: impl compositor::Display) {}
 
-    pub(crate) fn surface_changed(_window: impl compositor::Window + Clone) -> u64 {
-      0
+    pub(crate) fn register_surface(_window: impl compositor::Window + Clone) -> u64 {
+      use std::sync::atomic::{AtomicU64, Ordering};
+      static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+      NEXT_TOKEN.fetch_add(1, Ordering::Relaxed)
     }
+
+    pub(crate) fn select_surface(_token: Option<u64>) {}
 
     pub(crate) fn surface_dropped(_token: u64) {}
 

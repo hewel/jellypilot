@@ -1857,6 +1857,20 @@ pub(crate) fn apply_playback_input(
   // Mutate in place: other intents pass through without re-boxing.
   let mut input = input;
   if let PlaybackInput::Intent(intent) = &mut input {
+    // A later explicit Pause supersedes a deferred Resume even if a window
+    // admission or close acknowledgement is still in flight.
+    if matches!(
+      intent.as_ref(),
+      PlaybackIntent::SetPaused(true) | PlaybackIntent::Stop | PlaybackIntent::Quit
+    ) || (matches!(intent.as_ref(), PlaybackIntent::TogglePaused)
+      && surface
+        .view
+        .now_playing
+        .as_ref()
+        .is_some_and(|playing| !playing.paused))
+    {
+      surface.pending_play = None;
+    }
     match intent.as_mut() {
       PlaybackIntent::Start { item, intro, .. } => *intro = start_intro_availability(kernel, item),
       PlaybackIntent::PlayQueued { id, intro, .. } => {
@@ -5558,7 +5572,7 @@ mod tests {
   }
 
   #[test]
-  fn held_presentation_defers_remote_resume_but_runs_pause_headless() {
+  fn a_later_pause_cancels_deferred_resume_before_window_admission() {
     let (mut surface, mut kernel) = held_fixture();
     surface
       .view
@@ -5578,7 +5592,7 @@ mod tests {
     ));
     assert!(play_pending(&surface));
 
-    // Pause does not need a window and must not disturb the deferred play.
+    // A newer Pause must not be undone by a late close acknowledgement or Show.
     drop(handle_remote_command(
       &mut surface,
       &mut kernel,
@@ -5587,19 +5601,8 @@ mod tests {
       playstate("Pause"),
       false,
     ));
-    assert!(play_pending(&surface));
-
-    // Stop is headless too, but it supersedes the deferred play: admission
-    // must not replay a command the user already replaced.
-    drop(handle_remote_command(
-      &mut surface,
-      &mut kernel,
-      false,
-      remote,
-      playstate("Stop"),
-      false,
-    ));
     assert!(!play_pending(&surface));
+    assert!(window_opened(&mut surface, &mut kernel, false).is_none());
   }
 
   #[test]
@@ -5686,7 +5689,7 @@ mod tests {
   }
 
   #[test]
-  fn tray_resume_defers_while_tray_pause_stays_headless() {
+  fn tray_pause_cancels_deferred_resume_without_reopening_the_player() {
     let (mut surface, mut kernel) = held_fixture();
     surface
       .view
@@ -5704,7 +5707,7 @@ mod tests {
     ));
     assert!(play_pending(&surface));
 
-    // Pausing while held runs immediately and leaves the deferral alone.
+    // A newer Pause must retire Resume rather than replay it on a late window open.
     surface
       .view
       .now_playing
@@ -5718,7 +5721,8 @@ mod tests {
       crate::tray::TrayAction::PlayPause,
       false,
     ));
-    assert!(play_pending(&surface));
+    assert!(!play_pending(&surface));
+    assert!(window_opened(&mut surface, &mut kernel, false).is_none());
   }
 
   #[test]

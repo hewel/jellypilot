@@ -10,6 +10,7 @@ mod login;
 mod modal_dismiss;
 pub(crate) mod motion;
 mod personal_lists;
+pub(crate) mod pip;
 pub(crate) mod playback_tools;
 pub(crate) mod player;
 mod player_info;

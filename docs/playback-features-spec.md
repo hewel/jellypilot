@@ -214,6 +214,57 @@ effect. Current published pins are recorded in `tools/embedded-mpv/*source.json`
 Other accepted image/modal blur treatments remain independent of this removal.
 The earlier Paper blur states are superseded for the native player.
 
+## Native picture-in-picture
+
+Embedded Playback can transfer its existing video presentation to one auxiliary native
+window from **More → Picture-in-picture**. It retains the same MPV host, media,
+Playback Session, position and track selections; it does not reload media, change Playback
+Backend or create another App Mode. Only one window controls the video copy target,
+presentation color target and presentation-surface idle binding at a time.
+
+- Full mode keeps the main library usable while the small window plays. Control-Only
+  retains its selected mode. Entering TV mode first returns video to the main player.
+- Return (also Escape in the small window) waits for the main presentation to become
+  ready before retiring the small window. A closed main window is reopened; prior
+  fullscreen state is restored. Playing stays playing and paused stays paused.
+- Close pauses and waits for the controller acknowledgement before closing. Failed
+  pause retains the small window and reports the error. A newer explicit Pause cancels
+  any deferred Resume rather than replaying it when a window later opens.
+- While the selected PiP window remains, closing main does not pause or quit, even
+  without a tray. This is the multi-window exception to the main-only close behavior
+  recorded in ADR 0043. Explicit Quit still ends playback and all windows.
+- Opening failure leaves or restores a live main presentation. If main has disappeared
+  after selection, the small window is retained until pause succeeds. Failed Return
+  keeps the small window rather than leaving unpaused playback without a presentation.
+- Window IDs, transition generations and playback-session/media identity fence stale
+  callbacks and controls. End of playback, account handoff and Quit retire PiP.
+
+The entry is limited to Linux and Windows embedded builds outside TV mode. External MPV
+keeps its independent player window; macOS does not advertise this embedded feature.
+Window-manager placement is best effort: Wayland does not grant the application arbitrary
+positioning or portable always-on-top control. On niri, make the window floating manually
+or match its stable title `JellyPilot — Picture-in-Picture` in a floating window rule.
+This does not provide cross-workspace stickiness. No desktop configuration is changed.
+
+See the [small-window design contract](design-system.md#native-picture-in-picture)
+for controls and the manual acceptance checklist. Automated lifecycle tests and the
+native dual-surface GPU probe cover different boundaries: the probe transfers a real
+decoded picture through the presentation API, not the production PiP coordinator or
+desktop pointer interactions.
+
+Validation passed: workspace `bun run check` and Rust tests, focused iced tests/Clippy
+after the presentation-initialization correction, and isolated native startup smoke.
+The clean native GPU run `2dc58f8d-f0e1-4a71-917e-6ebbf64f57ea` passed both video
+transfers, last-window close/reopen and teardown with exactly one host created and
+dropped; its report is `target/pip-native-regression-final/report.json`. This run used
+`assets/promo/demo.webm` with `--hwdec no`, not hardware-decoder acceptance.
+Independent lifecycle and presentation reviews have no remaining established findings.
+
+Two earlier native runs timed out in paused-frame settling before PiP; a diagnostic run
+and the final run without instrumentation passed. The timeout cause was not established,
+so this evidence does not establish absence of intermittent presentation stalls.
+Desktop appearance/placement and Windows runtime behavior remain human acceptance.
+
 ## Verification and acceptance
 
 Follow [the validation policy](agents/validation.md): focused behavior tests and

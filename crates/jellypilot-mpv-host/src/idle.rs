@@ -63,7 +63,8 @@ pub struct IdleInhibit {
     /// re-attempting a bind that can never succeed until the display changes.
     unsupported: bool,
     display: Option<(RawDisplayHandle, Owner)>,
-    surface: Option<SurfaceSlot>,
+    surfaces: Vec<SurfaceSlot>,
+    selected: Option<u64>,
     /// Last bind failure, for diagnostics and the native regression report.
     last_error: Option<String>,
     next_token: u64,
@@ -89,7 +90,8 @@ impl IdleInhibit {
             desired: false,
             unsupported: false,
             display: None,
-            surface: None,
+            surfaces: Vec::new(),
+            selected: None,
             last_error: None,
             next_token: 0,
         }
@@ -110,36 +112,43 @@ impl IdleInhibit {
         self.sync();
     }
 
-    /// Registers the surface backing a newly created compositor surface and
-    /// returns its token for [`Self::surface_dropped`]. Any existing binding
-    /// targeted the previous surface and is rebound when desired.
-    pub fn surface_changed<W>(&mut self, window: W) -> u64
+    /// Registers a native surface without changing presentation ownership.
+    /// The returned token must be selected explicitly and dropped on teardown.
+    pub fn register_surface<W>(&mut self, window: W) -> u64
     where
         W: HasWindowHandle + Send + Sync + 'static,
     {
         self.next_token += 1;
         let token = self.next_token;
         let handle = window.window_handle().ok().map(|handle| handle.as_raw());
-        self.surface = handle.map(|handle| SurfaceSlot {
-            token,
-            handle,
-            owner: Arc::new(window),
-        });
-        self.active = None;
-        self.sync();
+        if let Some(handle) = handle {
+            self.surfaces.push(SurfaceSlot {
+                token,
+                handle,
+                owner: Arc::new(window),
+            });
+        }
         token
+    }
+
+    /// Binds inhibition to the selected presentation surface, including an
+    /// older still-live surface when returning from picture-in-picture.
+    pub fn select_surface(&mut self, token: Option<u64>) {
+        if self.selected == token {
+            return;
+        }
+        self.active = None;
+        self.selected = token;
+        self.sync();
     }
 
     /// Drops the registration for a destroyed surface. A stale drop (the
     /// compositor creates the replacement surface before dropping the old one)
     /// must not clear the newer registration or its binding.
     pub fn surface_dropped(&mut self, token: u64) {
-        if self
-            .surface
-            .as_ref()
-            .is_some_and(|slot| slot.token == token)
-        {
-            self.surface = None;
+        self.surfaces.retain(|slot| slot.token != token);
+        if self.selected == Some(token) {
+            self.selected = None;
             self.active = None;
         }
     }
@@ -156,7 +165,8 @@ impl IdleInhibit {
     /// re-acquire without the session re-asserting.
     pub fn shutdown(&mut self) {
         self.active = None;
-        self.surface = None;
+        self.surfaces.clear();
+        self.selected = None;
         self.display = None;
         self.unsupported = false;
     }
@@ -184,8 +194,11 @@ impl IdleInhibit {
         if self.active.is_some() {
             return;
         }
-        let (Some((display, display_owner)), Some(surface)) =
-            (self.display.clone(), self.surface.as_ref())
+        let surface = self
+            .surfaces
+            .iter()
+            .find(|slot| Some(slot.token) == self.selected);
+        let (Some((display, display_owner)), Some(surface)) = (self.display.clone(), surface)
         else {
             return;
         };
@@ -196,7 +209,7 @@ impl IdleInhibit {
                 events
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(Event::Acquired);
+                    .push(Event::Acquired(surface.token));
                 Ok(Some(Box::new(RecordedBound {
                     events: Arc::clone(events),
                 }) as Box<dyn Any + Send>))
@@ -482,7 +495,7 @@ mod x11 {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Event {
-    Acquired,
+    Acquired(u64),
     Released,
 }
 
@@ -570,12 +583,13 @@ mod tests {
         let events = events();
         let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
         inhibit.display_changed(&FakeDisplay);
-        inhibit.surface_changed(FakeWindow(1));
+        let token = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(token));
 
         inhibit.set_desired(true);
         assert!(inhibit.inhibited());
         inhibit.set_desired(true);
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(token)]);
 
         inhibit.set_desired(false);
         assert!(!inhibit.inhibited());
@@ -590,9 +604,10 @@ mod tests {
         inhibit.set_desired(true);
         assert!(!inhibit.inhibited());
 
-        inhibit.surface_changed(FakeWindow(1));
+        let token = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(token));
         assert!(inhibit.inhibited());
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(token)]);
     }
 
     #[test]
@@ -600,15 +615,17 @@ mod tests {
         let events = events();
         let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
         inhibit.display_changed(&FakeDisplay);
-        let old = inhibit.surface_changed(FakeWindow(1));
+        let old = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(old));
         inhibit.set_desired(true);
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(old)]);
 
         // The compositor creates the replacement surface before dropping the
         // old one (SurfaceError::Lost path); the stale drop must not release
         // the new binding.
-        let new = inhibit.surface_changed(FakeWindow(2));
-        assert_eq!(taken(&events), [Event::Released, Event::Acquired]);
+        let new = inhibit.register_surface(FakeWindow(2));
+        inhibit.select_surface(Some(new));
+        assert_eq!(taken(&events), [Event::Released, Event::Acquired(new)]);
         inhibit.surface_dropped(old);
         assert!(inhibit.inhibited());
         assert_eq!(taken(&events), []);
@@ -623,18 +640,20 @@ mod tests {
         let events = events();
         let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
         inhibit.display_changed(&FakeDisplay);
-        let token = inhibit.surface_changed(FakeWindow(1));
+        let token = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(token));
         inhibit.set_desired(true);
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(token)]);
 
         inhibit.surface_dropped(token);
         assert!(!inhibit.inhibited());
         assert_eq!(taken(&events), [Event::Released]);
 
         // Desired survived the close: reopening the window rebinds.
-        inhibit.surface_changed(FakeWindow(2));
+        let token = inhibit.register_surface(FakeWindow(2));
+        inhibit.select_surface(Some(token));
         assert!(inhibit.inhibited());
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(token)]);
     }
 
     #[test]
@@ -642,9 +661,10 @@ mod tests {
         let events = events();
         let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
         inhibit.display_changed(&FakeDisplay);
-        inhibit.surface_changed(FakeWindow(1));
+        let token = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(token));
         inhibit.set_desired(true);
-        assert_eq!(taken(&events), [Event::Acquired]);
+        assert_eq!(taken(&events), [Event::Acquired(token)]);
 
         inhibit.shutdown();
         assert!(!inhibit.inhibited());
@@ -655,5 +675,48 @@ mod tests {
         inhibit.set_desired(true);
         assert!(!inhibit.inhibited());
         assert_eq!(taken(&events), []);
+    }
+
+    #[test]
+    fn new_browse_surface_cannot_steal_inhibit_and_return_rebinds_main() {
+        let events = events();
+        let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
+        inhibit.display_changed(&FakeDisplay);
+        let main = inhibit.register_surface(FakeWindow(1));
+        inhibit.select_surface(Some(main));
+        inhibit.set_desired(true);
+        assert_eq!(taken(&events), [Event::Acquired(main)]);
+
+        let pip = inhibit.register_surface(FakeWindow(2));
+        assert_eq!(taken(&events), []);
+        inhibit.select_surface(Some(pip));
+        assert_eq!(taken(&events), [Event::Released, Event::Acquired(pip)]);
+
+        inhibit.select_surface(Some(main));
+        assert_eq!(taken(&events), [Event::Released, Event::Acquired(main)]);
+        inhibit.surface_dropped(pip);
+        assert!(inhibit.inhibited());
+        assert_eq!(taken(&events), []);
+    }
+
+    #[test]
+    fn selected_surface_loss_does_not_fall_back_to_another_live_surface() {
+        let events = events();
+        let mut inhibit = IdleInhibit::recording(Arc::clone(&events));
+        inhibit.display_changed(&FakeDisplay);
+        let main = inhibit.register_surface(FakeWindow(1));
+        let pip = inhibit.register_surface(FakeWindow(2));
+        inhibit.select_surface(Some(pip));
+        inhibit.set_desired(true);
+        taken(&events);
+
+        inhibit.surface_dropped(pip);
+        inhibit.set_desired(true);
+        assert!(!inhibit.inhibited());
+        assert_eq!(taken(&events), [Event::Released]);
+
+        inhibit.select_surface(Some(main));
+        assert!(inhibit.inhibited());
+        assert_eq!(taken(&events), [Event::Acquired(main)]);
     }
 }

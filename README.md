@@ -122,9 +122,25 @@ Manual skip actions remain available while playback stays inside a range, unless
 ### Window Close and Playback
 
 - In both **Full** and **Control-Only**, closing the main window with an initialized tray keeps JellyPilot's runtime and remote Playback Target available. Full restores its page, history, filters, scroll position, and unsaved Settings drafts; dialogs and menus are dismissed.
-- **Embedded Playback** pauses before a requested window close completes and retains its Playback Session. If pause fails, the window stays visible and reports the error. Tray **Show** or a second launch restores the window without resuming playback; explicit remote/tray Play or Resume first restores the player.
+- **Embedded Playback** normally pauses before a requested main-window close completes and retains its Playback Session. If pause fails, the window stays visible and reports the error. Tray **Show** or a second launch restores the window without resuming playback; explicit remote/tray Play or Resume first restores the player. With an active **picture-in-picture** window, closing main instead leaves video playing in that window, including when no tray is available.
 - **External Playback** continues in MPV's independent window when JellyPilot's main window closes.
-- Use **Quit** to end playback, the connection, and the application. If the tray could not initialize, closing the window also performs orderly shutdown.
+- Use **Quit** to end playback, the connection, and all application windows. Without a tray, closing the last JellyPilot window performs orderly shutdown.
+
+### Picture-in-Picture
+
+During Embedded Playback, choose **More → Picture-in-picture**. The independent small
+window shares the current playback session; in Full mode, the main window can continue
+browsing. **Return to player** preserves play/pause state; **Close and pause** waits for
+pause confirmation before closing. Drag the video background to move the window and
+drag an edge or corner to resize it.
+
+This entry is available in Linux and Windows embedded builds, not External MPV or macOS.
+Wayland placement and topmost behavior belong to the compositor. On niri, use its floating
+window controls or a window rule matching the stable title
+`JellyPilot — Picture-in-Picture`; JellyPilot does not change your desktop configuration.
+Cross-workspace sticky placement is not provided on niri. See the
+[picture-in-picture contract](docs/playback-features-spec.md#native-picture-in-picture)
+for failure handling and acceptance limits.
 
 ### Installation
 

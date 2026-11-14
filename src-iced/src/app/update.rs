@@ -222,6 +222,9 @@ fn select_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
   {
     return Task::none();
   }
+  if mode == UiMode::Tv && super::pip::window_id(state).is_some() {
+    return super::pip::return_for_tv(state, true);
+  }
   if let Err(error) = state.kernel.settings.set_ui_mode(mode) {
     state.kernel.diagnostics.record(
       DiagnosticLevel::Error,
@@ -258,6 +261,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   let collections_task = super::collections::reconcile(state);
   super::undo::reconcile(state);
   let list_playback_task = super::list_playback::sync(state);
+  let pip_task = super::pip::reconcile(state);
   let fullscreen_task = shell::reconcile_player_fullscreen(state);
   super::playback::tools::reconcile(state);
   super::embedded_player::reconcile(state);
@@ -282,6 +286,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     .record(state.playback.artwork.take_summary());
   Task::batch([
     task,
+    pip_task,
     collections_task,
     list_playback_task,
     fullscreen_task,
@@ -301,6 +306,8 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
   };
   match message {
     Message::Tv(message) => super::tv::update(state, message),
+    Message::Pip(message) => super::pip::update(state, message),
+    Message::NativeProbe(_) => Task::none(),
     Message::UiModeSelected(mode) => select_ui_mode(state, mode),
     Message::TvLaunch => {
       if state.shell.quit_requested
@@ -308,6 +315,9 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
         || accounts::blocking_modal(&state.accounts)
       {
         return Task::done(Message::Window(WindowMessage::ShowRequested(None)));
+      }
+      if super::pip::window_id(state).is_some() {
+        return super::pip::return_for_tv(state, false);
       }
       Task::batch([
         shell::apply_ui_mode(state, UiMode::Tv),
@@ -361,10 +371,21 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       Task::none()
     }
     Message::Window(message) => {
+      if let Some(task) = super::pip::window_event(state, message) {
+        return task;
+      }
+      if let WindowMessage::Resized(id, _) = message {
+        if state.shell.window_id != Some(id) && state.shell.pending_window_id != Some(id) {
+          return Task::none();
+        }
+      }
       // A deferred play's show loses authority when a later close cancels it.
       let message = if matches!(message, WindowMessage::ShowForPlayback) {
         if !playback::play_pending(&state.playback) || state.shell.quit_requested {
           return Task::none();
+        }
+        if state.shell.pip.keeps_alive() {
+          return super::pip::admit_playback(state);
         }
         WindowMessage::ShowRequested(None)
       } else {
@@ -375,12 +396,13 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       let pending_before = state.shell.pending_window_id;
       let close_before = state.shell.pending_close;
       let visible_before = state.shell.images_visible;
+      let pause_before_close = crate::embedded::enabled() && !state.shell.pip.keeps_alive();
       let window_task = shell::update(
         &mut state.shell,
         &mut state.kernel,
         skeletons_active,
         state.playback.view.now_playing.is_some(),
-        crate::embedded::enabled(),
+        pause_before_close,
         message,
       );
       let mut tasks = vec![window_task];
@@ -459,7 +481,10 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
           }
           _ => false,
         };
-      if !close_without_tray && (close_started.is_some() || (removed && close_before.is_none())) {
+      if !state.shell.pip.keeps_alive()
+        && !close_without_tray
+        && (close_started.is_some() || (removed && close_before.is_none()))
+      {
         // Enqueue the pause now; only its acknowledgement runs asynchronously.
         let pause = playback::window_closed(
           &mut state.playback,
@@ -498,14 +523,18 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
         WindowMessage::ShowRequested(Some(id)) => is_open && pending_before == Some(id),
         _ => false,
       };
-      if is_open && !state.shell.quit_requested && (admitted_show || pause_failure.is_some()) {
+      if is_open
+        && !state.shell.quit_requested
+        && !super::pip::transitioning(state)
+        && (admitted_show || pause_failure.is_some())
+      {
         if let Some(play) = playback::window_opened(
           &mut state.playback,
           &mut state.kernel,
           state.shell.quit_requested,
         ) {
           // Navigation mutates state before the admitted playback task runs.
-          if crate::embedded::enabled() || state.tv_mode() {
+          if !state.shell.pip.keeps_alive() && (crate::embedded::enabled() || state.tv_mode()) {
             tasks.push(shell::navigate(state, Destination::NowPlaying));
           }
           tasks.push(play);
@@ -531,7 +560,7 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
           &mut state.kernel,
         ));
       }
-      if let WindowMessage::Resized(size) = message {
+      if let WindowMessage::Resized(_, size) = message {
         if let Some(full) = state.full.as_mut() {
           tasks.push(browse::sync_scroll_window(
             &mut full.browse,
@@ -842,7 +871,8 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       } else {
         playback_update.task
       };
-      let task = if (crate::embedded::enabled() || state.tv_mode())
+      let task = if !state.shell.pip.keeps_alive()
+        && (crate::embedded::enabled() || state.tv_mode())
         && !had_playback
         && state.playback.view.now_playing.is_some()
         && state.app_mode() == AppMode::Full
@@ -870,7 +900,7 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       }
     }
     Message::Remote(message) => {
-      let player_visible = super::embedded_player::active(state);
+      let player_visible = super::embedded_player::active(state) || super::pip::active(state);
       playback::update_remote(
         &mut state.playback,
         &mut state.kernel,
@@ -906,7 +936,7 @@ pub(super) fn route_message(state: &mut State, message: Message) -> Task<Message
       if state.kernel.sdk.content_mutations_blocked() {
         return Task::none();
       }
-      let player_visible = super::embedded_player::active(state);
+      let player_visible = super::embedded_player::active(state) || super::pip::active(state);
       playback::update_tray(
         &mut state.playback,
         &mut state.kernel,
@@ -3931,7 +3961,7 @@ pub(crate) mod tests {
     let fullscreen_bounds = iced::Size::new(1920.0, 1080.0);
     drop(update(
       &mut state,
-      Message::Window(WindowMessage::Resized(fullscreen_bounds)),
+      Message::Window(WindowMessage::Resized(window, fullscreen_bounds)),
     ));
     let ui = UserInterface::build(
       crate::app::view(&state, window),

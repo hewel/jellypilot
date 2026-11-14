@@ -84,6 +84,25 @@ struct Run {
   phase_history: Vec<serde_json::Value>,
   presentations: u64,
   copied_frames: u64,
+  pip: PipProbe,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum NativeMessage {
+  WindowOpened(iced::window::Id),
+  TargetResolved(
+    iced::window::Id,
+    Option<crate::embedded::PresentationWindow>,
+  ),
+}
+
+#[derive(Default)]
+struct PipProbe {
+  main: Option<iced::window::Id>,
+  window: Option<iced::window::Id>,
+  main_target: Option<crate::embedded::PresentationWindow>,
+  target: Option<crate::embedded::PresentationWindow>,
+  displaying: Option<iced::window::Id>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -94,6 +113,12 @@ enum Action {
   Closing,
   Reopened,
   Exit,
+  PipOpen,
+  PipSwitch,
+  PipPlaying,
+  PipReturn,
+  PipClosing,
+  PipReturned,
 }
 
 fn with_run<T>(f: impl FnOnce(&mut Run) -> T) -> Option<T> {
@@ -296,6 +321,7 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
     requested_host_abi,
     actual_host_abi: None,
     action: Action::None,
+    pip: PipProbe::default(),
     hosts: 0,
     dropped_hosts: 0,
     renderers: 0,
@@ -391,8 +417,12 @@ pub(crate) fn host_extra_args() -> Vec<String> {
   })
   .unwrap_or_default()
 }
-pub(crate) fn gpu_size() -> Option<iced::Size> {
-  with_run(|run| (run.scenario == "gpu").then_some(run.video_size)).flatten()
+pub(crate) fn gpu_size_for(id: iced::window::Id) -> Option<iced::Size> {
+  with_run(|run| {
+    (run.scenario == "gpu" && run.pip.displaying.is_none_or(|owner| owner == id))
+      .then_some(run.video_size)
+  })
+  .flatten()
 }
 pub(crate) fn tray() -> bool {
   with_run(|run| run.scenario == "tray").unwrap_or(false)
@@ -480,6 +510,44 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
   if !active() {
     return None;
   }
+  if let Message::NativeProbe(message) = message {
+    return Some(
+      with_run(|run| {
+        match *message {
+          NativeMessage::WindowOpened(id) if run.pip.window == Some(id) => {
+            return crate::embedded::presentation_window(id)
+              .map(move |target| Message::NativeProbe(NativeMessage::TargetResolved(id, target)));
+          }
+          NativeMessage::TargetResolved(id, target) if run.action == Action::PipSwitch => {
+            if run.pip.main != Some(id) && run.pip.window != Some(id) {
+              return Task::none();
+            }
+            let Some(target) = target else {
+              run.record_failure("PiP native target was not usable".into(), Instant::now());
+              return Task::none();
+            };
+            if run.pip.main == Some(id) {
+              run.pip.main_target = Some(target);
+            } else {
+              run.pip.target = Some(target);
+            }
+            if let (Some(_), Some(target)) = (run.pip.main_target, run.pip.target) {
+              if crate::embedded::set_presentation_window(Some(target)) {
+                run.pip.displaying = run.pip.window;
+                run.video_size = iced::Size::new(320.0, 180.0);
+                run.action = Action::PipPlaying;
+              } else {
+                run.record_failure("PiP target selection failed".into(), Instant::now());
+              }
+            }
+          }
+          _ => {}
+        }
+        Task::none()
+      })
+      .unwrap_or_else(Task::none),
+    );
+  }
   if let Message::Window(WindowMessage::ShowRequested(None)) = message {
     let reopen = with_run(|run| {
       if run.action != Action::Closing {
@@ -524,6 +592,57 @@ pub(crate) fn update(state: &mut crate::app::State, message: &Message) -> Option
   Some(
     with_run(|run| match run.action {
       Action::Exit => iced::exit(),
+      Action::PipOpen => {
+        let Some(main) = state.shell.window_id else {
+          run.record_failure("PiP probe lost the main window".into(), Instant::now());
+          return Task::none();
+        };
+        let (id, open) = iced::window::open(iced::window::Settings {
+          size: iced::Size::new(320.0, 180.0),
+          min_size: Some(iced::Size::new(320.0, 180.0)),
+          max_size: Some(iced::Size::new(320.0, 180.0)),
+          resizable: false,
+          exit_on_close_request: false,
+          ..Default::default()
+        });
+        run.pip = PipProbe {
+          main: Some(main),
+          window: Some(id),
+          displaying: Some(main),
+          ..Default::default()
+        };
+        run.action = Action::PipSwitch;
+        Task::batch([
+          open.map(|id| Message::NativeProbe(NativeMessage::WindowOpened(id))),
+          crate::embedded::presentation_window(main)
+            .map(move |target| Message::NativeProbe(NativeMessage::TargetResolved(main, target))),
+        ])
+      }
+      Action::PipReturn => {
+        if run
+          .pip
+          .main_target
+          .is_some_and(|target| crate::embedded::set_presentation_window(Some(target)))
+        {
+          run.pip.displaying = run.pip.main;
+          run.video_size = iced::Size::new(448.0, 288.0);
+          run.action = Action::PipReturned;
+        } else {
+          run.record_failure(
+            "PiP could not return to the live main surface".into(),
+            Instant::now(),
+          );
+        }
+        Task::none()
+      }
+      Action::PipClosing => {
+        run.action = Action::None;
+        run
+          .pip
+          .window
+          .take()
+          .map_or_else(Task::none, iced::window::close)
+      }
       Action::Resize => {
         run.action = Action::None;
         // Exercise the real shader/layout-to-copy-target resize boundary,
@@ -1082,7 +1201,57 @@ mod gpu_probe {
           check("resumed mpv clock, frame copies and shader pixels advanced while renderer image upload callback completed");
           self.sample_decoder("resumed")?;
           self.generation = generation;
-          with_run(|run| run.action = Action::Close);
+          self.clock = self.clock()?;
+          with_run(|run| run.action = Action::PipOpen);
+          self.advance(10);
+        }
+        10 if self.copied && self.clock()? > self.clock + 0.2 => {
+          let ready = with_run(|run| {
+            run.action == Action::PipPlaying
+              && run.hosts == 1
+              && run.surfaces == 2
+              && run.pip.target.is_some_and(|target| {
+                crate::embedded::presentation_status(target)
+                  == crate::embedded::PresentationStatus::Ready
+              })
+          })
+          .unwrap_or(false);
+          if !ready || !nonuniform(&renderer.screenshot(viewport, background)) {
+            return Ok(());
+          }
+          check("PiP presented advancing video on a second surface while retaining the main window and one MPV host");
+          self.sample_decoder("picture-in-picture")?;
+          self.clock = self.clock()?;
+          with_run(|run| run.action = Action::PipReturn);
+          self.advance(11);
+        }
+        11 if self.copied && self.clock()? > self.clock + 0.2 => {
+          let ready = with_run(|run| {
+            run.action == Action::PipReturned
+              && run.hosts == 1
+              && run.surfaces == 2
+              && run.pip.main_target.is_some_and(|target| {
+                crate::embedded::presentation_status(target)
+                  == crate::embedded::PresentationStatus::Ready
+              })
+          })
+          .unwrap_or(false);
+          if !ready || !nonuniform(&renderer.screenshot(viewport, background)) {
+            return Ok(());
+          }
+          check(
+            "PiP returned advancing video to the original main surface without reloading the host",
+          );
+          with_run(|run| run.action = Action::PipClosing);
+          self.advance(12);
+        }
+        12 if self.copied && with_run(|run| run.surfaces == 1).unwrap_or(false) => {
+          self.generation = generation;
+          crate::embedded::set_presentation_window(None);
+          with_run(|run| {
+            run.pip = PipProbe::default();
+            run.action = Action::Close;
+          });
           self.advance(5);
         }
         5 if self.copied
@@ -1090,7 +1259,7 @@ mod gpu_probe {
           && with_run(|run| run.closed && run.action == Action::Reopened).unwrap_or(false) =>
         {
           if !with_run(|run| {
-            run.hosts == 1 && run.renderers == run.cycle as usize + 1 && run.surfaces == 1
+            run.hosts == 1 && run.renderers == 2 * run.cycle as usize + 1 && run.surfaces == 1
           })
           .unwrap_or(false)
           {
@@ -1638,6 +1807,7 @@ mod tests {
       requested_host_abi: "3",
       actual_host_abi: None,
       action: Action::None,
+      pip: PipProbe::default(),
       hosts: 1,
       dropped_hosts: 0,
       renderers: 1,

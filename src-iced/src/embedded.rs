@@ -4,6 +4,44 @@
 pub(crate) mod compositor;
 pub(crate) mod idle;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+mod presentation;
+// Keep the lifecycle interface available to external-only platforms as well.
+pub use presentation::PresentationWindow;
+pub(crate) use presentation::{
+  presentation_status, presentation_window, set_presentation_window, PresentationStatus,
+};
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+mod presentation {
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  pub struct PresentationWindow;
+
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  #[expect(
+    dead_code,
+    reason = "Unsupported platforms never create native presentation surfaces"
+  )]
+  pub(crate) enum PresentationStatus {
+    Preparing,
+    Ready,
+    Failed,
+    Unavailable,
+  }
+
+  pub(crate) fn presentation_window(
+    _id: iced::window::Id,
+  ) -> iced::Task<Option<PresentationWindow>> {
+    iced::Task::done(None)
+  }
+
+  pub(crate) fn set_presentation_window(_window: Option<PresentationWindow>) -> bool {
+    false
+  }
+
+  pub(crate) fn presentation_status(_window: PresentationWindow) -> PresentationStatus {
+    PresentationStatus::Unavailable
+  }
+}
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) mod retained;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod video;

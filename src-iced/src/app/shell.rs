@@ -196,6 +196,7 @@ pub struct Surface {
   /// Embedded video presentation; the Library Browser remains mounted underneath.
   pub player_fullscreen: bool,
   pub embedded_player: super::embedded_player::Surface,
+  pub pip: super::pip::Surface,
   /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
   /// each `FrameTick` while skeletons are on screen.
   pub skeleton_phase: f32,
@@ -235,6 +236,7 @@ impl Surface {
       full_window_size: None,
       player_fullscreen: false,
       embedded_player: super::embedded_player::Surface::default(),
+      pip: super::pip::Surface::default(),
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       quit_requested: false,
@@ -340,6 +342,16 @@ pub(crate) fn open_timeout(id: iced::window::Id) -> Task<Message> {
     |id| Message::Window(WindowMessage::OpenTimedOut(id)),
   )
 }
+
+pub(super) fn cancel_pending_open(surface: &mut Surface, id: iced::window::Id) -> Task<Message> {
+  if surface.pending_window_id != Some(id) {
+    return Task::none();
+  }
+  surface.pending_window_id = None;
+  surface.suppressed_window_id = Some(id);
+  iced::window::close(id)
+}
+
 /// Window geometry decision for one app mode. Pure so the fixed/restore
 /// policy is testable without executing window tasks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -375,8 +387,8 @@ pub(crate) fn destination_allowed(mode: AppMode, destination: &Destination) -> b
 }
 
 /// Applies the window geometry decision to the live window.
-fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
-  iced::window::latest().and_then(move |id| {
+fn window_geometry_task(id: Option<iced::window::Id>, geometry: ModeGeometry) -> Task<Message> {
+  id.map_or_else(Task::none, |id| {
     Task::batch([
       iced::window::set_resizable(id, geometry.resizable),
       iced::window::set_min_size(id, geometry.min_size),
@@ -470,7 +482,7 @@ pub(crate) fn apply_ui_mode(state: &mut State, mode: UiMode) -> Task<Message> {
       if let Some(id) = state.shell.window_id {
         tasks.push(
           iced::window::set_mode(id, iced::window::Mode::Windowed)
-            .chain(window_geometry_task(geometry)),
+            .chain(window_geometry_task(Some(id), geometry)),
         );
       }
     }
@@ -510,7 +522,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       state.shell.full_window_size = Some(state.shell.window_size);
       state.shell.clear_history();
       state.shell.destination = Destination::NowPlaying;
-      window_geometry_task(mode_geometry(mode, None))
+      window_geometry_task(state.shell.window_id, mode_geometry(mode, None))
     }
     AppMode::Full => {
       let restore_size = if state.shell.window_id.is_some() {
@@ -532,7 +544,11 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       } else {
         Task::none()
       };
-      Task::batch([window_geometry_task(geometry), activation, membership])
+      Task::batch([
+        window_geometry_task(state.shell.window_id, geometry),
+        activation,
+        membership,
+      ])
     }
   };
   fullscreen_exit.chain(task)
@@ -553,7 +569,7 @@ pub(crate) fn exit_player_fullscreen(state: &mut State) -> Task<Message> {
 }
 
 pub(crate) fn toggle_player_fullscreen(state: &mut State) -> Task<Message> {
-  if state.tv_mode() {
+  if state.tv_mode() || super::pip::active(state) {
     return Task::none();
   }
   if state.shell.player_fullscreen {
@@ -628,7 +644,7 @@ pub fn update(
   message: WindowMessage,
 ) -> Task<Message> {
   match message {
-    WindowMessage::CloseRequested(id) if kernel.tray.is_some() => {
+    WindowMessage::CloseRequested(id) if kernel.tray.is_some() || surface.pip.keeps_alive() => {
       // ADR 0043: the window is actually closed in both modes; the runtime,
       // tray, and remote target stay resident. Only the transient surfaces
       // reset — browsing context, history, and settings drafts are retained
@@ -687,6 +703,7 @@ pub fn update(
       // live window remains.
       if removed
         && kernel.tray.is_none()
+        && !surface.pip.keeps_alive()
         && surface.window_id.is_none()
         && surface.pending_window_id.is_none()
       {
@@ -804,8 +821,10 @@ pub fn update(
         Task::none()
       }
     }
-    WindowMessage::Resized(size) => {
-      if !surface.player_fullscreen {
+    WindowMessage::Resized(id, size) => {
+      if (surface.window_id == Some(id) || surface.pending_window_id == Some(id))
+        && !surface.player_fullscreen
+      {
         surface.window_size = size;
       }
       Task::none()
@@ -935,17 +954,32 @@ fn capture_page(state: &mut State) -> Option<PageState> {
   }
 }
 
+pub(super) fn focus_step(root: &'static str, previous: bool) -> Task<Message> {
+  use iced::advanced::widget::{operate, operation};
+  if previous {
+    operate(operation::scope(
+      root.into(),
+      operation::focusable::focus_previous(),
+    ))
+  } else {
+    operate(operation::scope(
+      root.into(),
+      operation::focusable::focus_next(),
+    ))
+  }
+}
+
 pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Message> {
   use iced::widget::operation;
   match message {
     ShellMessage::ExitPlayerFullscreen => exit_player_fullscreen(state),
     ShellMessage::FocusNext => {
       super::embedded_player::reveal_for_focus(state);
-      operation::focus_next()
+      focus_step("main-root", false)
     }
     ShellMessage::FocusPrevious => {
       super::embedded_player::reveal_for_focus(state);
-      operation::focus_previous()
+      focus_step("main-root", true)
     }
     ShellMessage::FocusSearch | ShellMessage::ToggleCompactSearch => {
       if state.full.is_none() || state.shell.settings_open {
@@ -1756,6 +1790,8 @@ mod tests {
   fn window_resize_updates_the_tracked_window_size() {
     let (mut surface, mut kernel) = test_fixture();
     let size = iced::Size::new(1024.0, 768.0);
+    let id = iced::window::Id::unique();
+    surface.window_id = Some(id);
 
     drop(update(
       &mut surface,
@@ -1763,7 +1799,7 @@ mod tests {
       false,
       false,
       false,
-      WindowMessage::Resized(size),
+      WindowMessage::Resized(id, size),
     ));
 
     assert_eq!(surface.window_size, size);

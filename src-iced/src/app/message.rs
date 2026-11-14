@@ -28,6 +28,8 @@ impl std::fmt::Debug for Message {
     match self {
       Self::Window(message) => formatter.debug_tuple("Window").field(message).finish(),
       Self::Shell(_) => formatter.write_str("Shell"),
+      Self::Pip(_) => formatter.write_str("Pip"),
+      Self::NativeProbe(message) => formatter.debug_tuple("NativeProbe").field(message).finish(),
       Self::Tv(_) => formatter.write_str("Tv"),
       Self::UiModeSelected(mode) => formatter.debug_tuple("UiModeSelected").field(mode).finish(),
       Self::TvLaunch => formatter.write_str("TvLaunch"),
@@ -81,6 +83,8 @@ pub enum Message {
   TvLaunch,
   Window(WindowMessage),
   Shell(ShellMessage),
+  Pip(super::pip::Message),
+  NativeProbe(crate::regression::NativeMessage),
   PersonalLists(super::personal_lists::PersonalListsMessage),
   SavedBrowse(super::saved_browse::Message),
   Collections(super::collections::CollectionMessage),
@@ -142,7 +146,7 @@ pub enum WindowMessage {
     generation: u64,
     result: Result<(), PlaybackError>,
   },
-  Resized(iced::Size),
+  Resized(window::Id, iced::Size),
   /// One rendered frame; carries the compositor timestamp so animation
   /// phases derive from frame cadence instead of wall-clock polling.
   FrameTick(std::time::Instant),
