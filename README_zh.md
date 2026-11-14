@@ -159,6 +159,81 @@ chmod +x jellypilot-*-x86_64.AppImage
 > [!NOTE]
 > macOS 默认采用**外部 MPV 播放**。请确保已安装 MPV（例如通过 `brew install mpv`）并加入环境变量，或在**设置 → 播放**中设置其路径。
 
+#### 应用无法启动时的本地诊断
+
+新构建的软件包附带独立控制台程序 `jellypilot-diagnostics`。默认检查模式不启动
+iced、托盘、GPU 或 MPV，因此桌面程序初始化失败时仍可检查本地前提条件。
+
+```bash
+jellypilot-diagnostics
+jellypilot-diagnostics --output jellypilot-diagnostics.txt
+```
+
+- **Windows**：在安装目录打开 PowerShell，运行
+  `.\jellypilot-diagnostics.exe --output jellypilot-diagnostics.txt`。
+- **macOS**：运行
+  `/Applications/JellyPilot.app/Contents/MacOS/jellypilot-diagnostics`。
+- **AppImage**：先运行 `./jellypilot-*.AppImage --appimage-extract`，再运行
+  `./squashfs-root/usr/bin/jellypilot-diagnostics`。不要将诊断程序单独移出解包目录，
+  否则相对路径下的内嵌运行库检查不能反映原安装状态。
+- **源码构建**：`bun run task iced build --release` 会在 `target/release` 生成两个程序。
+
+默认检查报告涵盖配置是否可读及可解析、所选播放后端、本地会话标志以及播放器和运行库文件
+是否存在；不迁移配置、不读取密钥环、不访问服务器，也不执行配置中的播放器。
+报告不包含原始配置、账号或服务器信息、环境变量值和原始日志。
+`--output` 只创建新文件，已有报告不会被覆盖。
+需要检查指定配置或私人备份时，可加 `--config PATH`，替代系统默认位置。
+指定文件不存在时会报告问题，不会偷偷读取默认配置。
+
+要获取**真正的启动报错**，请先通过**退出**结束已有 JellyPilot（只关闭窗口可能仍有
+托盘进程），然后用诊断工具复现：
+
+```bash
+jellypilot-diagnostics --capture-startup --output startup-report.txt
+# 按指定启动方式复现，并延长观察时间：
+jellypilot-diagnostics --capture-startup --timeout-secs 60 --output startup-external.txt -- --external
+```
+
+Windows 在 PowerShell 中使用 `.\jellypilot-diagnostics.exe`。默认启动诊断程序旁边的
+`jellypilot`；独立下载的诊断工具不在安装目录时，用 `--app /path/to/jellypilot` 指定
+实际程序。`--` 后的参数直接传给程序，不经过 shell。采集模式不能与 `--config`
+组合：复现使用应用的正常配置，不会悄悄改用另一份配置。
+
+**采集会真实启动应用**，可能打开窗口、迁移或保存配置、访问密钥环并自动登录。
+继承当前环境和工作目录，仅在未设置时补充 `JELLYPILOT_LOG=debug`、
+`RUST_BACKTRACE=1`。默认观察 **30 秒**，可通过 `--timeout-secs` 设置为 1–300 秒。
+到期只结束本次创建的应用主进程，不结束已有实例，也不按进程名批量杀进程；
+不管理应用另行派生的子进程。若实际转交给了已有实例，会标记为无法确认，而不是
+声称完成了启动复现。
+
+报告包含 stdout/stderr、启动阶段、耗时、退出码或信号，以及超时和日志丢失标记。
+超时仅表示观察时间结束，不能据此判断卡死或启动成功；panic/backtrace 在应用输出
+时会被采集，来不及输出日志的原生崩溃可能只有退出状态。原始输出只在有界内存中
+处理，不写入原始日志文件；会处理已知敏感字段、URL 和私人路径，但无法识别第三方
+输出中的所有秘密，**分享前仍须检查报告**。输出文件已存在时，在启动应用前就会拒绝。
+
+退出码：**0** 表示未发现阻塞性的本地问题，或被采集进程正常退出（不证明界面可用）；
+**1** 表示问题、失败或无法确认的采集、超时或采集不完整；**2** 表示参数或输出失败。
+两种模式都不能追回先前已退出进程的日志。诊断工具自身仍需要兼容的操作系统和系统
+运行库；应用能运行时，详细播放日志仍通过**设置 → 诊断**采集。
+
+#### 手动触发测试版构建
+
+维护者打开 [Actions → Native Release](https://github.com/hewel/jellypilot/actions/workflows/release.yml)，
+点击 **Run workflow**，选择分支后运行，无需打 tag。对应平台任务完成后，
+已登录 GitHub 的用户可在该次运行的 **Artifacts** 区域下载测试产物。
+这不是定时 nightly，也不会创建或更新 GitHub Release。
+
+手动构建包含 Windows NSIS、macOS DMG、Linux DEB/AppImage，以及独立诊断工具；
+Arch 包仍仅随 tag 发布构建。Linux 任务需要项目的 `jellypilot-lan` runner 在线。
+反馈问题时请附上产物中的构建标识和校验信息，以便定位到确切提交和工作流运行。
+测试产物保留 **14 天**。下载后先解开 artifact ZIP，再解开其中的 `.tar.gz`
+（保留 Unix 执行权限）。每份测试包包含记录提交、运行链接和平台的
+`build-info.json`，以及 `SHA256SUMS` 校验文件。
+
+测试包保留源码中的包版本、应用标识和配置目录，可能替换已安装的稳定版，
+**不是隔离的并行安装通道**。测试前请备份 JellyPilot 配置。
+
 #### 源码构建
 
 <details>

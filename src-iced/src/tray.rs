@@ -88,10 +88,12 @@ impl Tray {
           // parsing and makes libmpv reject startup. UI language is owned by
           // Localizer; keep Rust's initial C locale instead of mutating it here.
           gtk::disable_setlocale();
+          jellypilot_core::startup_capture::emit_startup_stage("gtk-init-enter");
           if let Err(error) = gtk::init() {
             let _ = init_tx.send(Err(error.to_string()));
             return;
           }
+          jellypilot_core::startup_capture::emit_startup_stage("gtk-init-exit");
         }
 
         let play_pause = MenuItem::with_id(PLAY_PAUSE_ID, locale.text("common-play"), false, None);

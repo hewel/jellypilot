@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+
+# The LAN jobs share a workspace and persistent build caches across runs.
+concurrency:
+  group: native-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,6 +22,8 @@ jobs:
       version: ${{ steps.versions.outputs.version }}
       tag: ${{ steps.versions.outputs.tag }}
       release_notes: ${{ steps.versions.outputs.release_notes }}
+      test_suffix: ${{ steps.versions.outputs.test_suffix }}
+      build_info: ${{ steps.versions.outputs.build_info }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate versions and release notes
@@ -23,6 +31,7 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 - <<'PY'
           import json
@@ -52,24 +61,44 @@ jobs:
           if len(set(versions.values())) != 1:
               raise SystemExit(f'Release versions disagree: {json.dumps(versions, sort_keys=True)}')
           version = packager['version']
+          if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) is None:
+              raise SystemExit(f'Package version must be stable MAJOR.MINOR.PATCH, got {version!r}')
           tag = f'v{version}'
-          notes_path = Path('.github/release-notes') / f'{tag}.md'
-          if not notes_path.is_file():
-              raise SystemExit(f'Missing checked-in release notes: {notes_path}')
-          expected_heading = f'## {tag}'
-          actual_heading = notes_path.read_text().splitlines()[0]
-          if actual_heading != expected_heading:
-              raise SystemExit(f'{notes_path} must start with {expected_heading!r}, got {actual_heading!r}')
-          if os.environ['REF_TYPE'] == 'tag':
-              ref_name = os.environ['REF_NAME']
-              if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', ref_name) is None:
-                  raise SystemExit(f'Release tag must be stable vMAJOR.MINOR.PATCH, got {ref_name!r}')
-              if ref_name != tag:
-                  raise SystemExit(f'Release tag {ref_name!r} does not match metadata tag {tag!r}')
+          notes_path = ''
+          if os.environ['EVENT_NAME'] == 'push':
+              notes_path = Path('.github/release-notes') / f'{tag}.md'
+              if not notes_path.is_file():
+                  raise SystemExit(f'Missing checked-in release notes: {notes_path}')
+              expected_heading = f'## {tag}'
+              actual_heading = notes_path.read_text().splitlines()[0]
+              if actual_heading != expected_heading:
+                  raise SystemExit(f'{notes_path} must start with {expected_heading!r}, got {actual_heading!r}')
+              if os.environ['REF_TYPE'] == 'tag':
+                  ref_name = os.environ['REF_NAME']
+                  if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', ref_name) is None:
+                      raise SystemExit(f'Release tag must be stable vMAJOR.MINOR.PATCH, got {ref_name!r}')
+                  if ref_name != tag:
+                      raise SystemExit(f'Release tag {ref_name!r} does not match metadata tag {tag!r}')
+          sha = os.environ['GITHUB_SHA']
+          run_id = os.environ['GITHUB_RUN_ID']
+          attempt = os.environ['GITHUB_RUN_ATTEMPT']
+          test_suffix = f'-test-{sha[:12]}-{run_id}-{attempt}'
+          build_info = {
+              'build_kind': 'test' if os.environ['EVENT_NAME'] == 'workflow_dispatch' else 'release',
+              'version': version,
+              'commit': sha,
+              'ref': os.environ['GITHUB_REF'],
+              'run_id': run_id,
+              'run_attempt': attempt,
+              'run_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}",
+              'workflow': os.environ['GITHUB_WORKFLOW'],
+          }
           with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
               output.write(f'version={version}\n')
               output.write(f'tag={tag}\n')
               output.write(f'release_notes={notes_path}\n')
+              output.write(f'test_suffix={test_suffix}\n')
+              output.write(f'build_info={json.dumps(build_info, separators=(",", ":"))}\n')
           PY
 
   package:
@@ -151,11 +180,95 @@ jobs:
           ./packaging/windows/verify-package.ps1 -Root $destination -ExpectedExecutable target/release/jellypilot.exe |
             Tee-Object -FilePath target/windows-package-verification.json
       - name: Upload ${{ matrix.format }} package
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: jellypilot-${{ matrix.platform }}-${{ matrix.format }}
           path: target/release/bundle/${{ matrix.asset }}
           if-no-files-found: error
+      - name: Archive standalone diagnostics with required runtime
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          release = Path('target/release')
+          name = f"jellypilot-{os.environ['PLATFORM']}-diagnostics"
+          if os.environ['RUNNER_OS'] == 'Windows':
+              # The installer verification checked this helper against target/release.
+              # Keep adjacent launcher runtime DLLs, not the embedded MPV DLL tree.
+              installed = Path(os.environ['RUNNER_TEMP']) / 'jellypilot-install-check'
+              helper = installed / 'jellypilot-diagnostics.exe'
+              with zipfile.ZipFile(release / f'{name}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+                  for path in [helper, *sorted(installed.glob('*.dll'))]:
+                      archive.write(path, path.name)
+          else:
+              with tarfile.open(release / f'{name}.tar.gz', 'w:gz') as archive:
+                  archive.add(release / 'jellypilot-diagnostics', arcname='jellypilot-diagnostics')
+          PY
+      - name: Upload release diagnostics
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-${{ matrix.platform }}-diagnostics
+          path: target/release/jellypilot-${{ matrix.platform }}-diagnostics.*
+          if-no-files-found: error
+      - name: Assemble identifiable test package
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          BUILD_INFO: ${{ needs.metadata.outputs.build_info }}
+          PLATFORM: ${{ matrix.platform }}
+          PACKAGE_GLOB: ${{ matrix.asset }}
+          TEST_SUFFIX: ${{ needs.metadata.outputs.test_suffix }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import tarfile
+
+          destination = Path('target/test-package')
+          shutil.rmtree(destination, ignore_errors=True)
+          destination.mkdir(parents=True, exist_ok=True)
+          packages = sorted(Path('target/release/bundle').glob(os.environ['PACKAGE_GLOB']))
+          if not packages:
+              raise SystemExit('No test installer found')
+          files = packages + sorted(Path('target/release').glob(f"jellypilot-{os.environ['PLATFORM']}-diagnostics.*"))
+          if len(files) == len(packages):
+              raise SystemExit('No standalone diagnostics archive found')
+          for path in files:
+              shutil.copy2(path, destination / path.name)
+          info = json.loads(os.environ['BUILD_INFO'])
+          info.update(platform=os.environ['PLATFORM'], runner_arch=os.environ['RUNNER_ARCH'])
+          (destination / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
+          with (destination / 'SHA256SUMS').open('w') as checksums:
+              for path in sorted(destination.iterdir()):
+                  if path.name != 'SHA256SUMS':
+                      with path.open('rb') as content:
+                          digest = hashlib.file_digest(content, 'sha256').hexdigest()
+                      checksums.write(f'{digest}  {path.name}\n')
+          # Tar preserves Unix executable modes, unlike artifact ZIP downloads.
+          archive_name = f"jellypilot-{os.environ['PLATFORM']}{os.environ['TEST_SUFFIX']}.tar.gz"
+          with tarfile.open(Path('target') / archive_name, 'w:gz') as archive:
+              for path in sorted(destination.iterdir()):
+                  archive.add(path, arcname=path.name)
+          PY
+      - name: Upload test package and diagnostics
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-${{ matrix.platform }}-${{ matrix.format }}${{ needs.metadata.outputs.test_suffix }}
+          path: target/jellypilot-${{ matrix.platform }}${{ needs.metadata.outputs.test_suffix }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   linux:
     name: Package linux-x86_64 (deb, appimage)
@@ -164,6 +277,9 @@ jobs:
     # instead of Fedora 44. The pinned private runtime supplies libplacebo
     # 7.387.0 because Ubuntu does not publish that version.
     runs-on: jellypilot-lan
+    concurrency:
+      group: jellypilot-lan-packaging
+      cancel-in-progress: false
     steps:
       - name: Restore leftover workspace ownership
         run: |
@@ -238,17 +354,79 @@ jobs:
               cargo packager --config Packager.toml --formats appimage
             '
       - name: Upload deb package
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: jellypilot-linux-x86_64-deb
           path: target/release/bundle/*.deb
           if-no-files-found: error
       - name: Upload AppImage package
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: jellypilot-linux-x86_64-appimage
           path: target/release/bundle/*.AppImage
           if-no-files-found: error
+      - name: Archive standalone Linux diagnostics
+        run: |
+          tar -czf target/release/jellypilot-linux-x86_64-diagnostics.tar.gz \
+            -C target/release jellypilot-diagnostics
+      - name: Upload release diagnostics
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-linux-x86_64-diagnostics
+          path: target/release/jellypilot-linux-x86_64-diagnostics.tar.gz
+          if-no-files-found: error
+      - name: Assemble identifiable Linux test packages
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUILD_INFO: ${{ needs.metadata.outputs.build_info }}
+          TEST_SUFFIX: ${{ needs.metadata.outputs.test_suffix }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import tarfile
+
+          destination = Path('target/test-package')
+          shutil.rmtree(destination, ignore_errors=True)
+          destination.mkdir(parents=True, exist_ok=True)
+          bundle = Path('target/release/bundle')
+          files = [Path('target/release/jellypilot-linux-x86_64-diagnostics.tar.gz')]
+          for pattern in ('*.deb', '*.AppImage'):
+              packages = sorted(bundle.glob(pattern))
+              if not packages:
+                  raise SystemExit(f'No test installer found: {pattern}')
+              files.extend(packages)
+          for path in files:
+              shutil.copy2(path, destination / path.name)
+          info = json.loads(os.environ['BUILD_INFO'])
+          info.update(platform='linux-x86_64', runner_arch=os.environ['RUNNER_ARCH'], build_image='ubuntu:26.04')
+          (destination / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
+          with (destination / 'SHA256SUMS').open('w') as checksums:
+              for path in sorted(destination.iterdir()):
+                  if path.name != 'SHA256SUMS':
+                      with path.open('rb') as content:
+                          digest = hashlib.file_digest(content, 'sha256').hexdigest()
+                      checksums.write(f'{digest}  {path.name}\n')
+          # Preserve AppImage and diagnostics executable modes in downloads.
+          archive_name = f"jellypilot-linux-x86_64{os.environ['TEST_SUFFIX']}.tar.gz"
+          with tarfile.open(Path('target') / archive_name, 'w:gz') as archive:
+              for path in sorted(destination.iterdir()):
+                  archive.add(path, arcname=path.name)
+          PY
+      - name: Upload Linux test packages and diagnostics
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-linux-x86_64-deb-appimage${{ needs.metadata.outputs.test_suffix }}
+          path: target/jellypilot-linux-x86_64${{ needs.metadata.outputs.test_suffix }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
       - name: Restore workspace ownership
         if: always()
         run: podman unshare chown -R 0:0 "${GITHUB_WORKSPACE}"
@@ -260,6 +438,9 @@ jobs:
     # Fedora LAN runner (10.0.0.28). Builds with rootless podman because
     # the host is not Arch and has no Docker CLI for job containers.
     runs-on: jellypilot-lan
+    concurrency:
+      group: jellypilot-lan-packaging
+      cancel-in-progress: false
     steps:
       - name: Restore leftover workspace ownership
         run: |
@@ -326,6 +507,7 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+          pattern: jellypilot-*
       - name: Generate checksums
         working-directory: release-assets
         run: sha256sum * > SHA256SUMS

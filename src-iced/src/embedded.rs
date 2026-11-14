@@ -68,6 +68,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{LazyLock, OnceLock};
 
 use jellypilot_core::config::{HdrOutput, PlaybackBackend, SettingsStore};
+use jellypilot_core::startup_capture::emit_startup_stage;
 
 static OPTIONS: OnceLock<Options> = OnceLock::new();
 
@@ -272,8 +273,7 @@ fn resolve_asset(
     }
     return path.canonicalize().map_err(|_| {
       format!(
-        "Embedded MPV asset missing: {}. Run the pinned MPV build task or set {variable}; system libmpv is not used.",
-        path.display()
+        "Embedded MPV asset missing: {path:?}. Run the pinned MPV build task or set {variable}; system libmpv is not used."
       )
     });
   }
@@ -284,9 +284,9 @@ fn resolve_asset(
     }
   }
   Err(format!(
-    "Embedded MPV asset missing: {} (also tried {}). Linux packages install the pinned fork under the executable prefix; development builds stage target/embedded-mpv. Set {variable} only for a trusted pinned ABI. System libmpv is not used.",
-    candidates[0].display(),
-    candidates[1].display()
+    "Embedded MPV asset missing: {:?} (also tried {:?}). Linux packages install the pinned fork under the executable prefix; development builds stage target/embedded-mpv. Set {variable} only for a trusted pinned ABI. System libmpv is not used.",
+    candidates[0],
+    candidates[1]
   ))
 }
 
@@ -315,7 +315,12 @@ pub(crate) fn initialize(
   let settings = if explicit_external || (smoke && !explicit_embedded) {
     None
   } else {
-    SettingsStore::load().ok()
+    emit_startup_stage("backend-settings-enter");
+    let settings = SettingsStore::load()
+      .inspect_err(|_| emit_startup_stage("backend-settings-failed"))
+      .ok();
+    emit_startup_stage("backend-settings-exit");
+    settings
   };
   let selected = if explicit_external || (smoke && !explicit_embedded) {
     PlaybackBackend::External
@@ -328,12 +333,15 @@ pub(crate) fn initialize(
       .unwrap_or_default()
   };
   if selected == PlaybackBackend::External {
+    emit_startup_stage("backend-external");
     return Ok(());
   }
+  emit_startup_stage("backend-embedded");
   #[cfg(not(any(target_os = "linux", target_os = "windows")))]
   return Err("Embedded MPV is available only on Linux and Windows Vulkan. Start with --external to keep using external MPV.".into());
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   {
+    emit_startup_stage("embedded-assets-enter");
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let root = executable
       .parent()
@@ -344,6 +352,7 @@ pub(crate) fn initialize(
       root,
       "share/jellypilot/mpv-baseline.conf",
     )?;
+    emit_startup_stage("embedded-assets-exit");
     let host_abi = match std::env::var_os("JELLYPILOT_MPV_HOST_ABI").as_deref() {
       None => jellypilot_mpv_host::HostAbi::Legacy,
       Some(value) if value == "legacy" => jellypilot_mpv_host::HostAbi::Legacy,

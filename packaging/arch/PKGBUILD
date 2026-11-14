@@ -65,6 +65,7 @@ package() {
   cd "$srcdir/$pkgname"
 
   install -Dm755 "target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
+  install -Dm755 "target/release/jellypilot-diagnostics" "$pkgdir/usr/bin/jellypilot-diagnostics"
   install -d "$pkgdir/usr/lib/jellypilot"
   install -m755 "target/embedded-mpv/lib/jellypilot/"*.so* "$pkgdir/usr/lib/jellypilot/"
   install -Dm644 "target/embedded-mpv/share/jellypilot/mpv-baseline.conf" \

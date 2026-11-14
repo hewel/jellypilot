@@ -15,6 +15,7 @@ use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnost
 use jellypilot_core::home_hero::{self, HeroCandidate, HeroSource};
 use jellypilot_core::intro_skipper::IntroSkipMode;
 use jellypilot_core::request_gate::RequestGate;
+use jellypilot_core::startup_capture::emit_startup_stage;
 use jellypilot_core::LoadState;
 use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkLimits};
 use jellypilot_media_server::{
@@ -648,13 +649,18 @@ pub struct State {
 
 impl State {
   pub fn boot(smoke: bool) -> Self {
+    emit_startup_stage("app-settings-enter");
     let (settings, settings_error) = match SettingsStore::load() {
       Ok(settings) => (settings, None),
-      Err(error) => (
-        SettingsStore::default(),
-        Some(format!("Could not load saved settings: {error}")),
-      ),
+      Err(error) => {
+        emit_startup_stage("app-settings-failed");
+        (
+          SettingsStore::default(),
+          Some(format!("Could not load saved settings: {error}")),
+        )
+      }
     };
+    emit_startup_stage("app-settings-exit");
     let mut login = LoginState::from_settings(settings.snapshot());
     login.error = settings_error
       .as_ref()

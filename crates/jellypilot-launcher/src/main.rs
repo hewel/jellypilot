@@ -58,7 +58,34 @@ fn configure_surface(
     unsafe { context.configure_surface(surface, configuration) }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> std::process::ExitCode {
+    jellypilot_core::startup_capture::emit_startup_stage("main-enter");
+    match run() {
+        Ok(()) => {
+            jellypilot_core::startup_capture::emit_startup_stage("main-returned");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(error) => {
+            use std::io::Write as _;
+
+            jellypilot_core::startup_capture::emit_startup_stage("main-error");
+            // Preserve the inherited stderr pipe even for the Windows GUI subsystem:
+            // attaching a console here could replace the capture parent's handles.
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "Error: {error}");
+            // iced wrappers can omit their payload from both Display and source().
+            let _ = writeln!(stderr, "Error details: {error:#?}");
+            let mut source = error.source();
+            while let Some(cause) = source {
+                let _ = writeln!(stderr, "  Caused by: {cause}");
+                source = cause.source();
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(target_os = "windows")]
     jellypilot_iced::set_tray_message_pump(pump_thread_messages);
     #[cfg(any(target_os = "linux", target_os = "windows"))]

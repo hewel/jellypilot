@@ -4,6 +4,7 @@ use iced::advanced::graphics::{self, compositor, Shell, Viewport};
 use iced::advanced::renderer;
 use iced::{Color, Renderer};
 use iced_wgpu::{wgpu, Engine, QueueGuard};
+use jellypilot_core::startup_capture::emit_startup_stage;
 use jellypilot_mpv_host::{DeviceContext, Host, HostOptions, TargetColor};
 
 use super::presentation::{self, PresentationStatus};
@@ -176,7 +177,9 @@ impl graphics::Compositor for Compositor {
     compatible_window: impl compositor::Window + Clone,
     shell: Shell,
   ) -> Result<Self, iced::advanced::graphics::core::backend::Error> {
+    emit_startup_stage("compositor-init-enter");
     let options = super::options().ok_or_else(|| unavailable("not selected"))?;
+    emit_startup_stage("gpu-instance-enter");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
       backends: wgpu::Backends::VULKAN,
       ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(display.clone()))
@@ -184,11 +187,14 @@ impl graphics::Compositor for Compositor {
     let surface = instance
       .create_surface(wgpu::SurfaceTarget::Window(Box::new(compatible_window)))
       .map_err(unavailable)?;
+    emit_startup_stage("gpu-instance-exit");
+    emit_startup_stage("gpu-device-enter");
     let context = Arc::new(
       DeviceContext::new(&instance, &surface)
         .await
         .map_err(unavailable)?,
     );
+    emit_startup_stage("gpu-device-exit");
     let surface_format = context.surface_format();
     tracing::info!(?surface_format, "Embedded MPV presentation format selected");
     if surface_format != wgpu::TextureFormat::Rgb10a2Unorm {
@@ -198,6 +204,7 @@ impl graphics::Compositor for Compositor {
         "Embedded MPV uses 8-bit SDR presentation; internal video textures remain 10-bit"
       );
     }
+    emit_startup_stage("embedded-engine-enter");
     let engine = (options.engine_factory.create_engine)(
       &context,
       settings
@@ -205,7 +212,9 @@ impl graphics::Compositor for Compositor {
         .then_some(graphics::Antialiasing::MSAAx4),
       shell.clone(),
     );
+    emit_startup_stage("embedded-engine-exit");
     let wake = shell.clone();
+    emit_startup_stage("embedded-host-enter");
     let host = Host::new(
       context.clone(),
       HostOptions {
@@ -221,6 +230,7 @@ impl graphics::Compositor for Compositor {
       move || wake.request_redraw(),
     )
     .map_err(unavailable)?;
+    emit_startup_stage("embedded-host-exit");
     if crate::regression::active() {
       crate::regression::host_created(context.adapter().get_info().name, host.abi_version());
     }
@@ -242,6 +252,7 @@ impl graphics::Compositor for Compositor {
     // The display owner is transferred once here; surfaces register per window
     // so a rebound inhibitor always targets a live presentation surface.
     crate::embedded::idle::display_changed(display);
+    emit_startup_stage("compositor-init-exit");
     Ok(Self {
       host,
       context,

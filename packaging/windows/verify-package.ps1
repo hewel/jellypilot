@@ -13,6 +13,11 @@ $manifest = Get-Content (Join-Path $share 'mpv-manifest.json') -Raw | ConvertFro
 if ((Get-FileHash (Join-Path $Root 'jellypilot.exe')).Hash -ne (Get-FileHash $ExpectedExecutable).Hash) {
   throw 'Packaged launcher differs from the release executable'
 }
+$diagnostics = Join-Path $Root 'jellypilot-diagnostics.exe'
+$expectedDiagnostics = Join-Path (Split-Path $ExpectedExecutable) 'jellypilot-diagnostics.exe'
+if ((Get-FileHash $diagnostics).Hash -ne (Get-FileHash $expectedDiagnostics).Hash) {
+  throw 'Packaged diagnostics differs from the release executable'
+}
 foreach ($file in $runtime.bundled) {
   if ((Get-FileHash (Join-Path $libraryDirectory $file.name)).Hash -ne $file.sha256) {
     throw "Packaged DLL hash mismatch: $($file.name)"
@@ -40,6 +45,27 @@ if (@(Get-ChildItem (Join-Path $share 'licenses\msys2') -Recurse -File).Count -e
 $env:JELLYPILOT_LIBMPV = $null
 $env:JELLYPILOT_MPV_BASELINE = $null
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+$diagnosticsHelp = & $diagnostics --help
+if ($LASTEXITCODE -ne 0 -or !($diagnosticsHelp -match 'jellypilot-diagnostics')) {
+  throw 'Packaged diagnostics could not run without developer PATH'
+}
+# A real GUI-subsystem process must deliver its startup error through inherited
+# pipes. These flags reject before settings, tray, GPU or window initialization.
+$captureReport = Join-Path $env:RUNNER_TEMP ("startup-capture-" + [guid]::NewGuid() + ".txt")
+try {
+  $capture = Start-Process -FilePath $diagnostics -Wait -PassThru -NoNewWindow -ArgumentList @(
+    '--capture-startup', '--timeout-secs', '10', '--output', "`"$captureReport`"",
+    '--', '--smoke-test', '--embedded', '--external'
+  )
+  $captureText = Get-Content $captureReport -Raw
+  if ($capture.ExitCode -ne 1 -or
+      !$captureText.Contains('Choose either --embedded or --external') -or
+      !$captureText.Contains('backend-init-enter')) {
+    throw 'Packaged diagnostics did not capture the real GUI-subsystem startup error'
+  }
+} finally {
+  if (Test-Path $captureReport) { Remove-Item $captureReport }
+}
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -104,6 +130,8 @@ public static class PackagedMpvProbe {
   bundledDlls = @($runtime.bundled).Count
   hashesVerified = $true
   dllInitialized = $true
+  diagnosticsRuns = $true
+  diagnosticsCapturesStartupErrors = $true
   baseline = 'd3d11va-copy'
   gpuPlayback = 'not tested by this headless gate'
 } | ConvertTo-Json

@@ -2933,6 +2933,8 @@ dependencies = [
  "jellypilot-media-server",
  "serde",
  "serde_json",
+ "tokio",
+ "which",
 ]
 
 [[package]]
@@ -2977,9 +2979,11 @@ version = "2.2.3"
 dependencies = [
  "embed-resource",
  "iced_wgpu",
+ "jellypilot-core",
  "jellypilot-iced",
  "jellypilot-mpv-host",
  "mimalloc",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 

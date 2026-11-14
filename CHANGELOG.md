@@ -4,6 +4,11 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Added the standalone `jellypilot-diagnostics` command for read-only local startup checks without initializing the desktop, GPU, tray, or player; reports exclude credentials and refuse to overwrite existing output files.
+- Added opt-in startup reproduction capture with real application stdout/stderr, startup phases, exit codes/signals and bounded timeouts; sanitized reports preserve actionable failures without writing raw logs to disk.
+- Added manually triggered Windows, macOS, and Linux test builds in GitHub Actions, with traceable artifacts and checksums, without publishing a release or requiring a tag.
+
 ## [2.2.3] - 2026-10-22
 
 ### Added

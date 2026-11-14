@@ -475,6 +475,15 @@ impl Settings {
         self.playback_backend
     }
 
+    /// Predicts ordinary startup selection without migrating or saving settings.
+    pub(crate) fn startup_playback_backend(&self) -> PlaybackBackend {
+        if cfg!(target_os = "linux") && self.settings_revision < CURRENT_SETTINGS_REVISION {
+            PlaybackBackend::Embedded
+        } else {
+            self.playback_backend
+        }
+    }
+
     pub const fn hdr_output(&self) -> HdrOutput {
         self.hdr_output
     }
@@ -1399,10 +1408,7 @@ fn migrate_settings(mut settings: Settings) -> (Settings, bool) {
     if settings.settings_revision >= CURRENT_SETTINGS_REVISION {
         return (settings, false);
     }
-    #[cfg(target_os = "linux")]
-    if settings.playback_backend == PlaybackBackend::External {
-        settings.playback_backend = PlaybackBackend::Embedded;
-    }
+    settings.playback_backend = settings.startup_playback_backend();
     settings.settings_revision = CURRENT_SETTINGS_REVISION;
     (settings, true)
 }

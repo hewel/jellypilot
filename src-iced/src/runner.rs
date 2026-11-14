@@ -1,3 +1,5 @@
+use jellypilot_core::startup_capture::emit_startup_stage;
+
 #[derive(Clone, Copy)]
 pub(crate) struct RunOptions {
   pub smoke: bool,
@@ -34,11 +36,16 @@ impl std::io::Write for LogTeeWriter {
 pub(super) fn run(
   factory: crate::EmbeddedEngineFactory,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  emit_startup_stage("tracing-init-enter");
   let filter = std::env::var("JELLYPILOT_LOG").unwrap_or_else(|_| "warn".to_owned());
   tracing_subscriber::fmt()
     .with_env_filter(filter)
+    .with_ansi(
+      std::env::var_os("JELLYPILOT_STARTUP_CAPTURE").as_deref() != Some(std::ffi::OsStr::new("1")),
+    )
     .with_writer(LogTee)
     .init();
+  emit_startup_stage("tracing-init-exit");
   let arguments: Vec<_> = std::env::args().collect();
   crate::regression::initialize(&arguments)?;
   let result = crate::run_application(

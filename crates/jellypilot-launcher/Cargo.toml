@@ -6,29 +6,39 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 publish = false
+default-run = "jellypilot"
 # Desktop workspace member; the root workspace excludes this crate.
 workspace = "../../src-iced"
 
 [[bin]]
 name = "jellypilot"
 path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "jellypilot-diagnostics"
+path = "src/diagnostics.rs"
 
 [features]
-dev = ["jellypilot-iced/dev"]
-debug = ["jellypilot-iced/debug"]
+default = ["desktop"]
+desktop = ["dep:jellypilot-iced", "dep:mimalloc", "dep:jellypilot-mpv-host", "dep:iced_wgpu", "dep:windows-sys"]
+dev = ["desktop", "jellypilot-iced/dev"]
+debug = ["desktop", "jellypilot-iced/debug"]
 
 [dependencies]
-jellypilot-iced = { path = "../../src-iced" }
-mimalloc = { version = "0.1.48", default-features = false }
+jellypilot-core = { path = "../jellypilot-core" }
+jellypilot-iced = { path = "../../src-iced", optional = true }
+mimalloc = { version = "0.1.48", default-features = false, optional = true }
+tokio = { version = "1.50.0", default-features = false, features = ["rt", "time", "process", "io-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
-iced_wgpu = { workspace = true }
+jellypilot-mpv-host = { path = "../jellypilot-mpv-host", optional = true }
+iced_wgpu = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-jellypilot-mpv-host = { path = "../jellypilot-mpv-host" }
-iced_wgpu = { workspace = true }
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+jellypilot-mpv-host = { path = "../jellypilot-mpv-host", optional = true }
+iced_wgpu = { workspace = true, optional = true }
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
 
 [build-dependencies]
 embed-resource = "3"

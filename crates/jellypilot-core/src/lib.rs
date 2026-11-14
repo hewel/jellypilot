@@ -44,6 +44,10 @@ pub mod seek_preview;
 #[cfg(feature = "portable")]
 pub mod settings;
 pub mod skeleton;
+#[cfg(feature = "native")]
+pub mod startup_capture;
+#[cfg(feature = "native")]
+pub mod startup_diagnostics;
 pub mod tv_navigation;
 pub mod tv_player;
 pub mod undo_notices;

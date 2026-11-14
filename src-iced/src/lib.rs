@@ -12,6 +12,7 @@ mod tray;
 use std::cell::RefCell;
 
 use iced::{window, Size};
+use jellypilot_core::startup_capture::emit_startup_stage;
 
 /// Default logical window size at startup.
 const DEFAULT_WINDOW_SIZE: Size = app::shell::FULL_DEFAULT_WINDOW_SIZE;
@@ -97,23 +98,40 @@ fn run_application(
   let runner::RunOptions { smoke, tv } = options;
   tracing::debug!(smoke, "daemon booting");
   let instance = if smoke {
+    emit_startup_stage("instance-skipped");
     None
   } else {
+    emit_startup_stage("instance-enter");
     let activation = if tv {
       instance::Activation::ShowTv
     } else {
       instance::Activation::Show
     };
     match instance::acquire(activation) {
-      instance::Startup::Existing => return Ok(()),
-      instance::Startup::Primary(guard) => Some(guard),
-      instance::Startup::Unavailable => None,
+      instance::Startup::Existing => {
+        emit_startup_stage("existing-instance");
+        return Ok(());
+      }
+      instance::Startup::Primary(guard) => {
+        emit_startup_stage("instance-primary");
+        Some(guard)
+      }
+      instance::Startup::Unavailable => {
+        emit_startup_stage("instance-unavailable");
+        None
+      }
     }
   };
+  emit_startup_stage("backend-init-enter");
   embedded::initialize(smoke, factory)?;
+  emit_startup_stage("backend-init-exit");
+  emit_startup_stage("fonts-init-enter");
   jellypilot_ui::fonts::initialize()?;
+  emit_startup_stage("fonts-init-exit");
   // Keep the final decoder owner outside iced: its Drop joins the native worker.
+  emit_startup_stage("preview-init-enter");
   let preview_owner = preview::Runtime::start();
+  emit_startup_stage("preview-init-exit");
   let preview = preview_owner.clone();
   let instance = RefCell::new(instance);
   let mut daemon = iced::daemon(
@@ -146,12 +164,13 @@ fn run_application(
     daemon = daemon.font(font);
   }
 
+  emit_startup_stage("event-loop-enter");
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   if embedded::enabled() {
     use embedded::retained::RetainedCompositor;
     use iced::advanced::graphics::Compositor;
     let retained = std::rc::Rc::new(RefCell::new(None::<RetainedCompositor>));
-    return daemon
+    let result = daemon
       .run_with_compositor(move |settings, display, window, shell| {
         let retained = retained.clone();
         async move {
@@ -164,9 +183,13 @@ fn run_application(
         }
       })
       .map_err(Into::into);
+    emit_startup_stage("event-loop-returned");
+    return result;
   }
 
-  daemon.run().map_err(Into::into)
+  let result = daemon.run().map_err(Into::into);
+  emit_startup_stage("event-loop-returned");
+  result
 }
 
 pub(crate) fn window_icon() -> Option<window::Icon> {

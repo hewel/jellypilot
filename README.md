@@ -195,6 +195,94 @@ Download `jellypilot-*.dmg` from [GitHub Releases](https://github.com/hewel/jell
 > [!NOTE]
 > macOS uses **External MPV Playback** by default. Install [MPV](https://mpv.io/) (e.g. `brew install mpv`) and ensure it is available on `PATH`, or specify its executable path in **Settings → Playback**.
 
+#### Local diagnostics when the app will not start
+
+New packages include a separate console executable, `jellypilot-diagnostics`. Its default
+mode does not start iced, the tray, a GPU device, or MPV, so it can inspect local prerequisites
+even when the desktop executable cannot initialize.
+
+```bash
+jellypilot-diagnostics
+jellypilot-diagnostics --output jellypilot-diagnostics.txt
+```
+
+On Windows, run `.\jellypilot-diagnostics.exe --output jellypilot-diagnostics.txt` from
+the installation directory in PowerShell. On macOS, use
+`/Applications/JellyPilot.app/Contents/MacOS/jellypilot-diagnostics`.
+For an AppImage, extract it with `./jellypilot-*.AppImage --appimage-extract`, then run
+`./squashfs-root/usr/bin/jellypilot-diagnostics`. Run it from the extracted package,
+not after moving it elsewhere, so relative runtime-resource checks remain meaningful.
+Source builds place both executables in `target/release` after
+`bun run task iced build --release`.
+
+The default report checks configuration readability/parsing, the selected playback backend,
+local session indicators, and player/runtime file availability. It does not migrate
+settings, read credentials from the keyring, contact servers, or execute a configured
+player. Reports omit raw configuration, account/server details, environment values,
+and raw logs. `--output` creates a new file and refuses to overwrite existing evidence.
+Use `--config PATH` to inspect an explicit configuration file or private backup instead of
+the platform default; a missing explicit file is reported as an issue, not silently replaced.
+
+For the **actual startup error**, quit existing JellyPilot instances using **Quit** (closing
+the window may leave the tray process running), then reproduce through the helper:
+
+```bash
+jellypilot-diagnostics --capture-startup --output startup-report.txt
+# Reproduce a particular launch mode, with a longer observation window:
+jellypilot-diagnostics --capture-startup --timeout-secs 60 --output startup-external.txt -- --external
+```
+
+On Windows use `.\jellypilot-diagnostics.exe` in PowerShell. The helper starts the
+`jellypilot` executable beside itself; use `--app /path/to/jellypilot` when running a
+standalone helper from elsewhere. Arguments after `--` are forwarded literally, without
+a shell. `--config` cannot be combined with capture: reproduction uses the application's
+normal configuration, not a silently substituted copy.
+
+Capture **really launches the application**: it may open windows, migrate/save settings,
+access the keyring, and auto-login. It inherits the current environment and working
+directory. `JELLYPILOT_LOG=debug` and `RUST_BACKTRACE=1` are supplied only when not already
+set. The default deadline is **30 seconds**, configurable from 1 to 300 seconds.
+At the deadline the helper stops only its own spawned application process, not an existing
+instance or all processes with the same name. It does not manage independently spawned
+descendants. An existing-instance handoff is reported as inconclusive, not successful startup.
+
+The capture report includes stdout/stderr, startup phases, elapsed time, exit code or signal,
+and explicit timeout/output-loss information. A timeout means the observation window ended;
+it does not establish a hang or successful startup. Panic/backtrace text is captured when the
+application emits it; a native crash before logging may provide only an exit status.
+Raw output is processed in bounded memory, never saved as a raw log. Capture redacts known
+sensitive fields, URLs and private paths, but arbitrary third-party messages may contain
+unrecognized secrets: **review the report before sharing**. Existing output files are refused
+before an application is launched.
+
+Exit status: **0** means no blocking local finding, or the captured process exited zero
+(not a desktop-readiness guarantee); **1** means findings, a failed/inconclusive capture,
+timeout, or incomplete capture; **2** means a command or output error.
+Neither mode recovers logs from an earlier exited process. The helper still requires a
+compatible OS and its own system runtime. For detailed playback logs from a running app,
+use **Settings → Diagnostics** instead.
+
+#### Manually triggered test builds
+
+Maintainers can open [Actions → Native Release](https://github.com/hewel/jellypilot/actions/workflows/release.yml),
+choose **Run workflow**, select a branch, and start a test build without creating a tag.
+After the platform jobs finish, signed-in GitHub users can download their artifacts from
+that run's **Artifacts** section. These builds are manual, not scheduled nightly releases.
+They do not publish or update GitHub Releases.
+
+Manual builds produce Windows NSIS, macOS DMG, and Linux DEB/AppImage packages, plus
+standalone diagnostic downloads. Arch packages remain part of tagged releases only.
+Linux builds require the project's `jellypilot-lan` runner to be online.
+Keep the included build identity and checksums with bug reports so a test package can
+be traced to its exact commit and workflow run.
+Test artifacts are retained for **14 days**. Extract the downloaded artifact ZIP and then
+its `.tar.gz`; the latter preserves executable permissions. Each test bundle includes
+`build-info.json` (commit, run URL, platform) and `SHA256SUMS`.
+
+Test packages retain the source package version, application identifier, and configuration
+location: they can replace an installed stable build and are **not** an isolated side-by-side
+channel. Back up your JellyPilot configuration before testing.
+
 #### Build from Source
 
 <details>

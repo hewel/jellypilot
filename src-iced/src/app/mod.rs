@@ -32,6 +32,7 @@ mod view;
 use iced::widget::Widget as _;
 use iced::{Subscription, Task, Theme};
 use jellypilot_core::config::{AppMode, UiMode};
+use jellypilot_core::startup_capture::emit_startup_stage;
 
 pub use message::Message;
 pub use state::State;
@@ -41,6 +42,7 @@ pub fn boot(
   tv: bool,
   instance: Option<crate::instance::Guard>,
 ) -> (State, Task<Message>) {
+  emit_startup_stage("app-boot-enter");
   let mut state = State::boot(smoke);
   if tv {
     state.shell.ui_mode = UiMode::Tv;
@@ -48,6 +50,11 @@ pub fn boot(
     state.shell.destination = state::Destination::Home;
   }
   state.instance = instance;
+  if !smoke || crate::regression::active() {
+    emit_startup_stage("tray-init-enter");
+  } else {
+    emit_startup_stage("tray-skipped");
+  }
   state.kernel.tray = if crate::regression::active() {
     match crate::tray::Tray::new(state.kernel.locale) {
       Ok(tray) => {
@@ -55,6 +62,7 @@ pub fn boot(
         Some(tray)
       }
       Err(error) => {
+        emit_startup_stage("tray-unavailable");
         crate::regression::unavailable(format!("Real tray initialization failed: {error}"));
         return (state, iced::exit());
       }
@@ -65,7 +73,11 @@ pub fn boot(
       .flatten()
   };
   if let Some(tray) = &state.kernel.tray {
+    emit_startup_stage("tray-ready");
     tray.sync(&state.playback.view, false, state.kernel.locale);
+  }
+  if state.kernel.tray.is_none() && (!smoke || crate::regression::active()) {
+    emit_startup_stage("tray-unavailable");
   }
 
   let start_hidden = !state.tv_mode()
@@ -75,6 +87,7 @@ pub fn boot(
       smoke,
     );
   if start_hidden {
+    emit_startup_stage("window-start-hidden");
     state.shell.images_visible = false;
     playback::suspend_artwork(&mut state.playback);
   }
@@ -100,11 +113,16 @@ pub fn boot(
       };
     }
     state.shell.window_size = geometry.size;
+    emit_startup_stage("window-open-requested");
     let (id, open) = iced::window::open(window_settings(geometry));
     state.shell.pending_window_id = Some(id);
-    tasks.push(open.map(|id| Message::Window(message::WindowMessage::ShowRequested(Some(id)))));
+    tasks.push(open.map(|id| {
+      emit_startup_stage("window-opened");
+      Message::Window(message::WindowMessage::ShowRequested(Some(id)))
+    }));
     tasks.push(shell::open_timeout(id));
   }
+  emit_startup_stage("app-boot-exit");
   (state, Task::batch(tasks))
 }
 

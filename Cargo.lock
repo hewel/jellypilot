@@ -1426,6 +1426,8 @@ dependencies = [
  "jellypilot-media-server",
  "serde",
  "serde_json",
+ "tokio",
+ "which",
 ]
 
 [[package]]
