@@ -271,6 +271,8 @@ pub enum SettingsMessage {
   SectionSelected(super::state::SettingsSection),
   LanguageMenuToggled,
   LanguageMenuDismissed,
+  RendererMenuToggled,
+  RendererMenuDismissed,
   UiLanguageSelected(LanguagePreference),
   PlaybackBackendSelected(jellypilot_core::config::PlaybackBackend),
   HdrOutputSelected(jellypilot_core::config::HdrOutput),

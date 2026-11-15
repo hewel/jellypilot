@@ -8,9 +8,11 @@ All notable changes to JellyPilot are documented in this file.
 - Added the standalone `jellypilot-diagnostics` command for read-only local startup checks without initializing the desktop, GPU, tray, or player; reports exclude credentials and refuse to overwrite existing output files.
 - Added opt-in startup reproduction capture with real application stdout/stderr, startup phases, exit codes/signals and bounded timeouts; sanitized reports preserve actionable failures without writing raw logs to disk.
 - Added manually triggered Windows, macOS, and Linux test builds in GitHub Actions, with traceable artifacts and checksums, without publishing a release or requiring a tag.
+- Added restart-required interface renderer selection in desktop and TV settings, with observed runtime status, command-line recovery overrides, and explicit Embedded MPV compatibility checks.
 
 ### Changed
 - Migrated both Rust workspaces to Rust 1.100 and pinned local, CI, and release toolchains to 1.100.0; replaced deprecated atomic update calls without weakening warning checks.
+- Automatic interface rendering now selects DirectX 12 on Windows; startup captures retain renderer selection metadata outside the bounded log tail and suppress verbose shader debug output by default.
 
 ### Fixed
 - Fixed Linux runtime license collection for Debian packages whose documentation directories are symlinks, including `libstdc++6`; standard copyright paths are checked while missing notices still fail packaging.

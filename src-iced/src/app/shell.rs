@@ -1269,6 +1269,7 @@ pub(crate) fn open_settings(state: &mut State) {
   state.settings.view.diagnostic_level_menu_open = false;
   state.settings.view.diagnostic_category_menu_open = false;
   state.settings.view.language_menu_open = false;
+  state.settings.view.renderer_menu_open = false;
   state.shell.open_settings();
 }
 
@@ -1280,6 +1281,7 @@ pub(crate) fn close_settings(state: &mut State) {
   state.settings.view.diagnostic_level_menu_open = false;
   state.settings.view.diagnostic_category_menu_open = false;
   state.settings.view.language_menu_open = false;
+  state.settings.view.renderer_menu_open = false;
 }
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
   let destination = state.shell.destination.clone();

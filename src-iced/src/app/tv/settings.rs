@@ -7,6 +7,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Fill, Task};
 use jellypilot_core::config::{IntroMode, LocalPreference, PlaybackBackend, ThemeMode, UiMode};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
+use jellypilot_core::rendering::RenderBackend;
 use jellypilot_core::request_gate::SessionToken;
 use jellypilot_core::tv_navigation::Input;
 use jellypilot_ui::fonts::HEADING_FONT;
@@ -93,6 +94,7 @@ pub enum Setting {
   Language,
   Theme,
   Backend,
+  Renderer,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,6 +114,7 @@ pub enum Change {
   Language(LanguagePreference),
   Theme(ThemeMode),
   Backend(PlaybackBackend),
+  Renderer(RenderBackend),
   Subtitles(Vec<String>),
 }
 
@@ -146,6 +149,9 @@ impl Change {
       Self::Backend(backend) => {
         SettingsMessage::LocalPreferenceSelected(LocalPreference::PlaybackBackend(*backend))
       }
+      Self::Renderer(backend) => {
+        SettingsMessage::LocalPreferenceSelected(LocalPreference::RenderBackend(*backend))
+      }
       Self::Subtitles(languages) => SettingsMessage::LocalPreferenceSelected(
         LocalPreference::SubtitleLanguages(languages.clone()),
       ),
@@ -168,8 +174,18 @@ impl Change {
       Self::Language(value) => saved.ui_language() == *value,
       Self::Theme(value) => saved.theme_mode() == *value,
       Self::Backend(value) => saved.playback_backend() == *value,
+      Self::Renderer(value) => saved.render_backend() == *value,
       Self::Subtitles(value) => saved.subtitle_languages() == value,
     }
+  }
+
+  fn unavailable_reason(&self, state: &State) -> Option<&'static str> {
+    let preference = match self {
+      Self::Renderer(backend) => LocalPreference::RenderBackend(*backend),
+      Self::Backend(backend) => LocalPreference::PlaybackBackend(*backend),
+      _ => return None,
+    };
+    crate::app::settings::renderer_preference_error(state.kernel.settings.snapshot(), &preference)
   }
 }
 
@@ -333,14 +349,22 @@ pub fn update(state: &mut State, event: Message) -> Task<AppMessage> {
       }
     }
     Message::Choice(index) if matches!(state.tv.settings.save, Save::Idle) => {
-      let change = state.tv.settings.selector.as_mut().and_then(|selector| {
-        if index >= selector.choices.len() {
-          return None;
-        }
-        selector.cursor = index;
-        Some(selector.choices[index].change.clone())
+      let change = state.tv.settings.selector.as_ref().and_then(|selector| {
+        selector
+          .choices
+          .get(index)
+          .map(|choice| choice.change.clone())
       });
-      change.map_or_else(Task::none, |change| begin_save(state, change))
+      let Some(change) = change else {
+        return Task::none();
+      };
+      if change.unavailable_reason(state).is_some() {
+        return Task::none();
+      }
+      if let Some(selector) = state.tv.settings.selector.as_mut() {
+        selector.cursor = index;
+      }
+      begin_save(state, change)
     }
     Message::Retry => {
       let Save::Failed { change, .. } = &state.tv.settings.save else {
@@ -755,6 +779,19 @@ fn rows(state: &State) -> Vec<SettingRow> {
         Setting::Theme,
       ),
       choice(
+        "settings-renderer",
+        crate::app::settings::renderer_label(state.kernel.locale, settings.render_backend()),
+        "tv-settings-renderer-help",
+        Setting::Renderer,
+      ),
+      SettingRow::new(
+        state,
+        "settings-renderer-actual",
+        crate::app::settings::actual_renderer_label(state.kernel.locale),
+        "",
+        Action::Unavailable,
+      ),
+      choice(
         "settings-player-backend",
         state.t(
           if settings.playback_backend() == PlaybackBackend::Embedded {
@@ -1033,6 +1070,26 @@ fn selector(state: &State, setting: Setting) -> Selector {
       }
       ("settings-player-backend", choices)
     }
+    Setting::Renderer => (
+      "settings-renderer",
+      RenderBackend::available(std::env::consts::OS)
+        .iter()
+        .map(|&backend| {
+          entry(
+            crate::app::settings::renderer_label(state.kernel.locale, backend),
+            if backend.supported(
+              std::env::consts::OS,
+              crate::app::settings::renderer_requires_vulkan(saved),
+            ) {
+              ""
+            } else {
+              "tv-settings-renderer-embedded"
+            },
+            Change::Renderer(backend),
+          )
+        })
+        .collect(),
+    ),
     Setting::Subtitle => (
       "tv-settings-subtitle-priority",
       jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS
@@ -1428,6 +1485,9 @@ fn selector_hint(state: &State) -> String {
       .as_ref()
       .and_then(|selector| selector.choices.get(selector.cursor))
       .map_or_else(String::new, |choice| {
+        if let Some(reason) = choice.change.unavailable_reason(state) {
+          return state.t(reason);
+        }
         state.format(
           "tv-settings-hint-apply",
           &[("target", choice.label.clone().into())],
@@ -1492,12 +1552,37 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
         .boxed(),
       );
     }
+    if selector.kind == Setting::Renderer {
+      content = content.push(
+        text(state.format(
+          "tv-settings-renderer-actual",
+          &[(
+            "actual",
+            crate::app::settings::actual_renderer_label(state.kernel.locale).into(),
+          )],
+        ))
+        .size(style::META * scale)
+        .line_height(iced::Pixels(28.0 * scale))
+        .color(style::PALETTE.text.metadata)
+        .boxed(),
+      );
+      content = content.push(
+        text(state.t("tv-settings-renderer-help"))
+          .size(style::META * scale)
+          .line_height(iced::Pixels(28.0 * scale))
+          .color(style::PALETTE.text.metadata)
+          .boxed(),
+      );
+    }
     for (index, choice) in selector.choices.iter().enumerate() {
+      let enabled = choice.change.unavailable_reason(state).is_none();
       let selected = Some(index) == selector.selected;
-      let focused = index == selector.cursor && matches!(surface.save, Save::Idle);
+      let focused = enabled && index == selector.cursor && matches!(surface.save, Save::Idle);
       let failed = matches!(&surface.save, Save::Failed { change, .. } if change == &choice.change);
       let detail = if failed {
         state.t("tv-settings-not-applied")
+      } else if !enabled {
+        state.t("tv-settings-renderer-embedded")
       } else {
         choice.detail.clone()
       };
@@ -1542,7 +1627,7 @@ fn selector_view(state: &State, scale: f32) -> Element<'_, AppMessage> {
             .height(104.0 * scale)
             .padding([20.0 * scale, 24.0 * scale])
             .style(style::button_progress(style::PALETTE, progress, selected))
-            .on_press(message(Message::Choice(index))),
+            .on_press_maybe(enabled.then_some(message(Message::Choice(index)))),
           )
           .id(format!("tv-settings-choice-{index}"))
           .boxed()
@@ -1947,5 +2032,35 @@ mod tests {
         assert!(focused_y + focused.height <= viewport.y + viewport.height);
       }
     }
+  }
+
+  #[test]
+  fn renderer_selector_disables_incompatible_options_and_stale_apply_is_rejected() {
+    let mut state = state("renderer-guard");
+    state
+      .kernel
+      .settings
+      .set_playback_backend(PlaybackBackend::Embedded)
+      .unwrap();
+    state
+      .kernel
+      .settings
+      .set_local_preference(LocalPreference::RenderBackend(RenderBackend::Auto))
+      .unwrap();
+    let before = state.kernel.settings.snapshot().clone();
+    let selector = selector(&state, Setting::Renderer);
+    for choice in &selector.choices {
+      let Change::Renderer(backend) = choice.change else {
+        panic!("renderer choices must contain renderer preferences");
+      };
+      assert_eq!(
+        choice.change.unavailable_reason(&state).is_none(),
+        matches!(backend, RenderBackend::Auto | RenderBackend::Vulkan),
+      );
+    }
+    let _ = begin_save(&mut state, Change::Renderer(RenderBackend::Software));
+    apply_pending(&mut state);
+    assert!(matches!(state.tv.settings.save, Save::Failed { .. }));
+    assert_eq!(state.kernel.settings.snapshot(), &before);
   }
 }

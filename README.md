@@ -195,6 +195,31 @@ Download `jellypilot-*.dmg` from [GitHub Releases](https://github.com/hewel/jell
 > [!NOTE]
 > macOS uses **External MPV Playback** by default. Install [MPV](https://mpv.io/) (e.g. `brew install mpv`) and ensure it is available on `PATH`, or specify its executable path in **Settings → Playback**.
 
+#### Interface rendering backend
+
+**Settings → Interface → Interface rendering backend** (TV: **Settings → Appearance**)
+saves the choice for the next full application restart. The current backend is reported
+from the initialized compositor, separately from the saved choice.
+Automatic uses DirectX 12 on Windows, Vulkan on Linux, and Metal on macOS.
+Platform-supported alternatives and software rendering are available for troubleshooting.
+Embedded MPV requires Vulkan: only Automatic and Vulkan are compatible while embedded
+playback is active or selected for the next start. Select External playback and restart
+before selecting another interface renderer.
+
+If a saved choice prevents startup, quit any existing tray instance and override it:
+
+```powershell
+.\jellypilot.exe --external --renderer software
+.\jellypilot-diagnostics.exe --capture-startup --output "$env:TEMP\jellypilot-dx12.txt" -- --external --renderer dx12
+```
+
+`--renderer` accepts `auto`, `dx12`, `vulkan`, `metal`, `open-gl`, or `software`.
+Priority is command line, then `ICED_BACKEND` / `WGPU_BACKEND`, then the saved preference.
+Overrides do not save a preference. `ICED_BACKEND=tiny-skia` selects software and ignores
+`WGPU_BACKEND`; `ICED_BACKEND=wgpu` permits the hardware API specified by `WGPU_BACKEND`
+(including comma-separated API lists). Unsupported platforms or embedded combinations
+fail explicitly. There is no promise of recovery after a native driver crash.
+
 #### Local diagnostics when the app will not start
 
 New packages include a separate console executable, `jellypilot-diagnostics`. Its default
@@ -240,8 +265,9 @@ normal configuration, not a silently substituted copy.
 
 Capture **really launches the application**: it may open windows, migrate/save settings,
 access the keyring, and auto-login. It inherits the current environment and working
-directory. `JELLYPILOT_LOG=debug` and `RUST_BACKTRACE=1` are supplied only when not already
-set. The default deadline is **30 seconds**, configurable from 1 to 300 seconds.
+directory. `JELLYPILOT_LOG=info,jellypilot_iced=debug,wgpu_hal=info,naga=warn,iced_winit=warn` and
+`RUST_BACKTRACE=1` are supplied only when not already set. The default deadline is
+**30 seconds**, configurable from 1 to 300 seconds.
 At the deadline the helper stops only its own spawned application process, not an existing
 instance or all processes with the same name. It does not manage independently spawned
 descendants. An existing-instance handoff is reported as inconclusive, not successful startup.
@@ -250,6 +276,8 @@ The capture report includes stdout/stderr, startup phases, elapsed time, exit co
 and explicit timeout/output-loss information. A timeout means the observation window ended;
 it does not establish a hang or successful startup. Panic/backtrace text is captured when the
 application emits it; a native crash before logging may provide only an exit status.
+Configured/requested/observed renderer metadata is retained separately from the bounded
+log tail; an uninitialized renderer remains pending, not a claimed successful selection.
 Raw output is processed in bounded memory, never saved as a raw log. Capture redacts known
 sensitive fields, URLs and private paths, but arbitrary third-party messages may contain
 unrecognized secrets: **review the report before sharing**. Existing output files are refused

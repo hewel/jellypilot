@@ -4,10 +4,11 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::{
-  AppMode, HdrOutput, IntroMode, PlaybackBackend, ShortcutKind, ThemeMode,
+  AppMode, HdrOutput, IntroMode, LocalPreference, PlaybackBackend, ShortcutKind, ThemeMode,
 };
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
+use jellypilot_core::rendering::RenderBackend;
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
 use jellypilot_ui::fonts::{FONT_ATTRIBUTIONS, FONT_LICENSES, HEADING_FONT, MONO_FONT};
 use jellypilot_ui::icons::{
@@ -628,6 +629,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   column![
     language_row(state),
+    renderer_row(state),
     choice_row(
       palette,
       state.t("presentation-tv-title"),
@@ -701,6 +703,91 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s5)
   .width(Fill)
   .boxed()
+}
+
+fn renderer_row(state: &State) -> Element<'_, Message> {
+  let settings = state.kernel.settings.snapshot();
+  let selected = settings.render_backend();
+  let embedded = crate::app::settings::renderer_requires_vulkan(settings);
+  let mut menu = Column::<Element<'_, Message>>::new()
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill);
+  for &backend in RenderBackend::available(std::env::consts::OS) {
+    menu = menu.push(
+      control_button(
+        None,
+        Some(crate::app::settings::renderer_label(
+          state.kernel.locale,
+          backend,
+        )),
+        if backend == selected {
+          ButtonVariant::Secondary
+        } else {
+          ButtonVariant::Text
+        },
+      )
+      .style(settings_style::navigation_button)
+      .label_size(TOKENS.font_sizes.s12)
+      .padding([TOKENS.spacing.s1_5, TOKENS.spacing.s2_5])
+      .min_height(40.0)
+      .width(Fill)
+      .label_fill(true)
+      .on_press_maybe(backend.supported(std::env::consts::OS, embedded).then_some(
+        Message::Settings(SettingsMessage::LocalPreferenceSelected(
+          LocalPreference::RenderBackend(backend),
+        )),
+      ))
+      .boxed(),
+    );
+  }
+  let picker = popover(
+    select_trigger(
+      crate::app::settings::renderer_label(state.kernel.locale, selected),
+      [TOKENS.spacing.s2, TOKENS.spacing.s3],
+      TOKENS.spacing.s2,
+      Length::Fit,
+    )
+    .id("settings-renderer")
+    .on_press(Message::Settings(SettingsMessage::RendererMenuToggled)),
+    menu,
+    state.settings.view.renderer_menu_open,
+    PopoverOptions {
+      width: Some(220.0),
+      ..PopoverOptions::default()
+    },
+    Message::Settings(SettingsMessage::RendererMenuDismissed),
+  );
+  let actual = crate::app::settings::actual_renderer_label(state.kernel.locale);
+  let mut content = column![
+    choice_row(
+      state.palette(),
+      state.t("settings-renderer"),
+      Some(state.t("settings-renderer-help")),
+      picker,
+    ),
+    text(state.format(
+      "settings-renderer-status",
+      &[
+        (
+          "selected",
+          crate::app::settings::renderer_label(state.kernel.locale, selected).into()
+        ),
+        ("actual", actual.into()),
+      ],
+    ))
+    .size(TOKENS.font_sizes.s12)
+    .color(state.palette().text.body),
+  ]
+  .spacing(TOKENS.spacing.s1);
+  if embedded {
+    content = content.push(
+      text(state.t("settings-renderer-embedded-required"))
+        .size(TOKENS.font_sizes.s12)
+        .color(state.palette().text.body)
+        .boxed(),
+    );
+  }
+  content.width(Fill).boxed()
 }
 
 fn language_row(state: &State) -> Element<'_, Message> {

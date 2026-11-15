@@ -159,6 +159,28 @@ chmod +x jellypilot-*-x86_64.AppImage
 > [!NOTE]
 > macOS 默认采用**外部 MPV 播放**。请确保已安装 MPV（例如通过 `brew install mpv`）并加入环境变量，或在**设置 → 播放**中设置其路径。
 
+#### 界面渲染后端
+
+在**设置 → 界面 → 界面渲染后端**（TV 模式：**设置 → 外观**）保存选择，
+完整退出并重新启动应用后生效。当前实际后端取自已初始化的合成器，与保存的选择分别显示。
+“自动”在 Windows 使用 DirectX 12、Linux 使用 Vulkan、macOS 使用 Metal。
+各平台提供受支持的其他图形 API 和软件渲染兼容模式。
+内嵌 MPV 要求 Vulkan：当前正在使用或下次启动已选择内嵌播放时，仅允许“自动”和 Vulkan。
+如需其他界面后端，请先选择外部播放并重启。
+
+若保存的选择导致无法启动，先退出已有托盘实例，再临时覆盖：
+
+```powershell
+.\jellypilot.exe --external --renderer software
+.\jellypilot-diagnostics.exe --capture-startup --output "$env:TEMP\jellypilot-dx12.txt" -- --external --renderer dx12
+```
+
+`--renderer` 支持 `auto`、`dx12`、`vulkan`、`metal`、`open-gl`、`software`。
+优先级为命令行、`ICED_BACKEND` / `WGPU_BACKEND` 环境变量、保存的设置；临时覆盖不保存设置。
+`ICED_BACKEND=tiny-skia` 选择软件渲染并忽略 `WGPU_BACKEND`；
+`ICED_BACKEND=wgpu` 使用 `WGPU_BACKEND` 指定的硬件 API（支持逗号分隔列表）。
+不支持的平台或内嵌播放组合会明确报错，不承诺原生驱动崩溃后自动恢复。
+
 #### 应用无法启动时的本地诊断
 
 新构建的软件包附带独立控制台程序 `jellypilot-diagnostics`。默认检查模式不启动
@@ -200,13 +222,16 @@ Windows 在 PowerShell 中使用 `.\jellypilot-diagnostics.exe`。默认启动�
 组合：复现使用应用的正常配置，不会悄悄改用另一份配置。
 
 **采集会真实启动应用**，可能打开窗口、迁移或保存配置、访问密钥环并自动登录。
-继承当前环境和工作目录，仅在未设置时补充 `JELLYPILOT_LOG=debug`、
+继承当前环境和工作目录，仅在未设置时补充
+`JELLYPILOT_LOG=info,jellypilot_iced=debug,wgpu_hal=info,naga=warn,iced_winit=warn`、
 `RUST_BACKTRACE=1`。默认观察 **30 秒**，可通过 `--timeout-secs` 设置为 1–300 秒。
 到期只结束本次创建的应用主进程，不结束已有实例，也不按进程名批量杀进程；
 不管理应用另行派生的子进程。若实际转交给了已有实例，会标记为无法确认，而不是
 声称完成了启动复现。
 
 报告包含 stdout/stderr、启动阶段、耗时、退出码或信号，以及超时和日志丢失标记。
+配置选择、启动请求及实际观测到的渲染后端会独立于有界日志尾部保留；
+初始化尚未完成时明确标记为待初始化，不将请求的后端冒充实际后端。
 超时仅表示观察时间结束，不能据此判断卡死或启动成功；panic/backtrace 在应用输出
 时会被采集，来不及输出日志的原生崩溃可能只有退出状态。原始输出只在有界内存中
 处理，不写入原始日志文件；会处理已知敏感字段、URL 和私人路径，但无法识别第三方

@@ -22,7 +22,7 @@ At the deadline only the spawned application process is terminated; this is not 
 
 Options:
   --config PATH      Inspect a configuration copy; cannot combine with --capture-startup.
-  --capture-startup  Capture sanitized stdout/stderr, startup stages and process exit status.
+  --capture-startup  Capture sanitized output, startup stages, renderer metadata and exit status.
   --app PATH         Application to reproduce; default is jellypilot beside this helper.
   --timeout-secs N   Capture deadline, 1-300 seconds (default: 30); capture mode only.
   --output PATH      Create a NEW report file, never overwrite; otherwise use stdout.
@@ -30,7 +30,8 @@ Options:
   --help            Show this help.
   --version         Show the application version.
 
-Capture preserves existing JELLYPILOT_LOG/RUST_BACKTRACE; defaults are debug/1 when absent.
+Capture preserves existing JELLYPILOT_LOG/RUST_BACKTRACE. When absent, defaults are
+info,jellypilot_iced=debug,wgpu_hal=info,naga=warn,iced_winit=warn and 1 respectively.
 Raw capture is held in bounded memory, not written to disk. Review reports before sharing:
 automatic redaction cannot recognize every possible secret in third-party output.
 

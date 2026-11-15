@@ -129,6 +129,7 @@ struct Environment {
     libmpv_override: Option<PathBuf>,
     baseline_override: Option<PathBuf>,
     host_abi: Option<OsString>,
+    renderer_override_present: bool,
 }
 
 fn present(variable: &str) -> bool {
@@ -154,6 +155,8 @@ pub fn collect_startup_report(config_override: Option<&Path>) -> StartupReport {
         libmpv_override: std::env::var_os("JELLYPILOT_LIBMPV").map(PathBuf::from),
         baseline_override: std::env::var_os("JELLYPILOT_MPV_BASELINE").map(PathBuf::from),
         host_abi: std::env::var_os("JELLYPILOT_MPV_HOST_ABI"),
+        renderer_override_present: std::env::var_os("ICED_BACKEND").is_some()
+            || std::env::var_os("WGPU_BACKEND").is_some(),
     };
     collect(&environment, config_override)
 }
@@ -207,6 +210,7 @@ fn collect(environment: &Environment, config_override: Option<&Path>) -> Startup
         PlaybackBackend::Embedded => "Embedded MPV (ordinary startup; includes pending Linux default revision policy).",
         PlaybackBackend::External => "External MPV (ordinary startup).",
     }, Some("Desktop --external/--embedded launch overrides are not applied by this diagnostics command."));
+    inspect_renderer(environment, settings.as_ref(), backend, &mut report);
     inspect_session(environment, &mut report);
     inspect_external(
         environment,
@@ -226,6 +230,66 @@ fn collect(environment: &Environment, config_override: Option<&Path>) -> Startup
     report
 }
 
+fn inspect_renderer(
+    environment: &Environment,
+    settings: Option<&Settings>,
+    playback: PlaybackBackend,
+    report: &mut StartupReport,
+) {
+    report.add(
+        "Configured renderer",
+        CheckStatus::Info,
+        settings.map_or("unavailable; default preference is auto", |settings| {
+            settings.render_backend().as_str()
+        }),
+        Some("Renderer preferences apply next launch; desktop CLI overrides are not applied here."),
+    );
+    report.add(
+        "Renderer environment override",
+        CheckStatus::Info,
+        if environment.renderer_override_present {
+            "ICED_BACKEND or WGPU_BACKEND is present; value omitted."
+        } else {
+            "No ICED_BACKEND or WGPU_BACKEND override is present."
+        },
+        None,
+    );
+    if environment.renderer_override_present || settings.is_none() {
+        report.add(
+            "Expected renderer",
+            CheckStatus::NotProbed,
+            "Not determined: environment selection or configuration requires ordinary startup.",
+            None,
+        );
+    } else if let Some(settings) = settings {
+        let configured = settings.render_backend();
+        let embedded = playback == PlaybackBackend::Embedded;
+        if configured.supported(std::env::consts::OS, embedded) {
+            report.add(
+                "Expected renderer",
+                CheckStatus::Info,
+                configured
+                    .resolve_auto(std::env::consts::OS, embedded)
+                    .as_str(),
+                Some("Expected ordinary startup request only; not an observed GPU backend."),
+            );
+        } else {
+            report.add(
+                "Expected renderer",
+                CheckStatus::Issue,
+                "Configured renderer is incompatible with the platform or embedded playback.",
+                Some("Choose a supported renderer; embedded playback requires auto or vulkan."),
+            );
+        }
+    }
+    report.add(
+        "Actual renderer",
+        CheckStatus::NotProbed,
+        "Not probed: no compositor or GPU initialization.",
+        None,
+    );
+}
+
 fn inspect_config(path: &Path, explicit: bool, report: &mut StartupReport) -> Option<Settings> {
     match read_config(path) {
         Ok(settings) => {
@@ -236,7 +300,7 @@ fn inspect_config(path: &Path, explicit: bool, report: &mut StartupReport) -> Op
         Err(ConfigFinding::Missing) if !explicit => {
             report.add("Configuration", CheckStatus::Info,
                 "No configuration file found; ordinary startup uses platform defaults. Nothing created.", None);
-            None
+            Some(Settings::default())
         }
         Err(finding) => {
             report.add("Configuration", CheckStatus::Issue, match finding {
@@ -532,6 +596,7 @@ fn inspect_embedded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::RenderBackend;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -565,6 +630,7 @@ mod tests {
                 libmpv_override: None,
                 baseline_override: None,
                 host_abi: None,
+                renderer_override_present: false,
             }
         }
 
@@ -638,6 +704,59 @@ mod tests {
         assert!(!report.contains("example.invalid"));
         assert!(report.contains("[not probed] Credentials"));
         assert!(report.contains("[not probed] Network"));
+    }
+
+    #[test]
+    fn renderer_environment_presence_prevents_claiming_a_selected_or_actual_backend() {
+        let fixture = Fixture::new();
+        let mut settings = serde_json::to_value(Settings::default()).unwrap();
+        settings["render_backend"] = "software".into();
+        settings["playback_backend"] = "external".into();
+        fixture.config(&serde_json::to_vec(&settings).unwrap());
+        let mut environment = fixture.environment();
+        environment.renderer_override_present = true;
+        let report = collect(&environment, None);
+        for name in ["Expected renderer", "Actual renderer"] {
+            assert_eq!(
+                report
+                    .checks()
+                    .iter()
+                    .find(|check| check.name == name)
+                    .unwrap()
+                    .status,
+                CheckStatus::NotProbed
+            );
+        }
+        assert!(report.to_string().contains("Configured renderer: software"));
+        assert!(report.to_string().contains("value omitted"));
+    }
+
+    #[test]
+    fn renderer_prediction_is_not_reported_as_an_actual_backend() {
+        let fixture = Fixture::new();
+        let mut settings = serde_json::to_value(Settings::default()).unwrap();
+        settings["render_backend"] = "software".into();
+        settings["playback_backend"] = "external".into();
+        fixture.config(&serde_json::to_vec(&settings).unwrap());
+        let report = collect(&fixture.environment(), None);
+        assert_eq!(
+            report
+                .checks()
+                .iter()
+                .find(|check| check.name == "Expected renderer")
+                .unwrap()
+                .detail,
+            RenderBackend::Software.as_str()
+        );
+        assert_eq!(
+            report
+                .checks()
+                .iter()
+                .find(|check| check.name == "Actual renderer")
+                .unwrap()
+                .status,
+            CheckStatus::NotProbed
+        );
     }
 
     #[test]

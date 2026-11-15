@@ -2949,6 +2949,7 @@ dependencies = [
  "gtk",
  "iced",
  "iced_mpv_preview",
+ "iced_renderer",
  "iced_runtime",
  "iced_wgpu",
  "image",

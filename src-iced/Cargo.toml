@@ -20,6 +20,8 @@ jellypilot-sdk = { path = "../crates/jellypilot-sdk" }
 jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { workspace = true }
+iced_renderer = { workspace = true }
+iced_wgpu = { workspace = true }
 iced_mpv_preview = { path = "../target/vendor/iced/mpv_preview" }
 async-trait = "0.1.89"
 dirs = "6.0.0"
@@ -38,7 +40,6 @@ zeroize = "1.8.1"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 jellypilot-mpv-host = { path = "../crates/jellypilot-mpv-host" }
-iced_wgpu = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
@@ -71,6 +72,7 @@ resolver = "2"
 # The dispatcher materializes this repository-relative tree before invoking Cargo.
 iced = { path = "../target/vendor/iced", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
 iced_runtime = { path = "../target/vendor/iced/runtime" }
+iced_renderer = { path = "../target/vendor/iced/renderer" }
 iced_wgpu = { path = "../target/vendor/iced/wgpu" }
 
 [workspace.package]

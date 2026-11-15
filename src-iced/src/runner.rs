@@ -5,6 +5,7 @@ pub(crate) struct RunOptions {
   pub smoke: bool,
   /// One-launch TV override; persisted presentation is changed only by the UI.
   pub tv: bool,
+  pub renderer: Option<jellypilot_core::rendering::RenderBackend>,
 }
 
 /// Tees tracing output into the process-wide support-log buffer (Settings →
@@ -52,6 +53,7 @@ pub(super) fn run(
     RunOptions {
       smoke: arguments.iter().any(|argument| argument == "--smoke-test"),
       tv: arguments.iter().any(|argument| argument == "--tv"),
+      renderer: jellypilot_core::rendering::parse_renderer_override(&arguments)?,
     },
     factory,
   );

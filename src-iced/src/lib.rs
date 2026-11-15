@@ -6,6 +6,7 @@ mod i18n;
 mod instance;
 mod preview;
 mod regression;
+mod rendering;
 mod runner;
 mod tray;
 
@@ -98,7 +99,11 @@ fn run_application(
   options: runner::RunOptions,
   factory: EmbeddedEngineFactory,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  let runner::RunOptions { smoke, tv } = options;
+  let runner::RunOptions {
+    smoke,
+    tv,
+    renderer,
+  } = options;
   tracing::debug!(smoke, "daemon booting");
   let instance = if smoke {
     emit_startup_stage("instance-skipped");
@@ -128,6 +133,9 @@ fn run_application(
   emit_startup_stage("backend-init-enter");
   embedded::initialize(smoke, factory)?;
   emit_startup_stage("backend-init-exit");
+  emit_startup_stage("renderer-init-enter");
+  rendering::initialize(renderer, embedded::enabled())?;
+  emit_startup_stage("renderer-init-exit");
   emit_startup_stage("fonts-init-enter");
   jellypilot_ui::fonts::initialize()?;
   emit_startup_stage("fonts-init-exit");
@@ -181,6 +189,7 @@ fn run_application(
             return Ok(compositor.clone());
           }
           let compositor = RetainedCompositor::new(settings, display, window, shell).await?;
+          rendering::observe(compositor.information());
           *retained.borrow_mut() = Some(compositor.clone());
           Ok(compositor)
         }
@@ -190,7 +199,9 @@ fn run_application(
     return result;
   }
 
-  let result = daemon.run().map_err(Into::into);
+  let result = daemon
+    .run_with_compositor(rendering::create_compositor)
+    .map_err(Into::into);
   emit_startup_stage("event-loop-returned");
   result
 }

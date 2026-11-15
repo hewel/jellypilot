@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browse_model::BrowsePreferences;
 use crate::locale::LanguagePreference;
+use crate::rendering::RenderBackend;
 use crate::watchlist::ProfileScope;
 
 #[cfg(feature = "native")]
@@ -342,6 +343,8 @@ pub struct Settings {
     #[serde(default)]
     playback_backend: PlaybackBackend,
     #[serde(default)]
+    render_backend: RenderBackend,
+    #[serde(default)]
     hdr_output: HdrOutput,
     #[serde(default)]
     settings_revision: u32,
@@ -407,6 +410,7 @@ impl Default for Settings {
             app_mode: AppMode::Full,
             ui_mode: UiMode::Desktop,
             playback_backend: PlaybackBackend::default(),
+            render_backend: RenderBackend::default(),
             hdr_output: HdrOutput::default(),
             settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: None,
@@ -473,6 +477,11 @@ impl Settings {
 
     pub const fn playback_backend(&self) -> PlaybackBackend {
         self.playback_backend
+    }
+
+    /// Configured next-launch renderer, not the currently initialized compositor.
+    pub const fn render_backend(&self) -> RenderBackend {
+        self.render_backend
     }
 
     /// Predicts ordinary startup selection without migrating or saving settings.
@@ -571,6 +580,7 @@ pub enum SettingsMutationError {
     DuplicateSubtitleLanguage,
     EmptyShortcut,
     ShortcutCollision,
+    IncompatibleRenderer,
 }
 
 impl fmt::Display for SettingsMutationError {
@@ -585,6 +595,9 @@ impl fmt::Display for SettingsMutationError {
             }
             Self::EmptyShortcut => formatter.write_str("shortcut is empty"),
             Self::ShortcutCollision => formatter.write_str("shortcut is already assigned"),
+            Self::IncompatibleRenderer => {
+                formatter.write_str("embedded playback requires auto or Vulkan interface rendering")
+            }
         }
     }
 }
@@ -613,6 +626,7 @@ pub enum LocalPreference {
     ThemeMode(ThemeMode),
     AutoLogin(bool),
     PlaybackBackend(PlaybackBackend),
+    RenderBackend(RenderBackend),
     HdrOutput(HdrOutput),
     SubtitleLanguages(Vec<String>),
     ImageCache(bool),
@@ -635,6 +649,7 @@ fn apply_local_preference(
         LocalPreference::ThemeMode(mode) => settings.theme_mode = *mode,
         LocalPreference::AutoLogin(enabled) => settings.auto_login = *enabled,
         LocalPreference::PlaybackBackend(backend) => settings.playback_backend = *backend,
+        LocalPreference::RenderBackend(backend) => settings.render_backend = *backend,
         LocalPreference::HdrOutput(output) => settings.hdr_output = *output,
         LocalPreference::SubtitleLanguages(languages) => {
             let languages: Vec<_> = languages
@@ -657,6 +672,17 @@ fn apply_local_preference(
         }
         LocalPreference::PreferOriginalAudio(enabled) => settings.prefer_original_audio = *enabled,
         LocalPreference::ReducedMotion(enabled) => settings.reduced_motion = *enabled,
+    }
+    if matches!(
+        preference,
+        LocalPreference::PlaybackBackend(_) | LocalPreference::RenderBackend(_)
+    ) && settings.playback_backend == PlaybackBackend::Embedded
+        && !matches!(
+            settings.render_backend,
+            RenderBackend::Auto | RenderBackend::Vulkan
+        )
+    {
+        return Err(SettingsMutationError::IncompatibleRenderer);
     }
     Ok(())
 }
@@ -1475,6 +1501,112 @@ mod tests {
     }
 
     #[test]
+    fn renderer_preference_round_trips_without_adopting_stale_disk_siblings() {
+        let path = test_path("renderer-isolated");
+        let initial = remembered_settings();
+        save_to(&path, &initial).unwrap();
+        let mut store = store_at(path.clone(), initial.clone());
+        let mut disk = initial.clone();
+        disk.username = "other-process".to_owned();
+        disk.playback_backend = PlaybackBackend::External;
+        save_to(&path, &disk).unwrap();
+
+        assert!(store
+            .set_local_preference(LocalPreference::RenderBackend(RenderBackend::Software))
+            .unwrap());
+        let mut expected_live = initial;
+        expected_live.render_backend = RenderBackend::Software;
+        disk.render_backend = RenderBackend::Software;
+        assert_eq!(store.snapshot(), &expected_live);
+        assert_eq!(load_from(&path).unwrap(), disk);
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"render_backend\": \"software\""));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn renderer_changes_reject_conflicting_disk_edits_without_mutating_either_snapshot() {
+        let path = test_path("renderer-conflicting-disk");
+        for (preference, disk_playback, disk_renderer, legacy_setter) in [
+            (
+                LocalPreference::RenderBackend(RenderBackend::Software),
+                PlaybackBackend::Embedded,
+                RenderBackend::Auto,
+                false,
+            ),
+            (
+                LocalPreference::PlaybackBackend(PlaybackBackend::Embedded),
+                PlaybackBackend::External,
+                RenderBackend::Software,
+                false,
+            ),
+            (
+                LocalPreference::PlaybackBackend(PlaybackBackend::Embedded),
+                PlaybackBackend::External,
+                RenderBackend::Software,
+                true,
+            ),
+        ] {
+            let initial = remembered_settings();
+            let mut store = store_at(path.clone(), initial.clone());
+            let mut disk = initial.clone();
+            disk.playback_backend = disk_playback;
+            disk.render_backend = disk_renderer;
+            save_to(&path, &disk).unwrap();
+
+            let result = if legacy_setter {
+                store.set_playback_backend(PlaybackBackend::Embedded)
+            } else {
+                store.set_local_preference(preference)
+            };
+            assert!(matches!(
+                result,
+                Err(SettingsMutationError::IncompatibleRenderer)
+            ));
+            assert_eq!(store.snapshot(), &initial);
+            assert_eq!(read_from(&path).unwrap(), disk);
+            fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_renderer_write_preserves_disk_and_live_preferences() {
+        let path = test_path("renderer-failed-write");
+        let initial = remembered_settings();
+        save_to(&path, &initial).unwrap();
+        let temporary = temporary_path(&path);
+        fs::create_dir(&temporary).unwrap();
+        let mut store = store_at(path.clone(), initial.clone());
+
+        assert!(store
+            .set_local_preference(LocalPreference::RenderBackend(RenderBackend::Software))
+            .is_err());
+        assert_eq!(store.snapshot(), &initial);
+        assert_eq!(load_from(&path).unwrap(), initial);
+        fs::remove_dir(temporary).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_renderer_recovers_auto_without_losing_other_settings() {
+        let expected = remembered_settings();
+        let mut json = serde_json::to_value(&expected).unwrap();
+        for invalid in [
+            serde_json::json!("future-renderer"),
+            serde_json::json!({"invalid": true}),
+        ] {
+            json["render_backend"] = invalid;
+            assert_eq!(
+                serde_json::from_value::<Settings>(json.clone()).unwrap(),
+                expected
+            );
+        }
+        json.as_object_mut().unwrap().remove("render_backend");
+        assert_eq!(serde_json::from_value::<Settings>(json).unwrap(), expected);
+    }
+
+    #[test]
     fn tv_preferences_preserve_disk_siblings_without_adopting_them_live() {
         let path = test_path("tv-isolated-preferences");
         let initial = Settings::default();
@@ -1687,6 +1819,7 @@ mod tests {
             ui_mode: UiMode::Desktop,
             tmdb_api_key: Some("tmdb-key".to_owned()),
             playback_backend: PlaybackBackend::External,
+            render_backend: RenderBackend::Auto,
             hdr_output: HdrOutput::On,
             settings_revision: CURRENT_SETTINGS_REVISION,
             mpv_path: Some("/usr/bin/mpv".to_owned()),

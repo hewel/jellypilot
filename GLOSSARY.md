@@ -47,6 +47,10 @@ _Avoid_: External player window, zero-copy playback, hardware-decoding guarantee
 **Playback Backend**:
 The persisted desktop choice between Embedded MPV Playback (the Linux default) and External MPV Playback (the default on other desktop platforms, and an explicit Linux option). A changed choice takes effect on application restart; it is independent of App Mode.
 
+**Interface Rendering Backend**:
+The graphics implementation that draws JellyPilot's own interface, distinct from the Playback Backend that presents media. Its saved preference applies on restart; the current backend is the implementation actually initialized for this run.
+_Avoid_: Player renderer, playback decoder
+
 **Android MPV Playback**:
 Playback presented inside the Android client while its interface is visible and the device is unlocked. Leaving the playback page ends the Playback Session; temporarily hiding or locking the app pauses it, and returning does not automatically resume playback.
 _Avoid_: Desktop Playback Backend, background playback, picture-in-picture

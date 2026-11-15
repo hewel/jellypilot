@@ -18,6 +18,7 @@ use tokio::process::Command;
 use tokio::time::{self, Instant};
 
 use crate::diagnostics::sanitize_message;
+use crate::rendering::RenderBackend;
 
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_TAIL_BYTES: usize = 1024 * 1024;
@@ -142,6 +143,18 @@ impl fmt::Display for StartupCaptureReport {
             "Last substantive startup phase: {}",
             self.stages.last_phase.unwrap_or("none observed")
         )?;
+        if let Some(renderer) = &self.stages.renderer {
+            writeln!(
+                f,
+                "Renderer: configured={} requested={} source={} actual={}",
+                renderer.configured.as_str(),
+                renderer.requested.as_str(),
+                renderer.source,
+                renderer.actual,
+            )?;
+        } else {
+            writeln!(f, "Renderer: not observed; actual backend unknown.")?;
+        }
         if self.stages.existing_instance {
             writeln!(f, "Inconclusive: existing-instance handoff; this child did not establish a new desktop startup.")?;
         }
@@ -220,7 +233,14 @@ async fn capture_command(mut command: Command, timeout: Duration) -> StartupCapt
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
         .env("CLICOLOR_FORCE", "0");
-    for (key, default) in [("JELLYPILOT_LOG", "debug"), ("RUST_BACKTRACE", "1")] {
+    for (key, default) in [
+        (
+            "JELLYPILOT_LOG",
+            // iced_winit logs WindowAttributes, including every icon pixel, at info.
+            "info,jellypilot_iced=debug,wgpu_hal=info,naga=warn,iced_winit=warn",
+        ),
+        ("RUST_BACKTRACE", "1"),
+    ] {
         // var_os preserves even invalid Unicode and explicitly empty/custom values.
         if std::env::var_os(key).is_none()
             && !command.as_std().get_envs().any(|(name, _)| name == key)
@@ -407,6 +427,11 @@ impl CapturedStream {
                             stages.last_phase = Some(observed);
                         }
                     }
+                    let renderer_marker = raw.starts_with("JELLYPILOT_RENDERER");
+                    let renderer = recognized_renderer(raw);
+                    if let Some(renderer) = renderer {
+                        stages.renderer = Some(renderer);
+                    }
                     // Decide on complete lines, never independently read pipe fragments.
                     // Omit credential fields; mask locations without erasing the failure.
                     let sensitive_header = sensitive_line(raw);
@@ -416,7 +441,7 @@ impl CapturedStream {
                     self.sensitive_value_pending =
                         sensitive_header && raw.trim_end().ends_with([':', '=']);
                     self.sensitive_continuation = sensitive;
-                    let line = if sensitive {
+                    let line = if sensitive || (renderer_marker && renderer.is_none()) {
                         Cow::Borrowed(REDACTED_LINE)
                     } else {
                         Cow::Owned(redact_locations(raw))
@@ -592,6 +617,43 @@ struct ObservedStages {
     last: Option<&'static str>,
     last_phase: Option<&'static str>,
     existing_instance: bool,
+    renderer: Option<RendererMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RendererMetadata {
+    configured: RenderBackend,
+    requested: RenderBackend,
+    source: &'static str,
+    actual: &'static str,
+}
+
+fn recognized_renderer(line: &str) -> Option<RendererMetadata> {
+    let mut tokens = line.strip_prefix("JELLYPILOT_RENDERER ")?.split(' ');
+    let canonical =
+        |value: &str| RenderBackend::parse(value).filter(|backend| backend.as_str() == value);
+    let configured = canonical(tokens.next()?.strip_prefix("configured=")?)?;
+    let requested = canonical(tokens.next()?.strip_prefix("requested=")?)?;
+    let source = match tokens.next()?.strip_prefix("source=")? {
+        "cli" => "cli",
+        "environment" => "environment",
+        "settings" => "settings",
+        _ => return None,
+    };
+    let actual = match tokens.next()?.strip_prefix("actual=")? {
+        "pending" => "pending",
+        "unknown" => "unknown",
+        value => canonical(value)?.as_str(),
+    };
+    if tokens.next().is_some() {
+        return None;
+    }
+    Some(RendererMetadata {
+        configured,
+        requested,
+        source,
+        actual,
+    })
 }
 
 fn recognized_stage(line: &str) -> Option<&'static str> {
@@ -613,6 +675,8 @@ fn recognized_stage(line: &str) -> Option<&'static str> {
         "backend-settings-enter",
         "backend-settings-exit",
         "backend-settings-failed",
+        "renderer-init-enter",
+        "renderer-init-exit",
         "backend-external",
         "backend-embedded",
         "embedded-assets-enter",
@@ -676,6 +740,7 @@ mod tests {
             "failure" => {
                 println!("renderer initialization failed: adapter unavailable");
                 eprintln!("JELLYPILOT_STARTUP_STAGE backend-init-enter");
+                eprintln!("JELLYPILOT_RENDERER configured=auto requested=vulkan source=settings actual=pending");
                 eprintln!("native loader failed: missing library");
                 eprintln!("JELLYPILOT_STARTUP_STAGE main-error");
                 std::process::exit(23);
@@ -732,6 +797,9 @@ mod tests {
             "flood" => {
                 let mut out = io::stdout().lock();
                 let block = vec![b'x'; 4096];
+                writeln!(out, "JELLYPILOT_RENDERER configured=auto requested=vulkan source=cli actual=pending").unwrap();
+                writeln!(out, "JELLYPILOT_RENDERER configured=auto requested=vulkan source=cli actual=software").unwrap();
+                writeln!(out, "JELLYPILOT_RENDERER configured=private-token requested=vulkan source=cli actual=software").unwrap();
                 for _ in 0..8 {
                     out.write_all(&block).unwrap();
                 }
@@ -793,6 +861,8 @@ mod tests {
         assert!(text.contains("renderer initialization failed"));
         assert!(text.contains("native loader failed"));
         assert!(text.contains("--- stdout") && text.contains("--- stderr"));
+        assert!(text
+            .contains("Renderer: configured=auto requested=vulkan source=settings actual=pending"));
     }
 
     #[tokio::test]
@@ -909,6 +979,15 @@ mod tests {
         assert!(!text.contains("fragment-secret"));
         assert!(text.contains("final actionable error"));
         assert!(text.contains("native stderr evidence during stdout flood"));
+        assert!(
+            text.contains("Renderer: configured=auto requested=vulkan source=cli actual=software")
+        );
+        assert!(!text.contains("private-token"));
+        assert!(!text
+            .split("--- stdout")
+            .nth(1)
+            .unwrap()
+            .contains("JELLYPILOT_RENDERER"));
         assert!(report.has_failure());
     }
 
@@ -963,6 +1042,32 @@ mod tests {
             let text = String::from_utf8(stream.tail.into_iter().collect()).unwrap();
             assert!(!text.contains("private credential"));
             assert!(text.contains("renderer: 语"));
+        }
+    }
+
+    #[test]
+    fn renderer_metadata_accepts_only_complete_canonical_allowlisted_tokens() {
+        let valid = b"JELLYPILOT_RENDERER configured=auto requested=vulkan source=environment actual=unknown\n";
+        for boundary in 0..=valid.len() {
+            let mut stream = CapturedStream::default();
+            let mut stages = ObservedStages::default();
+            stream.feed(&valid[..boundary], &mut stages);
+            stream.feed(&valid[boundary..], &mut stages);
+            let expected = stages.renderer.expect("complete renderer marker");
+            for invalid in [
+                "JELLYPILOT_RENDERER configured=private-value requested=vulkan source=cli actual=pending\n",
+                "JELLYPILOT_RENDERER configured=auto requested=gl source=cli actual=pending\n",
+                "JELLYPILOT_RENDERER configured=auto requested=vulkan source=private-value actual=pending\n",
+                "JELLYPILOT_RENDERER configured=auto requested=vulkan source=cli actual=private-value\n",
+                "JELLYPILOT_RENDERER configured=auto requested=vulkan source=cli actual=vulkan extra=private-value\n",
+                "JELLYPILOT_RENDERER configured=auto requested=vulkan source=cli\n",
+            ] {
+                stream.feed(invalid.as_bytes(), &mut stages);
+                assert_eq!(stages.renderer, Some(expected));
+            }
+            let tail = String::from_utf8(stream.tail.into_iter().collect()).unwrap();
+            assert!(!tail.contains("private-value"));
+            assert!(tail.contains(REDACTED_LINE));
         }
     }
 
