@@ -4,7 +4,7 @@ project(jellypilot_player CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Staged by the `bun run task android mpv` pipeline:
+# Staged by the `cargo xtask android mpv` pipeline:
 #   <MPV_STAGING>/include/mpv/{client.h,render.h,...}
 #   <MPV_STAGING>/include/libavcodec/jni.h (+ other ffmpeg headers)
 #   <MPV_STAGING>/lib/libmpv.so, libavcodec.so, ...
@@ -13,7 +13,7 @@ if(NOT MPV_STAGING)
   message(FATAL_ERROR "MPV_STAGING not set; run the android mpv pipeline first")
 endif()
 if(NOT EXISTS "${MPV_STAGING}/lib/libmpv.so")
-  message(FATAL_ERROR "libmpv.so missing at ${MPV_STAGING}/lib; run `bun run task android mpv`")
+  message(FATAL_ERROR "libmpv.so missing at ${MPV_STAGING}/lib; run `cargo xtask android mpv`")
 endif()
 
 add_library(mpv SHARED IMPORTED GLOBAL)

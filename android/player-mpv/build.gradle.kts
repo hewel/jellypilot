@@ -2,7 +2,7 @@ plugins {
   alias(libs.plugins.android.library)
 }
 
-// libmpv and its dependencies are staged by `bun run task android mpv` at
+// libmpv and its dependencies are staged by `cargo xtask android mpv` at
 // <repo>/target/android/mpv/arm64-v8a/{include,lib}. The Gradle build fails
 // fast when they are absent rather than silently producing a broken APK.
 val mpvStaging = rootProject.file("../target/android/mpv/arm64-v8a")
@@ -16,7 +16,7 @@ abstract class StageMpvLibraries : DefaultTask() {
   fun stage() {
     val source = sourceDirectory.get().asFile
     require(source.resolve("libmpv.so").isFile) {
-      "libmpv.so missing at ${source.absolutePath}; run `bun run task android mpv` first"
+      "libmpv.so missing at ${source.absolutePath}; run `cargo xtask android mpv` first"
     }
     fileSystem.sync {
       from(source) { into("arm64-v8a"); include("*.so") }

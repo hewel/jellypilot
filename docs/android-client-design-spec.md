@@ -504,9 +504,9 @@ Recorded on 2026-09-15. The Android application contains Compose account/browse/
 With the Android SDK and pinned toolchain installed, set `ANDROID_HOME` or `ANDROID_SDK_ROOT` and use:
 
 ```bash
-bun run task android doctor
-bun run task android build
-bun run task android check
+cargo xtask android doctor
+cargo xtask android build
+cargo xtask android check
 android/gradlew -p android :app:connectedDebugAndroidTest --no-daemon
 ```
 

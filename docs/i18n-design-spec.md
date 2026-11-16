@@ -155,7 +155,7 @@ Implementation must demonstrate the following behaviors, not merely compile a lo
 10. Fonts load without depending on the original Downloads paths or installed copies. Both fonts are available in either language, with actual selected families and weights verified rather than inferred from filename or successful TTF parsing.
 11. Human visual acceptance covers login, Settings, Now Playing, sidebar, list/detail views, and tray in both App Modes where present: mixed Chinese/English, long labels, input text, truncation/tooltips, weight hierarchy, and small-size legibility in both themes. Font fallback and layout need Windows/macOS/Linux acceptance; agent file checks do not substitute for it.
 
-Follow the [validation policy](agents/validation.md): focused changed-contract tests and clippy, Rust formatting, then workspace gates for cross-crate implementation (`bun run check` and `bun run task rust test`). Add `xvfb-run -a bun run task iced run --smoke` for startup/settings/tray/font integration. The smoke gate proves startup, not appearance or cross-platform correctness. No Cargo invocation bypasses the Bun dispatcher.
+Follow the [validation policy](agents/validation.md): focused changed-contract tests and clippy, Rust formatting, then workspace gates for cross-crate implementation (`cargo xtask check` and `cargo xtask test`). Add `xvfb-run -a cargo xtask iced run --smoke` for startup/settings/tray/font integration. The smoke gate proves startup, not appearance or cross-platform correctness. Use native `cargo xtask` for maintained workflows.
 
 The implementation and code-level acceptance are complete. Human visual and cross-platform acceptance remain separate; see the records below.
 

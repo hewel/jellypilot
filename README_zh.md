@@ -198,7 +198,7 @@ jellypilot-diagnostics --output jellypilot-diagnostics.txt
 - **AppImage**：先运行 `./jellypilot-*.AppImage --appimage-extract`，再运行
   `./squashfs-root/usr/bin/jellypilot-diagnostics`。不要将诊断程序单独移出解包目录，
   否则相对路径下的内嵌运行库检查不能反映原安装状态。
-- **源码构建**：`bun run task iced build --release` 会在 `target/release` 生成两个程序。
+- **源码构建**：`cargo xtask iced build --release` 会在 `target/release` 生成两个程序。
 
 默认检查报告涵盖配置是否可读及可解析、所选播放后端、本地会话标志以及播放器和运行库文件
 是否存在；不迁移配置、不读取密钥环、不访问服务器，也不执行配置中的播放器。
@@ -265,7 +265,7 @@ Arch 包仍仅随 tag 发布构建。Linux 任务需要项目的 `jellypilot-lan
 <summary>开发编译依赖</summary>
 
 - [Rust](https://rustup.rs/) 1.100.0（由 `rust-toolchain.toml` 选择；CI 和发布构建使用相同版本，包含 rustfmt 和 Clippy）
-- [Bun](https://bun.sh/) 1.3.14 或更高版本（仅用于任务调度器，本项目无 JavaScript 前端）
+- Cargo 运行原生 Rust `xtask` 调度器；普通构建和检查不需要 Bun 或 Java OpenAPI 生成器
 - Linux 原生图形依赖：GTK 3、`libxkbcommon` 与 Wayland 开发包（`libgtk-3-dev`、`libxkbcommon-dev`、`libwayland-dev`、`wayland-protocols`）
 - Linux 内嵌 MPV 构建依赖（若仅使用外部 MPV 则可跳过）：Meson >= 1.3、Ninja、C/C++ 编译器、pkg-config、Vulkan 开发头文件与加载器、FFmpeg 开发库、`libplacebo` >= 7.360.1、`libass`。
 - Windows 内嵌 MPV：在 MSYS2 UCRT64 等 Windows 环境中准备上述原生构建工具与媒体库，以及 Lua 或 LuaJIT 开发文件。构建要求 D3D 硬解与 Lua 支持；即使 host 设置 `osc=no`，该选项仍依赖 Lua。
@@ -275,13 +275,12 @@ Arch 包仍仅随 tag 发布构建。Linux 任务需要项目的 `jellypilot-lan
 ```bash
 git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
-bun install --frozen-lockfile
 
 # 可选（Linux 或 Windows）：编译并部署内嵌 MPV Fork
-bun run task mpv build
+cargo xtask mpv build
 
 # 编译 release 正式版启动器
-bun run task iced build --release
+cargo xtask iced build --release
 ```
 
 编译产物位于 `target/release/jellypilot`（Windows 为 `jellypilot.exe`）。
@@ -289,7 +288,7 @@ bun run task iced build --release
 Cargo 任务会自动拉取并配置官方维护的 `target/vendor/iced` 专有 Fork 分支。`tools/embedded-mpv/iced-source.json` 是所引用的 Fork 版本权威来源。若要使用本地已有的 iced 源码：
 
 ```bash
-bun run task iced prepare --source /absolute/path/to/iced
+cargo xtask iced prepare --source /absolute/path/to/iced
 ```
 
 ### 内嵌 MPV：构建、配置与恢复
@@ -313,20 +312,20 @@ bun run task iced prepare --source /absolute/path/to/iced
 ```bash
 # Linux 构建前置：Meson >=1.3, Ninja, C/C++ 编译器, pkg-config,
 # Vulkan 开发头文件/loader, FFmpeg, libplacebo >=7.360.1, libass.
-bun run task mpv build --source /absolute/path/to/mpv
-bun run task iced run
+cargo xtask mpv build --source /absolute/path/to/mpv
+cargo xtask iced run
 ```
 
 `tools/embedded-mpv/source.json` 定义了 mpv 的固定修订版本、基线配置与 Meson 构建参数。若未传 `--source` 参数，构建任务会自动拉取锁定的 Fork 提交版本。构建任务将产物部署至 `target/embedded-mpv/lib/jellypilot/libmpv.so` 与 `target/embedded-mpv/share/jellypilot/mpv-baseline.conf`，并生成 `manifest.json` 记录构建环境指纹。
 
-Windows 默认仍为外部播放，也可使用固定 DLL 开启内嵌播放。Windows 构建生成 `lib/jellypilot/libmpv-2.dll`，基线来自 `tools/embedded-mpv/baseline-windows.conf`；任务会追加 `source.json` 中的 `windowsMesonOptions`，在配置阶段拒绝缺少 D3D 硬解或 Lua 支持的构建。基线默认请求 `hwdec=d3d11va-copy`：GPU 解码后将帧回读至系统内存，再上传到现有 Vulkan 渲染器；不支持的编码或设备可能回退软解。通过 `bun run task iced run --release --embedded` 启动。
+Windows 默认仍为外部播放，也可使用固定 DLL 开启内嵌播放。Windows 构建生成 `lib/jellypilot/libmpv-2.dll`，基线来自 `tools/embedded-mpv/baseline-windows.conf`；任务会追加 `source.json` 中的 `windowsMesonOptions`，在配置阶段拒绝缺少 D3D 硬解或 Lua 支持的构建。基线默认请求 `hwdec=d3d11va-copy`：GPU 解码后将帧回读至系统内存，再上传到现有 Vulkan 渲染器；不支持的编码或设备可能回退软解。通过 `cargo xtask iced run --release --embedded` 启动。
 
 MPV 构建任务只部署主 DLL；分发 Windows 安装包时使用下面的打包任务收集运行依赖。修改源码基线后需要重新部署配置（MPV 构建任务会完成此步骤），已运行的播放器仍使用启动时的配置。验收时应在播放中确认实际 `hwdec-current=d3d11va-copy`；目前 `iced regress` 运行器仍仅支持 Linux。
 
-先在 MSYS2 UCRT64 环境构建 MPV，再在具备 Rust/MSVC 和 Bun 的 Windows 原生终端运行：
+先在 MSYS2 UCRT64 环境构建 MPV，再在具备 Rust/MSVC 的 Windows 原生终端运行：
 
 ```powershell
-bun run task package windows --runtime-dir C:\msys64\ucrt64\bin
+cargo xtask package windows --runtime-dir C:\msys64\ucrt64\bin
 ```
 
 如果没有可用的 `cargo-packager` 0.11.8，任务会将该固定版本安装到 `target/tools`，不替换全局已有版本。
@@ -342,9 +341,9 @@ bun run task package windows --runtime-dir C:\msys64\ucrt64\bin
 JellyPilot 将自身代码提交、`Cargo.lock`、`tools/embedded-mpv/iced-source.json` 与 `tools/embedded-mpv/source.json` 视为强锁定的整体组合。
 
 针对上游同步流程：
-1. 在全新的应用检出中执行 `bun install --frozen-lockfile` 与 `bun run task iced prepare`（不加 `--source`），校验 iced Fork 拉取。
-2. 运行 `bun run task mpv build` 编译锁定的 mpv 版本并生成 manifest。
-3. 执行 `bun run task iced regress all --file /absolute/path/to/real-moving-clip.mp4` 进行全链路端到端原生回归探测。
+1. 在全新的应用检出中执行 `cargo xtask iced prepare`（不加 `--source`），校验 iced Fork 拉取。
+2. 运行 `cargo xtask mpv build` 编译锁定的 mpv 版本并生成 manifest。
+3. 执行 `cargo xtask iced regress all --file /absolute/path/to/real-moving-clip.mp4` 进行全链路端到端原生回归探测。
 4. 完成独立的人工三路色彩对比。
 
 ### 手动三路色彩对比规范
@@ -420,16 +419,28 @@ flowchart LR
 
 | 任务 | 命令 |
 | :--- | :--- |
-| **启动开发模式** | `bun run task iced run` |
-| **无头启动冒烟测试** | `xvfb-run -a bun run task iced run --smoke` |
-| **编译 Release 正式版** | `bun run task iced build --release` |
-| **编译内嵌 MPV（Linux）** | `bun run task mpv build` |
-| **原生回归测试探测** | `bun run task iced regress all --file <样片路径>` |
-| **执行全局规范检查** | `bun run check` |
-| **格式化代码** | `bun run task rust fmt && bun run task fmt` |
-| **运行 Rust 单元测试** | `bun run task rust test` |
-| **运行 Clippy 代码检查** | `bun run task rust clippy` |
-| **重新生成 API 客户端** | `bun run task api` |
+| **启动开发模式** | `cargo xtask iced run` |
+| **无头启动冒烟测试** | `xvfb-run -a cargo xtask iced run --smoke` |
+| **编译 Release 正式版** | `cargo xtask iced build --release` |
+| **编译内嵌 MPV（Linux）** | `cargo xtask mpv build` |
+| **原生回归测试探测** | `cargo xtask iced regress all --file <样片路径>` |
+| **执行全局规范检查** | `cargo xtask check` |
+| **格式化代码** | `cargo xtask fmt` |
+| **运行 Rust 单元测试** | `cargo xtask test` |
+| **运行 Clippy 代码检查** | `cargo xtask rust clippy` |
+| **重新生成 API 客户端** | `cargo xtask api generate <jellyfin\|emby>` |
+| **更新 API 定义及客户端** | `cargo xtask api update <jellyfin\|emby>` |
+| **安装可选 Git hooks** | `cargo xtask hooks install` |
+
+API 客户端已纳入版本控制；仅显式执行 `api generate` / `api update` 时需要 Java，
+并下载固定的 OpenAPI Generator 7.22.0 JAR。普通构建、检查、测试和打包不运行生成器。
+Android 的 Gradle 工具链仍独立需要 JDK，详见 [Android 验证说明](docs/android-testing.md)；
+这与可选的 OpenAPI Java 生成器无关。
+Git hooks 需主动安装：`hooks install` 启用 `.githooks`；pre-commit 只检查格式，
+不修改暂存文件，pre-push 执行 `cargo xtask check`。
+
+可选的 Reicon MCP 集成通过 `npx` 运行固定版本 `reicon-mcp@1.1.102`。
+仅使用该集成时需要 Node.js/npm；普通构建和检查不需要。
 
 ### 编码规范
 

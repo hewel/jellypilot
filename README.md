@@ -116,7 +116,7 @@ Manual skip actions remain available while playback stays inside a range, unless
 
 ### Runtime Prerequisites
 
-- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `bun run task mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player. While a Playback Session is active and unpaused, embedded playback also holds a session idle inhibitor — the Wayland idle-inhibit protocol (`zwp_idle_inhibitor_v1`) on the presentation surface under Wayland, `XScreenSaverSuspend` under X11 — so the desktop does not auto-lock mid-episode. Pausing or stopping playback releases it. On Wayland the inhibitor follows the visible window: closing the window to the tray pauses embedded playback and releases it; it is reacquired only after playback resumes in a visible window. Compositors without the idle-inhibit protocol cannot be inhibited (playback continues normally).
+- **Embedded Playback (Linux default)**: Requires the pinned host-enabled `libmpv` build and baseline configuration (provided by packaged installs or built via `cargo xtask mpv build`), along with a Vulkan driver supporting `Rgb10a2Unorm` presentation surfaces. Missing capability triggers an explicit error rather than falling back to an unverified configuration or external player. While a Playback Session is active and unpaused, embedded playback also holds a session idle inhibitor — the Wayland idle-inhibit protocol (`zwp_idle_inhibitor_v1`) on the presentation surface under Wayland, `XScreenSaverSuspend` under X11 — so the desktop does not auto-lock mid-episode. Pausing or stopping playback releases it. On Wayland the inhibitor follows the visible window: closing the window to the tray pauses embedded playback and releases it; it is reacquired only after playback resumes in a visible window. Compositors without the idle-inhibit protocol cannot be inhibited (playback continues normally).
 - **External Playback (Windows & macOS default, optional on Linux)**: Requires [MPV](https://mpv.io/) with Lua scripting support, discoverable on `PATH` or configured explicitly in **Settings → Playback**. A bundled Lua hook captures volume and temporary mute states before MPV resets options at the end of playback.
 
 ### Window Close and Playback
@@ -238,7 +238,7 @@ For an AppImage, extract it with `./jellypilot-*.AppImage --appimage-extract`, t
 `./squashfs-root/usr/bin/jellypilot-diagnostics`. Run it from the extracted package,
 not after moving it elsewhere, so relative runtime-resource checks remain meaningful.
 Source builds place both executables in `target/release` after
-`bun run task iced build --release`.
+`cargo xtask iced build --release`.
 
 The default report checks configuration readability/parsing, the selected playback backend,
 local session indicators, and player/runtime file availability. It does not migrate
@@ -317,7 +317,7 @@ channel. Back up your JellyPilot configuration before testing.
 <summary>Development prerequisites</summary>
 
 - [Rust](https://rustup.rs/) 1.100.0 (selected by `rust-toolchain.toml`; CI and release builds use the same version, with rustfmt and Clippy)
-- [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
+- Cargo runs the native Rust `xtask` dispatcher; normal builds and checks require neither Bun nor the Java OpenAPI generator
 - Linux GUI: GTK 3, `libxkbcommon`, and Wayland development packages (`libgtk-3-dev`, `libxkbcommon-dev`, `libwayland-dev`, `wayland-protocols`)
 - Linux Embedded MPV (optional if using external MPV): Meson >= 1.3, Ninja, C/C++ compiler, pkg-config, Vulkan development headers/loader >= 1.4.309, FFmpeg dev libraries, `libplacebo` >= 7.387.0, `libass`, and Lua or LuaJIT development files (Ubuntu: `libluajit-5.1-dev`; Arch: `luajit`). Lua support is required for the host's `osc=no` option.
 - Windows Embedded MPV: the same native build tools and media libraries in a Windows environment such as MSYS2 UCRT64, plus Lua or LuaJIT development files. The build requires D3D hardware decoding and Lua support; Lua provides the `osc` option even when the host sets `osc=no`.
@@ -327,13 +327,12 @@ channel. Back up your JellyPilot configuration before testing.
 ```bash
 git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
-bun install --frozen-lockfile
 
 # Optional (Linux or Windows): build and stage the pinned mpv fork for Embedded Playback
-bun run task mpv build
+cargo xtask mpv build
 
 # Build the release launcher binary
-bun run task iced build --release
+cargo xtask iced build --release
 ```
 
 The release binary is `target/release/jellypilot` (`jellypilot.exe` on Windows).
@@ -347,7 +346,7 @@ An inaccessible commit fails explicitly. An optional local source can provide th
 committed contents without being modified; it is not the remote cold-prepare acceptance path:
 
 ```bash
-bun run task iced prepare --source /absolute/path/to/iced
+cargo xtask iced prepare --source /absolute/path/to/iced
 ```
 
 ### Embedded MPV: build, select, and recover
@@ -412,8 +411,8 @@ down to 768 logical pixels; at 900 pixels and below, the landscape thumbnail is 
 ```bash
 # Linux prerequisites: Meson >=1.3, Ninja, C/C++ compiler, pkg-config,
 # Vulkan development headers/loader >=1.4.309, FFmpeg, libplacebo >=7.387.0, libass, Lua/LuaJIT.
-bun run task mpv build
-bun run task iced run
+cargo xtask mpv build
+cargo xtask iced run
 ```
 
 `tools/embedded-mpv/source.json` is the authority for the mpv revision, baseline and Meson
@@ -428,7 +427,7 @@ On Windows, the library is `lib/jellypilot/libmpv-2.dll` and the baseline comes 
 `source.json`, so missing D3D hardware decoding or Lua support fails at configuration time.
 The Windows baseline requests `hwdec=d3d11va-copy`: hardware-decoded frames pass through
 system memory before upload to the existing Vulkan renderer. Unsupported codecs or devices
-can fall back to software decoding. Start it with `bun run task iced run --release --embedded`.
+can fall back to software decoding. Start it with `cargo xtask iced run --release --embedded`.
 Linux and Windows presentation prefer `Rgb10a2Unorm`, then fall back to `Bgra8Unorm` or
 `Rgba8Unorm` if the window surface cannot present 10-bit output. The mpv producer and
 private video texture remain 10-bit. Linux keeps its float scene attachment; Windows
@@ -444,10 +443,10 @@ Confirm `hwdec-current=d3d11va-copy` during playback before claiming hardware de
 the current `iced regress` runner remains Linux-only.
 
 For a Windows installer, build MPV in MSYS2 UCRT64, then run from a native Windows shell
-with Rust/MSVC and Bun available:
+with Rust/MSVC available:
 
 ```powershell
-bun run task package windows --runtime-dir C:\msys64\ucrt64\bin
+cargo xtask package windows --runtime-dir C:\msys64\ucrt64\bin
 ```
 
 If `cargo-packager` 0.11.8 is unavailable, the task installs that exact version under
@@ -484,9 +483,9 @@ directory for the build and its shared-library directory for every run or native
 ```bash
 LIBPLACEBO_PREFIX=/absolute/path/to/libplacebo-7.387.0/install
 PKG_CONFIG_PATH="$LIBPLACEBO_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
-  bun run task mpv build
+  cargo xtask mpv build
 LD_LIBRARY_PATH="$LIBPLACEBO_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  bun run task iced run
+  cargo xtask iced run
 ```
 
 This local build is not a portable release payload. Keep the prefix available for its
@@ -494,7 +493,7 @@ lifetime; the generated manifest records the selected dependency and link inputs
 System FFmpeg may additionally load its own older libplacebo SONAME. That is not a
 fallback for the pinned libmpv's direct `libplacebo.so.387` dependency.
 
-Linux release builds use `bun run task mpv linux-runtime` instead of the development
+Linux release builds use `cargo xtask mpv linux-runtime` instead of the development
 `mpv build` command. It fetches the libplacebo revision in
 `packaging/linux/libplacebo-source.json`, builds it in a private prefix, builds pinned
 mpv against it, and stages libplacebo's required ELF dependencies beside libmpv.
@@ -603,7 +602,7 @@ The desktop dependency graph and `src-iced/Cargo.lock` now include
 `iced_mpv_preview`; the root workspace lockfile is unaffected by this package.
 
 This stream-preview integration consumes the published iced revision recorded in
-`tools/embedded-mpv/iced-source.json`, materialized by `bun run task iced prepare`.
+`tools/embedded-mpv/iced-source.json`, materialized by `cargo xtask iced prepare`.
 The four temporary consumer path overrides were restored exactly. All source files
 and executable bits in the published checkout matched the accepted task-only export;
 the unchanged provider and interaction matrix was reused rather than rerun.
@@ -655,7 +654,7 @@ and a legacy run requires ABI v1 or v2. They also record both Cargo lockfile has
 For sustained GPU lifecycle acceptance, use the same entry with an explicit minimum duration:
 
 ```bash
-bun run task iced regress gpu --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4 --duration-secs 300 --out target/native-regression-sustained
+cargo xtask iced regress gpu --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4 --duration-secs 300 --out target/native-regression-sustained
 ```
 
 `--duration-secs N` accepts **ASCII decimal digits only**, with an integer value from **1 to
@@ -681,7 +680,7 @@ assertions and a successful process exit. Aggregate reports retain `requestedDur
 short or stale reports cannot substitute for a requested sustained run.
 
 Resource collection remains a **separate read-only observer**, for example
-`bun run task monitor --pid <processId> --out target/resources/sustained.ndjson` while the
+`cargo xtask monitor --pid <processId> --out target/resources/sustained.ndjson` while the
 probe runs. Correlate observations with the current run, PID and phase/cycle timestamps;
 retain raw samples and unavailable metrics separately from lifecycle status. A sustained
 pass or a resource trend alone makes no leak-free, color, HDR or decoder-acceptance claim.
@@ -693,16 +692,16 @@ Review the upstream range and the fork's actual ABI/source changes; do not inven
 version bump when no ABI contract changes. Publish the candidate fork commits through the
 normal owner workflow, update the application manifests as one candidate combination, then:
 
-1. In a fresh application checkout, run `bun install --frozen-lockfile` and
-   `bun run task iced prepare` **without `--source`**. Preparation must fetch the manifest's
+1. In a fresh application checkout, run
+   `cargo xtask iced prepare` **without `--source`**. Preparation must fetch the manifest's
    exact published commit and all iced packages must resolve under `target/vendor/iced`.
-2. Build the pinned mpv with `bun run task mpv build`, preserving its generated manifest and
+2. Build the pinned mpv with `cargo xtask mpv build`, preserving its generated manifest and
    any explicit SDK/dependency inputs. Run the applicable [project gates](docs/agents/validation.md).
-3. Run `bun run task iced regress all --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4`.
+3. Run `cargo xtask iced regress all --host-abi 3 --file /absolute/path/to/real-moving-clip.mp4`.
    This is the sole joint-probe entry; [native regression policy](docs/agents/validation.md#opt-in-native-regressions)
    defines prerequisites and evidence. A missing GPU fixture is rejected before preparation,
    build or application startup. Normal run/hot/smoke commands do not enable these probes.
-   Run `bun run task iced regress gpu --host-abi legacy` with the same `--file` and a separate `--out`
+   Run `cargo xtask iced regress gpu --host-abi legacy` with the same `--file` and a separate `--out`
    directory for compatibility evidence. The GPU scenario also checks that a rejected local
    file can be followed by valid playback without recreating the host; this is not fatal
    synchronization recovery.
@@ -782,7 +781,7 @@ through the same input path. Hold Enter on a media card to open its actions; the
 key or Shift+F10 opens the same menu. Login and search support an on-screen keyboard
 and native keyboard/IME entry.
 Choose **Return to desktop** in the TV navigation to leave. The in-app choice is saved.
-`jellypilot --tv` (or `bun run task iced run --tv`) enters TV for that launch, including
+`jellypilot --tv` (or `cargo xtask iced run --tv`) enters TV for that launch, including
 when the application is already running, without changing the saved presentation.
 TV temporarily makes full browsing available even if the desktop is configured for
 Control-Only; leaving TV restores that desktop preference.
@@ -870,20 +869,33 @@ another close.
 
 | Task                        | Command                                      |
 | :-------------------------- | :------------------------------------------- |
-| **Run the app**             | `bun run task iced run`                      |
-| **Startup smoke gate**      | `xvfb-run -a bun run task iced run --smoke`  |
-| **Build release binary**    | `bun run task iced build --release`          |
-| **Build embedded MPV**      | `bun run task mpv build`                     |
-| **Native regression probes**| `bun run task iced regress all --file <clip>`|
-| **Check everything**        | `bun run check`                              |
-| **Format code**             | `bun run task rust fmt && bun run task fmt`  |
-| **Rust tests**              | `bun run task rust test`                     |
-| **Rust clippy**             | `bun run task rust clippy`                   |
-| **Regenerate API clients**  | `bun run task api`                           |
+| **Run the app**             | `cargo xtask iced run` |
+| **Startup smoke gate**      | `xvfb-run -a cargo xtask iced run --smoke` |
+| **Build release binary**    | `cargo xtask iced build --release` |
+| **Build embedded MPV**      | `cargo xtask mpv build` |
+| **Native regression probes**| `cargo xtask iced regress all --file <clip>` |
+| **Check everything**        | `cargo xtask check` |
+| **Format code**             | `cargo xtask fmt` |
+| **Rust tests**              | `cargo xtask test` |
+| **Rust clippy**             | `cargo xtask rust clippy` |
+| **Regenerate API clients**  | `cargo xtask api generate <jellyfin\|emby>` |
+| **Update API schema/client**| `cargo xtask api update <jellyfin\|emby>` |
+| **Install optional hooks**  | `cargo xtask hooks install` |
+
+API clients are checked in. For desktop workflows, Java is needed only by the explicit
+`api generate` / `api update` commands, which download the pinned OpenAPI Generator 7.22.0 JAR.
+Normal build, check, test, and packaging commands do not regenerate clients. Android's
+Gradle toolchain still requires its JDK independently; see [Android testing](docs/android-testing.md).
+Git hooks are opt-in: `hooks install` activates
+`.githooks`, whose pre-commit checks formatting without changing staged files and whose
+pre-push runs `cargo xtask check`.
+
+The optional Reicon MCP integration uses pinned `reicon-mcp@1.1.102` through `npx`.
+Node.js/npm are needed only when using that integration, not for normal builds or checks.
 
 ### Conventions
 
-- **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
+- **Rust**: formatting is enforced by `cargo xtask fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
 - **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
 - **Domain language**: [GLOSSARY.md](GLOSSARY.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
 - **Design and promo artwork**: logo sources, screenshots, fonts, and the renderer live in the separate `jellypilot-design` project. From that checkout, run `bun run promo`, then preview publication with `bun run sync:app -- /absolute/path/to/jellypilot`; add `--write` to copy the selected exports. This repository keeps the published files in `assets/promo/` and `assets/screenshots/`, plus the logo used by those assets. `assets/promo/demo.webm` and `demo-poster.webp` are a recorded demo, not design-project exports.

@@ -13,6 +13,7 @@ All notable changes to JellyPilot are documented in this file.
 ### Changed
 - Migrated both Rust workspaces to Rust 1.100 and pinned local, CI, and release toolchains to 1.100.0; replaced deprecated atomic update calls without weakening warning checks.
 - Automatic interface rendering now selects DirectX 12 on Windows; startup captures retain renderer selection metadata outside the bounded log tail and suppress verbose shader debug output by default.
+- Replaced Bun/TypeScript build orchestration with native Rust `cargo xtask` commands across desktop, Android, packaging and CI. OpenAPI generation is now explicit and on-demand; ordinary builds need neither Bun nor the Java generator. Git hooks are opt-in through `cargo xtask hooks install`.
 
 ### Fixed
 - Fixed Linux runtime license collection for Debian packages whose documentation directories are symlinks, including `libstdc++6`; standard copyright paths are checked while missing notices still fail packaging.

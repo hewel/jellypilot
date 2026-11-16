@@ -4,20 +4,25 @@ This document is the authority for verification scope, including the final pass.
 that exercise the changed contract. Existing authorization for implementation includes these
 checks; do not add an approval pause solely because the applicable tier is broader.
 
+Use native `cargo xtask` for maintained workflows. OpenAPI clients are checked in; ordinary
+checks, tests and builds do not regenerate them or require the Java generator. Historical
+verification records retain the commands actually run (including retired Bun commands);
+they are evidence, not current execution instructions.
+
 ## Tiers
 
 1. **Focused** — the default for localized edits. For Rust behavior, use tests in the touched
-   crate (`bun run task rust test <crate>`), focused clippy (`bun run task rust clippy <crate>`),
-   and `bun run task rust fmt --check`. For scripts, use the relevant Bun tests plus
-   `bun run task typecheck`, `bun run task lint`, and `bun run task fmt --check` as applicable.
+   crate (`cargo xtask rust test <crate>`), focused clippy (`cargo xtask rust clippy <crate>`),
+   and `cargo xtask fmt --check`. For orchestration changes, use the relevant `xtask`
+   tests (`cargo xtask rust test xtask`) and focused clippy (`cargo xtask rust clippy xtask`).
    Documentation and instruction-only changes need link, command, metadata, and consistency
    checks; they do not require application builds or tests. Use this tier when no cross-crate
    contract changes.
-2. **Suite** — for contract or cross-crate changes: focused gates first, then `bun run check`
-   (fmt + lint + scripts typecheck + workspace clippy) and `bun run task rust test` (workspace).
+2. **Suite** — for contract or cross-crate changes: focused gates first, then `cargo xtask check`
+   (maintained Rust fmt + clippy + xtask tests) and `cargo xtask test` (both Rust workspaces).
    Use when public types, crate interfaces, or more than one crate change.
 3. **Native smoke** — for desktop-boundary crossings: add
-   `xvfb-run -a bun run task iced run --smoke` (builds the app, renders one frame, exits) when
+   `xvfb-run -a cargo xtask iced run --smoke` (builds the app, renders one frame, exits) when
    acceptance crosses application startup, window/shell wiring, subscriptions, tray behavior, or
    configuration persistence. The smoke gate proves startup, not appearance — visual acceptance
    remains human (see root AGENTS.md).
@@ -25,11 +30,24 @@ checks; do not add an approval pause solely because the applicable tier is broad
    probe that enables the real tray before embedded-host creation under a non-C `LC_ALL`,
    using an isolated D-Bus session and a usable native display. A tray-free smoke cannot verify
    that boundary; Xvfb without a presentation-capable Vulkan driver is not hardware evidence.
+   Temporary test-configuration isolation is a Linux/XDG contract (`XDG_CONFIG_HOME`).
+   It is not a cross-platform settings override: Windows uses its KnownFolder configuration
+   location, so changing `APPDATA` does not establish isolation there.
+   If Xvfb lacks a Vulkan presentation adapter, retain the default smoke failure. After
+   preparing the desktop with `cargo xtask iced build`, a separate software-startup probe is:
+
+   ```bash
+   xvfb-run -a env WAYLAND_DISPLAY= WINIT_UNIX_BACKEND=x11 \
+     cargo run --manifest-path src-iced/Cargo.toml --package jellypilot-launcher -- \
+     --smoke-test --external --renderer software
+   ```
+
+   A successful software probe does not pass the default smoke, Embedded MPV, or GPU gates.
 
 ## Opt-in native regressions
 
 The sole maintained joint entry is
-`bun run task iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>] [--host-abi <legacy|3>] [--duration-secs <N>]`.
+`cargo xtask iced regress <tray|external|gpu|all> [--file <media>] [--out <report-dir>] [--hwdec <no|vaapi|vaapi-copy>] [--host-abi <legacy|3>] [--duration-secs <N>]`.
 It is not part of normal startup or a replacement for the applicable project gates.
 See [fork maintenance](../../README.md#fork-maintenance-and-joint-acceptance) for sync and
 rollback, and [manual color comparison](../../README.md#manual-three-way-color-comparison)
@@ -143,7 +161,7 @@ Phase codes are 0 load, 8 settle paused frame, 1 paused hold, 2 paused seek, 3 p
 Phase history records transitions; resource samples correlated to it are not atomic phase
 measurements and can miss short stages.
 Resource metrics remain a separate read-only observer, not a new acceptance framework:
-for example, attach `bun run task monitor --pid <processId> --out target/resources/sustained.ndjson`
+for example, attach `cargo xtask monitor --pid <processId> --out target/resources/sustained.ndjson`
 while the process runs, and retain raw metrics/unavailability alongside run/PID/phase/cycle
 evidence. Neither a lifecycle pass nor resource trends establish absence of leaks.
 Human-authored `color-comparison.json` is separate and is never written or accepted by the
@@ -157,9 +175,10 @@ When the smoke gate or MPV playback fails, follow this route instead of ad-hoc s
 - **App logging**: `JELLYPILOT_LOG` (tracing EnvFilter syntax) controls app diagnostics; default
   `warn`, output goes to **stderr** (`src-iced/src/runner.rs`). Typical values: `error`, `warn`,
   `info`, `debug`, `trace`, or module-scoped `jellypilot_iced=debug`. Re-run a failing gate as
-  `JELLYPILOT_LOG=debug bun run task iced run --smoke`.
-- **Stream anatomy**: the dispatcher pipes child output through, so cargo compile lines come first
-  and app tracing starts after cargo's `Running …` line. Compile errors belong to cargo (they name
+  `JELLYPILOT_LOG=debug cargo xtask iced run --smoke`.
+- **Stream anatomy**: ordinary tasks inherit child stdout/stderr; explicit capture tasks
+  instead retain bounded output without forwarding it. Cargo compile lines come first and
+  app tracing starts after cargo's `Running …` line. Compile errors belong to cargo (they name
   the crate and file); failures after `Running` belong to the app.
 - **Failure segment**: a failing smoke gate ends with an `=== iced smoke [FAILED] ===` segment
   (command, exit code, hint). Absence of that segment means the failure happened before the app
@@ -188,9 +207,9 @@ When the smoke gate or MPV playback fails, follow this route instead of ad-hoc s
   case-by-case tests for simple command forwarding, constants, defaults, or field copying.
 - Assert error semantics (rejection, error type/code, or relevant structured context), not
   incidental error-message wording. Assert wording only when it is an explicit required contract.
-- Do not re-run suites the change cannot affect: no workspace clippy for a `scripts/**`-only edit,
-  no smoke gate for display-free logic in `jellypilot-core`.
-- Prefer cached incremental reruns. A focused `bun run task rust test <crate>` after a warm build is
+- Do not re-run suites the change cannot affect: orchestration-only changes need focused `xtask`
+  gates, not application suites; display-free logic in `jellypilot-core` needs no native smoke.
+- Prefer cached incremental reruns. A focused `cargo xtask rust test <crate>` after a warm build is
   seconds; reserve full gates for the final pass of multi-step work, not for every intermediate
   edit.
 - A failing, timed-out, or cancelled verification run is not a pass. Investigate the failure and

@@ -3,3 +3,6 @@
 # native regression runner all address artifacts under target/{debug,release}.
 [build]
 target-dir = "target"
+
+[alias]
+xtask = "run --package xtask --"

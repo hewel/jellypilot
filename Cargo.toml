@@ -12,6 +12,7 @@ members = [
   "crates/jellypilot-session",
   "crates/jellypilot-sdk",
   "crates/jellypilot-ffi",
+  "xtask",
 ]
 exclude = [
   "crates/jellypilot-ui",

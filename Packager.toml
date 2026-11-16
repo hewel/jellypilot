@@ -10,7 +10,7 @@ description = "Jellyfin and Emby companion app with embedded MPV from the pinned
 category = "Video"
 binaries-dir = "target/release"
 out-dir = "target/release/bundle"
-before-packaging-command = "bun run task iced build --release"
+before-packaging-command = "cargo xtask iced build --release"
 binaries = [
   { path = "jellypilot", main = true },
   { path = "jellypilot-diagnostics", main = false },
@@ -24,7 +24,7 @@ icons = [
 ]
 
 [nsis]
-# Windows releases use `bun run task package windows --runtime-dir <UCRT64/bin>`.
+# Windows releases use `cargo xtask package windows --runtime-dir <UCRT64/bin>`.
 # It adds verified embedded resources to this shared config before invoking NSIS.
 installMode = "currentUser"
 

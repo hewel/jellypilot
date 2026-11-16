@@ -25,10 +25,11 @@ embedded build/selection contract. No webview/Tauri.
   `jellypilot-media-server` (Jellyfin/Emby HTTP + artwork), `jellypilot-auth` (login + keyring),
   `jellypilot-mpv` (process + JSON IPC), `jellypilot-session` (WebSocket remote sessions)
 - **Embedded host**: `crates/jellypilot-mpv-host` owns Vulkan/libmpv FFI; `src-iced/src/embedded` supplies the closed official compositor and player primitive
-- **Generated API clients**: `crates/media-server-api/{jellyfin,emby}` (OpenAPI, regenerate via
-  `bun run task api`)
-- **Tooling**: Bun exists only for the `scripts/task.ts` dispatcher; Oxc formats/lints `scripts/**`;
-  there is no JavaScript frontend
+- **Generated API clients**: `crates/media-server-api/{jellyfin,emby}` (OpenAPI, regenerate on demand via
+  `cargo xtask api generate <jellyfin|emby>`; the Java generator runs only on demand)
+- **Tooling**: native Rust `xtask`; desktop builds and checks need neither Bun nor Java
+- **Optional Reicon MCP**: pinned `reicon-mcp@1.1.102` runs through `npx`; Node.js/npm are
+  required only for that integration, not for normal builds or checks
 
 ## Where to Look
 
@@ -42,35 +43,35 @@ embedded build/selection contract. No webview/Tauri.
 | Media server client | `crates/jellypilot-media-server/src/` | `client.rs`, `types.rs`, `artwork.rs` |
 | MPV IPC | `crates/jellypilot-mpv/src/` | `client.rs`, `playback.rs`, `protocol.rs` |
 | Remote sessions | `crates/jellypilot-session/src/` | WebSocket command channel |
-| Task dispatcher | `scripts/task.ts` + `scripts/task/` | Effect-based CLI; the only permitted cargo entry |
+| Task dispatcher | `xtask/src/` | Native Rust CLI via `cargo xtask` |
 | Add test | beside the code (`#[cfg(test)]`) | display-free logic tested in its crate |
 
 ## Commands
 
 ```bash
-bun run check                    # oxfmt/oxlint + scripts typecheck/tests + cargo fmt/clippy (workspace)
-bun run task fmt [--check]       # oxfmt on package.json + scripts/**
-bun run task lint [--fix]        # oxlint on scripts/**
-bun run task typecheck           # tsc on scripts/**
-bun run task rust fmt [--check]  # rustfmt on maintained Rust packages
-bun run task rust check [crate]  # cargo check (workspace or named crates)
-bun run task rust clippy [crate] # cargo clippy -D warnings
-bun run task rust test [crate]   # cargo test
-bun run task iced run [--smoke] [--release]  # run the app; --smoke exits after first frame
-bun run task iced hot                      # hot-reload dev run via cargo-hot (dev feature)
-bun run task api                 # regenerate OpenAPI clients
-bun run task monitor --pid <pid> --out <target/path> # Linux raw resource sampler for a running process
+cargo xtask check                    # maintained Rust fmt/clippy + xtask tests
+cargo xtask test                     # tests in both Rust workspaces
+cargo xtask fmt [--check]             # rustfmt on maintained Rust packages
+cargo xtask rust check [crate]        # cargo check (both workspaces or named crates)
+cargo xtask rust clippy [crate]       # cargo clippy -D warnings
+cargo xtask rust test [crate]         # cargo test
+cargo xtask iced run [--smoke] [--release]  # run the app; --smoke exits after first frame
+cargo xtask iced hot                      # hot-reload dev run via cargo-hot (dev feature)
+cargo xtask api generate <jellyfin|emby>    # optional OpenAPI regeneration; requires Java
+cargo xtask api update <jellyfin|emby>      # optional schema update and regeneration
+cargo xtask monitor --pid <pid> --out <target/path> # Linux raw resource sampler
+cargo xtask hooks install                 # optional: activate repository .githooks
 ```
 
-Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui + app).
+Crate short names include `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui + app), and `xtask`.
 
 ## Conventions
 
 - **Rust style**: 2-space indent (`rustfmt.toml`); workspace lints forbid `unsafe_code` and deny
   clippy warnings. Select focused or broader gates from `docs/agents/validation.md`; that policy
   is authoritative for verification scope, including the final pass.
-- **No cargo directly**: use the `scripts/task.ts` dispatcher (`bun run task rust …`); never invoke
-  `cargo` by hand except inside hooks that already do.
+- **Cargo entry points**: use `cargo xtask` for maintained build, format, lint, and test workflows.
+  Cargo and native Rust xtask commands are permitted; ordinary builds do not regenerate API clients.
 - **Display-free logic lives in `jellypilot-core`** and is tested there; `src-iced` keeps
   orchestration (Tasks, subscriptions, view). Follow ADR 0028's replace-don't-layer testing:
   adapters are tested through their external seam.
@@ -99,7 +100,7 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
   Agents must not launch the app to "check how it looks", capture screenshots, toggle system
   settings (gsettings/color scheme), or inject input to drive the desktop. Agents verify code-level
   only — focused checks/lints, format, type checks, and the native smoke gate
-  (`xvfb-run -a bun run task iced run --smoke`) — and report a concrete visual checklist (where to
+  (`xvfb-run -a cargo xtask iced run --smoke`) — and report a concrete visual checklist (where to
   look, what should appear) for the user to review.
 - **Treating the project as a web app**: this is cross-platform desktop software (Windows, macOS,
   Linux) drawn by iced; there is no DOM, no CSS, no browser target. Do not propose web tooling,

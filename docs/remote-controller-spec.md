@@ -94,7 +94,7 @@ requests. SDK tests coordinate target/profile changes at async boundaries and
 prove that obsolete commands do not reach a new target. Android host tests cover
 selection, capability-driven actions, proper item identity, page/visibility
 lifetime and unchanged local playback. Follow the cross-crate suite tier and
-`bun run task android check`.
+`cargo xtask android check`.
 
 Real phone-to-PC/TV control, server permission policy and network timing require
 human integration acceptance. No agent screenshots or native input injection.

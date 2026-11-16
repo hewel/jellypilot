@@ -312,14 +312,14 @@ The follow-up alignment and focus fixes passed focused UI/app tests and clippy, 
 The subsequent quick-menu simplification passed focused UI/app tests and clippy, `bun run check`, workspace Rust tests, and the native smoke gate. A native `UserInterface` regression activates Manage accounts, checks the Account category, and verifies keyboard activation of the restored origin after both account-specific and ordinary Settings entry. It reproduced and then closed the redundant-Open focus-origin defect. Independent behavior and design reviews have no remaining actionable findings. These checks do not exercise live account switching or establish human visual acceptance.
 
 ```bash
-bun run task rust test <crate>
-bun run task rust clippy <crate>
-bun run task rust fmt --check
+cargo xtask rust test <crate>
+cargo xtask rust clippy <crate>
+cargo xtask fmt --check
 # Final gates for cross-crate / public-interface changes
-bun run check
-bun run task rust test
+cargo xtask check
+cargo xtask test
 # Desktop-boundary and persistence gate: proves startup, not appearance
-xvfb-run -a bun run task iced run --smoke
+xvfb-run -a cargo xtask iced run --smoke
 ```
 
 Replace `<crate>` with the actual short name required by the validation policy. Test domain logic in display-free crates and adapters through real external interface shapes;

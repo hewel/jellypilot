@@ -1,5 +1,10 @@
 # Library Virtual Scrolling
 
+> Historical Tauri/Solid/WASM implementation record, superseded by the native iced architecture
+> in ADR 0027. Paths and Bun/WebView commands below describe the retired implementation, not
+> maintained build instructions. Use [the validation policy](agents/validation.md) for current
+> Cargo/xtask checks.
+
 This document describes the virtualized grid used by the movie and TV library browse route:
 
 - route and paging: `src/routes/_authenticated/library/$collectionType/$libraryId.tsx`

@@ -6,10 +6,14 @@ acceptance. Visual and audio/output acceptance is performed by a human.
 
 ## Automated checks
 
+Use the native Rust dispatcher; Bun is not required. Android Gradle still requires its JDK,
+SDK and pinned NDK, independently of the optional Java OpenAPI generator. These Android tasks
+consume the checked-in API clients and do not regenerate them.
+
 ```bash
-bun run task android doctor
-bun run task android check
-bun run task android build
+cargo xtask android doctor
+cargo xtask android check
+cargo xtask android build
 ```
 
 `android check` regenerates UniFFI bindings and runs Android lint and host tests. Compose behavior

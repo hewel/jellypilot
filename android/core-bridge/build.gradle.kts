@@ -14,8 +14,8 @@ extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
   }
-  // `bun run task android rust` stages libjellypilot_ffi.so into
-  // build/jniLibs/<abi>; `bun run task android bindings` generates Kotlin
+  // `cargo xtask android rust` stages libjellypilot_ffi.so into
+  // build/jniLibs/<abi>; `cargo xtask android bindings` generates Kotlin
   // into build/generated/uniffi. Both stay out of src/ as build artifacts.
   sourceSets["main"].apply {
     jniLibs.directories += "build/jniLibs"

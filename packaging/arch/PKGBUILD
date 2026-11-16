@@ -29,7 +29,6 @@ optdepends=(
 makedepends=(
   'git'
   'rust>=1.100'
-  'bun'
   'meson'
   'ninja'
   'pkgconf'
@@ -56,9 +55,8 @@ sha256sums=(
 build() {
   cd "$srcdir/$pkgname"
 
-  bun install --frozen-lockfile
-  bun run task mpv linux-runtime
-  bun run task iced build --release
+  cargo xtask mpv linux-runtime
+  cargo xtask iced build --release
 }
 
 package() {

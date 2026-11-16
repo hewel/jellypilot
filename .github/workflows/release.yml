@@ -41,7 +41,6 @@ jobs:
           import tomllib
 
           cargo = tomllib.loads(Path('Cargo.toml').read_text())
-          package = json.loads(Path('package.json').read_text())
           packager = tomllib.loads(Path('Packager.toml').read_text())
           pkgbuild = Path('packaging/arch/PKGBUILD').read_text()
           bin_pkgbuild = Path('packaging/arch/bin/PKGBUILD').read_text()
@@ -53,7 +52,6 @@ jobs:
               raise SystemExit('packaging/arch/bin/PKGBUILD does not declare pkgver')
           versions = {
               'Cargo workspace': cargo['workspace']['package']['version'],
-              'package.json': package['version'],
               'Packager.toml': packager['version'],
               'PKGBUILD': pkgver_match.group(1).strip("'\""),
               'bin PKGBUILD': bin_pkgver_match.group(1).strip("'\""),
@@ -119,8 +117,6 @@ jobs:
             asset: '*.dmg'
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@1.100.0
       - uses: swatinem/rust-cache@v2
         with:
@@ -157,12 +153,12 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          bun run task mpv build
+          cargo xtask mpv build
           echo "runtime-dir=$(cygpath -w "$MINGW_PREFIX/bin")" >> "$GITHUB_OUTPUT"
       - name: Package Windows with embedded runtime
         if: runner.os == 'Windows'
         shell: pwsh
-        run: bun run task package windows --runtime-dir '${{ steps.windows-mpv.outputs.runtime-dir }}'
+        run: cargo xtask package windows --runtime-dir '${{ steps.windows-mpv.outputs.runtime-dir }}'
       - name: Build ${{ matrix.format }} package
         if: runner.os != 'Windows'
         run: cargo packager --config Packager.toml --formats ${{ matrix.format }}
@@ -293,7 +289,7 @@ jobs:
         run: |
           cache="${HOME}/.cache/jellypilot-ci"
           tools="${cache}/packager/AppImage"
-          mkdir -p "${cache}/cargo" "${cache}/rustup" "${cache}/bun" "${tools}"
+          mkdir -p "${cache}/cargo" "${cache}/rustup" "${tools}"
           download() {
             local dest="$1" url="$2"
             if [[ -s "${dest}" ]]; then
@@ -315,20 +311,17 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/work" \
             -v "${cache}/cargo:/opt/cargo" \
             -v "${cache}/rustup:/opt/rustup" \
-            -v "${cache}/bun:/opt/bun" \
             -v "${cache}/packager:/root/.cache/.cargo-packager" \
             -w /work \
             -e CARGO_HOME=/opt/cargo \
             -e RUSTUP_HOME=/opt/rustup \
-            -e BUN_INSTALL=/opt/bun \
             -e XDG_CACHE_HOME=/root/.cache \
             -e APPIMAGE_EXTRACT_AND_RUN=1 \
-            -e HUSKY=0 \
             docker.io/library/ubuntu:26.04 \
             bash -lc '
               set -euo pipefail
               export DEBIAN_FRONTEND=noninteractive
-              export PATH="/opt/bun/bin:/opt/cargo/bin:$PATH"
+              export PATH="/opt/cargo/bin:$PATH"
               apt-get update
               apt-get install -y --no-install-recommends \
                 ca-certificates curl build-essential pkg-config git unzip xz-utils \
@@ -338,9 +331,6 @@ jobs:
                 libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev \
                 libswresample-dev libswscale-dev libass-dev libluajit-5.1-dev \
                 libvulkan-dev glslang-dev libshaderc-dev liblcms2-dev
-              if ! command -v bun >/dev/null; then
-                curl -fsSL https://bun.sh/install | bash
-              fi
               if ! command -v rustc >/dev/null; then
                 curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
                   -y --default-toolchain 1.100.0 --profile minimal --no-modify-path
@@ -348,8 +338,7 @@ jobs:
               if ! command -v cargo-packager >/dev/null; then
                 cargo install cargo-packager --version 0.11.8 --locked
               fi
-              bun install --frozen-lockfile
-              bun run task mpv linux-runtime
+              cargo xtask mpv linux-runtime
               cargo packager --config Packager.toml --formats deb
               cargo packager --config Packager.toml --formats appimage
             '
@@ -467,7 +456,7 @@ jobs:
             docker.io/library/archlinux:base-devel \
             bash -lc '
               set -euo pipefail
-              pacman -Syu --noconfirm --needed git curl rust bun gtk3 mpv libxkbcommon wayland \
+              pacman -Syu --noconfirm --needed git curl rust gtk3 mpv libxkbcommon wayland \
                 meson ninja pkgconf binutils patchelf vulkan-headers vulkan-icd-loader ffmpeg \
                 glslang libass shaderc lcms2 luajit
               useradd --create-home builder

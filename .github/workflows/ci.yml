@@ -10,8 +10,6 @@ jobs:
   check:
     name: Lint and Test
     runs-on: ubuntu-latest
-    env:
-      HUSKY: 0
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
@@ -27,16 +25,11 @@ jobs:
       - name: Discard cached iced vendor
         shell: bash
         run: rm -rf target/vendor/iced target/vendor/iced-*
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Format, lint, typecheck, and clippy
-        run: bun run check
+      - name: Check Rust formatting, clippy, and xtask tests
+        run: cargo xtask check
 
       - name: Run Rust tests
-        run: bun run task rust test
+        run: cargo xtask test
 
       - name: Run iced startup smoke
-        run: xvfb-run -a bun run task iced run --smoke
+        run: xvfb-run -a cargo xtask iced run --smoke
