@@ -1729,4 +1729,347 @@ mod tests {
     );
     assert!(update.commands.is_empty());
   }
+
+  #[test]
+  fn stateful_property_enforces_single_cleanup_and_token_isolation_without_sockets() {
+    use std::collections::HashSet;
+
+    use jellypilot_core::prop_test::{check_stateful, Rng};
+
+    #[derive(Clone, Debug)]
+    enum Action {
+      Start(u8),
+      Rename(u8),
+      Event {
+        use_current_token: bool,
+        kind: u8,
+      },
+      Retire(u8),
+      CompleteInFlight {
+        pick: usize,
+        stale_revision: bool,
+        outcome: u8,
+      },
+    }
+
+    enum InFlightKind {
+      Startup {
+        desired: Arc<AtomicU64>,
+      },
+      Registration {
+        reconnected: bool,
+        desired: Arc<AtomicU64>,
+      },
+      Cleanup,
+    }
+
+    struct InFlight {
+      resource: u64,
+      work: u64,
+      kind: InFlightKind,
+    }
+
+    let shared_client = Arc::new(JellyfinClient::new());
+
+    check_stateful(
+      256,
+      60,
+      |rng: &mut Rng| match rng.below(5) {
+        0 => Action::Start(rng.below(4) as u8),
+        1 => Action::Rename(rng.below(6) as u8),
+        2 => Action::Event {
+          use_current_token: rng.below(4) != 0,
+          kind: rng.below(4) as u8,
+        },
+        3 => Action::Retire(rng.below(5) as u8),
+        _ => Action::CompleteInFlight {
+          pick: rng.below(8),
+          stale_revision: rng.below(4) == 0,
+          outcome: rng.below(5) as u8,
+        },
+      },
+      |actions| {
+        let mut gate = RequestGate::default();
+        let mut runtime = Runtime::new(&mut gate);
+        let mut created_resources: HashSet<u64> = HashSet::new();
+        let mut cleanups_emitted: HashSet<u64> = HashSet::new();
+        let mut cleanups_completed: HashSet<u64> = HashSet::new();
+        let mut in_flight: Vec<InFlight> = Vec::new();
+        let mut stale_token = gate.begin_remote();
+
+        let record_update = |step_label: &str,
+                             runtime: &Runtime,
+                             update: Update,
+                             created: &mut HashSet<u64>,
+                             emitted: &mut HashSet<u64>,
+                             queue: &mut Vec<InFlight>|
+         -> Result<(), String> {
+          if update.settled.contains(&Waiter::Disconnect) {
+            return Err(format!(
+              "{step_label}: Waiter::Disconnect appeared in settled"
+            ));
+          }
+          for (tok, _) in update.commands {
+            if tok != runtime.token() {
+              return Err(format!(
+                "{step_label}: command emitted with non-current RemoteToken"
+              ));
+            }
+          }
+          for work in update.work {
+            match work.0 {
+              WorkInner::Startup {
+                resource, desired, ..
+              } => {
+                created.insert(resource);
+                queue.push(InFlight {
+                  resource,
+                  work: 0,
+                  kind: InFlightKind::Startup { desired },
+                });
+              }
+              WorkInner::Registration {
+                resource,
+                work,
+                reconnected,
+                desired,
+                ..
+              } => {
+                queue.push(InFlight {
+                  resource,
+                  work,
+                  kind: InFlightKind::Registration {
+                    reconnected,
+                    desired,
+                  },
+                });
+              }
+              WorkInner::Cleanup { resource, work, .. } => {
+                if !emitted.insert(resource) {
+                  return Err(format!(
+                    "{step_label}: Cleanup emitted more than once for resource {resource}"
+                  ));
+                }
+                queue.push(InFlight {
+                  resource,
+                  work,
+                  kind: InFlightKind::Cleanup,
+                });
+              }
+            }
+          }
+          Ok(())
+        };
+
+        let make_completion =
+          |item: InFlight, stale_revision: bool, outcome: u8| -> (u64, Completion) {
+            let cleanup_resource =
+              matches!(item.kind, InFlightKind::Cleanup).then_some(item.resource);
+            let kind = match item.kind {
+              InFlightKind::Startup { desired } => {
+                let rev = desired.load(Ordering::Acquire);
+                let revision = if stale_revision {
+                  rev.saturating_sub(1)
+                } else {
+                  rev
+                };
+                let result = match outcome % 5 {
+                  0 | 1 => Ok(true),
+                  2 => Ok(false),
+                  3 => Err(StartError::ConnectionFailed),
+                  _ => Err(StartError::CapabilityRegistrationFailed),
+                };
+                CompletionKind::Startup { revision, result }
+              }
+              InFlightKind::Registration {
+                reconnected,
+                desired,
+              } => {
+                let rev = desired.load(Ordering::Acquire);
+                let revision = if stale_revision {
+                  rev.saturating_sub(1)
+                } else {
+                  rev
+                };
+                let result = match outcome % 4 {
+                  0 | 1 => Ok(true),
+                  2 => Ok(false),
+                  _ => Err(CapabilityRegistrationError),
+                };
+                CompletionKind::Registration {
+                  revision,
+                  reconnected,
+                  result,
+                }
+              }
+              InFlightKind::Cleanup => CompletionKind::Cleanup,
+            };
+            (
+              cleanup_resource.unwrap_or(0),
+              Completion {
+                resource: item.resource,
+                work: item.work,
+                kind,
+              },
+            )
+          };
+
+        for (step, action) in actions.iter().enumerate() {
+          let label = format!("step {step}");
+          match action {
+            Action::Start(name_idx) => {
+              let prev_token = runtime.token();
+              let update = runtime.update(
+                Input::Start {
+                  client: Arc::clone(&shared_client),
+                  name: format!("Target-{name_idx}"),
+                },
+                &mut gate,
+              );
+              stale_token = prev_token;
+              record_update(
+                &label,
+                &runtime,
+                update,
+                &mut created_resources,
+                &mut cleanups_emitted,
+                &mut in_flight,
+              )?;
+            }
+            Action::Rename(name_idx) => {
+              let update = runtime.update(Input::Rename(format!("Renamed-{name_idx}")), &mut gate);
+              record_update(
+                &label,
+                &runtime,
+                update,
+                &mut created_resources,
+                &mut cleanups_emitted,
+                &mut in_flight,
+              )?;
+            }
+            Action::Event {
+              use_current_token,
+              kind,
+            } => {
+              let remote = if *use_current_token {
+                runtime.token()
+              } else {
+                stale_token
+              };
+              let event = match kind % 4 {
+                0 => JellyfinWebSocketEvent::Connected,
+                1 => JellyfinWebSocketEvent::ConnectionLost,
+                2 => JellyfinWebSocketEvent::Reconnected,
+                _ => playstate("Pause"),
+              };
+              let update = runtime.update(Input::Event { remote, event }, &mut gate);
+              if !use_current_token
+                && (!update.commands.is_empty()
+                  || !update.notices.is_empty()
+                  || !update.work.is_empty())
+              {
+                return Err(format!("{label}: stale RemoteToken event produced effects"));
+              }
+              record_update(
+                &label,
+                &runtime,
+                update,
+                &mut created_resources,
+                &mut cleanups_emitted,
+                &mut in_flight,
+              )?;
+            }
+            Action::Retire(waiter_kind) => {
+              let waiter = match waiter_kind % 5 {
+                0 => Waiter::Disconnect,
+                1 => Waiter::Quit,
+                n => Waiter::Account(u64::from(n - 2)),
+              };
+              let prev_token = runtime.token();
+              let update = runtime.update(Input::Retire(waiter), &mut gate);
+              stale_token = prev_token;
+              if runtime.view().state != RemoteControlState::Unavailable {
+                return Err(format!(
+                  "{label}: view state not Unavailable immediately after Retire"
+                ));
+              }
+              record_update(
+                &label,
+                &runtime,
+                update,
+                &mut created_resources,
+                &mut cleanups_emitted,
+                &mut in_flight,
+              )?;
+            }
+            Action::CompleteInFlight {
+              pick,
+              stale_revision,
+              outcome,
+            } => {
+              if in_flight.is_empty() {
+                continue;
+              }
+              let idx = *pick % in_flight.len();
+              let item = in_flight.swap_remove(idx);
+              let is_cleanup = matches!(item.kind, InFlightKind::Cleanup);
+              let (cleanup_res, completion) = make_completion(item, *stale_revision, *outcome);
+              if is_cleanup {
+                cleanups_completed.insert(cleanup_res);
+              }
+              let update = runtime.update(Input::Completed(completion), &mut gate);
+              record_update(
+                &label,
+                &runtime,
+                update,
+                &mut created_resources,
+                &mut cleanups_emitted,
+                &mut in_flight,
+              )?;
+            }
+          }
+        }
+
+        let retire_update = runtime.update(Input::Retire(Waiter::Quit), &mut gate);
+        if runtime.view().state != RemoteControlState::Unavailable {
+          return Err("drain retire left non-Unavailable state".to_owned());
+        }
+        record_update(
+          "drain-retire",
+          &runtime,
+          retire_update,
+          &mut created_resources,
+          &mut cleanups_emitted,
+          &mut in_flight,
+        )?;
+        while !in_flight.is_empty() {
+          let item = in_flight.remove(0);
+          let is_cleanup = matches!(item.kind, InFlightKind::Cleanup);
+          let (cleanup_res, completion) = make_completion(item, false, 0);
+          if is_cleanup {
+            cleanups_completed.insert(cleanup_res);
+          }
+          let update = runtime.update(Input::Completed(completion), &mut gate);
+          record_update(
+            "drain-step",
+            &runtime,
+            update,
+            &mut created_resources,
+            &mut cleanups_emitted,
+            &mut in_flight,
+          )?;
+        }
+
+        if !runtime.view().quiescent {
+          return Err("runtime not quiescent after draining all in-flight work".to_owned());
+        }
+        if cleanups_emitted != created_resources || cleanups_completed != created_resources {
+          return Err(format!(
+            "cleanup mismatch: created={created_resources:?} emitted={cleanups_emitted:?} completed={cleanups_completed:?}"
+          ));
+        }
+        Ok(())
+      },
+    );
+  }
 }

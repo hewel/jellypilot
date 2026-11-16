@@ -499,4 +499,350 @@ mod tests {
         assert!(!gate.finish_image_cache(earlier));
         assert!(gate.finish_image_cache(current));
     }
+
+    #[test]
+    fn stateful_property_preserves_session_remote_and_aux_invariants() {
+        use crate::prop_test::{check_stateful, Rng};
+
+        #[derive(Clone, Debug)]
+        enum Action {
+            BeginLogin,
+            FinishLogin(usize),
+            Disconnect,
+            BeginHome,
+            FinishHome(usize),
+            BeginDetail,
+            FinishDetail(usize),
+            CancelDetailLoads,
+            Navigate,
+            SetDetailItem(Option<u8>),
+            BeginDetailAux(u8),
+            FinishDetailAux(usize),
+            InvalidateDetailAux(u8),
+            BeginRemote,
+            BeginRemotePlay,
+            BeginImageCache,
+            FinishImageCache(usize),
+        }
+
+        fn item_name(idx: Option<u8>) -> Option<String> {
+            idx.map(|n| format!("item-{n}"))
+        }
+
+        const AUX_KINDS: [DetailAuxKind; 4] = [
+            DetailAuxKind::Streams,
+            DetailAuxKind::Recommendations,
+            DetailAuxKind::SeasonNeighbors,
+            DetailAuxKind::SimilarItems,
+        ];
+
+        check_stateful(
+            256,
+            100,
+            |rng: &mut Rng| match rng.below(17) {
+                0 => Action::BeginLogin,
+                1 => Action::FinishLogin(rng.below(8)),
+                2 => Action::Disconnect,
+                3 => Action::BeginHome,
+                4 => Action::FinishHome(rng.below(8)),
+                5 => Action::BeginDetail,
+                6 => Action::FinishDetail(rng.below(8)),
+                7 => Action::CancelDetailLoads,
+                8 => Action::Navigate,
+                9 => Action::SetDetailItem(match rng.below(3) {
+                    0 => None,
+                    1 => Some(0),
+                    _ => Some(1),
+                }),
+                10 => Action::BeginDetailAux(rng.below(4) as u8),
+                11 => Action::FinishDetailAux(rng.below(8)),
+                12 => Action::InvalidateDetailAux(rng.below(4) as u8),
+                13 => Action::BeginRemote,
+                14 => Action::BeginRemotePlay,
+                15 => Action::BeginImageCache,
+                _ => Action::FinishImageCache(rng.below(8)),
+            },
+            |actions| {
+                let mut gate = RequestGate::default();
+                let mut session: u64 = 0;
+                let mut active_login: Option<SessionToken> = None;
+                let mut active_home: Option<HomeToken> = None;
+                let mut active_detail: Option<DetailToken> = None;
+                let mut detail_item: Option<String> = None;
+                let mut aux_seq = [0_u64; 4];
+                let mut aux_live = [false; 4];
+                let mut active_remote: Option<RemoteToken> = None;
+                let mut active_remote_play: Option<RemotePlayToken> = None;
+                let mut active_image: Option<ImageCacheToken> = None;
+
+                let mut logins = Vec::new();
+                let mut homes = Vec::new();
+                let mut details = Vec::new();
+                let mut aux_tokens: Vec<(DetailAuxToken, u64, u64)> = Vec::new();
+                let mut remotes = Vec::new();
+                let mut remote_plays = Vec::new();
+                let mut images = Vec::new();
+
+                for (step, action) in actions.iter().enumerate() {
+                    match action {
+                        Action::BeginLogin => {
+                            let token = gate.begin_login();
+                            session += 1;
+                            active_login = Some(token);
+                            active_home = None;
+                            active_detail = None;
+                            detail_item = None;
+                            aux_live = [false; 4];
+                            logins.push(token);
+                            if !gate.is_current_login(token) {
+                                return Err(format!("step {step}: newly begun login not current"));
+                            }
+                            for old in &homes {
+                                if gate.finish_home(*old) {
+                                    return Err(format!("step {step}: old home survived login"));
+                                }
+                            }
+                            for old in &details {
+                                if gate.finish_detail(*old) {
+                                    return Err(format!("step {step}: old detail survived login"));
+                                }
+                            }
+                        }
+                        Action::FinishLogin(pick) => {
+                            if !logins.is_empty() {
+                                let tok = logins[*pick % logins.len()];
+                                let expected = active_login == Some(tok);
+                                let got = gate.finish_login(tok);
+                                if got != expected {
+                                    return Err(format!(
+                                        "step {step}: finish_login expected {expected}, got {got}"
+                                    ));
+                                }
+                                if got {
+                                    active_login = None;
+                                    if gate.finish_login(tok) {
+                                        return Err(format!(
+                                            "step {step}: login token settled twice"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Action::Disconnect => {
+                            gate.disconnect();
+                            session += 1;
+                            active_login = None;
+                            active_home = None;
+                            active_detail = None;
+                            detail_item = None;
+                            aux_live = [false; 4];
+                            for old in &logins {
+                                if gate.is_current_login(*old) {
+                                    return Err(format!(
+                                        "step {step}: login stayed current after disconnect"
+                                    ));
+                                }
+                            }
+                            if let Some(remote) = active_remote {
+                                if !gate.is_current_remote(remote) {
+                                    return Err(format!(
+                                        "step {step}: disconnect invalidated remote"
+                                    ));
+                                }
+                            }
+                            if let Some(play) = active_remote_play {
+                                if !gate.is_current_remote_play(play) {
+                                    return Err(format!(
+                                        "step {step}: disconnect invalidated remote_play"
+                                    ));
+                                }
+                            }
+                        }
+                        Action::BeginHome => {
+                            let tok = gate.begin_home();
+                            active_home = Some(tok);
+                            homes.push(tok);
+                        }
+                        Action::FinishHome(pick) => {
+                            if !homes.is_empty() {
+                                let tok = homes[*pick % homes.len()];
+                                let expected = active_home == Some(tok);
+                                let got = gate.finish_home(tok);
+                                if got != expected {
+                                    return Err(format!(
+                                        "step {step}: finish_home expected {expected}, got {got}"
+                                    ));
+                                }
+                                if got {
+                                    active_home = None;
+                                    if gate.finish_home(tok) {
+                                        return Err(format!("step {step}: home settled twice"));
+                                    }
+                                }
+                            }
+                        }
+                        Action::BeginDetail => {
+                            let tok = gate.begin_detail();
+                            active_detail = Some(tok);
+                            details.push(tok);
+                        }
+                        Action::FinishDetail(pick) => {
+                            if !details.is_empty() {
+                                let tok = details[*pick % details.len()];
+                                let expected = active_detail == Some(tok);
+                                let got = gate.finish_detail(tok);
+                                if got != expected {
+                                    return Err(format!(
+                                        "step {step}: finish_detail expected {expected}, got {got}"
+                                    ));
+                                }
+                                if got {
+                                    active_detail = None;
+                                    if gate.finish_detail(tok) {
+                                        return Err(format!("step {step}: detail settled twice"));
+                                    }
+                                }
+                            }
+                        }
+                        Action::CancelDetailLoads => {
+                            gate.cancel_detail_loads();
+                            active_detail = None;
+                        }
+                        Action::Navigate => {
+                            gate.navigate();
+                            active_detail = None;
+                            detail_item = None;
+                            for seq in &mut aux_seq {
+                                *seq += 1;
+                            }
+                            aux_live = [false; 4];
+                        }
+                        Action::SetDetailItem(item) => {
+                            let next = item_name(*item);
+                            gate.set_detail_item(next.clone());
+                            detail_item = next;
+                        }
+                        Action::BeginDetailAux(kind_idx) => {
+                            let kind = AUX_KINDS[*kind_idx as usize];
+                            let got = gate.begin_detail_aux(kind);
+                            match (&detail_item, got) {
+                                (None, Some(_)) => {
+                                    return Err(format!(
+                                        "step {step}: minted detail aux with no detail_item"
+                                    ));
+                                }
+                                (Some(_), None) => {
+                                    return Err(format!(
+                                        "step {step}: failed to mint detail aux when detail_item set"
+                                    ));
+                                }
+                                (Some(_), Some(tok)) => {
+                                    let idx = *kind_idx as usize;
+                                    aux_seq[idx] += 1;
+                                    aux_live[idx] = true;
+                                    aux_tokens.push((tok, session, aux_seq[idx]));
+                                }
+                                (None, None) => {}
+                            }
+                        }
+                        Action::FinishDetailAux(pick) => {
+                            if !aux_tokens.is_empty() {
+                                let (tok, tok_session, tok_seq) =
+                                    aux_tokens[*pick % aux_tokens.len()].clone();
+                                let idx = match tok.kind {
+                                    DetailAuxKind::Streams => 0,
+                                    DetailAuxKind::Recommendations => 1,
+                                    DetailAuxKind::SeasonNeighbors => 2,
+                                    DetailAuxKind::SimilarItems => 3,
+                                };
+                                let expected = tok_session == session
+                                    && aux_live[idx]
+                                    && aux_seq[idx] == tok_seq
+                                    && detail_item.as_deref() == Some(tok.item_id.as_str());
+                                let got = gate.finish_detail_aux(tok.clone());
+                                if got != expected {
+                                    return Err(format!(
+                                        "step {step}: finish_detail_aux expected {expected}, got {got}"
+                                    ));
+                                }
+                                if got {
+                                    aux_live[idx] = false;
+                                    if gate.finish_detail_aux(tok) {
+                                        return Err(format!(
+                                            "step {step}: detail aux settled twice"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Action::InvalidateDetailAux(kind_idx) => {
+                            let kind = AUX_KINDS[*kind_idx as usize];
+                            gate.invalidate_detail_aux(kind);
+                            let idx = *kind_idx as usize;
+                            aux_seq[idx] += 1;
+                            aux_live[idx] = false;
+                        }
+                        Action::BeginRemote => {
+                            let tok = gate.begin_remote();
+                            active_remote = Some(tok);
+                            active_remote_play = None;
+                            remotes.push(tok);
+                            for old in &remotes[..remotes.len() - 1] {
+                                if gate.is_current_remote(*old) {
+                                    return Err(format!(
+                                        "step {step}: prior remote survived begin_remote"
+                                    ));
+                                }
+                            }
+                            for old_play in &remote_plays {
+                                if gate.is_current_remote_play(*old_play) {
+                                    return Err(format!(
+                                        "step {step}: prior remote_play survived begin_remote"
+                                    ));
+                                }
+                            }
+                        }
+                        Action::BeginRemotePlay => {
+                            let tok = gate.begin_remote_play();
+                            active_remote_play = Some(tok);
+                            remote_plays.push(tok);
+                            for old_play in &remote_plays[..remote_plays.len() - 1] {
+                                if gate.is_current_remote_play(*old_play) {
+                                    return Err(format!(
+                                        "step {step}: prior remote_play survived new play"
+                                    ));
+                                }
+                            }
+                        }
+                        Action::BeginImageCache => {
+                            let tok = gate.begin_image_cache();
+                            active_image = Some(tok);
+                            images.push(tok);
+                        }
+                        Action::FinishImageCache(pick) => {
+                            if !images.is_empty() {
+                                let tok = images[*pick % images.len()];
+                                let expected = active_image == Some(tok);
+                                let got = gate.finish_image_cache(tok);
+                                if got != expected {
+                                    return Err(format!(
+                                        "step {step}: finish_image_cache expected {expected}, got {got}"
+                                    ));
+                                }
+                                if got {
+                                    active_image = None;
+                                    if gate.finish_image_cache(tok) {
+                                        return Err(format!(
+                                            "step {step}: image cache settled twice"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            },
+        );
+    }
 }

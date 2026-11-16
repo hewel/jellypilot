@@ -899,4 +899,244 @@ mod tests {
         policy.set_mode(IntroSkipMode::Automatic);
         assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
     }
+
+    #[test]
+    fn stateful_property_enforces_at_most_once_auto_skip_and_seek_suppression() {
+        use crate::prop_test::{check_stateful, Rng};
+
+        #[derive(Clone, Debug)]
+        enum Action {
+            SetMode(IntroSkipMode),
+            ReplaceRanges(u8),
+            NoteUserSeek(f64),
+            ObservePosition(f64),
+            ObserveManualSkip(f64),
+            UpdateStays(f64),
+            PromptSettled { use_latest: bool, presented: bool },
+            DismissPrompt,
+            AdvanceMs(u64),
+        }
+
+        const POSITIONS: [f64; 10] = [0.0, 10.0, 25.0, 29.9, 30.0, 35.0, 40.0, 55.0, 70.0, 90.0];
+
+        fn range_set(choice: u8) -> Vec<IntroSkipRange> {
+            match choice % 3 {
+                0 => vec![range(IntroSkipKind::Introduction, 10.0, 30.0)],
+                1 => vec![
+                    range(IntroSkipKind::Introduction, 10.0, 30.0),
+                    range(IntroSkipKind::Credits, 20.0, 40.0),
+                    range(IntroSkipKind::Credits, 55.0, 70.0),
+                ],
+                _ => vec![
+                    range(IntroSkipKind::Introduction, 10.0, 30.0),
+                    range(IntroSkipKind::Credits, 55.0, 70.0),
+                ],
+            }
+        }
+
+        for manual_policy in [ManualPromptPolicy::Timed, ManualPromptPolicy::WholeRange] {
+            check_stateful(
+                256,
+                80,
+                |rng: &mut Rng| match rng.below(9) {
+                    0 => Action::SetMode(match rng.below(3) {
+                        0 => IntroSkipMode::Automatic,
+                        1 => IntroSkipMode::Manual,
+                        _ => IntroSkipMode::Off,
+                    }),
+                    1 => Action::ReplaceRanges(rng.below(3) as u8),
+                    2 => Action::NoteUserSeek(*rng.choose(&POSITIONS)),
+                    3 | 4 => Action::ObservePosition(*rng.choose(&POSITIONS)),
+                    5 => Action::ObserveManualSkip(*rng.choose(&POSITIONS)),
+                    6 => Action::UpdateStays(*rng.choose(&POSITIONS)),
+                    7 => Action::PromptSettled {
+                        use_latest: rng.below(4) != 0,
+                        presented: rng.bool(),
+                    },
+                    _ => {
+                        if rng.bool() {
+                            Action::DismissPrompt
+                        } else {
+                            Action::AdvanceMs(1_500)
+                        }
+                    }
+                },
+                |actions| {
+                    let mut now = Instant::now();
+                    let mut mode = IntroSkipMode::Automatic;
+                    let mut skipper = IntroSkipper::with_manual_policy(mode, manual_policy);
+                    let mut active_ranges: Vec<IntroSkipRange> = Vec::new();
+                    let mut auto_seeks: Vec<u32> = Vec::new();
+                    let mut user_seek_stay: Vec<Option<bool>> = Vec::new();
+                    let mut tokens: Vec<IntroPromptToken> = Vec::new();
+                    let mut whole_range_pending_or_active = false;
+
+                    let update_stays_shadow =
+                        |pos: f64, ranges: &[IntroSkipRange], stays: &mut [Option<bool>]| {
+                            for (idx, r) in ranges.iter().enumerate() {
+                                let inside = pos >= r.start_seconds && pos < r.end_seconds;
+                                stays[idx] = match (stays[idx], inside) {
+                                    (Some(false), true) => Some(true),
+                                    (Some(true), false) => None,
+                                    (prev, _) => prev,
+                                };
+                            }
+                        };
+
+                    for (step, action) in actions.iter().enumerate() {
+                        match action {
+                            Action::SetMode(next_mode) => {
+                                if manual_policy == ManualPromptPolicy::WholeRange
+                                    && (mode != *next_mode || *next_mode == IntroSkipMode::Off)
+                                {
+                                    whole_range_pending_or_active = false;
+                                }
+                                if *next_mode == IntroSkipMode::Off {
+                                    whole_range_pending_or_active = false;
+                                }
+                                mode = *next_mode;
+                                skipper.set_mode(mode);
+                                if mode == IntroSkipMode::Off {
+                                    active_ranges.clear();
+                                    auto_seeks.clear();
+                                    user_seek_stay.clear();
+                                    if !skipper.ranges().is_empty()
+                                        || skipper.prompt_kind().is_some()
+                                    {
+                                        return Err(format!(
+                                            "step {step}: Off failed to clear ranges/prompt"
+                                        ));
+                                    }
+                                }
+                            }
+                            Action::ReplaceRanges(choice) => {
+                                let ranges = range_set(*choice);
+                                skipper.replace_ranges(ranges.clone());
+                                whole_range_pending_or_active = false;
+                                if mode == IntroSkipMode::Off {
+                                    active_ranges.clear();
+                                    auto_seeks.clear();
+                                    user_seek_stay.clear();
+                                    if !skipper.ranges().is_empty() {
+                                        return Err(format!(
+                                            "step {step}: Off adopted replacement ranges"
+                                        ));
+                                    }
+                                } else {
+                                    auto_seeks = vec![0; ranges.len()];
+                                    user_seek_stay = vec![None; ranges.len()];
+                                    active_ranges = ranges;
+                                }
+                            }
+                            Action::NoteUserSeek(pos) => {
+                                skipper.note_user_seek(*pos);
+                                for (idx, r) in active_ranges.iter().enumerate() {
+                                    let inside = *pos >= r.start_seconds && *pos < r.end_seconds;
+                                    user_seek_stay[idx] = inside.then_some(false);
+                                }
+                            }
+                            Action::UpdateStays(pos) => {
+                                skipper.update_stays(*pos);
+                                update_stays_shadow(*pos, &active_ranges, &mut user_seek_stay);
+                                if manual_policy == ManualPromptPolicy::WholeRange
+                                    && skipper.prompt_kind().is_none()
+                                {
+                                    // Leaving a prompt's range clears any pending/active prompt.
+                                    // We conservatively resync from prompt_kind() only when none was active;
+                                    // below we verify WholeRange never double-issues while active.
+                                }
+                            }
+                            Action::ObservePosition(pos) => {
+                                update_stays_shadow(*pos, &active_ranges, &mut user_seek_stay);
+                                let outcome = skipper.observe(*pos, now, IntroSkipInput::Position);
+                                if mode == IntroSkipMode::Off && outcome.is_some() {
+                                    return Err(format!(
+                                        "step {step}: action emitted while mode is Off"
+                                    ));
+                                }
+                                match outcome {
+                                    Some(IntroSkipAction::Seek(end)) => {
+                                        let idx = active_ranges
+                                            .iter()
+                                            .position(|r| r.end_seconds == end)
+                                            .ok_or_else(|| {
+                                                format!("step {step}: unknown seek end {end}")
+                                            })?;
+                                        auto_seeks[idx] += 1;
+                                        if auto_seeks[idx] > 1 {
+                                            return Err(format!(
+                                                "step {step}: range {idx} emitted Automatic Seek {} times",
+                                                auto_seeks[idx]
+                                            ));
+                                        }
+                                        if user_seek_stay[idx].is_some() {
+                                            return Err(format!(
+                                                "step {step}: range {idx} skipped despite active note_user_seek stay"
+                                            ));
+                                        }
+                                    }
+                                    Some(IntroSkipAction::ShowPrompt { token, .. }) => {
+                                        if manual_policy == ManualPromptPolicy::WholeRange
+                                            && whole_range_pending_or_active
+                                            && skipper.prompt_kind().is_some()
+                                        {
+                                            return Err(format!(
+                                                "step {step}: WholeRange issued overlapping prompt"
+                                            ));
+                                        }
+                                        tokens.push(token);
+                                        whole_range_pending_or_active = true;
+                                    }
+                                    Some(IntroSkipAction::ManualSkip(_)) => {
+                                        return Err(format!(
+                                            "step {step}: Position input produced ManualSkip"
+                                        ));
+                                    }
+                                    None => {}
+                                }
+                            }
+                            Action::ObserveManualSkip(pos) => {
+                                update_stays_shadow(*pos, &active_ranges, &mut user_seek_stay);
+                                let outcome =
+                                    skipper.observe(*pos, now, IntroSkipInput::ManualSkip);
+                                if let Some(IntroSkipAction::ManualSkip(_)) = outcome {
+                                    whole_range_pending_or_active = false;
+                                }
+                            }
+                            Action::PromptSettled {
+                                use_latest,
+                                presented,
+                            } => {
+                                let token = if *use_latest {
+                                    tokens.last().copied()
+                                } else {
+                                    tokens.first().copied()
+                                };
+                                if let Some(tok) = token {
+                                    skipper.prompt_settled(tok, *presented, now);
+                                    if skipper.prompt_kind().is_none() {
+                                        whole_range_pending_or_active = false;
+                                    }
+                                }
+                            }
+                            Action::DismissPrompt => {
+                                skipper.dismiss_prompt();
+                                if skipper.prompt_kind().is_some() {
+                                    return Err(format!(
+                                        "step {step}: prompt remained active after dismiss_prompt"
+                                    ));
+                                }
+                                whole_range_pending_or_active = false;
+                            }
+                            Action::AdvanceMs(ms) => {
+                                now += Duration::from_millis(*ms);
+                                skipper.advance_time(now);
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
+    }
 }

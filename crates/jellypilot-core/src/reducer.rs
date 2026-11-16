@@ -860,4 +860,339 @@ mod tests {
             "released failed page should be refetched on return"
         );
     }
+
+    #[test]
+    fn stateful_property_enforces_concurrency_alignment_and_cancellation_invariants() {
+        use crate::prop_test::{check_stateful, Rng};
+        use std::collections::BTreeMap;
+
+        #[derive(Clone, Debug)]
+        enum OutcomeKind {
+            Loaded { total: u32 },
+            Malformed,
+            Failed { retryable: bool },
+        }
+
+        #[derive(Clone, Debug)]
+        enum Action {
+            Configure { source_idx: u8, enabled: bool },
+            WindowChanged { indexes: Vec<u32> },
+            LoadNext,
+            Retry,
+            SettleActive { pick: usize, outcome: OutcomeKind },
+            SettleStale { pick: usize, outcome: OutcomeKind },
+        }
+
+        for retain_loaded in [false, true] {
+            check_stateful(
+                256,
+                80,
+                |rng: &mut Rng| match rng.below(10) {
+                    0 => Action::Configure {
+                        source_idx: rng.below(4) as u8,
+                        enabled: rng.bool(),
+                    },
+                    1..=3 => {
+                        let start = (rng.below(6) as u32) * 12;
+                        let count = 1 + rng.below(30) as u32;
+                        let mut indexes = Vec::new();
+                        for offset in 0..count {
+                            if rng.bool() {
+                                indexes.push(start + offset);
+                            }
+                        }
+                        if rng.below(4) == 0 {
+                            indexes.push(250);
+                        }
+                        Action::WindowChanged { indexes }
+                    }
+                    4 => Action::LoadNext,
+                    5 => Action::Retry,
+                    6..=8 => Action::SettleActive {
+                        pick: rng.below(4),
+                        outcome: match rng.below(5) {
+                            0 | 1 => OutcomeKind::Loaded {
+                                total: if rng.bool() { TOTAL } else { 0 },
+                            },
+                            2 => OutcomeKind::Malformed,
+                            3 => OutcomeKind::Failed { retryable: true },
+                            _ => OutcomeKind::Failed { retryable: false },
+                        },
+                    },
+                    _ => Action::SettleStale {
+                        pick: rng.below(8),
+                        outcome: OutcomeKind::Failed { retryable: true },
+                    },
+                },
+                |actions| {
+                    let mut core = LibraryBrowseCore::new();
+                    core.set_retain_loaded_pages(retain_loaded);
+                    let mut active: BTreeMap<LibraryBrowseLoadToken, u32> = BTreeMap::new();
+                    let mut retired_tokens: Vec<(LibraryBrowseLoadToken, u32)> = Vec::new();
+                    let mut active_total: Option<u32> = None;
+
+                    for (step, action) in actions.iter().enumerate() {
+                        match action {
+                            Action::Configure {
+                                source_idx,
+                                enabled,
+                            } => {
+                                let source_id = match source_idx {
+                                    0 => "movies",
+                                    1 => "series",
+                                    2 => "anime",
+                                    _ => "   ",
+                                };
+                                let before = core.snapshot();
+                                match core.dispatch(LibraryBrowseAction::Configure {
+                                    source_id: source_id.to_owned(),
+                                    enabled: *enabled,
+                                }) {
+                                    Err(LibraryBrowseCoreError::EmptySourceId) => {
+                                        if !enabled || !source_id.trim().is_empty() {
+                                            return Err(format!(
+                                                "step {step}: unexpected EmptySourceId"
+                                            ));
+                                        }
+                                        if core.snapshot() != before {
+                                            return Err(format!(
+                                                "step {step}: failed configure mutated snapshot"
+                                            ));
+                                        }
+                                        continue;
+                                    }
+                                    Err(err) => {
+                                        return Err(format!(
+                                            "step {step}: configure failed: {err}"
+                                        ));
+                                    }
+                                    Ok(update) => {
+                                        let has_reset = update.commands.iter().any(|cmd| {
+                                            matches!(cmd, LibraryBrowseCommand::ResetViewport)
+                                        });
+                                        if has_reset {
+                                            active_total = None;
+                                        }
+                                        apply_commands(
+                                            step,
+                                            &update.commands,
+                                            &mut active,
+                                            &mut retired_tokens,
+                                        )?;
+                                        if update.snapshot.pending_count as usize != active.len() {
+                                            return Err(format!(
+                                                "step {step}: pending_count {} != active {}",
+                                                update.snapshot.pending_count,
+                                                active.len()
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Action::WindowChanged { indexes } => {
+                                let update = core
+                                    .dispatch(LibraryBrowseAction::WindowChanged {
+                                        display_indexes: indexes.clone(),
+                                    })
+                                    .map_err(|e| format!("step {step}: window changed err: {e}"))?;
+                                apply_commands(
+                                    step,
+                                    &update.commands,
+                                    &mut active,
+                                    &mut retired_tokens,
+                                )?;
+                                if update.snapshot.pending_count as usize != active.len() {
+                                    return Err(format!(
+                                        "step {step}: pending_count {} != active {}",
+                                        update.snapshot.pending_count,
+                                        active.len()
+                                    ));
+                                }
+                            }
+                            Action::LoadNext => {
+                                let update = core
+                                    .dispatch(LibraryBrowseAction::LoadNext)
+                                    .map_err(|e| format!("step {step}: load next err: {e}"))?;
+                                apply_commands(
+                                    step,
+                                    &update.commands,
+                                    &mut active,
+                                    &mut retired_tokens,
+                                )?;
+                                if update.snapshot.pending_count as usize != active.len() {
+                                    return Err(format!(
+                                        "step {step}: pending_count {} != active {}",
+                                        update.snapshot.pending_count,
+                                        active.len()
+                                    ));
+                                }
+                            }
+                            Action::Retry => {
+                                let update = core
+                                    .dispatch(LibraryBrowseAction::Retry)
+                                    .map_err(|e| format!("step {step}: retry err: {e}"))?;
+                                apply_commands(
+                                    step,
+                                    &update.commands,
+                                    &mut active,
+                                    &mut retired_tokens,
+                                )?;
+                                if update.snapshot.pending_count as usize != active.len() {
+                                    return Err(format!(
+                                        "step {step}: pending_count {} != active {}",
+                                        update.snapshot.pending_count,
+                                        active.len()
+                                    ));
+                                }
+                            }
+                            Action::SettleActive { pick, outcome } => {
+                                if active.is_empty() {
+                                    continue;
+                                }
+                                let keys: Vec<LibraryBrowseLoadToken> =
+                                    active.keys().copied().collect();
+                                let token = keys[*pick % keys.len()];
+                                let start_index = active.remove(&token).expect("active key");
+                                retired_tokens.push((token, start_index));
+                                let total = if start_index == 0 {
+                                    match outcome {
+                                        OutcomeKind::Loaded { total } => {
+                                            active_total = Some(*total);
+                                            *total
+                                        }
+                                        _ => TOTAL,
+                                    }
+                                } else {
+                                    active_total.unwrap_or(TOTAL)
+                                };
+                                let page_outcome = make_outcome(start_index, total, outcome);
+                                let update = core
+                                    .dispatch(LibraryBrowseAction::PageSettled {
+                                        token,
+                                        outcome: page_outcome,
+                                    })
+                                    .map_err(|e| format!("step {step}: settle active err: {e}"))?;
+                                apply_commands(
+                                    step,
+                                    &update.commands,
+                                    &mut active,
+                                    &mut retired_tokens,
+                                )?;
+                                if update.snapshot.pending_count as usize != active.len() {
+                                    return Err(format!(
+                                        "step {step}: pending_count {} != active {}",
+                                        update.snapshot.pending_count,
+                                        active.len()
+                                    ));
+                                }
+                            }
+                            Action::SettleStale { pick, outcome } => {
+                                if retired_tokens.is_empty() {
+                                    continue;
+                                }
+                                let (token, start_index) =
+                                    retired_tokens[*pick % retired_tokens.len()];
+                                let before = core.snapshot();
+                                let update = core
+                                    .dispatch(LibraryBrowseAction::PageSettled {
+                                        token,
+                                        outcome: make_outcome(start_index, TOTAL, outcome),
+                                    })
+                                    .map_err(|e| format!("step {step}: settle stale err: {e}"))?;
+                                if !update.commands.is_empty() || update.snapshot != before {
+                                    return Err(format!(
+                                        "step {step}: stale settlement mutated reducer state"
+                                    ));
+                                }
+                            }
+                        }
+
+                        if active.len() > LIBRARY_BROWSE_MAX_CONCURRENT_LOADS {
+                            return Err(format!(
+                                "step {step}: active loads {} exceeded max {}",
+                                active.len(),
+                                LIBRARY_BROWSE_MAX_CONCURRENT_LOADS
+                            ));
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
+
+        fn apply_commands(
+            step: usize,
+            commands: &[LibraryBrowseCommand],
+            active: &mut std::collections::BTreeMap<LibraryBrowseLoadToken, u32>,
+            retired: &mut Vec<(LibraryBrowseLoadToken, u32)>,
+        ) -> Result<(), String> {
+            for cmd in commands {
+                match cmd {
+                    LibraryBrowseCommand::CancelLoad { token } => {
+                        let Some(start) = active.remove(token) else {
+                            return Err(format!(
+                                "step {step}: CancelLoad targeted non-active token {token:?}"
+                            ));
+                        };
+                        retired.push((*token, start));
+                    }
+                    LibraryBrowseCommand::LoadPage {
+                        token,
+                        start_index,
+                        limit,
+                        ..
+                    } => {
+                        if !start_index.is_multiple_of(LIBRARY_BROWSE_PAGE_SIZE) {
+                            return Err(format!(
+                                "step {step}: unaligned start_index {start_index}"
+                            ));
+                        }
+                        if *limit != LIBRARY_BROWSE_PAGE_SIZE {
+                            return Err(format!("step {step}: unexpected limit {limit}"));
+                        }
+                        if active.insert(*token, *start_index).is_some() {
+                            return Err(format!("step {step}: duplicate load token {token:?}"));
+                        }
+                    }
+                    LibraryBrowseCommand::ResetViewport
+                    | LibraryBrowseCommand::ReleasePages { .. } => {}
+                }
+            }
+            Ok(())
+        }
+
+        fn make_outcome(
+            start_index: u32,
+            total: u32,
+            kind: &OutcomeKind,
+        ) -> LibraryBrowsePageOutcome {
+            match kind {
+                OutcomeKind::Loaded { .. } => {
+                    let remaining = total.saturating_sub(start_index);
+                    let item_count = remaining.min(LIBRARY_BROWSE_PAGE_SIZE);
+                    let has_more = start_index.saturating_add(item_count) < total;
+                    LibraryBrowsePageOutcome::Loaded {
+                        start_index,
+                        limit: LIBRARY_BROWSE_PAGE_SIZE,
+                        total_record_count: total,
+                        item_count,
+                        has_more,
+                    }
+                }
+                OutcomeKind::Malformed => LibraryBrowsePageOutcome::Loaded {
+                    start_index,
+                    limit: LIBRARY_BROWSE_PAGE_SIZE + 1,
+                    total_record_count: total,
+                    item_count: 1,
+                    has_more: false,
+                },
+                OutcomeKind::Failed { retryable } => LibraryBrowsePageOutcome::Failed {
+                    failure: LibraryBrowseFailure {
+                        message: "transient".to_owned(),
+                        retryable: *retryable,
+                    },
+                },
+            }
+        }
+    }
 }

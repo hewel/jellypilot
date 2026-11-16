@@ -37,6 +37,8 @@ pub mod logs;
 #[cfg(feature = "portable")]
 pub mod now_playing_adjustments;
 pub mod player_logs;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod prop_test;
 #[cfg(feature = "portable")]
 pub mod rendering;
 pub mod request_gate;

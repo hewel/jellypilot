@@ -356,4 +356,347 @@ mod tests {
         assert!(!second.settle(claim, true));
         assert_eq!(second.entries().len(), 1);
     }
+
+    #[test]
+    fn stateful_property_enforces_capacity_uniqueness_and_claim_locking() {
+        use std::collections::HashSet;
+
+        use crate::prop_test::{check_stateful, Rng};
+
+        #[derive(Clone, Debug)]
+        enum Action {
+            Insert {
+                media_pick: u8,
+                value: u32,
+                next: bool,
+                stale_rev: bool,
+            },
+            Move {
+                entry_pick: usize,
+                up: bool,
+                stale_rev: bool,
+            },
+            Remove {
+                entry_pick: usize,
+                stale_rev: bool,
+            },
+            Clear {
+                stale_rev: bool,
+            },
+            Claim {
+                entry_pick: usize,
+                stale_rev: bool,
+            },
+            SettleActive {
+                started: bool,
+            },
+            SettleStale {
+                pick: usize,
+                started: bool,
+            },
+            ReleasePending,
+            Reset,
+        }
+
+        check_stateful(
+            256,
+            80,
+            |rng: &mut Rng| match rng.below(9) {
+                0 | 1 => Action::Insert {
+                    media_pick: rng.below(106) as u8,
+                    value: rng.below(1000) as u32,
+                    next: rng.bool(),
+                    stale_rev: rng.below(6) == 0,
+                },
+                2 => Action::Move {
+                    entry_pick: rng.below(16),
+                    up: rng.bool(),
+                    stale_rev: rng.below(6) == 0,
+                },
+                3 => Action::Remove {
+                    entry_pick: rng.below(16),
+                    stale_rev: rng.below(6) == 0,
+                },
+                4 => Action::Clear {
+                    stale_rev: rng.below(6) == 0,
+                },
+                5 => Action::Claim {
+                    entry_pick: rng.below(16),
+                    stale_rev: rng.below(6) == 0,
+                },
+                6 => Action::SettleActive {
+                    started: rng.bool(),
+                },
+                7 => Action::SettleStale {
+                    pick: rng.below(8),
+                    started: rng.bool(),
+                },
+                _ => {
+                    if rng.bool() {
+                        Action::ReleasePending
+                    } else {
+                        Action::Reset
+                    }
+                }
+            },
+            |actions| {
+                let mut queue = ViewingQueue::<u32>::default();
+                let mut past_revisions = vec![queue.revision()];
+                let mut active_claim: Option<QueueClaim> = None;
+                let mut retired_claims: Vec<QueueClaim> = Vec::new();
+
+                let stale_rev = |current: u64, past: &[u64]| -> u64 {
+                    past.iter()
+                        .copied()
+                        .find(|r| *r != current)
+                        .unwrap_or_else(|| current.wrapping_add(1))
+                };
+                let snapshot = |q: &ViewingQueue<u32>| -> (
+                    u64,
+                    Option<QueueEntryId>,
+                    Vec<(QueueEntryId, String, u32)>,
+                ) {
+                    (
+                        q.revision(),
+                        q.pending(),
+                        q.entries()
+                            .iter()
+                            .map(|e| (e.id, e.media_id.clone(), e.value))
+                            .collect(),
+                    )
+                };
+
+                for (step, action) in actions.iter().enumerate() {
+                    let cur_rev = queue.revision();
+                    past_revisions.push(cur_rev);
+                    let before = snapshot(&queue);
+
+                    match action {
+                        Action::Insert {
+                            media_pick,
+                            value,
+                            next,
+                            stale_rev: use_stale,
+                        } => {
+                            let media_id = if *media_pick >= 104 {
+                                "   ".to_owned()
+                            } else {
+                                format!("media-{media_pick}")
+                            };
+                            let rev = if *use_stale {
+                                stale_rev(cur_rev, &past_revisions)
+                            } else {
+                                cur_rev
+                            };
+                            let placement = if *next {
+                                QueuePlacement::Next
+                            } else {
+                                QueuePlacement::Last
+                            };
+                            let res = queue.insert(rev, media_id.clone(), *value, placement);
+                            if *use_stale {
+                                if res != Err(QueueEditError::Stale) || snapshot(&queue) != before {
+                                    return Err(format!(
+                                        "step {step}: stale insert did not return Stale cleanly"
+                                    ));
+                                }
+                            } else if before.1.is_some() {
+                                if res != Err(QueueEditError::Busy) || snapshot(&queue) != before {
+                                    return Err(format!(
+                                        "step {step}: insert while pending did not return Busy"
+                                    ));
+                                }
+                            } else if media_id.trim().is_empty()
+                                && res != Err(QueueEditError::InvalidItem)
+                            {
+                                return Err(format!(
+                                    "step {step}: whitespace media did not return InvalidItem"
+                                ));
+                            }
+                        }
+                        Action::Move {
+                            entry_pick,
+                            up,
+                            stale_rev: use_stale,
+                        } => {
+                            if queue.entries().is_empty() {
+                                continue;
+                            }
+                            let id = queue.entries()[*entry_pick % queue.entries().len()].id;
+                            let rev = if *use_stale {
+                                stale_rev(cur_rev, &past_revisions)
+                            } else {
+                                cur_rev
+                            };
+                            let dir = if *up { QueueMove::Up } else { QueueMove::Down };
+                            let res = queue.move_entry(rev, id, dir);
+                            if *use_stale {
+                                if res != Err(QueueEditError::Stale) || snapshot(&queue) != before {
+                                    return Err(format!("step {step}: stale move failed check"));
+                                }
+                            } else if before.1.is_some()
+                                && (res != Err(QueueEditError::Busy) || snapshot(&queue) != before)
+                            {
+                                return Err(format!("step {step}: busy move failed check"));
+                            }
+                        }
+                        Action::Remove {
+                            entry_pick,
+                            stale_rev: use_stale,
+                        } => {
+                            if queue.entries().is_empty() {
+                                continue;
+                            }
+                            let id = queue.entries()[*entry_pick % queue.entries().len()].id;
+                            let rev = if *use_stale {
+                                stale_rev(cur_rev, &past_revisions)
+                            } else {
+                                cur_rev
+                            };
+                            let res = queue.remove(rev, id);
+                            if *use_stale {
+                                if res != Err(QueueEditError::Stale) || snapshot(&queue) != before {
+                                    return Err(format!("step {step}: stale remove failed check"));
+                                }
+                            } else if before.1.is_some()
+                                && (res != Err(QueueEditError::Busy) || snapshot(&queue) != before)
+                            {
+                                return Err(format!("step {step}: busy remove failed check"));
+                            }
+                        }
+                        Action::Clear {
+                            stale_rev: use_stale,
+                        } => {
+                            let rev = if *use_stale {
+                                stale_rev(cur_rev, &past_revisions)
+                            } else {
+                                cur_rev
+                            };
+                            let res = queue.clear(rev);
+                            if *use_stale {
+                                if res != Err(QueueEditError::Stale) || snapshot(&queue) != before {
+                                    return Err(format!("step {step}: stale clear failed check"));
+                                }
+                            } else if before.1.is_some()
+                                && (res != Err(QueueEditError::Busy) || snapshot(&queue) != before)
+                            {
+                                return Err(format!("step {step}: busy clear failed check"));
+                            }
+                        }
+                        Action::Claim {
+                            entry_pick,
+                            stale_rev: use_stale,
+                        } => {
+                            if queue.entries().is_empty() {
+                                continue;
+                            }
+                            let id = queue.entries()[*entry_pick % queue.entries().len()].id;
+                            let rev = if *use_stale {
+                                stale_rev(cur_rev, &past_revisions)
+                            } else {
+                                cur_rev
+                            };
+                            let res = queue.claim(rev, id);
+                            if *use_stale {
+                                if res != Err(QueueEditError::Stale) || snapshot(&queue) != before {
+                                    return Err(format!("step {step}: stale claim failed check"));
+                                }
+                            } else if before.1.is_some() {
+                                if res != Err(QueueEditError::Busy) || snapshot(&queue) != before {
+                                    return Err(format!("step {step}: busy claim failed check"));
+                                }
+                            } else if let Ok(claim) = res {
+                                if queue.claimed(claim).is_none() || queue.pending() != Some(id) {
+                                    return Err(format!("step {step}: active claim missing entry"));
+                                }
+                                active_claim = Some(claim);
+                            }
+                        }
+                        Action::SettleActive { started } => {
+                            if let Some(claim) = active_claim.take() {
+                                if !queue.settle(claim, *started) {
+                                    return Err(format!(
+                                        "step {step}: active claim failed to settle"
+                                    ));
+                                }
+                                retired_claims.push(claim);
+                                if queue.pending().is_some() {
+                                    return Err(format!(
+                                        "step {step}: pending stayed set after settle"
+                                    ));
+                                }
+                                let remaining: Vec<_> = queue
+                                    .entries()
+                                    .iter()
+                                    .map(|e| (e.id, e.media_id.clone(), e.value))
+                                    .collect();
+                                if *started {
+                                    let expected: Vec<_> = before
+                                        .2
+                                        .into_iter()
+                                        .filter(|(id, _, _)| *id != claim.entry_id())
+                                        .collect();
+                                    if remaining != expected {
+                                        return Err(format!(
+                                            "step {step}: started settle modified wrong entries"
+                                        ));
+                                    }
+                                } else if remaining != before.2 {
+                                    return Err(format!(
+                                        "step {step}: failed settle dropped entries"
+                                    ));
+                                }
+                            }
+                        }
+                        Action::SettleStale { pick, started } => {
+                            if retired_claims.is_empty() {
+                                continue;
+                            }
+                            let claim = retired_claims[*pick % retired_claims.len()];
+                            if queue.settle(claim, *started) || snapshot(&queue) != before {
+                                return Err(format!(
+                                    "step {step}: stale claim settlement mutated queue"
+                                ));
+                            }
+                        }
+                        Action::ReleasePending => {
+                            let released = queue.release_pending();
+                            if released != before.1.is_some() {
+                                return Err(format!(
+                                    "step {step}: release_pending returned wrong bool"
+                                ));
+                            }
+                            if let Some(claim) = active_claim.take() {
+                                retired_claims.push(claim);
+                            }
+                        }
+                        Action::Reset => {
+                            queue.reset();
+                            if let Some(claim) = active_claim.take() {
+                                retired_claims.push(claim);
+                            }
+                            if !queue.entries().is_empty() || queue.pending().is_some() {
+                                return Err(format!("step {step}: reset left non-empty state"));
+                            }
+                        }
+                    }
+
+                    if queue.entries().len() > VIEWING_QUEUE_CAPACITY {
+                        return Err(format!("step {step}: capacity exceeded"));
+                    }
+                    let mut ids = HashSet::new();
+                    let mut media_ids = HashSet::new();
+                    for entry in queue.entries() {
+                        if !ids.insert(entry.id) {
+                            return Err(format!("step {step}: duplicate QueueEntryId"));
+                        }
+                        if !media_ids.insert(entry.media_id.as_str()) {
+                            return Err(format!("step {step}: duplicate media_id"));
+                        }
+                    }
+                }
+                Ok(())
+            },
+        );
+    }
 }
