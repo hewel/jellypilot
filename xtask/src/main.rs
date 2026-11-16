@@ -20,6 +20,9 @@ mod util;
 mod windows_dependencies;
 mod windows_package;
 
+#[cfg(test)]
+mod guardrails;
+
 #[derive(Parser)]
 #[command(name = "cargo xtask", about = "JellyPilot build and maintenance tasks")]
 struct Cli {

@@ -68,8 +68,9 @@ Crate short names include `auth`, `core`, `media-server`, `mpv`, `session`, `ice
 ## Conventions
 
 - **Rust style**: 2-space indent (`rustfmt.toml`); workspace lints forbid `unsafe_code` and deny
-  clippy warnings. Select focused or broader gates from `docs/agents/validation.md`; that policy
-  is authoritative for verification scope, including the final pass.
+  clippy warnings, with root `clippy.toml` disallowed APIs and `xtask` guardrail tests
+  (`xtask/src/guardrails.rs`). Select focused or broader gates from `docs/agents/validation.md`;
+  that policy is authoritative for verification scope, including the final pass.
 - **Cargo entry points**: use `cargo xtask` for maintained build, format, lint, and test workflows.
   Cargo and native Rust xtask commands are permitted; ordinary builds do not regenerate API clients.
 - **Display-free logic lives in `jellypilot-core`** and is tested there; `src-iced` keeps
@@ -114,6 +115,7 @@ Crate short names include `auth`, `core`, `media-server`, `mpv`, `session`, `ice
 - **Issue tracker**: GitHub Issues for `hewel/jmsr` — see [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)
 - **Triage labels**: five-label vocabulary — see [docs/agents/triage-labels.md](docs/agents/triage-labels.md)
 - **Domain docs**: root `GLOSSARY.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md)
+- **Feature map & statecharts**: surface → Glossary → module index and lifecycle statechart rule — see [docs/agents/feature-map.md](docs/agents/feature-map.md)
 
 ## Docs
 
