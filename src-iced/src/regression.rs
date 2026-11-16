@@ -394,6 +394,10 @@ pub(crate) fn initialize(arguments: &[String]) -> Result<(), String> {
       fail(format!(
         "Native regression exceeded its {process_timeout}-second process deadline"
       ));
+      #[expect(
+        clippy::disallowed_methods,
+        reason = "native regression watchdog terminates a potentially wedged compositor event loop after recording the failure report"
+      )]
       std::process::exit(1);
     }
   });

@@ -1,0 +1,9 @@
+disallowed-methods = [
+  { path = "std::env::set_var", reason = "Process-global env mutation races across threads and parallel tests; pass configuration explicitly or isolate child processes via std::process::Command::env (see xtask/src/rust.rs)." },
+  { path = "std::env::remove_var", reason = "Process-global env mutation races across threads and parallel tests; pass configuration explicitly or isolate child processes via std::process::Command::env (see xtask/src/rust.rs)." },
+  { path = "std::process::exit", reason = "std::process::exit skips Drop teardown (MPV host, IPC sockets, tray, single-instance guard); return ExitCode from main or trigger orderly shutdown via iced::exit()." },
+  { path = "iced_core::Color::from_rgb", reason = "Do not construct ad-hoc colors outside jellypilot-ui; use semantic roles from jellypilot_ui::tokens::TOKENS / state.palette() or add a Catalog style in crates/jellypilot-ui (see docs/design-system.md)." },
+  { path = "iced_core::Color::from_rgba", reason = "Do not construct ad-hoc colors outside jellypilot-ui; use semantic roles from jellypilot_ui::tokens::TOKENS / state.palette() or add a Catalog style in crates/jellypilot-ui (see docs/design-system.md)." },
+  { path = "iced_core::Color::from_rgb8", reason = "Do not construct ad-hoc colors outside jellypilot-ui; use semantic roles from jellypilot_ui::tokens::TOKENS / state.palette() or add a Catalog style in crates/jellypilot-ui (see docs/design-system.md)." },
+  { path = "iced_core::Color::from_rgba8", reason = "Do not construct ad-hoc colors outside jellypilot-ui; use semantic roles from jellypilot_ui::tokens::TOKENS / state.palette() or add a Catalog style in crates/jellypilot-ui (see docs/design-system.md)." },
+]

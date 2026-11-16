@@ -6,6 +6,10 @@ use iced::{Alignment, Background, Border, Color, Element, Length, Rectangle, Siz
 
 use crate::tv;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui TV player Catalog defines cinema overlay colors"
+)]
 pub fn control(
     focus: f32,
     primary: bool,
@@ -65,6 +69,10 @@ pub fn choice(
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui TV player Catalog defines cinema overlay colors"
+)]
 pub fn panel(_: &Theme) -> container::Style {
     container::Style {
         background: Some(Color::from_rgb8(0x15, 0x16, 0x1c).into()),
@@ -145,6 +153,10 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Timeline<'_> {
     fn layout(&mut self, tree: &mut widget::Tree, _: &iced::Renderer, limits: &layout::Limits) {
         tree.size = layout::atomic(limits, Length::Fill, 30.0 * self.scale);
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "jellypilot-ui TV player Catalog defines cinema timeline rail colors"
+    )]
     fn draw(
         &self,
         _: &widget::Tree,

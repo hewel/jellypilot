@@ -386,6 +386,10 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Header<'_, Message> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixture constructs high-contrast stripe colors to measure backdrop blur"
+)]
 mod tests {
     use iced::advanced::shell::{Bus, Waker};
     use iced::advanced::widget::operation::{focusable, scrollable as scroll_operation};

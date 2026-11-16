@@ -11,17 +11,45 @@ use crate::tokens::{DARK_PALETTE, TOKENS};
 use crate::variants::ButtonVariant;
 
 /// Black/60% fill and white/15% edge shared by framed controls and the prompt.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const FRAMED_FILL: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.6);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const FRAMED_EDGE: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.15);
 /// Paper's floating-panel radius; no radius token matches it.
 const PANEL_RADIUS: f32 = 16.0;
 /// Playback-information panel fill: #191A21 at 80% over the video.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const PANEL_FILL: Color = Color::from_rgba8(0x19, 0x1a, 0x21, 0.8);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const RAIL: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.22);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const BUFFERED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
 /// Intro/credit interval wash; Paper paints it at the buffered layer's value.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const SEGMENT: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
 /// Chapter and skip-boundary tick: 2×10 white/70% centered on the rail.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const MARKER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.7);
 const MARKER_WIDTH: f32 = 2.0;
 const MARKER_HEIGHT: f32 = 10.0;
@@ -30,7 +58,15 @@ const HOVER_MARKER_HEIGHT: f32 = 12.0;
 const RAIL_WIDTH: f32 = 4.0;
 const KNOB_RADIUS: f32 = 7.0;
 const KNOB_BORDER: f32 = 2.5;
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const PROGRESS_START: Color = Color::from_rgb8(0x63, 0x66, 0xf1);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema chrome colors"
+)]
 const PROGRESS_END: Color = Color::from_rgb8(0x81, 0x8c, 0xf8);
 const VOLUME_KNOB_RADIUS: f32 = 4.0;
 /// Paused minimal indicator: 72px framed circle centered on the picture.
@@ -42,6 +78,10 @@ const MINI_KNOB_INSET: f32 = 2.0;
 
 /// The actual play method, using the information panel's compact status pill.
 pub fn play_method_badge<'a, Message: 'a>(label: String, font: iced::Font) -> Element<'a, Message> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "embedded_player Catalog widget defines scoped cinema status badge color"
+    )]
     const GREEN: Color = Color::from_rgb8(0x10, 0xb9, 0x81);
     let dot = container(space())
         .width(6)
@@ -104,6 +144,10 @@ pub fn popover(_theme: &Theme) -> container::Style {
 }
 
 /// Secondary playback actions share a quiet, raised cinema menu.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped cinema menu shadow color"
+)]
 pub fn menu_panel(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(DARK_PALETTE.colors.surfaceContainer)),
@@ -122,6 +166,10 @@ pub fn menu_panel(_theme: &Theme) -> container::Style {
 }
 
 /// Fixed preview surface; its opaque fill does not sample or blur the video.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "embedded_player Catalog widget defines scoped seek-preview contour colors"
+)]
 pub fn seek_preview(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(Color::from_rgb8(0x19, 0x1a, 0x21))),

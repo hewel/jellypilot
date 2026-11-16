@@ -164,6 +164,10 @@ fn skeleton_panel_style(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixture constructs arbitrary non-token base colors for animation math"
+)]
 mod tests {
     use super::*;
     use crate::tokens::DARK_PALETTE;

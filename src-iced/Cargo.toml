@@ -86,4 +86,6 @@ version = "2.2.3"
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
+disallowed_methods = "warn"
+disallowed_types = "warn"

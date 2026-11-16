@@ -734,6 +734,10 @@ mod tests {
 
     #[test]
     #[ignore = "subprocess fixture; invoked only by capture tests"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "subprocess test fixture intentionally simulates direct exit codes and non-reaped descendants"
+    )]
     fn subprocess_fixture() {
         let mode = std::env::var("JELLYPILOT_CAPTURE_FIXTURE").expect("fixture mode");
         match mode.as_str() {

@@ -7,7 +7,15 @@ use std::time::Duration;
 use iced::{Color, Shadow, Theme, Vector};
 
 /// Image-local playback tracks remain white in both desktop color schemes.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui tokens defines canonical design-token color constants"
+)]
 pub const POSTER_PROGRESS_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.18);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui tokens defines canonical design-token color constants"
+)]
 pub const LANDSCAPE_PROGRESS_TRACK: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.24);
 
 /// Complete JellyPilot design-token set.
@@ -582,6 +590,10 @@ pub const SETTINGS_MODAL_RADIUS: f32 = 16.0;
 /// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
 /// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
 /// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui tokens defines canonical dark theme palette colors"
+)]
 pub const DARK_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         action: Color::from_rgb8(0x4f, 0x46, 0xe5),
@@ -650,6 +662,10 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
 /// accent text drops to the deeper `#4f46e5`, and status roles drop to their
 /// 700-series steps so text and icons hold the 4.5:1 floor on the light
 /// canvas.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui tokens defines canonical light theme palette colors"
+)]
 pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         action: Color::from_rgb8(0x4f, 0x46, 0xe5),
@@ -720,6 +736,10 @@ pub fn palette(theme: &Theme) -> &'static ThemePalette {
         .unwrap_or(&DARK_PALETTE)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "jellypilot-ui tokens constructs shadow colors for canonical theme palettes"
+)]
 const fn shadow(
     x: f32,
     y: f32,
@@ -738,6 +758,10 @@ const fn shadow(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests verify canonical palette hex literals against design tokens"
+)]
 mod tests {
     use iced::{Color, Theme};
 

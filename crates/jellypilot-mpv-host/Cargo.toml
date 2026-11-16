@@ -32,4 +32,6 @@ x11rb = { version = "0.13", features = ["screensaver"] }
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
+disallowed_methods = "warn"
+disallowed_types = "warn"

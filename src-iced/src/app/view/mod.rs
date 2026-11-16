@@ -169,6 +169,10 @@ fn toast_view<'a>(
   .content_centered(true)
   .on_press(Message::DismissNotice(close_id))
   .style(|_theme, _variant, status| {
+    #[expect(
+      clippy::disallowed_methods,
+      reason = "toast dismiss hover/press overlay uses translucent white over severity container fills until semantic toast-chrome roles are added to jellypilot-ui"
+    )]
     let bg = match status {
       button::Status::Hovered => Some(iced::Background::Color(Color::from_rgba(
         1.0, 1.0, 1.0, 0.1,

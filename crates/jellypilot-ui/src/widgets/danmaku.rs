@@ -614,6 +614,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "renders dynamic per-comment RGB colors from danmaku stream metadata"
+    )]
     fn draw(
         &self,
         tree: &Tree,
@@ -694,6 +698,10 @@ where
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test asserts rendered RGBA color for hex comment payload"
+)]
 mod tests {
     use std::cell::Cell;
     use std::time::Duration;

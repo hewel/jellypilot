@@ -186,6 +186,10 @@ impl ContentColor {
     }
 
     /// The last stored color, or `fallback` before the first draw.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "reconstructs packed RGBA theme color from AtomicU64 cache"
+    )]
     fn load_or(&self, fallback: impl FnOnce() -> iced::Color) -> iced::Color {
         if self.set.load(Ordering::Relaxed) {
             let packed = self.packed.load(Ordering::Relaxed) as u32;

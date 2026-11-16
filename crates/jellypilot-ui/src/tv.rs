@@ -16,8 +16,20 @@ pub const RAIL: f32 = 288.0;
 pub const CONTENT_INSET: f32 = 48.0;
 pub const CONTROL: f32 = 64.0;
 pub const GAP: f32 = 24.0;
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tv.rs owns scoped living-room TV focus surface and contrast color tokens"
+)]
 pub const FOCUS_SURFACE: Color = Color::from_rgb8(0xe8, 0xe9, 0xed);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tv.rs owns scoped living-room TV focus surface and contrast color tokens"
+)]
 pub const ON_FOCUS: Color = Color::from_rgb8(0x17, 0x18, 0x1c);
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tv.rs owns scoped living-room TV focus surface and contrast color tokens"
+)]
 pub const ON_FOCUS_SECONDARY: Color = Color::from_rgb8(0x49, 0x4b, 0x54);
 pub const FOCUS_EDGE: Color = FOCUS_SURFACE;
 pub const FOCUS_WIDTH: f32 = 2.0;

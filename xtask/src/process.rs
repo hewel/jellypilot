@@ -280,6 +280,10 @@ mod tests {
           Some(ProcessStop::TimedOut)
         )
       });
+      #[expect(
+        clippy::disallowed_methods,
+        reason = "subprocess fixture exits immediately so the test harness does not print into the deliberately full pipe"
+      )]
       std::process::exit(if timed_out { 0 } else { 1 });
     }
     let mut child = OwnedGroup(Some(

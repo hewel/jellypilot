@@ -287,6 +287,10 @@ fn inherited_pipe_parent() {
         .spawn()
         .unwrap();
     // The parent must exit without reaping to exercise inherited pipe ownership.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "subprocess fixture deliberately exits without reaping child to exercise inherited pipe ownership"
+    )]
     std::process::exit(0);
 }
 
