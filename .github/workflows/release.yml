@@ -292,13 +292,13 @@ jobs:
           mkdir -p "${cache}/cargo" "${cache}/rustup" "${tools}"
           download() {
             local dest="$1" url="$2"
-            if [[ -s "${dest}" ]]; then
-              return
+            if [[ ! -s "${dest}" ]]; then
+              curl --retry 8 --retry-all-errors --retry-delay 2 -fL --connect-timeout 20 \
+                -o "${dest}.part" "${url}"
+              mv "${dest}.part" "${dest}"
             fi
-            curl --retry 8 --retry-all-errors --retry-delay 2 -fL --connect-timeout 20 \
-              -o "${dest}.part" "${url}"
-            chmod 764 "${dest}.part"
-            mv "${dest}.part" "${dest}"
+            # cargo-packager copies the cached AppRun into the image with its mode.
+            chmod 0755 "${dest}"
           }
           download "${tools}/AppRun-x86_64" \
             https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
@@ -341,6 +341,12 @@ jobs:
               cargo xtask mpv linux-runtime
               cargo packager --config Packager.toml --formats deb
               cargo packager --config Packager.toml --formats appimage
+              images=(/work/target/release/bundle/*.AppImage)
+              test "${#images[@]}" -eq 1
+              cd "$(mktemp -d)"
+              "${images[0]}" --appimage-extract AppRun
+              stat -c "%a %n" squashfs-root/AppRun
+              test "$(stat -c %a squashfs-root/AppRun)" = 755
             '
       - name: Upload deb package
         if: github.event_name == 'push'

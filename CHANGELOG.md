@@ -4,6 +4,8 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-11-22
+
 ### Added
 - Added the standalone `jellypilot-diagnostics` command for read-only local startup checks without initializing the desktop, GPU, tray, or player; reports exclude credentials and refuse to overwrite existing output files.
 - Added opt-in startup reproduction capture with real application stdout/stderr, startup phases, exit codes/signals and bounded timeouts; sanitized reports preserve actionable failures without writing raw logs to disk.
@@ -16,6 +18,7 @@ All notable changes to JellyPilot are documented in this file.
 - Replaced Bun/TypeScript build orchestration with native Rust `cargo xtask` commands across desktop, Android, packaging and CI. OpenAPI generation is now explicit and on-demand; ordinary builds need neither Bun nor the Java generator. Git hooks are opt-in through `cargo xtask hooks install`.
 
 ### Fixed
+- Fixed `AppRun: Permission denied` when launching the Linux AppImage as a non-root user. The release job now checks the launcher mode inside the finished image before upload.
 - Fixed Linux runtime license collection for Debian packages whose documentation directories are symlinks, including `libstdc++6`; standard copyright paths are checked while missing notices still fail packaging.
 - Fit startup, restored, and App Mode window sizes and minimums to the current monitor's logical dimensions, preventing oversized windows on high-DPI displays such as the 1920×1080 / 150% setup in [#236](https://github.com/hewel/jellypilot/issues/236). This addresses window sizing, not the separately reported graphics initialization failure.
 
@@ -255,7 +258,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.3...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.4...HEAD
+[2.2.4]: https://github.com/hewel/jellypilot/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/hewel/jellypilot/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/hewel/jellypilot/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/hewel/jellypilot/compare/v2.2.0...v2.2.1

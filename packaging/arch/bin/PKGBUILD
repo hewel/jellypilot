@@ -1,21 +1,20 @@
 # Maintainer: Hewel <13846369+hewel@users.noreply.github.com>
 
 pkgname=jellypilot-bin
-pkgver=2.2.3
+pkgver=2.2.4
 pkgrel=1
 pkgdesc='Jellyfin and Emby companion app with embedded MPV from the pinned mpv fork (prebuilt binary)'
 arch=('x86_64')
 url='https://github.com/hewel/jellypilot'
 license=('MIT')
-# The pinned v2.2.3 artifact predates private libplacebo bundling.
 depends=(
   'gtk3'
   'libxkbcommon'
   'wayland'
   'ffmpeg'
-  'libplacebo'
   'libass'
   'luajit'
+  'mujs'
   'vulkan-icd-loader'
 )
 optdepends=(
@@ -29,8 +28,8 @@ source=(
   "$pkgname-$pkgver.pkg.tar.zst::$url/releases/download/v$pkgver/jellypilot-$pkgver-$_pkgrel-x86_64.pkg.tar.zst"
 )
 noextract=("$pkgname-$pkgver.pkg.tar.zst")
-# SHA-256 of the verified v2.2.3 release-build artifact.
-sha256sums=('06e8b87749d567517dcb69aff2abcd2ec9dd821e361b8d7b1524db7c6f110959')
+# Fill from the verified release artifact before publishing to the AUR.
+sha256sums=()
 
 package() {
   bsdtar -x \
