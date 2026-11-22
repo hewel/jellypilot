@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-auth"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-core"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "chrono",
  "dirs",
@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-ffi"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-trait",
  "jellypilot-auth",
@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-media-server"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "base64",
  "bytes",
@@ -1570,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-channel",
  "dirs",
@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-sdk"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-session"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "futures-util",
  "jellypilot-media-server",
@@ -4055,13 +4055,14 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "command-group",
  "ctrlc",
+ "dunce",
  "nix 0.27.1",
  "regex",
  "reqwest",

@@ -142,7 +142,8 @@ fn verify_link(vendor: &Path, link: &Path) -> Result<Option<PathBuf>> {
     "Refusing to replace non-symlink {}. Move it aside without deleting its contents.",
     link.display()
   );
-  let destination = owned_link_destination(vendor, &fs::read_link(link)?)?;
+  let target = fs::read_link(link)?;
+  let destination = owned_link_destination(vendor, dunce::simplified(&target))?;
   if let Some(metadata) = status(&destination)? {
     ensure!(
       metadata.is_dir() && !is_link(&metadata),
@@ -185,9 +186,8 @@ fn create_link(checkout: &Path, staged: &Path) -> Result<()> {
 }
 
 pub fn prepare(source: Option<&Path>) -> Result<()> {
-  let root = crate::root()
-    .canonicalize()
-    .context("Resolving repository root")?;
+  // Git for Windows and cmd's mklink reject verbatim paths on ordinary drive checkouts.
+  let root = dunce::canonicalize(crate::root()).context("Resolving repository root")?;
   prepare_in(&root, source)
 }
 
@@ -203,7 +203,7 @@ fn prepare_in(root: &Path, source: Option<&Path>) -> Result<()> {
   verify_link(&vendor, &link)?;
   if status(&checkout)?.is_none() {
     let explicit = source
-      .map(|source| root.join(source).canonicalize())
+      .map(|source| dunce::canonicalize(root.join(source)))
       .transpose()
       .context("Resolving explicit iced source")?;
     let origin = if let Some(source) = &explicit {
@@ -326,7 +326,7 @@ mod tests {
   #[test]
   fn preparation_fetches_only_committed_contents_and_never_resets_user_source() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().canonicalize().unwrap();
+    let root = dunce::canonicalize(temporary.path()).unwrap();
     let source = root.join("user-source");
     process::capture(process::command("git").arg("init").arg(&source)).unwrap();
     fs::write(source.join("tracked"), "committed").unwrap();

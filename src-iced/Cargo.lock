@@ -2911,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-auth"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-core"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "chrono",
  "dirs",
@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-iced"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2976,7 +2976,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-launcher"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "embed-resource",
  "iced_wgpu",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-media-server"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-channel",
  "dirs",
@@ -3037,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv-host"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "ash",
  "iced_wgpu",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-sdk"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -3070,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-session"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "futures-util",
  "jellypilot-media-server",
@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-ui"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "iced",
  "iced_runtime",

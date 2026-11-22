@@ -4,7 +4,7 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
-## [2.2.4] - 2026-11-22
+## [2.2.5] - 2026-11-22
 
 ### Added
 - Added the standalone `jellypilot-diagnostics` command for read-only local startup checks without initializing the desktop, GPU, tray, or player; reports exclude credentials and refuse to overwrite existing output files.
@@ -19,6 +19,7 @@ All notable changes to JellyPilot are documented in this file.
 
 ### Fixed
 - Fixed `AppRun: Permission denied` when launching the Linux AppImage as a non-root user. The release job now checks the launcher mode inside the finished image before upload.
+- Fixed a Windows packaging failure when Git received a verbatim drive path while preparing the pinned iced checkout. The `v2.2.4` tag did not produce a public release.
 - Fixed Linux runtime license collection for Debian packages whose documentation directories are symlinks, including `libstdc++6`; standard copyright paths are checked while missing notices still fail packaging.
 - Fit startup, restored, and App Mode window sizes and minimums to the current monitor's logical dimensions, preventing oversized windows on high-DPI displays such as the 1920×1080 / 150% setup in [#236](https://github.com/hewel/jellypilot/issues/236). This addresses window sizing, not the separately reported graphics initialization failure.
 
@@ -258,8 +259,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.4...HEAD
-[2.2.4]: https://github.com/hewel/jellypilot/compare/v2.2.3...v2.2.4
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.5...HEAD
+[2.2.5]: https://github.com/hewel/jellypilot/compare/v2.2.3...v2.2.5
 [2.2.3]: https://github.com/hewel/jellypilot/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/hewel/jellypilot/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/hewel/jellypilot/compare/v2.2.0...v2.2.1
