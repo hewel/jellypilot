@@ -227,27 +227,25 @@ pub fn build(source: Option<&Path>, environment: &BTreeMap<String, String>) -> R
       json!({"sha256": util::sha256_file(&root.join(relative))?}),
     );
   }
-  if cfg!(windows) {
-    for relative in NOTICES {
-      let name = Path::new(relative)
-        .file_name()
-        .context("Missing notice name")?
-        .to_string_lossy();
-      let content = process::capture(
-        process::command("git")
-          .arg("-C")
-          .arg(&checkout)
-          .args(["show", &format!("{revision}:{name}")]),
-      )?
-      .stdout;
-      let destination = root.join(relative);
-      fs::create_dir_all(destination.parent().context("Missing notice parent")?)?;
-      fs::write(&destination, content)?;
-      artifacts.insert(
-        relative,
-        json!({"sha256": util::sha256_file(&destination)?}),
-      );
-    }
+  for relative in NOTICES {
+    let name = Path::new(relative)
+      .file_name()
+      .context("Missing notice name")?
+      .to_string_lossy();
+    let content = process::capture(
+      process::command("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["show", &format!("{revision}:{name}")]),
+    )?
+    .stdout;
+    let destination = root.join(relative);
+    fs::create_dir_all(destination.parent().context("Missing notice parent")?)?;
+    fs::write(&destination, content)?;
+    artifacts.insert(
+      relative,
+      json!({"sha256": util::sha256_file(&destination)?}),
+    );
   }
   let mut introspection = BTreeMap::<&str, Value>::new();
   for name in ["dependencies", "compilers", "buildoptions", "machines"] {

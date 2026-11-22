@@ -498,9 +498,10 @@ Linux release builds use `cargo xtask mpv linux-runtime` instead of the developm
 `packaging/linux/libplacebo-source.json`, builds it in a private prefix, builds pinned
 mpv against it, and stages libplacebo's required ELF dependencies beside libmpv.
 The additional prerequisites are glslang, shaderc, lcms2, binutils/readelf, patchelf,
-and dpkg-query or pacman (plus Arch's `licenses` package) for provenance and notices. The resulting
-libraries use `$ORIGIN` lookup; glibc, the system Vulkan loader/drivers and mpv's other
-distribution dependencies remain external. No system library is installed or replaced.
+and dpkg-query or pacman (plus Arch's `licenses` package) for provenance and notices.
+Staged libraries use `$ORIGIN` lookup. Debian and Arch keep mpv's distribution
+dependencies; the AppImage stages libmpv's ELF dependencies too, including FFmpeg
+and its notices. All three use the host glibc and Vulkan loader/drivers.
 The generated manifest records bundled origins, normalized system dependency paths
 and post-patch hashes. Packages install it as `share/jellypilot/mpv-manifest.json`.
 The task checks library resolution with `LD_LIBRARY_PATH` removed; it does not make
@@ -508,10 +509,11 @@ host-specific optional dependencies or CPU/glibc requirements portable across di
 
 The Linux release workflow and source Arch PKGBUILD stage this private runtime for
 packaging; they do not assume a distribution already provides libplacebo 7.387.0.
-Ubuntu packages still target the workflow's Ubuntu 26.04 dependency/glibc baseline.
-The prebuilt Arch recipe retains its existing released artifact URL/hash and older
-runtime requirements until a separate release updates them. Windows keeps the MSYS2
-runtime dependency closure and the shared minimum-version check; macOS remains
+The `.deb` targets Ubuntu 26.04. The x86-64 AppImage is built separately on Ubuntu
+22.04, including its native media dependencies. Before upload, the release job checks
+that the finished AppImage opens a window offline as a regular user on Ubuntu 22.04.
+This checks startup, not hardware playback. Windows keeps the MSYS2 runtime
+dependency closure and the shared minimum-version check; macOS remains
 External-only. A Linux staging or playback pass is not Windows/macOS/Android device
 acceptance or verification of a generated installer.
 

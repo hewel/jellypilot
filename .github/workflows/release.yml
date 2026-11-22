@@ -269,9 +269,7 @@ jobs:
   linux:
     name: Package linux-x86_64 (deb, appimage)
     needs: metadata
-    # Fedora LAN runner. Build inside Ubuntu 26.04 for an Ubuntu LTS glibc
-    # instead of Fedora 44. The pinned private runtime supplies libplacebo
-    # 7.387.0 because Ubuntu does not publish that version.
+    # Keep the distro-specific deb and the portable AppImage in separate build roots.
     runs-on: jellypilot-lan
     concurrency:
       group: jellypilot-lan-packaging
@@ -285,38 +283,18 @@ jobs:
             rm -rf "${GITHUB_WORKSPACE}/.codegraph"
           fi
       - uses: actions/checkout@v4
-      - name: Build Debian and AppImage packages
+      - name: Build Ubuntu 26.04 Debian package
         run: |
           cache="${HOME}/.cache/jellypilot-ci"
-          tools="${cache}/packager/AppImage"
-          mkdir -p "${cache}/cargo" "${cache}/rustup" "${tools}"
-          download() {
-            local dest="$1" url="$2"
-            if [[ ! -s "${dest}" ]]; then
-              curl --retry 8 --retry-all-errors --retry-delay 2 -fL --connect-timeout 20 \
-                -o "${dest}.part" "${url}"
-              mv "${dest}.part" "${dest}"
-            fi
-            # cargo-packager copies the cached AppRun into the image with its mode.
-            chmod 0755 "${dest}"
-          }
-          download "${tools}/AppRun-x86_64" \
-            https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
-          download "${tools}/linuxdeploy-x86_64.AppImage" \
-            https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage
-          download "${tools}/linuxdeploy-plugin-appimage.AppImage" \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          mkdir -p "${cache}/cargo" "${cache}/rustup"
           podman run --rm \
             --security-opt label=disable \
             -v "${GITHUB_WORKSPACE}:/work" \
             -v "${cache}/cargo:/opt/cargo" \
             -v "${cache}/rustup:/opt/rustup" \
-            -v "${cache}/packager:/root/.cache/.cargo-packager" \
             -w /work \
             -e CARGO_HOME=/opt/cargo \
             -e RUSTUP_HOME=/opt/rustup \
-            -e XDG_CACHE_HOME=/root/.cache \
-            -e APPIMAGE_EXTRACT_AND_RUN=1 \
             docker.io/library/ubuntu:26.04 \
             bash -lc '
               set -euo pipefail
@@ -340,14 +318,38 @@ jobs:
               fi
               cargo xtask mpv linux-runtime
               cargo packager --config Packager.toml --formats deb
+            '
+      - name: Build Ubuntu 22.04 AppImage
+        run: |
+          podman build -t localhost/jellypilot-appimage-build:jammy \
+            -f packaging/linux/appimage-build.Containerfile .
+          # No target/, staged mpv, or cargo tools from the newer deb build.
+          work=$(mktemp -d "${RUNNER_TEMP}/jellypilot-appimage.XXXXXXXX")
+          trap 'podman unshare rm -rf -- "$work"' EXIT
+          git archive HEAD | tar -x -C "$work"
+          podman run --rm --security-opt label=disable \
+            -v "$work:/work" -w /work -e APPIMAGE_EXTRACT_AND_RUN=1 \
+            localhost/jellypilot-appimage-build:jammy bash -euc '
+              cargo xtask mpv linux-runtime
               cargo packager --config Packager.toml --formats appimage
               images=(/work/target/release/bundle/*.AppImage)
               test "${#images[@]}" -eq 1
               cd "$(mktemp -d)"
               "${images[0]}" --appimage-extract AppRun
-              stat -c "%a %n" squashfs-root/AppRun
               test "$(stat -c %a squashfs-root/AppRun)" = 755
             '
+          install -m 0755 "$work"/target/release/bundle/*.AppImage target/release/bundle/
+      - name: Verify normal offline startup on Ubuntu 22.04
+        run: |
+          podman build -t localhost/jellypilot-appimage-smoke:jammy \
+            -f packaging/linux/appimage-smoke.Containerfile .
+          images=(target/release/bundle/*.AppImage)
+          test "${#images[@]}" -eq 1
+          podman run --rm --init --timeout 90 --network none --read-only \
+            --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
+            --security-opt label=disable --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g,mode=1777 \
+            -v "$(realpath "${images[0]}"):/input/JellyPilot.AppImage:ro" \
+            localhost/jellypilot-appimage-smoke:jammy
       - name: Upload deb package
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
@@ -400,7 +402,8 @@ jobs:
           for path in files:
               shutil.copy2(path, destination / path.name)
           info = json.loads(os.environ['BUILD_INFO'])
-          info.update(platform='linux-x86_64', runner_arch=os.environ['RUNNER_ARCH'], build_image='ubuntu:26.04')
+          info.update(platform='linux-x86_64', runner_arch=os.environ['RUNNER_ARCH'],
+                      build_images={'deb': 'ubuntu:26.04', 'appimage': 'ubuntu:22.04', 'diagnostics': 'ubuntu:26.04'})
           (destination / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
           with (destination / 'SHA256SUMS').open('w') as checksums:
               for path in sorted(destination.iterdir()):

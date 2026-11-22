@@ -1,6 +1,6 @@
 name = "jellypilot"
 product-name = "JellyPilot"
-version = "2.2.5"
+version = "2.2.6"
 identifier = "top.pigfun.jellypilot"
 publisher = "hewel"
 authors = ["hewel"]
@@ -54,6 +54,16 @@ depends = [
 "target/embedded-mpv/share/jellypilot/mpv-baseline.conf" = "usr/share/jellypilot/mpv-baseline.conf"
 "target/embedded-mpv/manifest.json" = "usr/share/jellypilot/mpv-manifest.json"
 "target/embedded-mpv/share/jellypilot/licenses/linux-runtime" = "usr/share/jellypilot/licenses/linux-runtime"
+
+[appimage]
+# Load the user's Vulkan loader and ICDs together, not the Jammy SDK's loader.
+excluded-libraries = ["libvulkan.so*"]
+# Winit and the tray load XKB and AppIndicator at runtime. GTK's shared text
+# libraries must be on AppRun's search path, not just in libmpv's private directory.
+libs = [
+  "libxkbcommon-x11.so.0", "libxcb-xkb.so.1", "libayatana-appindicator3.so.1",
+  "libfribidi.so.0", "libharfbuzz.so.0", "libfontconfig.so.1",
+]
 
 [appimage.files]
 "target/embedded-mpv/lib/jellypilot" = "usr/lib/jellypilot"

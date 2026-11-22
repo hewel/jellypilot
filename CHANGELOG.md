@@ -4,6 +4,11 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.6] - 2026-11-22
+
+### Fixed
+- Build the Linux AppImage and its native media dependencies on Ubuntu 22.04 so the launcher no longer requires the newer glibc from the Ubuntu 26.04 Debian package. Gate release on an offline, non-root window startup from the finished AppImage.
+
 ## [2.2.5] - 2026-11-22
 
 ### Added
@@ -259,7 +264,8 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
-[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.5...HEAD
+[Unreleased]: https://github.com/hewel/jellypilot/compare/v2.2.6...HEAD
+[2.2.6]: https://github.com/hewel/jellypilot/compare/v2.2.5...v2.2.6
 [2.2.5]: https://github.com/hewel/jellypilot/compare/v2.2.3...v2.2.5
 [2.2.3]: https://github.com/hewel/jellypilot/compare/v2.2.2...v2.2.3
 [2.2.2]: https://github.com/hewel/jellypilot/compare/v2.2.1...v2.2.2

@@ -1,0 +1,5 @@
+**
+!rust-toolchain.toml
+!packaging/
+!packaging/linux/
+!packaging/linux/**

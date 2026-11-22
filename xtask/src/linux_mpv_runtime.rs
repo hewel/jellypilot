@@ -56,6 +56,22 @@ fn parse_ldconfig(output: &str) -> Result<BTreeMap<String, PathBuf>> {
   Ok(libraries)
 }
 
+fn parse_loader_paths(output: &str) -> Result<BTreeMap<String, PathBuf>> {
+  let mut libraries = BTreeMap::new();
+  for line in output.lines() {
+    let Some((name, resolved)) = line.trim().split_once(" => ") else {
+      continue;
+    };
+    let path = Path::new(resolved.split_whitespace().next().unwrap_or(""));
+    ensure!(
+      valid_soname(name) && path.is_absolute(),
+      "Unresolved or invalid loader dependency: {line}"
+    );
+    libraries.insert(name.to_owned(), path.to_owned());
+  }
+  Ok(libraries)
+}
+
 fn valid_soname(name: &str) -> bool {
   // A filename-only NEEDED is mandatory: no build-prefix or traversal dependencies.
   let Some((base, versions)) = name.rsplit_once(".so") else {
@@ -422,8 +438,9 @@ fn stage_closure(
   notices: &Path,
   manager: PackageManager,
   soname: &str,
+  bundle_mpv: bool,
 ) -> Result<(Vec<RuntimeLibrary>, BTreeMap<String, &'static str>)> {
-  let system_libraries = parse_ldconfig(&captured("ldconfig", &["-p"])?)?;
+  let mut system_libraries = parse_ldconfig(&captured("ldconfig", &["-p"])?)?;
   let private_library = prefix.join("lib").join(soname);
   ensure!(
     read_elf(&private_library)?.soname.as_deref() == Some(soname),
@@ -438,10 +455,41 @@ fn stage_closure(
       notices: copy_source_notices(checkout, notices)?,
     },
   )]);
+  let mut mpv_notices = Vec::new();
+  fs::create_dir_all(notices.join("mpv"))?;
+  for relative in mpv::NOTICES {
+    let name = Path::new(relative)
+      .file_name()
+      .context("Missing mpv notice filename")?;
+    let notice = Path::new("mpv").join(name);
+    fs::copy(mpv::artifact_root().join(relative), notices.join(&notice))?;
+    mpv_notices.push(notice.to_string_lossy().into_owned());
+  }
+  libraries.insert(
+    "libmpv.so".to_owned(),
+    RuntimeLibrary {
+      name: "libmpv.so".to_owned(),
+      origin: None,
+      notices: mpv_notices,
+    },
+  );
   let mut retained = BTreeMap::new();
   let mut notice_cache = BTreeMap::<String, Vec<String>>::new();
-  // Only libplacebo's closure is bundled; mpv's distro stack remains a package dependency.
+  // Debian/Arch retain their distro mpv dependencies. AppImage additionally
+  // stages the complete mpv closure so its FFmpeg ABI and notices travel with it.
   let mut queue = VecDeque::from([private_library]);
+  if bundle_mpv {
+    queue.push_back(payload.join("libmpv.so"));
+    // PulseAudio and Samba keep private SONAMEs outside ldconfig's index.
+    // Resolve the actual native closure before replacing package RUNPATHs.
+    let loader = process::capture(
+      process::command("ldd")
+        .arg(payload.join("libmpv.so"))
+        .env("LD_LIBRARY_PATH", prefix.join("lib"))
+        .env("LC_ALL", "C"),
+    )?;
+    system_libraries.extend(parse_loader_paths(&mpv::text(&loader))?);
+  }
   while let Some(importer) = queue.pop_front() {
     for name in read_elf(&importer)?.needed {
       ensure!(
@@ -678,8 +726,16 @@ pub fn build(source: Option<&Path>) -> Result<()> {
     root.join(LIBRARY_RELATIVE).join("libmpv.so"),
     payload.join("libmpv.so"),
   )?;
-  let (libraries, retained) =
-    stage_closure(&prefix, &checkout, &payload, &notice_root, manager, soname)?;
+  let bundle_mpv = std::env::var("JELLYPILOT_APPIMAGE_BUILD").as_deref() == Ok("1");
+  let (libraries, retained) = stage_closure(
+    &prefix,
+    &checkout,
+    &payload,
+    &notice_root,
+    manager,
+    soname,
+    bundle_mpv,
+  )?;
   let mut normalized = Vec::new();
   let system_path = Regex::new(r"^(?:/usr)?/lib(?:64)?/")?;
   for library in list_files(&payload)? {
@@ -741,12 +797,21 @@ pub fn build(source: Option<&Path>) -> Result<()> {
       .env_remove("LD_LIBRARY_PATH")
       .env("LC_ALL", "C"),
   )?;
-  validate_loader(
-    &mpv::text(&loader),
-    &String::from_utf8_lossy(&loader.stderr),
-    soname,
-    &library_directory,
-  )?;
+  let loader_stdout = mpv::text(&loader);
+  let loader_stderr = String::from_utf8_lossy(&loader.stderr);
+  validate_loader(&loader_stdout, &loader_stderr, soname, &library_directory)?;
+  if bundle_mpv {
+    for library in &libraries {
+      if library.name != "libmpv.so" {
+        validate_loader(
+          &loader_stdout,
+          &loader_stderr,
+          &library.name,
+          &library_directory,
+        )?;
+      }
+    }
+  }
   update_manifest(&root, &pin, &libraries, &retained, &tools, &normalized)?;
   println!(
     "Linux mpv runtime staged with private libplacebo {} at {}.",
@@ -811,6 +876,22 @@ mod tests {
         )
       ])
     );
+  }
+
+  #[test]
+  fn loader_paths_include_private_package_libraries_and_reject_unresolved_dependencies() {
+    let output = "linux-vdso.so.1 (0x1234)\n\
+      libpulsecommon-15.99.so => /usr/lib/x86_64-linux-gnu/pulseaudio/libpulsecommon-15.99.so (0x2345)\n\
+      /lib64/ld-linux-x86-64.so.2 (0x3456)\n";
+    assert_eq!(
+      parse_loader_paths(output).unwrap(),
+      BTreeMap::from([(
+        "libpulsecommon-15.99.so".to_owned(),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu/pulseaudio/libpulsecommon-15.99.so")
+      )])
+    );
+    assert!(parse_loader_paths("libcodec.so.1 => not found").is_err());
+    assert!(parse_loader_paths("../libcodec.so.1 => /usr/lib/libcodec.so.1").is_err());
   }
 
   #[test]
